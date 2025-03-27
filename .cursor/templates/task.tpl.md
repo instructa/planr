@@ -8,6 +8,6 @@ Use the following JSON to add a task
   "status": "todo|done",
   "created": "YYYY-MM-DD",
   "updated": "YYYY-MM-DD",
-  "notes": "add max 10 notes for other devs for documentation"
+  "notes": ""
 }
 ```
