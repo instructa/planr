@@ -18,10 +18,8 @@ Follow these guidelines:
 
 2. If you haven't done so read all related cursor rules for the task.
 
-3. Read [feat-agent.mdc](mdc:.cursor/rules/modes/feat-agent.mdc) that you learn about the architecture and how to add a feature.
+3. Procenting the current story `.planr/stories/{{STORY-ID}}`, ensuring you address all acceptance criteria.
 
-4. Proceed with implementing the current story `.planr/stories/{{STORY-ID}}`, ensuring you address all acceptance criteria.
+4. write all infos about updates, fixes, to the "Developer Notes" section in `.planr/stories/{{STORY-ID}}`. Do the same in @roadmap.json in `notes` but keep it for the 10 most important max.
 
-5. write all infos about updates, fixes, to the "Developer Notes" section in `.planr/stories/{{STORY-ID}}`. Do the same in [roadmap.json](mdc:.planr/roadmap.json) in `notes` but keep it for the 10 most important max.
-
-6. ask if you should proceed wit the next story
+5. ask if you shouldthe next story

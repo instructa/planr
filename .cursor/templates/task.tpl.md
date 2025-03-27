@@ -1,9 +1,3 @@
----
-description: use this ALWAYS to create/update a task in json
-globs: .planr/roadmap.json
-alwaysApply: false
----
-
 Use the following JSON to add a task
 
 ```json
