@@ -1,0 +1,15 @@
+{
+	"mcpServers": {
+		"svelte-docs": {
+			"command": "npx",
+			"args": ["-y", "mcp-svelte-docs"],
+			"env": {
+				"LIBSQL_URL": "file:local.db"
+			}
+		},
+		"duckduckgo-search": {
+			"command": "npx",
+			"args": ["-y", "duckduckgo-mpc-server"]
+		}
+	}
+}
