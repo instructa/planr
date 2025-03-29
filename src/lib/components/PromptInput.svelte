@@ -5,9 +5,18 @@
 
 	let prompt = '';
 	let isSubmitting = false;
+	let validationError = '';
 
 	function handleSubmit() {
-		if (!prompt.trim()) return;
+		// Clear previous validation error
+		validationError = '';
+
+		// Check for empty prompt
+		if (!prompt.trim()) {
+			validationError = 'Please enter a valid prompt.';
+			return;
+		}
+
 		isSubmitting = true;
 		onSubmit(prompt);
 	}
@@ -28,9 +37,16 @@
 			class="min-h-[100px] w-full resize-y rounded-lg border border-gray-300 p-3 focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
 			disabled={isSubmitting}
 		></textarea>
+
+		{#if validationError}
+			<div class="text-sm text-red-600" role="alert">
+				{validationError}
+			</div>
+		{/if}
+
 		<button
 			type="submit"
-			disabled={isSubmitting || !prompt.trim()}
+			disabled={isSubmitting}
 			class="rounded-lg bg-blue-600 px-4 py-2 text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
 		>
 			{isSubmitting ? 'Generating...' : 'Generate Image'}

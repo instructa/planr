@@ -1,14 +1,19 @@
 import { json } from '@sveltejs/kit';
 import type { RequestEvent } from '@sveltejs/kit';
 import { fal } from '@fal-ai/client';
+import { env } from '$env/dynamic/private';
 
 // Define Flux-schnell model ID
 const MODEL_ID = 'fal-ai/flux-schnell';
 
 export async function POST({ request }: RequestEvent) {
 	try {
+		// Get API key from environment variables
+		const apiKey = env.FAL_AI_API_KEY || process.env.FAL_AI_API_KEY;
+
 		// Validate API key
-		if (!process.env.FAL_AI_API_KEY) {
+		if (!apiKey) {
+			console.error('FAL_AI_API_KEY is not configured in environment variables');
 			return json({ error: 'API key not configured' }, { status: 500 });
 		}
 
@@ -22,7 +27,7 @@ export async function POST({ request }: RequestEvent) {
 
 		// Set up FAL AI client with API key
 		fal.config({
-			credentials: process.env.FAL_AI_API_KEY
+			credentials: apiKey
 		});
 
 		// Call fal.ai API to generate image

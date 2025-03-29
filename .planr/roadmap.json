@@ -12,10 +12,10 @@
 		"id": "US-002",
 		"title": "Handle Empty Prompt",
 		"file": ".planr/stories/US-002.md",
-		"status": "todo",
+		"status": "done",
 		"created": "2023-03-29",
-		"updated": "2023-03-29",
-		"notes": "Input validation"
+		"updated": "2025-03-29",
+		"notes": "Added client-side validation for empty prompts. Implemented error message display in the PromptInput component. No API call is made when validation fails."
 	},
 	{
 		"id": "US-003",
