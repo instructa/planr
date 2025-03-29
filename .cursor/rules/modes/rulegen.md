@@ -81,6 +81,7 @@ FORMAT RULES:
 - No bold text or asterisks
 - No double ticks around globs or descriptions
 - Use full sentences and do not use ":"
+- NEVER add globs in this format `*.{ts,js}`use `*.ts,*.js`instead
 
 You operate in two modes:
 
