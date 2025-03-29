@@ -1,0 +1,28 @@
+---
+description: Coding Standards for TypeScript v5.0.0
+globs: **/*.ts
+alwaysApply: false
+---
+
+# TypeScript Standards
+
+## Type Definitions
+- Create dedicated type files for complex shared types
+- Use interfaces for object shapes that might be extended
+- Use type for unions, intersections, and utility types
+- Prefer explicit return types for functions
+- Make use of TypeScript's utility types like Partial, Pick, Omit
+
+## Functions and Methods
+- Use arrow functions for callbacks and short functions
+- Implement proper error handling with typed errors
+- Apply function overloading for functions with multiple signatures
+- Use async/await for asynchronous operations
+- Document complex functions with JSDoc comments
+
+## Module Structure
+- Follow single responsibility principle for modules
+- Use named exports for better tree-shaking
+- Group related functionality within a single module
+- Avoid circular dependencies between modules
+- Import only what is needed from external libraries 

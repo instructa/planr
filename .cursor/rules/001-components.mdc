@@ -1,0 +1,28 @@
+---
+description: Coding Standards for Svelte v5.0.0 Components
+globs: **/*.svelte
+alwaysApply: false
+---
+
+# Svelte Component Standards
+
+## Script Organization
+- Place imports at the top of the script block
+- Define component props immediately after imports
+- Order script contents: imports, props, reactive declarations, lifecycle functions, other methods
+- Use $: for reactive declarations
+- Organize component exports at the end of script block
+
+## Template Structure
+- Keep template markup semantic and accessible
+- Use {#if}, {#each}, and {#await} blocks for conditional rendering and iteration
+- Implement keyboard navigation and ARIA attributes for interactive elements
+- Add proper labels and descriptions to form elements
+- Maintain a clean hierarchy of elements without excessive nesting
+
+## Styling Practices
+- Use TailwindCSS utility classes when possible
+- For component-specific styles, use the style block with scoped attribute
+- Define CSS variables at the highest appropriate level
+- Implement responsive design using TailwindCSS breakpoints
+- Avoid using !important in styles 

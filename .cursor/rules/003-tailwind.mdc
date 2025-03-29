@@ -1,0 +1,28 @@
+---
+description: Coding Standards for TailwindCSS v4.0.0
+globs: **/*.svelte,**/*.html
+alwaysApply: false
+---
+
+# TailwindCSS Standards
+
+## Class Organization
+- Group related utility classes together by category
+- Order classes logically: layout, sizing, spacing, typography, colors, effects
+- Use arbitrary value syntax with square brackets when needed
+- Extract repeated class patterns into @apply directives in a style block
+- Prefer native Tailwind utilities over custom CSS when possible
+
+## Responsive Design
+- Use mobile-first approach with responsive prefixes (sm:, md:, lg:, xl:)
+- Apply consistent breakpoints throughout the application
+- Test layouts across all defined breakpoint ranges
+- Use flex and grid utilities for responsive layouts
+- Implement dark mode with the dark: variant when applicable
+
+## Configuration
+- Extend the theme in tailwind.config.js rather than using arbitrary values
+- Define custom colors, spacing, and other theme values in the configuration
+- Create reusable component classes with @apply in a separate CSS file
+- Use plugins for common patterns rather than recreating utilities
+- Purge unused styles in production builds 

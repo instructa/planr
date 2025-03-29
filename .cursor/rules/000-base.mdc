@@ -1,0 +1,41 @@
+---
+description: Coding Standards & Rules for SvelteKit v2.16.0
+globs: **/*.svelte,**/*.ts,**/*.js
+alwaysApply: true
+---
+
+# Base SvelteKit Project Standards
+
+## Project Structure
+- Follow SvelteKit's conventional directory structure with routes in src/routes
+- Use src/lib for reusable components, utilities, and other code
+- Place API endpoints in src/routes/api
+- Store static assets in static directory
+- Implement layouts in src/routes using +layout.svelte files
+
+## TypeScript Usage
+- Use TypeScript for all new code
+- Define proper types for all function parameters and return values
+- Avoid using any type unless absolutely necessary
+- Use interface for object shapes and type for unions or complex types
+- Enable strict mode in tsconfig.json
+
+## Component Development
+- Create single-responsibility components
+- Use Svelte's built-in reactivity system with $ syntax
+- Isolate styles within components using Svelte's scoped styling
+- Export props with proper TypeScript types
+- Use slot system for composable components
+
+## State Management
+- Use Svelte stores for shared state
+- Prefer readable/writable stores for simple state
+- Use derived stores for computed values
+- Keep store implementations in src/lib/stores
+
+## Routing
+- Use SvelteKit's file-based routing system
+- Implement route parameters with [param] syntax in file names
+- Use +page.ts files for data loading
+- Use +server.ts for API endpoints
+- Implement auth guards in +layout.ts files 
