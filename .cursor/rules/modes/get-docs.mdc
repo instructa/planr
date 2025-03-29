@@ -18,4 +18,4 @@ Your goal is to fetch remote docs. Follow these steps:
 npx sitefetch {docs-url} -o docs/framework/{name}.md
 ```
 
-2. read docs/framework/{name}.md and find the suitable installation guide documentation and create another file with its content to docs/framework/install-{name}.md
+2. read docs/framework/{name}.md and find the suitable installation guide documentation. create another file with its content to docs/framework/install-{name}.md. ONLY add the installation path for the current framework we're using.
