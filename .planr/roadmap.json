@@ -1,0 +1,92 @@
+[
+	{
+		"id": "US-001",
+		"title": "Generate Image from Text Prompt",
+		"file": ".planr/stories/US-001.md",
+		"status": "todo",
+		"created": "2023-03-29",
+		"updated": "2023-03-29",
+		"notes": "Core functionality for the app"
+	},
+	{
+		"id": "US-002",
+		"title": "Handle Empty Prompt",
+		"file": ".planr/stories/US-002.md",
+		"status": "todo",
+		"created": "2023-03-29",
+		"updated": "2023-03-29",
+		"notes": "Input validation"
+	},
+	{
+		"id": "US-003",
+		"title": "Handle Rate Limit Exceeded",
+		"file": ".planr/stories/US-003.md",
+		"status": "todo",
+		"created": "2023-03-29",
+		"updated": "2023-03-29",
+		"notes": "API error handling"
+	},
+	{
+		"id": "US-004",
+		"title": "Handle Daily Budget Exceeded",
+		"file": ".planr/stories/US-004.md",
+		"status": "todo",
+		"created": "2023-03-29",
+		"updated": "2023-03-29",
+		"notes": "API budget management"
+	},
+	{
+		"id": "US-005",
+		"title": "View Generated Image",
+		"file": ".planr/stories/US-005.md",
+		"status": "todo",
+		"created": "2023-03-29",
+		"updated": "2023-03-29",
+		"notes": "Image display functionality"
+	},
+	{
+		"id": "US-006",
+		"title": "Generate Multiple Images",
+		"file": ".planr/stories/US-006.md",
+		"status": "todo",
+		"created": "2023-03-29",
+		"updated": "2023-03-29",
+		"notes": "State management for multiple requests"
+	},
+	{
+		"id": "US-007",
+		"title": "Indicate Loading State",
+		"file": ".planr/stories/US-007.md",
+		"status": "todo",
+		"created": "2023-03-29",
+		"updated": "2023-03-29",
+		"notes": "UX improvement for loading feedback"
+	},
+	{
+		"id": "US-008",
+		"title": "Handle API Errors",
+		"file": ".planr/stories/US-008.md",
+		"status": "todo",
+		"created": "2023-03-29",
+		"updated": "2023-03-29",
+		"notes": "General error handling"
+	},
+	{
+		"id": "US-009",
+		"title": "Access App in Browser",
+		"file": ".planr/stories/US-009.md",
+		"status": "todo",
+		"created": "2023-03-29",
+		"updated": "2023-03-29",
+		"notes": "Deployment and cross-browser testing"
+	},
+	{
+		"id": "US-010",
+		"title": "Provide User Guidance",
+		"file": ".planr/stories/US-010.md",
+		"status": "todo",
+		"created": "2023-03-29",
+		"updated": "2023-03-29",
+		"notes": "UX improvement for user instructions"
+	}
+]
