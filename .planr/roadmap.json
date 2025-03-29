@@ -3,10 +3,10 @@
 		"id": "US-001",
 		"title": "Generate Image from Text Prompt",
 		"file": ".planr/stories/US-001.md",
-		"status": "todo",
+		"status": "done",
 		"created": "2023-03-29",
-		"updated": "2023-03-29",
-		"notes": "Core functionality for the app"
+		"updated": "2025-03-29",
+		"notes": "Implemented core image generation functionality with fal.ai API. Created UI with prompt input, send button, and image display area. Added proper error handling."
 	},
 	{
 		"id": "US-002",
