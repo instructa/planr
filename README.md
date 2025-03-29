@@ -1,39 +1,38 @@
-# Planr
+# sv
 
-A project planning and management tool for software development projects.
+Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
 
-## Overview
+## Creating a project
 
-Planr is an AI-powered planning tool that helps teams manage product requirements, create user stories, and track development progress through a structured workflow.
+If you're seeing this, you've probably already done this step. Congrats!
 
-## Project Structure
+```bash
+# create a new project in the current directory
+npx sv create
 
-- `.planr/` - Core directory containing project planning artifacts
-  - `stories/` - User stories and requirements 
-  - `roadmap.json` - Project roadmap defining tasks and milestones
-  - `prd.md` - Product Requirements Document
+# create a new project in my-app
+npx sv create my-app
+```
 
-## Modes
+## Developing
 
-Planr supports different operational modes:
+Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
 
-- **Planning Mode** - Create and manage stories, specifications, and project plans
-  - `init` - Initialize project with stories and roadmap from PRD
-  - `add` - Add new stories to the project
+```bash
+npm run dev
 
-- **Implementation Mode** - Execute on the planned stories using the defined roadmap
+# or start the server and open the app in a new browser tab
+npm run dev -- --open
+```
 
-## Getting Started
+## Building
 
-1. Set up your project structure with the `.planr` directory
-2. Create your Product Requirements Document in `.planr/prd.md`
-3. Use Planning Mode to generate stories and roadmap
-4. Implement stories following the roadmap
+To create a production version of your app:
 
-## Usage
+```bash
+npm run build
+```
 
-Follow the structured workflow:
+You can preview the production build with `npm run preview`.
 
-1. Define product requirements in `prd.md`
-2. Generate stories and roadmap
-3. Track progress by updating story status and roadmap
+> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
