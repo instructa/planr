@@ -24,6 +24,5 @@ Follow these guidelines:
 
 5. write all infos about updates, fixes, to the "Developer Notes" section in `.planr/stories/{{STORY-ID}}`. Do the same in `mdc:.planr/roadmap.json` in `notes` but keep it for the 10 most important max.
 
-6. proceed wit the next story
-
+6. ask if you should proceed wit the next story
 
