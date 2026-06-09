@@ -1,0 +1,34 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# Rust and release outputs
+target/
+dist/
+
+# Node/package outputs
+node_modules/
+*.tgz
+
+# Local frontend experiments/scaffolds
+apps/web/
+
+# Local env and logs
+.env
+.env.*
+!.env.example
+*.log
+*.tmp
+tmp/
+temp/
+
+# Planr local runtime state
+.planr/*.sqlite
+.planr/*.sqlite-*
+.planr/*.db
+.planr/*.db-*
+.planr/status/
+.planr/plans/
+
+# Local task-graph databases
+.plandb.db

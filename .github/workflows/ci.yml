@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Quality Gates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install system tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Install Rust components
+        run: |
+          rustup component add rustfmt clippy
+
+      - name: Rust format
+        run: cargo fmt --check
+
+      - name: Rust lint
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Rust tests
+        run: cargo test
+
+      - name: Shell lint
+        run: shellcheck scripts/*.sh
+
+      - name: Release dry-run
+        run: |
+          cargo build --release
+          npm pack --dry-run
+          node npm/bin/planr.js --version
+          ./.planr/tooling/test_planr
+
+      - name: Cargo audit
+        run: |
+          if ! command -v cargo-audit >/dev/null 2>&1; then
+            cargo install cargo-audit --locked
+          fi
+          cargo audit --deny warnings
