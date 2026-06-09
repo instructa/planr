@@ -12,8 +12,19 @@ impl App {
         let listener = TcpListener::bind(("127.0.0.1", args.port))?;
         eprintln!("planr serve listening on http://127.0.0.1:{}", args.port);
         for stream in listener.incoming() {
-            let stream = stream?;
-            self.handle_http(stream)?;
+            // A single misbehaving connection must never terminate the server.
+            let stream = match stream {
+                Ok(stream) => stream,
+                Err(error) => {
+                    eprintln!("planr serve: accept error: {error}");
+                    continue;
+                }
+            };
+            let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+            let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(10)));
+            if let Err(error) = self.handle_http(stream) {
+                eprintln!("planr serve: connection error: {error:#}");
+            }
         }
         Ok(())
     }
@@ -39,6 +50,19 @@ impl App {
                     content_length = value.trim().parse().unwrap_or(0);
                 }
             }
+        }
+        const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
+        if content_length > MAX_BODY_BYTES {
+            let body = serde_json::to_string(&json!({
+                "error": {"code": "payload_too_large", "message": "request body exceeds 10 MiB limit", "details": {}}
+            }))?;
+            write!(
+                stream,
+                "HTTP/1.1 413 Payload Too Large\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            )?;
+            return Ok(());
         }
         let mut raw_body = vec![0u8; content_length];
         if content_length > 0 {

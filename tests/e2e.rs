@@ -582,7 +582,8 @@ fn runtime_control_and_approval_gates_are_enforced() {
     assert_eq!(unpicked_progress["error"]["code"], "invalid_transition");
 
     let mut mcp = planr();
-    mcp.current_dir(dir.path())
+    let mcp_output = mcp
+        .current_dir(dir.path())
         .args(["--db", db.to_str().unwrap(), "mcp"])
         .write_stdin(format!(
             "{}\n",
@@ -597,8 +598,23 @@ fn runtime_control_and_approval_gates_are_enforced() {
             })
         ))
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("invalid_transition"));
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let mcp_response: Value = serde_json::from_str(
+        String::from_utf8(mcp_output)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(mcp_response["result"]["isError"], true);
+    assert!(mcp_response["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("invalid_transition"));
 
     let output = planr()
         .current_dir(dir.path())
@@ -1339,6 +1355,141 @@ fn map_graph_intelligence_uses_dependency_paths_and_transitive_pressure() {
     assert_eq!(status["analysis"]["critical"][0]["id"], root);
     assert_eq!(status["analysis"]["pressure"][0]["transitive_blocks"], 4);
     assert!(status["analysis"]["cycles"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn http_server_survives_aborted_and_garbage_connections() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "project",
+            "init",
+            "Resilience",
+        ])
+        .assert()
+        .success();
+    let port = free_port();
+    let bin = assert_cmd::cargo::cargo_bin("planr");
+    let mut server = StdCommand::new(&bin)
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "serve",
+            "--port",
+            &port.to_string(),
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    thread::sleep(Duration::from_millis(150));
+
+    // Connection dropped mid-request: header promises a body that never comes.
+    {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        stream
+            .write_all(b"POST /v1/projects HTTP/1.1\r\nContent-Length: 50\r\n\r\n")
+            .unwrap();
+        drop(stream);
+    }
+    // Pure garbage bytes.
+    {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        stream
+            .write_all(b"\x00\x01\x02 not http at all\r\n")
+            .unwrap();
+        drop(stream);
+    }
+    // Oversized declared body is rejected without allocation.
+    {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        stream
+            .write_all(b"POST /v1/projects HTTP/1.1\r\nContent-Length: 99999999999\r\n\r\n")
+            .unwrap();
+        let mut response = String::new();
+        let _ = stream.read_to_string(&mut response);
+        assert!(
+            response.contains("413") || response.contains("payload_too_large"),
+            "expected payload rejection, got: {response}"
+        );
+    }
+
+    // The server must still answer normal requests afterwards.
+    let health = http_request(port, "GET", "/health", "");
+    assert!(health.contains("\"ok\":true"), "server died: {health}");
+
+    server.kill().unwrap();
+    server.wait().unwrap();
+}
+
+#[test]
+fn mcp_server_survives_failing_tool_calls_and_answers_errors() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "McpErr"])
+        .assert()
+        .success();
+
+    let input = [
+        // Tool call that previously killed the server (missing item).
+        json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"planr_map_preview","arguments":{"close":"itm_does_not_exist"}}}).to_string(),
+        // Tool call missing a required argument.
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"planr_map_preview","arguments":{}}}).to_string(),
+        // Unknown JSON-RPC method must be answered with -32601, not ok:true.
+        json!({"jsonrpc":"2.0","id":3,"method":"definitely/not-a-method"}).to_string(),
+        // Notification (no id) must get no response line.
+        json!({"jsonrpc":"2.0","method":"notifications/initialized"}).to_string(),
+        // Unparseable line must produce a -32700 parse error response.
+        "{not json".to_string(),
+        // Server must still be alive and serving.
+        json!({"jsonrpc":"2.0","id":4,"method":"tools/list"}).to_string(),
+    ]
+    .join("\n")
+        + "\n";
+
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "mcp"])
+        .write_stdin(input)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let responses = String::from_utf8(output)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+
+    // 5 responses for 6 inputs: the notification is silent.
+    assert_eq!(responses.len(), 5, "unexpected responses: {responses:?}");
+
+    assert_eq!(responses[0]["id"], 1);
+    assert_eq!(responses[0]["result"]["isError"], true);
+    assert!(responses[0]["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("not_found"));
+
+    assert_eq!(responses[1]["id"], 2);
+    assert_eq!(responses[1]["result"]["isError"], true);
+
+    assert_eq!(responses[2]["id"], 3);
+    assert_eq!(responses[2]["error"]["code"], -32601);
+
+    assert_eq!(responses[3]["id"], Value::Null);
+    assert_eq!(responses[3]["error"]["code"], -32700);
+
+    assert_eq!(responses[4]["id"], 4);
+    assert!(responses[4]["result"]["tools"].as_array().unwrap().len() > 10);
 }
 
 #[test]

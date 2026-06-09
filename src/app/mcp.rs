@@ -21,35 +21,69 @@ impl App {
             if line.trim().is_empty() {
                 continue;
             }
-            let request: Value = serde_json::from_str(&line).unwrap_or_else(|_| json!({}));
-            let id = request.get("id").cloned().unwrap_or(Value::Null);
-            let method = request.get("method").and_then(Value::as_str).unwrap_or("");
-            let result = match method {
-                "initialize" => {
-                    json!({"protocolVersion": "2025-03-26", "serverInfo": {"name": "planr", "version": env!("CARGO_PKG_VERSION")}, "capabilities": {"tools": {}, "resources": {}, "prompts": {}}})
+            let request: Value = match serde_json::from_str(&line) {
+                Ok(value) => value,
+                Err(error) => {
+                    write_rpc_error(
+                        &mut stdout,
+                        Value::Null,
+                        -32700,
+                        &format!("parse error: {error}"),
+                    )?;
+                    continue;
                 }
-                "tools/list" => json!({"tools": mcp_tools()}),
-                "resources/list" => json!({"resources": mcp_resources()}),
-                "resources/read" => {
-                    self.mcp_resource_read(request.get("params").cloned().unwrap_or(Value::Null))?
-                }
-                "prompts/list" => {
-                    json!({"prompts": [{"name": "planr-plan"}, {"name": "planr-work"}, {"name": "planr-review"}, {"name": "planr-map"}, {"name": "planr-summary"}]})
-                }
-                "prompts/get" => {
-                    self.mcp_prompt_get(request.get("params").cloned().unwrap_or(Value::Null))
-                }
-                "tools/call" => {
-                    self.mcp_tool_call(request.get("params").cloned().unwrap_or(Value::Null))?
-                }
-                _ => json!({"ok": true}),
             };
-            writeln!(
-                stdout,
-                "{}",
-                json!({"jsonrpc": "2.0", "id": id, "result": result})
-            )?;
-            stdout.flush()?;
+            let id = request.get("id").cloned();
+            let method = request.get("method").and_then(Value::as_str).unwrap_or("");
+            // JSON-RPC notifications carry no id and must not receive a response.
+            let Some(id) = id else {
+                continue;
+            };
+            let params = request.get("params").cloned().unwrap_or(Value::Null);
+            let outcome: Result<Value> = match method {
+                "initialize" => Ok(
+                    json!({"protocolVersion": "2025-03-26", "serverInfo": {"name": "planr", "version": env!("CARGO_PKG_VERSION")}, "capabilities": {"tools": {}, "resources": {}, "prompts": {}}}),
+                ),
+                "ping" => Ok(json!({})),
+                "tools/list" => Ok(json!({"tools": mcp_tools()})),
+                "resources/list" => Ok(json!({"resources": mcp_resources()})),
+                "resources/read" => self.mcp_resource_read(params),
+                "prompts/list" => Ok(
+                    json!({"prompts": [{"name": "planr-plan"}, {"name": "planr-work"}, {"name": "planr-review"}, {"name": "planr-map"}, {"name": "planr-summary"}]}),
+                ),
+                "prompts/get" => Ok(self.mcp_prompt_get(params)),
+                "tools/call" => Ok(match self.mcp_tool_call(params) {
+                    Ok(result) => result,
+                    // Tool execution failures are tool results with isError,
+                    // not protocol errors; the server must keep serving.
+                    Err(error) => json!({
+                        "content": [{"type": "text", "text": json!({"error": {"code": crate::util::infer_error_code(&error.to_string()), "message": error.to_string()}}).to_string()}],
+                        "isError": true
+                    }),
+                }),
+                _ => Err(anyhow!("method not found: {method}")),
+            };
+            match outcome {
+                Ok(result) => {
+                    writeln!(
+                        stdout,
+                        "{}",
+                        json!({"jsonrpc": "2.0", "id": id, "result": result})
+                    )?;
+                    stdout.flush()?;
+                }
+                Err(error) => {
+                    let message = error.to_string();
+                    let code = if message.starts_with("method not found") {
+                        -32601
+                    } else if message.starts_with("missing ") {
+                        -32602
+                    } else {
+                        -32603
+                    };
+                    write_rpc_error(&mut stdout, id, code, &message)?;
+                }
+            }
         }
         Ok(())
     }
@@ -659,9 +693,10 @@ impl App {
                 Ok(mcp_json(json!({"results": results})))
             }
             "planr_log_read" => Ok(mcp_json(self.get_log(required_arg(&args, "id")?)?)),
-            _ => Ok(mcp_json(
-                json!({"error": {"code": "not_found", "message": format!("unknown Planr MCP tool: {name}")}}),
-            )),
+            _ => Ok(json!({
+                "content": [{"type": "text", "text": json!({"error": {"code": "not_found", "message": format!("unknown Planr MCP tool: {name}")}}).to_string()}],
+                "isError": true
+            })),
         }
     }
 
@@ -701,4 +736,14 @@ impl App {
         };
         json!({"description": name, "messages": [{"role": "user", "content": {"type": "text", "text": text}}]})
     }
+}
+
+fn write_rpc_error(stdout: &mut io::Stdout, id: Value, code: i64, message: &str) -> Result<()> {
+    writeln!(
+        stdout,
+        "{}",
+        json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}})
+    )?;
+    stdout.flush()?;
+    Ok(())
 }
