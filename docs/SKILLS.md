@@ -9,6 +9,10 @@ Entry points (what users invoke):
 - `planr`: master router. One entry point for any request; reads live map state and dispatches to the right skill. Users do not need to remember skill names.
 - `planr-loop`: autonomous closing loop. Drives one feature to verified completion — work, live verification, independent review, fix items — until the map is clean or the iteration budget runs out. Ships subagent templates under `skills/planr-loop/agents/`.
 
+Capability skills (dispatched by the loop's live-verification step):
+
+- `planr-verify-web`: proves a web feature runs in a browser. Discovers the host's existing browser capability (browser skill, browser MCP, `npx playwright`, HTTP checks as last resort), records the choice as a `capability` context, and logs replayable evidence. Ships no browser tooling itself.
+
 Stage skills (what the router and loop dispatch to; also directly invocable):
 
 - `planr-task-graph`: active task graph coordination with plans, parent gates, map items, picks, runtime state, approvals, logs, reviews, handoffs, stories, and recovery.

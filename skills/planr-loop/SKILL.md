@@ -57,7 +57,7 @@ Host wiring (templates ship in `agents/` next to this skill):
 
 | Platform | Verification |
 | --- | --- |
-| `web` | drive the running dev server in a real browser (browser automation skill/MCP if available, otherwise scripted HTTP checks against the rendered routes) |
+| `web` | dispatch `$planr-verify-web`: discovers the host's browser capability, runs the changed flow against the dev server, logs a replayable command |
 | `ios` | build and launch in the simulator (`xcodebuild` + `xcrun simctl`), exercise the changed flow |
 | `cli` | execute the built binary with the real flags the feature added; assert on output |
 | `api`/`backend` | start the service, hit the changed endpoints with real requests, assert responses |
