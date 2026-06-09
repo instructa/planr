@@ -9,6 +9,45 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
 
+/// Replace secret-like tokens with `[REDACTED]` markers. Returns `None` when
+/// nothing matched. Token patterns only match at word boundaries so ordinary
+/// words like "risk-free" are not flagged.
+pub(crate) fn redact_secrets(text: &str) -> Option<String> {
+    if text.contains("BEGIN PRIVATE KEY") {
+        return Some("[REDACTED:private-key]".to_string());
+    }
+    const REDACTED: &str = "[REDACTED]";
+    let mut result = text.to_string();
+    let mut changed = false;
+    for pattern in ["sk-", "ghp_", "AKIA"] {
+        let mut from = 0;
+        while let Some(start) = find_token(&result, pattern, from) {
+            let end = result[start..]
+                .char_indices()
+                .find(|(_, c)| !(c.is_ascii_alphanumeric() || *c == '-' || *c == '_'))
+                .map(|(offset, _)| start + offset)
+                .unwrap_or(result.len());
+            result.replace_range(start..end, REDACTED);
+            changed = true;
+            from = start + REDACTED.len();
+        }
+    }
+    changed.then_some(result)
+}
+
+fn find_token(text: &str, pattern: &str, from: usize) -> Option<usize> {
+    let mut search_from = from;
+    while let Some(relative) = text.get(search_from..)?.find(pattern) {
+        let start = search_from + relative;
+        let at_boundary = start == 0 || !text.as_bytes()[start - 1].is_ascii_alphanumeric();
+        if at_boundary {
+            return Some(start);
+        }
+        search_from = start + pattern.len();
+    }
+    None
+}
+
 impl App {
     pub(crate) fn debug_bundle(&self, item: Option<&str>) -> Result<Value> {
         let events = self.list_events(item, 50)?;
@@ -73,20 +112,138 @@ impl App {
 
     pub(crate) fn secret_findings(&self) -> Result<Vec<Value>> {
         let mut findings = Vec::new();
-        let patterns = ["sk-", "ghp_", "BEGIN PRIVATE KEY", "AKIA"];
+        let mut scan = |kind: &str, id: &Value, field: &str, text: &str| {
+            if redact_secrets(text).is_some() {
+                findings.push(json!({"type": kind, "id": id, "field": field}));
+            }
+        };
         for log in self.list_logs(None)? {
-            let summary = log.get("summary").and_then(Value::as_str).unwrap_or("");
-            if patterns.iter().any(|p| summary.contains(p)) {
-                findings.push(json!({"type": "log", "id": log.get("id"), "field": "summary"}));
+            let id = log.get("id").cloned().unwrap_or(Value::Null);
+            for field in ["summary", "files", "commands", "tests"] {
+                let text = match log.get(field) {
+                    Some(Value::String(text)) => text.clone(),
+                    Some(value) if !value.is_null() => value.to_string(),
+                    _ => continue,
+                };
+                scan("log", &id, field, &text);
             }
         }
         for ctx in self.list_contexts(None)? {
+            let id = ctx.get("id").cloned().unwrap_or(Value::Null);
             let content = ctx.get("content").and_then(Value::as_str).unwrap_or("");
-            if patterns.iter().any(|p| content.contains(p)) {
-                findings.push(json!({"type": "context", "id": ctx.get("id"), "field": "content"}));
+            scan("context", &id, "content", content);
+        }
+        for artifact in self.list_artifacts(None)? {
+            let id = artifact.get("id").cloned().unwrap_or(Value::Null);
+            if let Some(content) = artifact.get("content").and_then(Value::as_str) {
+                scan("artifact", &id, "content", content);
             }
         }
         Ok(findings)
+    }
+
+    /// Rewrite flagged secret-like values in place. Returns the number of
+    /// rows whose stored values were redacted.
+    pub(crate) fn apply_scrub(&self) -> Result<usize> {
+        let tx = self.conn.unchecked_transaction()?;
+        let mut scrubbed = 0usize;
+        let mut scrubbed_rows: Vec<(String, String)> = Vec::new();
+
+        {
+            let mut stmt =
+                tx.prepare("SELECT id, summary, files, commands, tests FROM logs ORDER BY id")?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            for (id, summary, files, commands, tests) in rows {
+                let new_summary = redact_secrets(&summary);
+                let new_files = files.as_deref().and_then(redact_secrets);
+                let new_commands = commands.as_deref().and_then(redact_secrets);
+                let new_tests = tests.as_deref().and_then(redact_secrets);
+                if new_summary.is_none()
+                    && new_files.is_none()
+                    && new_commands.is_none()
+                    && new_tests.is_none()
+                {
+                    continue;
+                }
+                let summary = new_summary.unwrap_or(summary);
+                tx.execute(
+                    "UPDATE logs SET summary = ?2, files = COALESCE(?3, files), commands = COALESCE(?4, commands), tests = COALESCE(?5, tests) WHERE id = ?1",
+                    params![id, summary, new_files, new_commands, new_tests],
+                )?;
+                tx.execute(
+                    "UPDATE search_index SET title = ?2, body = ?2 WHERE source_type = 'log' AND source_id = ?1",
+                    params![id, summary],
+                )?;
+                scrubbed_rows.push(("log".to_string(), id));
+                scrubbed += 1;
+            }
+        }
+
+        {
+            let mut stmt = tx.prepare("SELECT id, content FROM contexts ORDER BY created_at")?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            for (id, content) in rows {
+                let Some(redacted) = redact_secrets(&content) else {
+                    continue;
+                };
+                tx.execute(
+                    "UPDATE contexts SET content = ?2 WHERE id = ?1",
+                    params![id, redacted],
+                )?;
+                tx.execute(
+                    "UPDATE search_index SET body = ?2 WHERE source_type = 'context' AND source_id = ?1",
+                    params![id, redacted],
+                )?;
+                scrubbed_rows.push(("context".to_string(), id));
+                scrubbed += 1;
+            }
+        }
+
+        {
+            let mut stmt = tx.prepare(
+                "SELECT id, content FROM artifacts WHERE content IS NOT NULL ORDER BY created_at",
+            )?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            for (id, content) in rows {
+                let Some(redacted) = redact_secrets(&content) else {
+                    continue;
+                };
+                tx.execute(
+                    "UPDATE artifacts SET content = ?2, size_bytes = ?3 WHERE id = ?1",
+                    params![id, redacted, redacted.len() as i64],
+                )?;
+                scrubbed_rows.push(("artifact".to_string(), id));
+                scrubbed += 1;
+            }
+        }
+
+        for (kind, id) in &scrubbed_rows {
+            self.record_event(
+                "secret_scrubbed",
+                None,
+                json!({"source_type": kind, "source_id": id}),
+            )?;
+        }
+        tx.commit()?;
+        Ok(scrubbed)
     }
 
     pub(crate) fn export_value(

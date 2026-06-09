@@ -2608,6 +2608,108 @@ fn recovery_sweep_recovers_timed_out_and_retryable_work() {
 }
 
 #[test]
+fn scrub_confirm_redacts_stored_secret_values() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Scrub"])
+        .assert()
+        .success();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "context",
+            "add",
+            "deploy with key sk-test123SECRET against staging",
+        ])
+        .assert()
+        .success();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "context",
+            "add",
+            "ordinary risk-free note that must survive untouched",
+        ])
+        .assert()
+        .success();
+
+    let preview = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "scrub"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let preview: Value = serde_json::from_slice(&preview).unwrap();
+    assert_eq!(preview["mode"], "preview");
+    assert_eq!(preview["findings"].as_array().unwrap().len(), 1);
+
+    let confirmed = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "scrub", "--confirm"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let confirmed: Value = serde_json::from_slice(&confirmed).unwrap();
+    assert_eq!(confirmed["mode"], "confirm");
+    assert_eq!(confirmed["scrubbed"], 1);
+
+    let conn = Connection::open(&db).unwrap();
+    let contents: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT content FROM contexts ORDER BY created_at")
+            .unwrap();
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        rows
+    };
+    assert!(
+        contents.iter().any(|c| c.contains("[REDACTED]")),
+        "{contents:?}"
+    );
+    assert!(
+        !contents.iter().any(|c| c.contains("sk-test123SECRET")),
+        "secret survived scrub: {contents:?}"
+    );
+    assert!(
+        contents.iter().any(|c| c.contains("risk-free")),
+        "false positive nuked normal content: {contents:?}"
+    );
+
+    // The search index must not return the secret anymore.
+    let indexed: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM search_index WHERE body LIKE '%sk-test123SECRET%'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(indexed, 0);
+
+    // Scrub writes are event-backed.
+    let scrub_events: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM events WHERE event_type = 'secret_scrubbed'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(scrub_events, 1);
+}
+
+#[test]
 fn recovery_timeout_marks_failed_then_retries_until_exhausted() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");

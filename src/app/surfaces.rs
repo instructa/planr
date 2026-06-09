@@ -37,9 +37,10 @@ impl App {
                 format!("{} possible secret(s)", findings.len()),
             );
         }
+        let scrubbed = self.apply_scrub()?;
         self.emit(
-            json!({"findings": findings, "action": "no_secret_values_rewritten"}),
-            "scrub complete".to_string(),
+            json!({"findings": findings, "mode": "confirm", "scrubbed": scrubbed}),
+            format!("scrub complete: {scrubbed} value(s) redacted"),
         )
     }
 
