@@ -11,6 +11,41 @@ Planr ships agent-facing skill templates under `skills/`.
 - `planr-status`: honest read-only status.
 - `planr-summary`: evidence-backed summaries.
 
+## Cheat Sheet
+
+Use the skills in this order for a new app:
+
+```text
+$planr-plan        idea -> product plan -> build plan
+$planr-task-graph  build plan -> map -> dependencies -> critical lane
+$planr-work        pick one ready item -> implement -> log evidence -> request review
+$planr-review      audit evidence -> complete or create fix work
+$planr-work        pick generated fix work when review finds issues
+$planr-status      report honest state, blockers, and next ready work
+$planr-summary     summarize completed scope with evidence
+```
+
+Example first prompt for a Habit Tracker:
+
+```text
+Use $planr-plan and $planr-task-graph.
+
+Create a production-ready Habit Tracker web app plan. Include habits, daily check-ins,
+streaks, weekly overview, local-first persistence, tests, privacy, and release readiness.
+Create the product plan, split an MVP build plan, check it, then build the Planr map.
+Do not implement yet. End with the build plan id, critical lane, and first ready items.
+```
+
+Example implementation prompt:
+
+```text
+Use $planr-work.
+
+Pick exactly one ready Habit Tracker item. Implement only that item, keep Planr runtime
+state current, log changed files and real verification commands, then request review.
+Do not close the item until review is complete.
+```
+
 ## Install For Codex
 
 Copy the Planr skills into Codex's local skill directory:
@@ -19,6 +54,16 @@ Copy the Planr skills into Codex's local skill directory:
 mkdir -p ~/.codex/skills
 cp -R skills/planr-* ~/.codex/skills/
 ```
+
+If Planr was installed from an npm package that includes `skills/`, copy from the package location instead:
+
+```bash
+PLANR_PKG="$(npm root -g)/planr"
+mkdir -p ~/.codex/skills
+cp -R "$PLANR_PKG"/skills/planr-* ~/.codex/skills/
+```
+
+Do not present `npx planr` as the primary install path until the npm artifact ships platform-native Planr binaries. Today the normal user path is the GitHub Release installer; npm is a development and consumer-test wrapper.
 
 Then run Codex from a repository where `planr` is installed and initialized:
 
