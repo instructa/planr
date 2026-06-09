@@ -1428,6 +1428,88 @@ fn http_server_survives_aborted_and_garbage_connections() {
 }
 
 #[test]
+fn http_protocol_correctness_status_codes_cors_and_live_sse() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Protocol"])
+        .assert()
+        .success();
+    let port = free_port();
+    let bin = assert_cmd::cargo::cargo_bin("planr");
+    let mut server = StdCommand::new(&bin)
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "serve",
+            "--port",
+            &port.to_string(),
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    thread::sleep(Duration::from_millis(150));
+
+    // Unknown route is a 404, not a 200 with an error body.
+    let missing = http_request(port, "GET", "/v1/definitely-not-a-route", "");
+    assert!(missing.starts_with("HTTP/1.1 404"), "{missing}");
+    assert!(missing.contains("not_found"), "{missing}");
+
+    // Missing entity is a 404.
+    let missing_item = http_request(port, "GET", "/v1/items/itm_nope", "");
+    assert!(missing_item.starts_with("HTTP/1.1 404"), "{missing_item}");
+
+    // Garbage JSON on a mutating route is a 400, and creates nothing.
+    let garbage = http_request(port, "POST", "/v1/projects", "{definitely not json");
+    assert!(garbage.starts_with("HTTP/1.1 400"), "{garbage}");
+    let projects = http_json(&http_request(port, "GET", "/v1/projects", ""));
+    assert_eq!(projects["projects"].as_array().unwrap().len(), 1);
+
+    // Every response carries CORS headers; OPTIONS preflight is answered.
+    let health = http_request(port, "GET", "/health", "");
+    assert!(
+        health
+            .to_lowercase()
+            .contains("access-control-allow-origin: *"),
+        "{health}"
+    );
+    let preflight = http_request(port, "OPTIONS", "/v1/projects", "");
+    assert!(preflight.starts_with("HTTP/1.1 204"), "{preflight}");
+
+    // SSE is a live stream: an event recorded after the stream opens arrives.
+    let stream_port = port;
+    let listener_handle = thread::spawn(move || {
+        http_sse_read_until(stream_port, "/v1/events/stream", "event: item_created")
+    });
+    thread::sleep(Duration::from_millis(400));
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "item",
+            "create",
+            "Streamed item",
+            "--description",
+            "born during an open SSE stream",
+        ])
+        .assert()
+        .success();
+    let streamed = listener_handle.join().unwrap();
+    assert!(streamed.contains("event: item_created"), "{streamed}");
+    assert!(
+        streamed.contains("Streamed item") || streamed.contains("data: "),
+        "{streamed}"
+    );
+
+    server.kill().unwrap();
+    server.wait().unwrap();
+}
+
+#[test]
 fn mcp_server_survives_failing_tool_calls_and_answers_errors() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
@@ -2313,7 +2395,8 @@ fn artifacts_events_and_debug_bundle_are_persisted() {
     assert!(http_event_types.contains(&"artifact_created"));
     assert!(http_event_types.contains(&"log_created"));
     assert!(http_event_types.contains(&"review_requested"));
-    let sse = http_request(port, "GET", "/v1/events/stream", "");
+    let sse = http_sse_read_until(port, "/v1/events/stream", "event: artifact_created");
+    assert!(sse.contains("text/event-stream"), "{sse}");
     assert!(sse.contains("event: artifact_created"), "{sse}");
     let http_bundle = http_json(&http_request(port, "GET", "/v1/debug/bundle", ""));
     assert_eq!(
@@ -3172,6 +3255,34 @@ fn http_request(port: u16, method: &str, path: &str, body: &str) -> String {
     let mut response = String::new();
     stream.read_to_string(&mut response).unwrap();
     response
+}
+
+fn http_sse_read_until(port: u16, path: &str, needle: &str) -> String {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    write!(
+        stream,
+        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: text/event-stream\r\n\r\n"
+    )
+    .unwrap();
+    let mut collected = String::new();
+    let mut buf = [0u8; 4096];
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        match stream.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                collected.push_str(&String::from_utf8_lossy(&buf[..n]));
+                if collected.contains(needle) {
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    collected
 }
 
 fn http_json(response: &str) -> Value {

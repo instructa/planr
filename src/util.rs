@@ -62,6 +62,42 @@ pub fn infer_error_code(message: &str) -> &'static str {
     }
 }
 
+/// Percent-decode a URL query component, treating `+` as a space.
+pub fn url_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b'%' if i + 2 < bytes.len() => {
+                let hex = [bytes[i + 1], bytes[i + 2]];
+                match std::str::from_utf8(&hex)
+                    .ok()
+                    .and_then(|h| u8::from_str_radix(h, 16).ok())
+                {
+                    Some(byte) => {
+                        out.push(byte);
+                        i += 3;
+                    }
+                    None => {
+                        out.push(b'%');
+                        i += 1;
+                    }
+                }
+            }
+            byte => {
+                out.push(byte);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 pub fn format_project(project: &Project) -> String {
     format!("{} {} ({})", project.id, project.name, project.status)
 }

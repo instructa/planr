@@ -22,9 +22,28 @@ impl App {
             };
             let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
             let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(10)));
-            if let Err(error) = self.handle_http(stream) {
-                eprintln!("planr serve: connection error: {error:#}");
-            }
+            // One thread and one SQLite connection per request keeps slow
+            // requests and held SSE streams from blocking the server.
+            let root = self.root.clone();
+            let db_path = self.db_path.clone();
+            let json = self.json;
+            std::thread::spawn(move || {
+                let app = match crate::storage::open_db(&db_path) {
+                    Ok(conn) => App {
+                        conn,
+                        root,
+                        db_path,
+                        json,
+                    },
+                    Err(error) => {
+                        eprintln!("planr serve: database open error: {error:#}");
+                        return;
+                    }
+                };
+                if let Err(error) = app.handle_http(stream) {
+                    eprintln!("planr serve: connection error: {error:#}");
+                }
+            });
         }
         Ok(())
     }
@@ -58,7 +77,7 @@ impl App {
             }))?;
             write!(
                 stream,
-                "HTTP/1.1 413 Payload Too Large\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+                "HTTP/1.1 413 Payload Too Large\r\n{CORS_HEADERS}content-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
                 body.len(),
                 body
             )?;
@@ -68,10 +87,34 @@ impl App {
         if content_length > 0 {
             reader.read_exact(&mut raw_body)?;
         }
+        if method == "OPTIONS" {
+            write!(
+                stream,
+                "HTTP/1.1 204 No Content\r\n{CORS_HEADERS}content-length: 0\r\n\r\n"
+            )?;
+            return Ok(());
+        }
+        if method == "GET" && path == "/v1/events/stream" {
+            return self.stream_events(stream);
+        }
         let body_json: Value = if raw_body.is_empty() {
             json!({})
         } else {
-            serde_json::from_slice(&raw_body).unwrap_or_else(|_| json!({}))
+            match serde_json::from_slice(&raw_body) {
+                Ok(value) => value,
+                Err(error) => {
+                    let body = serde_json::to_string(&json!({
+                        "error": {"code": "bad_request", "message": format!("request body is not valid JSON: {error}"), "details": {}}
+                    }))?;
+                    write!(
+                        stream,
+                        "HTTP/1.1 400 Bad Request\r\n{CORS_HEADERS}content-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )?;
+                    return Ok(());
+                }
+            }
         };
         let body_result: Result<String> = (|| {
             let body = match (method, path) {
@@ -94,7 +137,7 @@ impl App {
                 )?;
                     serde_json::to_string(&json!({"project": self.get_project(&id)?}))?
                 }
-                (_, p) if p.ends_with("/map") => serde_json::to_string(&self.map_value()?)?,
+                ("GET", p) if p.ends_with("/map") => serde_json::to_string(&self.map_value()?)?,
                 ("GET", p) if p.ends_with("/map/status") => {
                     serde_json::to_string(&self.map_status_value()?)?
                 }
@@ -103,7 +146,7 @@ impl App {
                         .split('&')
                         .filter_map(|part| part.split_once('='))
                         .find(|(key, _)| *key == "from")
-                        .map(|(_, value)| value.replace('+', " "));
+                        .map(|(_, value)| crate::util::url_decode(value));
                     serde_json::to_string(&self.lookahead_value(from.as_deref(), 10)?)?
                 }
                 ("GET", p) if p.ends_with("/items") => {
@@ -678,34 +721,13 @@ impl App {
                         .split('&')
                         .filter_map(|part| part.split_once('='))
                         .find(|(key, _)| *key == "q")
-                        .map(|(_, value)| value.replace('+', " "))
+                        .map(|(_, value)| crate::util::url_decode(value))
                         .unwrap_or_default();
                     let results = self.search_results(&q)?;
                     serde_json::to_string(&json!({"results": results}))?
                 }
-                ("GET", "/v1/events/stream") => {
-                    let mut stream_body = String::new();
-                    for event in self.list_events(None, 100)?.into_iter().rev() {
-                        stream_body.push_str("event: ");
-                        stream_body.push_str(
-                            event
-                                .get("event_type")
-                                .and_then(Value::as_str)
-                                .unwrap_or("planr_event"),
-                        );
-                        stream_body.push_str("\ndata: ");
-                        stream_body.push_str(&serde_json::to_string(&event)?);
-                        stream_body.push_str("\n\n");
-                    }
-                    if stream_body.is_empty() {
-                        stream_body.push_str("event: ready\ndata: {\"ok\":true}\n\n");
-                    }
-                    stream_body
-                }
                 (_, "/health") => "{\"ok\":true}".to_string(),
-                _ => serde_json::to_string(
-                    &json!({"error": {"code": "not_found", "message": "route not found"}}),
-                )?,
+                (m, p) => bail!("route not found: {m} {p}"),
             };
             Ok(body)
         })();
@@ -714,8 +736,13 @@ impl App {
             Err(error) => {
                 let message = error.to_string();
                 let code = infer_error_code(&message);
+                let status = match code {
+                    "not_found" => "404 Not Found",
+                    "internal_error" => "500 Internal Server Error",
+                    _ => "400 Bad Request",
+                };
                 (
-                    "400 Bad Request",
+                    status,
                     serde_json::to_string(&json!({
                         "error": {
                             "code": code,
@@ -726,19 +753,85 @@ impl App {
                 )
             }
         };
-        let content_type = if path == "/v1/events/stream" {
-            "text/event-stream"
-        } else if path == "/review" || path == "/review/" {
+        let content_type = if path == "/review" || path == "/review/" {
             "text/html; charset=utf-8"
         } else {
             "application/json"
         };
         write!(
             stream,
-            "HTTP/1.1 {status}\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\n\r\n{}",
+            "HTTP/1.1 {status}\r\n{CORS_HEADERS}content-type: {content_type}\r\ncontent-length: {}\r\n\r\n{}",
             body.len(),
             body
         )?;
         Ok(())
     }
+
+    /// Live Server-Sent Events stream: replays recent events, then follows
+    /// the events table until the client disconnects.
+    fn stream_events(&self, mut stream: TcpStream) -> Result<()> {
+        // Streaming writes are spaced out; the per-connection write timeout
+        // only needs to cover a single event or heartbeat write.
+        let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(10)));
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\n{CORS_HEADERS}content-type: text/event-stream\r\ncache-control: no-cache\r\nconnection: close\r\n\r\n"
+        )?;
+        write!(stream, "retry: 5000\n\n")?;
+        let mut last_id: i64 = 0;
+        let replay = self.list_events(None, 100)?;
+        if replay.is_empty() {
+            write!(stream, "event: ready\ndata: {{\"ok\":true}}\n\n")?;
+        }
+        for event in replay.into_iter().rev() {
+            last_id = write_sse_event(&mut stream, &event)?.max(last_id);
+        }
+        stream.flush()?;
+        let mut idle_polls = 0u32;
+        loop {
+            let fresh = self.events_after(last_id)?;
+            if fresh.is_empty() {
+                idle_polls += 1;
+                // Heartbeat comment roughly every 5 seconds keeps proxies and
+                // clients aware the stream is alive and detects disconnects.
+                if idle_polls >= 10 {
+                    idle_polls = 0;
+                    if write!(stream, ": keepalive\n\n").is_err() {
+                        return Ok(());
+                    }
+                    if stream.flush().is_err() {
+                        return Ok(());
+                    }
+                }
+            } else {
+                idle_polls = 0;
+                for event in fresh {
+                    match write_sse_event(&mut stream, &event) {
+                        Ok(id) => last_id = id.max(last_id),
+                        Err(_) => return Ok(()),
+                    }
+                }
+                if stream.flush().is_err() {
+                    return Ok(());
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+    }
+}
+
+const CORS_HEADERS: &str = "access-control-allow-origin: *\r\naccess-control-allow-methods: GET, POST, OPTIONS\r\naccess-control-allow-headers: content-type\r\n";
+
+fn write_sse_event(stream: &mut TcpStream, event: &Value) -> Result<i64> {
+    let id = event.get("id").and_then(Value::as_i64).unwrap_or(0);
+    write!(
+        stream,
+        "id: {id}\nevent: {}\ndata: {}\n\n",
+        event
+            .get("event_type")
+            .and_then(Value::as_str)
+            .unwrap_or("planr_event"),
+        serde_json::to_string(event)?
+    )?;
+    Ok(id)
 }

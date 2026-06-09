@@ -968,4 +968,12 @@ impl App {
         };
         collect_rows(rows)
     }
+
+    pub(crate) fn events_after(&self, after_id: i64) -> Result<Vec<Value>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, project_id, item_id, worker_id, event_type, payload, timestamp FROM events WHERE id > ?1 ORDER BY id LIMIT 500",
+        )?;
+        let rows = stmt.query_map(params![after_id], event_row)?;
+        collect_rows(rows)
+    }
 }
