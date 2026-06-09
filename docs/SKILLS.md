@@ -4,6 +4,13 @@ Planr ships agent-facing skill templates under `skills/`.
 
 ## Included Skills
 
+Entry points (what users invoke):
+
+- `planr`: master router. One entry point for any request; reads live map state and dispatches to the right skill. Users do not need to remember skill names.
+- `planr-loop`: autonomous closing loop. Drives one feature to verified completion — work, live verification, independent review, fix items — until the map is clean or the iteration budget runs out. Ships subagent templates under `skills/planr-loop/agents/`.
+
+Stage skills (what the router and loop dispatch to; also directly invocable):
+
 - `planr-task-graph`: active task graph coordination with plans, parent gates, map items, picks, runtime state, approvals, logs, reviews, handoffs, stories, and recovery.
 - `planr-plan`: product and build planning.
 - `planr-work`: one picked item to evidence-backed completion.
@@ -13,7 +20,14 @@ Planr ships agent-facing skill templates under `skills/`.
 
 ## Cheat Sheet
 
-Use the skills in this order for a new app:
+Default usage needs two skills:
+
+```text
+$planr        any request -> routed to the right stage skill from live map state
+$planr-loop   one feature -> loop work/verify/review/fix until done or budget exhausted
+```
+
+The stage order the router follows for a new app:
 
 ```text
 $planr-plan        idea -> product plan -> build plan
@@ -28,7 +42,7 @@ $planr-summary     summarize completed scope with evidence
 Example first prompt for a Habit Tracker:
 
 ```text
-Use $planr-plan and $planr-task-graph.
+Use $planr.
 
 Create a production-ready Habit Tracker web app plan. Include habits, daily check-ins,
 streaks, weekly overview, local-first persistence, tests, privacy, and release readiness.
@@ -36,7 +50,17 @@ Create the product plan, split an MVP build plan, check it, then build the Planr
 Do not implement yet. End with the build plan id, critical lane, and first ready items.
 ```
 
-Example implementation prompt:
+Example autonomous feature loop:
+
+```text
+Use $planr-loop.
+
+Goal: ship the weekly overview feature. DONE when every in-scope map item is closed with
+log evidence, all reviews are closed complete, and a live verification log shows the
+overview rendering real check-in data in the browser. Iteration budget: 10.
+```
+
+Example single implementation step (human-in-the-loop):
 
 ```text
 Use $planr-work.
@@ -46,13 +70,27 @@ state current, log changed files and real verification commands, then request re
 Do not close the item until review is complete.
 ```
 
+## Loop Roles
+
+`planr-loop` keeps maker and checker separate. Hosts with subagents get dedicated roles that are prompted with skills, not hand-written prompts:
+
+```bash
+# Codex: project-scoped agents preloading planr-work / planr-review
+cp skills/planr-loop/agents/codex/*.toml .codex/agents/
+
+# Claude Code: subagents preloading the same skills via frontmatter
+cp skills/planr-loop/agents/claude/*.md .claude/agents/
+```
+
+Dispatches stay one line: `Use $planr-work on item <id>` and `Use $planr-review on item <id>`. The map and logs are the loop memory, so any iteration can resume from zero context.
+
 ## Install For Codex
 
 Copy the Planr skills into Codex's local skill directory:
 
 ```bash
 mkdir -p ~/.codex/skills
-cp -R skills/planr-* ~/.codex/skills/
+cp -R skills/* ~/.codex/skills/
 ```
 
 If Planr was installed from an npm package that includes `skills/`, copy from the package location instead:
@@ -60,7 +98,7 @@ If Planr was installed from an npm package that includes `skills/`, copy from th
 ```bash
 PLANR_PKG="$(npm root -g)/planr"
 mkdir -p ~/.codex/skills
-cp -R "$PLANR_PKG"/skills/planr-* ~/.codex/skills/
+cp -R "$PLANR_PKG"/skills/* ~/.codex/skills/
 ```
 
 Do not present `npx planr` as the primary install path until the npm artifact ships platform-native Planr binaries. Today the normal user path is the GitHub Release installer; npm is a development and consumer-test wrapper.
@@ -81,7 +119,15 @@ planr prompt mcp --client codex
 
 ## Install For Claude Code
 
-Claude Code does not use Codex skill folders. Use MCP and paste the Planr workflow prompt into project instructions when needed:
+Claude Code loads project skills from `.claude/skills/`:
+
+```bash
+mkdir -p .claude/skills .claude/agents
+cp -R skills/* .claude/skills/
+cp skills/planr-loop/agents/claude/*.md .claude/agents/
+```
+
+Then add MCP and the Planr workflow prompt to project instructions when needed:
 
 ```bash
 planr project init "Example Product" --client claude
