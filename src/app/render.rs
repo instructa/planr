@@ -61,7 +61,7 @@ fn state_line(project: &str, items: &[Item]) -> String {
             .count()
     };
     let done = count(&["closed", "closed_partial"]);
-    let percent = if total == 0 { 0 } else { done * 100 / total };
+    let percent = (done * 100).checked_div(total).unwrap_or(0);
     let mut line = format!(
         "{project}: {done}/{total} done ({percent}%) | ready {} | active {} | in_review {} | blocked {}",
         count(&["ready"]),
@@ -113,7 +113,7 @@ fn render_tree(items: &[Item], edges: &[RenderEdge], critical: &HashSet<String>)
         .iter()
         .filter(|item| !incoming.contains(item.id.as_str()))
         .collect::<Vec<_>>();
-    roots.sort_by(|a, b| b.priority.cmp(&a.priority));
+    roots.sort_by_key(|item| std::cmp::Reverse(item.priority));
 
     let mut out = String::new();
     let mut printed = HashSet::new();
