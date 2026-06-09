@@ -20,10 +20,13 @@ impl App {
             RecoverCommand::Sweep(args) => {
                 let value = self.recovery_sweep_value(args.older_than_seconds, args.apply)?;
                 let released = value["released"].as_u64().unwrap_or(0);
+                let failed = value["failed"].as_u64().unwrap_or(0);
                 let retried = value["retried"].as_u64().unwrap_or(0);
                 self.emit(
                     value,
-                    format!("recovery sweep: {released} released, {retried} retried"),
+                    format!(
+                        "recovery sweep: {released} released, {failed} failed, {retried} retried"
+                    ),
                 )
             }
         }
@@ -148,13 +151,7 @@ impl App {
              AND datetime(COALESCE(last_heartbeat_at, picked_at, updated_at), '+' || timeout_seconds || ' seconds') < datetime('now')
              ORDER BY COALESCE(last_heartbeat_at, picked_at, updated_at)",
         )?;
-        let retryable = self.simple_recovery_ids(
-            "SELECT id FROM items
-             WHERE status = 'failed'
-             AND retry_count < max_retries
-             AND datetime(updated_at, '+' || ((retry_delay_ms + 999) / 1000) || ' seconds') <= datetime('now')
-             ORDER BY updated_at",
-        )?;
+        let retryable = self.retryable_failed_ids()?;
         let exhausted = self.simple_recovery_ids(
             "SELECT id FROM items
              WHERE status = 'failed'
@@ -163,14 +160,49 @@ impl App {
         )?;
 
         let mut released = 0usize;
+        let mut failed = 0usize;
         let mut retried = 0usize;
         if apply {
-            let release_ids: BTreeSet<_> = stale
-                .iter()
-                .chain(timed_out.iter())
-                .map(String::as_str)
-                .collect();
-            for item_id in release_ids {
+            // Timed-out items with a retry budget enter the failed/retry
+            // lifecycle; everything else is released straight back to ready.
+            let mut release_ids: BTreeSet<String> = stale.iter().cloned().collect();
+            for item_id in &timed_out {
+                let (max_retries, timeout_seconds): (i64, Option<i64>) = self.conn.query_row(
+                    "SELECT max_retries, timeout_seconds FROM items WHERE id = ?1",
+                    params![item_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?;
+                if max_retries > 0 {
+                    release_ids.remove(item_id);
+                    self.conn.execute(
+                        "UPDATE items
+                         SET status = 'failed',
+                             error = ?2,
+                             worker_id = NULL,
+                             pick_token = NULL,
+                             last_heartbeat_at = NULL,
+                             paused_at = NULL,
+                             updated_at = datetime('now')
+                         WHERE id = ?1 AND status IN ('picked','running')",
+                        params![
+                            item_id,
+                            format!(
+                                "timed out after {} seconds without heartbeat",
+                                timeout_seconds.unwrap_or(older_than_seconds)
+                            )
+                        ],
+                    )?;
+                    self.record_event(
+                        "item_timed_out",
+                        Some(item_id),
+                        json!({"timeout_seconds": timeout_seconds, "marked": "failed"}),
+                    )?;
+                    failed += 1;
+                } else {
+                    release_ids.insert(item_id.clone());
+                }
+            }
+            for item_id in &release_ids {
                 self.conn.execute(
                     "UPDATE items
                      SET status = 'ready',
@@ -219,8 +251,44 @@ impl App {
             "retryable": self.recovery_items(&retryable)?,
             "exhausted": self.recovery_items(&exhausted)?,
             "released": released,
+            "failed": failed,
             "retried": retried,
         }))
+    }
+
+    /// Failed items whose retry budget is open and whose backoff delay has
+    /// elapsed. Exponential backoff doubles the base delay per retry.
+    fn retryable_failed_ids(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, retry_count, retry_delay_ms, retry_backoff,
+                    (julianday('now') - julianday(updated_at)) * 86400000.0
+             FROM items
+             WHERE status = 'failed' AND retry_count < max_retries
+             ORDER BY updated_at",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, f64>(4)?,
+            ))
+        })?;
+        let mut ids = Vec::new();
+        for row in rows {
+            let (id, retry_count, delay_ms, backoff, elapsed_ms) = row?;
+            let factor = if backoff == "exponential" {
+                1i64 << retry_count.clamp(0, 20)
+            } else {
+                1
+            };
+            let effective_delay_ms = delay_ms.max(0).saturating_mul(factor);
+            if elapsed_ms >= effective_delay_ms as f64 {
+                ids.push(id);
+            }
+        }
+        Ok(ids)
     }
 
     fn recovery_ids(&self, sql: &str, value: i64) -> Result<Vec<String>> {

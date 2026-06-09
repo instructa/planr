@@ -2608,6 +2608,123 @@ fn recovery_sweep_recovers_timed_out_and_retryable_work() {
 }
 
 #[test]
+fn recovery_timeout_marks_failed_then_retries_until_exhausted() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Lifecycle"])
+        .assert()
+        .success();
+    let item = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "item",
+            "create",
+            "Flaky work",
+            "--description",
+            "times out, retries once, then exhausts",
+            "--timeout-seconds",
+            "1",
+            "--max-retries",
+            "1",
+            "--retry-delay-ms",
+            "0",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let item: Value = serde_json::from_slice(&item).unwrap();
+    let item_id = item["item"]["id"].as_str().unwrap().to_string();
+
+    let conn = Connection::open(&db).unwrap();
+    let sweep = |apply: bool| -> Value {
+        let mut args = vec![
+            "--db".to_string(),
+            db.to_str().unwrap().to_string(),
+            "--json".to_string(),
+            "recover".to_string(),
+            "sweep".to_string(),
+            "--older-than-seconds".to_string(),
+            "900".to_string(),
+        ];
+        if apply {
+            args.push("--apply".to_string());
+        }
+        let output = planr()
+            .current_dir(dir.path())
+            .args(&args)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice(&output).unwrap()
+    };
+    let pick_and_backdate = |conn: &Connection| {
+        planr()
+            .current_dir(dir.path())
+            .args(["--db", db.to_str().unwrap(), "--json", "pick"])
+            .assert()
+            .success();
+        conn.execute(
+            "UPDATE items SET picked_at = datetime('now','-5 seconds'), last_heartbeat_at = datetime('now','-5 seconds'), updated_at = datetime('now','-5 seconds') WHERE id = ?1",
+            [item_id.as_str()],
+        )
+        .unwrap();
+    };
+    let status = |conn: &Connection| -> String {
+        conn.query_row(
+            "SELECT status FROM items WHERE id = ?1",
+            [item_id.as_str()],
+            |row| row.get(0),
+        )
+        .unwrap()
+    };
+
+    // Round 1: timeout marks the item failed (retry budget exists).
+    pick_and_backdate(&conn);
+    let applied = sweep(true);
+    assert_eq!(applied["failed"], 1, "{applied}");
+    assert_eq!(status(&conn), "failed");
+
+    // Round 2: the failed item is retryable and goes back to ready.
+    let retry = sweep(true);
+    assert_eq!(retry["retried"], 1, "{retry}");
+    assert_eq!(status(&conn), "ready");
+
+    // Round 3: second timeout exhausts the budget; item stays failed.
+    pick_and_backdate(&conn);
+    let second_fail = sweep(true);
+    assert_eq!(second_fail["failed"], 1, "{second_fail}");
+    let exhausted = sweep(true);
+    assert_eq!(exhausted["retried"], 0, "{exhausted}");
+    assert_eq!(exhausted["exhausted"][0]["item"]["id"], item_id);
+    assert_eq!(status(&conn), "failed");
+
+    // The full lifecycle is event-backed.
+    let events: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT event_type FROM events WHERE item_id = ?1 ORDER BY id")
+            .unwrap();
+        let rows = stmt
+            .query_map([item_id.as_str()], |row| row.get::<_, String>(0))
+            .unwrap();
+        rows.collect::<rusqlite::Result<Vec<_>>>().unwrap()
+    };
+    assert!(events.contains(&"item_timed_out".to_string()), "{events:?}");
+    assert!(
+        events.contains(&"recovery_retry_scheduled".to_string()),
+        "{events:?}"
+    );
+}
+
+#[test]
 fn recovery_sweep_is_available_through_mcp_and_http() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
