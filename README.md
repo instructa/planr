@@ -2,6 +2,19 @@
 
 Planr is a local-first task planning and execution coordination tool for coding agents. It combines reviewable Markdown plans with a dependency-aware work map so Codex, Claude Code, Cursor, and other MCP-capable clients can coordinate safely.
 
+## Why a Graph-Based Planner
+
+Flat todo lists and Markdown checklists break down the moment real work has structure. Planr models work as a dependency graph because that is what work actually is:
+
+- **Readiness is computed, not guessed.** A flat list cannot express "B cannot start before A is closed." In the graph, an item becomes `ready` only when its blockers are closed, so an agent never has to interpret a checklist — it asks `planr pick next` and gets work that is actually startable.
+- **Parallel agents need atomic claims.** Two agents editing the same checklist is a race condition. Picks are atomic claims on ready items: one item, one owner, enforced by the database, not by convention.
+- **The critical path is a query.** "What unblocks the most downstream work?" and "what is the longest remaining chain?" are unanswerable with a list. With a graph they are one command: `planr map lane --critical` and `planr map pressure`.
+- **"Done" is gated, not asserted.** Closure requires log-backed evidence (files changed, commands run, tests) and open review items block their target. A checked checkbox proves nothing; a closed graph node carries its proof.
+- **Nesting gives context without losing state.** Markdown plans hold scope, acceptance criteria, and narrative; the graph holds live status. Chat history evaporates between sessions — the graph survives handoffs, restarts, and agent switches.
+- **Failure is structured.** Stale picks, timeouts, and retries are detectable and recoverable (`planr recover sweep`) because state lives in a database instead of someone's memory.
+
+The result: multiple coding agents can work the same repository concurrently without stepping on each other, and a human can audit at any time what is done, what is blocked, and why. See `docs/TASK_GRAPH_MODEL.md` and `docs/OPERATING_MODEL.md` for the full model.
+
 ## Product Direction
 
 Planr combines three layers:
