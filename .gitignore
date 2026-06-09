@@ -9,6 +9,8 @@ dist/
 # Node/package outputs
 node_modules/
 *.tgz
+pnpm-workspace.yaml
+pnpm-lock.yaml
 
 # Local frontend experiments/scaffolds
 apps/web/
