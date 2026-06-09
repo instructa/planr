@@ -174,7 +174,8 @@ jobs:
       - name: Push formula to tap
         env:
           TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
-          TAP_REPO: instructa/tap
+          # `brew install instructa/tap/planr` resolves to this repo name.
+          TAP_REPO: instructa/homebrew-tap
           TAG: ${{ github.ref_name }}
         run: |
           if [ -z "$TAP_TOKEN" ]; then

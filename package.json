@@ -12,8 +12,7 @@
     "skills",
     "README.md",
     "LICENSE.md",
-    "docs",
-    "public/planr_workflow.png"
+    "docs"
   ],
   "scripts": {
     "build:native": "cargo build --release",

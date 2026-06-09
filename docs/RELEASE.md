@@ -18,7 +18,7 @@ Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`:
 1. `create-release` verifies the tag matches the `Cargo.toml` version and creates a draft GitHub Release.
 2. `build` compiles and packages `planr-<os>-<arch>.tar.gz` for `darwin-arm64`, `darwin-x86_64`, `linux-x86_64`, and `linux-arm64`, then uploads each asset to the draft release.
 3. `finalize` downloads all uploaded assets, writes one aggregated `SHA256SUMS` covering every tarball, uploads it, and publishes the release.
-4. `homebrew-tap` regenerates `Formula/planr.rb` with `scripts/generate-formula.sh` and pushes it to `instructa/tap`.
+4. `homebrew-tap` regenerates `Formula/planr.rb` with `scripts/generate-formula.sh` and pushes it to `instructa/homebrew-tap` (installed as `brew install instructa/tap/planr`).
 
 Tag flow:
 
@@ -27,7 +27,7 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
-The Homebrew job only runs when the repository variable `HOMEBREW_TAP_ENABLED` is `true` and requires a `TAP_GITHUB_TOKEN` secret with write access to `instructa/tap`. The tap repository must exist before enabling it.
+The Homebrew job only runs when the repository variable `HOMEBREW_TAP_ENABLED` is `true` and requires a `TAP_GITHUB_TOKEN` secret with write access to `instructa/homebrew-tap`. The tap repository must exist before enabling it.
 
 ## Preflight
 
@@ -81,7 +81,6 @@ The package must include:
 - `skills/`
 - `README.md`
 - `LICENSE.md`
-- `public/planr_workflow.png`
 
 ## Install Smoke
 

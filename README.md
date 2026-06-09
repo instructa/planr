@@ -1,7 +1,5 @@
 # Planr
 
-![Planr workflow: plan -> fix -> review against repo state](public/planr_workflow.png)
-
 Planr is a local-first task planning and execution coordination tool for coding agents. It combines reviewable Markdown plans with a dependency-aware work map so Codex, Claude Code, Cursor, and other MCP-capable clients can coordinate safely.
 
 ## Product Direction
@@ -95,7 +93,6 @@ cargo run -- close <item-id> --summary "Verified"
 - `skills/planr-*`: public Planr-native skill templates for coding agents.
 - `docs/planr-spec/`: production-ready product specification package for Planr V1.
 - `examples/real-world-flow.md`: executable real-world operator flow.
-- `public/planr_workflow.png`: existing workflow image.
 
 ## Integrations
 
