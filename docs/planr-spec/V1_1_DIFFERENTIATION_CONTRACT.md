@@ -110,7 +110,7 @@ Acceptance:
 ### Templates And Review Packages
 
 - REQ-V11-TEMPLATE-001: Export/import must support map items, links, plans, contexts, logs, review artifacts, and metadata.
-- REQ-V11-TEMPLATE-002: Templates must include compatibility metadata, Planr version, creation timestamp, source project name, and optional tags.
+- REQ-V11-TEMPLATE-002: Templates must include package requirements metadata, Planr version, creation timestamp, source project name, and optional tags.
 - REQ-V11-TEMPLATE-003: Import must preview what will be created or skipped before mutating existing projects.
 - REQ-V11-TEMPLATE-004: Review packages must preserve annotations, findings, artifacts, and file references.
 - REQ-V11-TEMPLATE-005: Encrypted local bundle sharing may be implemented without hosted infrastructure; if not implemented in V1.1, docs must capture the accepted local-first format and explicit future scope.

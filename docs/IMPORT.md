@@ -1,22 +1,15 @@
-# Import Existing Planr Data
+# Planr Packages
 
 ```bash
-planr project init "Imported Project"
-planr import /path/to/repo-or-planr-dir
-planr map show --json
+planr project init "New Project"
+planr export --include-plans --include-logs --template-name "API backend slice" --tag api --out planr-package.json
+planr import planr-package.json --preview
+planr import planr-package.json --confirm
 ```
 
-Import reads project packs, product plans, build plans, status scopes, and review artifacts when present. Originals are not deleted or rewritten.
+Planr packages are local-first JSON files created by `planr export`. They carry graph items, links, contexts, optional logs, optional plan file snapshots, and review artifacts.
 
-Use JSON export for backups and reusable templates:
-
-```bash
-planr export --include-plans --include-logs --template-name "API backend slice" --tag api --out planr-backup.json
-planr import planr-backup.json --preview
-planr import planr-backup.json --confirm
-```
-
-JSON imports are preview-first. Preview reports compatibility metadata, create counts, and conflicting item ids before mutating the current project.
+Imports are preview-first. Preview reports package metadata, create counts, and conflicting item ids before mutating the current project.
 
 Planr packages are local-first JSON. For encrypted sharing, review the JSON locally and encrypt the file with your team's standard tool, for example:
 

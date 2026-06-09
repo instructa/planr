@@ -76,15 +76,11 @@ Only if shipped:
 - Server binds to localhost by default.
 - `/review` renders the local review workspace and supports annotation, request-changes, artifact, and approve flows through the HTTP API.
 
-## Migration Tests
+## Package Import Tests
 
-Fixtures from existing `.planr` data:
-
-- `.planr/project/*.md` imported as project pack.
-- `.planr/plans/*.plan.md` parsed as plans.
-- `.planr/status/current.json` scopes mapped to items.
-- `.planr/reviews/*.review.md` imported as review artifacts.
-- Originals remain unchanged.
+- Exported packages preview create counts and conflicting item ids without mutation.
+- Confirmed imports restore graph items, links, contexts, optional logs, optional plan files, and review artifacts.
+- Imported graph work can be picked in a fresh project.
 
 ## Security Tests
 

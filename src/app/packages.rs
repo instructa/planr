@@ -24,18 +24,6 @@ impl App {
     }
 
     pub(crate) fn import(&self, args: ImportArgs) -> Result<()> {
-        if args.file.is_dir() {
-            let imported = self.import_planr_dir(&args.file)?;
-            self.record_event(
-                "import_completed",
-                None,
-                json!({"path": args.file, "mode": "directory", "imported": imported}),
-            )?;
-            return self.emit(
-                json!({"path": args.file, "imported": imported}),
-                "directory imported".to_string(),
-            );
-        }
         let data: Value = serde_json::from_slice(&fs::read(&args.file)?)?;
         let report = self.import_package_report(&data)?;
         if args.preview || !args.confirm {
@@ -48,7 +36,7 @@ impl App {
         self.record_event(
             "import_completed",
             None,
-            json!({"file": args.file, "mode": "json", "imported": imported}),
+            json!({"file": args.file, "mode": "package", "imported": imported}),
         )?;
         self.emit(
             json!({"file": args.file, "mode": "apply", "imported": imported}),

@@ -64,7 +64,7 @@ V1 is a local backend packaged into the CLI binary:
 
 - Map state, worker heartbeats, progress, stale ownership data, and approval gates: SQLite.
 - Rich product plans, build plans, and project context: `.planr/*.md`.
-- Live status summaries: SQLite first; optional `.planr/status/current.json` compatibility export for imported `.planr` data.
+- Live status summaries: SQLite.
 - Search: SQLite FTS over items, contexts, plan metadata/frontmatter/headings, logs, and review summaries.
 - Large artifacts: paths and metadata by default; inline content only for small explicitly provided artifacts.
 
@@ -139,6 +139,5 @@ Planr does not call model providers by default. It guides external agents throug
 
 ## Open Technical Decisions
 
-- OD-ARCH-001: Whether `.planr/status/current.json` remains a compatibility export or disappears after migration.
-- OD-ARCH-002: Whether to implement worktree management in core V1 or as an extension.
-- OD-ARCH-003: Whether dashboard uses server-rendered HTML, TUI, or a small SPA.
+- OD-ARCH-001: Whether to implement worktree management in core V1 or as an extension.
+- OD-ARCH-002: Whether dashboard uses server-rendered HTML, TUI, or a small SPA.

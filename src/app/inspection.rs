@@ -6,7 +6,6 @@ use crate::util::{
 use anyhow::{anyhow, Result};
 use rusqlite::{params, OptionalExtension};
 use serde_json::{json, Value};
-use slug::slugify;
 use std::fs;
 use std::path::Path;
 
@@ -106,7 +105,7 @@ impl App {
                 "name": template_name.unwrap_or("Planr export"),
                 "source_project": project.name,
                 "tags": tags,
-                "compatibility": {
+                "requirements": {
                     "min_planr_version": "1.0.0",
                     "requires_confirmed_import": true,
                     "source_content_included": false
@@ -249,100 +248,5 @@ impl App {
             )?;
         }
         Ok(results)
-    }
-
-    pub(crate) fn import_planr_dir(&self, dir: &Path) -> Result<Value> {
-        let project = self.default_project()?;
-        let base = if dir.join(".planr").exists() {
-            dir.join(".planr")
-        } else {
-            dir.to_path_buf()
-        };
-        let mut imported_plans = 0usize;
-        let mut imported_items = 0usize;
-        let mut imported_reviews = 0usize;
-        let product_root = base.join("plans/product");
-        if product_root.exists() {
-            for entry in fs::read_dir(product_root)? {
-                let path = entry?.path();
-                if path.is_dir() {
-                    let title = path
-                        .file_name()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("product-plan")
-                        .replace('-', " ");
-                    let slug = slugify(&title);
-                    self.upsert_plan(
-                        &project.id,
-                        "product",
-                        &path,
-                        &title,
-                        &slug,
-                        json!({"imported": true}),
-                    )?;
-                    imported_plans += 1;
-                }
-            }
-        }
-        let build_root = base.join("plans/build");
-        if build_root.exists() {
-            for entry in fs::read_dir(build_root)? {
-                let path = entry?.path();
-                if path.extension().and_then(|s| s.to_str()) == Some("md") {
-                    let title = path
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("build-plan")
-                        .replace('-', " ");
-                    let slug = slugify(&title);
-                    self.upsert_plan(
-                        &project.id,
-                        "build",
-                        &path,
-                        &title,
-                        &slug,
-                        json!({"imported": true}),
-                    )?;
-                    imported_plans += 1;
-                }
-            }
-        }
-        let status = base.join("status/current.json");
-        if status.exists() {
-            let data: Value = serde_json::from_slice(&fs::read(status)?)?;
-            if let Some(scopes) = data.get("scopes").and_then(Value::as_array) {
-                for scope in scopes {
-                    let title = scope
-                        .get("title")
-                        .or_else(|| scope.get("id"))
-                        .and_then(Value::as_str)
-                        .unwrap_or("Imported scope");
-                    let description = serde_json::to_string_pretty(scope)?;
-                    self.create_item(None, title, &description, "generic", None)?;
-                    imported_items += 1;
-                }
-            }
-        }
-        let review_root = base.join("reviews");
-        if review_root.exists() {
-            for entry in fs::read_dir(review_root)? {
-                let path = entry?.path();
-                if path.extension().and_then(|s| s.to_str()) == Some("md") {
-                    self.conn.execute(
-                        "INSERT INTO artifacts(id, project_id, name, kind, path, mime_type, size_bytes, created_at) VALUES (?1, ?2, ?3, 'review', ?4, 'text/markdown', ?5, datetime('now'))",
-                        params![
-                            short_id("art"),
-                            project.id,
-                            path.file_name().and_then(|s| s.to_str()).unwrap_or("review.md"),
-                            path.to_string_lossy(),
-                            fs::metadata(&path).map(|m| m.len() as i64).unwrap_or(0),
-                        ],
-                    )?;
-                    imported_reviews += 1;
-                }
-            }
-        }
-        self.promote_ready()?;
-        Ok(json!({"plans": imported_plans, "items": imported_items, "reviews": imported_reviews}))
     }
 }

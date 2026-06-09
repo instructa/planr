@@ -146,20 +146,13 @@ Optional V1:
 - SSE stream for events.
 - no remote auth in V1 unless explicitly implemented.
 
-## `.planr` Import
+## Package Import
 
-REQ-BE-060: Import must detect:
+REQ-BE-060: Import must consume Planr JSON packages created by `planr export`.
 
-- `.planr/project/*.md`;
-- `.planr/plans/`;
-- `.planr/plans/*.plan.md`;
-- `.planr/status/current.json`;
-- `.planr/reviews/*.review.md`;
-- `skills/planr-*` when present in an exported package.
+REQ-BE-061: Import preview must report package metadata, create counts, and conflicting item ids without mutating state.
 
-REQ-BE-061: Import must read existing plan files and live status scopes without deleting originals.
-
-REQ-BE-062: Import must map existing status scopes to map items and logs when possible.
+REQ-BE-062: Confirmed import must restore package graph items, links, contexts, optional logs, optional plan file snapshots, and review artifacts.
 
 ## Agent Runners
 

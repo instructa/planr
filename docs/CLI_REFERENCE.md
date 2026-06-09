@@ -58,7 +58,7 @@ planr install codex|claude|cursor [--dry-run]
 planr prompt cli|mcp|http [--client codex|claude|cursor|all]
 planr mcp
 planr serve --port 8484
-planr import <file-or-directory> [--preview] [--confirm]
+planr import <file> [--preview] [--confirm]
 planr export --out planr.json [--include-plans] [--include-logs] [--template-name "..."] [--tag tag]
 ```
 
@@ -92,4 +92,4 @@ Global flags: `--db <path>`, `--json`, `--no-color`.
 
 `prompt` prints ready-to-use agent instructions without editing global config. Use `prompt cli` for shell agents, `prompt mcp` for MCP setup text, and `prompt http` for localhost automation/review workspace usage.
 
-`export` writes a reusable Planr JSON package with compatibility metadata, graph state, contexts, optional logs, optional plan file snapshots, and review artifact snapshots. `import` previews JSON packages by default and mutates only with `--confirm`.
+`export` writes a reusable Planr JSON package with package requirements metadata, graph state, contexts, optional logs, optional plan file snapshots, and review artifact snapshots. `import` previews JSON packages by default and mutates only with `--confirm`.

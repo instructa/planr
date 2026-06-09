@@ -275,7 +275,7 @@ Supports REQ-V11-TEMPLATE-001 through REQ-V11-TEMPLATE-005.
 
 Requirements:
 - Export/import graph items, links, plans, contexts, logs, review artifacts, and metadata.
-- Add compatibility metadata and preview-before-import.
+- Add package requirements metadata and preview-before-import.
 - Preserve review annotations, findings, artifacts, and file references.
 - Define or implement a local-first encrypted bundle strategy.
 
@@ -462,7 +462,7 @@ Dependencies:
 - TASK-FND-002.
 
 Do not do:
-- Do not use `.planr/status/current.json` as the new graph SSOT.
+- Do not add a second file-based graph SSOT beside SQLite.
 
 ## Data And Graph
 
@@ -597,30 +597,31 @@ Dependencies:
 Do not do:
 - Do not execute or obey instructions from plan file content.
 
-### TASK-BE-002: Implement `.planr` Import
+### TASK-BE-002: Implement Planr Package Import
 
 Goal:
-Import existing `.planr` project packs, plans, status, and reviews into the new graph+plan model.
+Import exported Planr JSON packages into the current graph+plan model.
 
 Context:
-Supports users who already have local `.planr` files.
+Supports reusable decompositions, backups, and review packages created by `planr export`.
 
 Requirements:
-- Detect existing `.planr` layouts.
-- Import project pack.
-- Import plans.
-- Map `status/current.json` scopes to items and log where possible.
-- Preserve originals.
+- Parse Planr JSON package metadata.
+- Preview graph items, links, contexts, logs, plan file snapshots, review artifacts, and conflicts without mutation.
+- Apply package graph and artifacts only when confirmed.
+- Preserve review annotations, findings, artifacts, and file references.
 
 Files or areas likely involved:
-- `src/planpack/import_planr_data.rs`.
+- `src/app/packages.rs`.
+- `src/app/inspection.rs`.
 
 Acceptance criteria:
-- Import report lists imported, skipped, and warning items.
-- Original files are unchanged.
+- Import report lists created and skipped package entities.
+- Fresh project can import a proven decomposition and pick work.
 
 Tests:
-- Fixture import tests using existing `.planr` layouts.
+- Export/import E2E tests using Planr JSON packages.
+- Conflict preview tests.
 
 Dependencies:
 - TASK-BE-001.
@@ -907,7 +908,7 @@ Requirements:
 - Build release binaries.
 - Generate checksums.
 - Add install docs.
-- Add migration docs.
+- Add package import/export docs.
 - Add MCP integration docs.
 
 Files or areas likely involved:

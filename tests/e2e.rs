@@ -399,60 +399,6 @@ fn mcp_contract_install_fixtures_and_cli_docs_do_not_drift() {
 }
 
 #[test]
-fn import_existing_planr_directory() {
-    let dir = tempdir().unwrap();
-    let db = dir.path().join(".planr/planr.sqlite");
-    planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "project", "init", "Importer"])
-        .assert()
-        .success();
-
-    let source = tempdir().unwrap();
-    fs::create_dir_all(source.path().join(".planr/plans/build")).unwrap();
-    fs::create_dir_all(source.path().join(".planr/status")).unwrap();
-    fs::create_dir_all(source.path().join(".planr/reviews")).unwrap();
-    fs::write(
-        source.path().join(".planr/plans/build/imported.plan.md"),
-        "---\nname: imported\ncustom: kept\n---\n\n# Imported\n\n## Phase 1\n\n- [ ] Imported work\n",
-    )
-    .unwrap();
-    fs::write(
-        source.path().join(".planr/status/current.json"),
-        "{\"scopes\":[{\"id\":\"scope-1\",\"title\":\"Imported Scope\",\"status\":\"open\"}]}",
-    )
-    .unwrap();
-    fs::write(
-        source.path().join(".planr/reviews/import.review.md"),
-        "# Review\n",
-    )
-    .unwrap();
-
-    planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "import",
-            source.path().to_str().unwrap(),
-        ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("directory imported"));
-
-    let output = planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "--json", "map", "show"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let value: Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(value["items"][0]["title"], "Imported Scope");
-}
-
-#[test]
 fn pick_returns_ranked_privacy_safe_recall_context() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
@@ -2968,6 +2914,10 @@ fn template_export_import_preserves_graph_context_and_review_artifacts() {
     let package_json: Value = serde_json::from_slice(&fs::read(&package).unwrap()).unwrap();
     assert_eq!(package_json["planr_template"]["schema_version"], 1);
     assert_eq!(
+        package_json["planr_template"]["requirements"]["requires_confirmed_import"],
+        true
+    );
+    assert_eq!(
         package_json["planr_template"]["encrypted_bundle_strategy"]["hosted_share_required"],
         false
     );
@@ -3098,10 +3048,6 @@ fn planr_native_skills_are_packaged_and_cli_first() {
         assert!(
             body.contains("planr "),
             "{skill} should teach Planr CLI usage"
-        );
-        assert!(
-            !body.contains(".planr/status/current.json"),
-            "{skill} should not depend on old live-status files"
         );
         assert!(
             !body.contains(&["./", ".planr", "/tooling/", "planr"].concat()),
