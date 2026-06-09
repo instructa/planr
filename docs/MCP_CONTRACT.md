@@ -29,7 +29,7 @@ Tests compare this fixture against live MCP stdio responses, install dry-run out
 
 ## Tool Contract
 
-Tools use `inputSchema.additionalProperties = true` in V1 so clients can pass JSON arguments without per-tool schema drift. Unknown tools return an MCP text payload containing a JSON error with code `not_found`.
+Every tool declares a real JSON Schema: typed `properties`, explicit `required` fields, and `additionalProperties = false`. The only exception is `planr_review_ingest`, which keeps `additionalProperties = true` so arbitrary hook payload shapes can be ingested. Unknown tools return an `isError` MCP result containing a JSON error with code `not_found`.
 
 Required groups:
 

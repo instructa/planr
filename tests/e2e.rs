@@ -260,8 +260,42 @@ fn mcp_contract_install_fixtures_and_cli_docs_do_not_drift() {
     expected_tools.sort();
     assert_eq!(actual_tools, expected_tools);
     for tool in responses[0]["result"]["tools"].as_array().unwrap() {
-        assert_eq!(tool["inputSchema"]["additionalProperties"], true);
+        let name = tool["name"].as_str().unwrap();
+        let schema = &tool["inputSchema"];
+        assert_eq!(schema["type"], "object", "{name} schema must be an object");
+        assert!(
+            schema["properties"].is_object(),
+            "{name} must declare real properties"
+        );
+        let properties = schema["properties"].as_object().unwrap();
+        // Every required field must be a declared property.
+        for required in schema["required"].as_array().unwrap() {
+            assert!(
+                properties.contains_key(required.as_str().unwrap()),
+                "{name} requires undeclared field {required}"
+            );
+        }
+        // Hook ingestion is the only tool allowed to accept arbitrary keys.
+        if name == "planr_review_ingest" {
+            assert_eq!(schema["additionalProperties"], true, "{name}");
+        } else {
+            assert_eq!(schema["additionalProperties"], false, "{name}");
+        }
     }
+    // Spot-check schema/handler agreement for a mutating tool.
+    let item_create = responses[0]["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "planr_item_create")
+        .unwrap();
+    let required = item_create["inputSchema"]["required"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    assert_eq!(required, vec!["title", "description"]);
 
     let mut actual_resources = responses[1]["result"]["resources"]
         .as_array()
