@@ -22,13 +22,6 @@ apps/web/
 tmp/
 temp/
 
-# Planr local runtime state
-.planr/*.sqlite
-.planr/*.sqlite-*
-.planr/*.db
-.planr/*.db-*
-.planr/status/
-.planr/plans/
-
-# Local task-graph databases
-.plandb.db
+# Local agent/runtime state
+.codex/
+.planr/

@@ -7,7 +7,6 @@ cargo test
 cargo build --release
 npm pack --dry-run
 node npm/bin/planr.js --version
-./.planr/tooling/test_planr
 
 if command -v shellcheck >/dev/null 2>&1; then
   shellcheck scripts/*.sh

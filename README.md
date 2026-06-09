@@ -90,7 +90,6 @@ cargo run -- close <item-id> --summary "Verified"
 - `src/integrations.rs`: Codex, Claude Code, Cursor, and MCP install descriptors.
 - `src/util.rs`: small CLI-boundary helpers for ids, paths, output, and file writes.
 - `tests/e2e.rs`: real CLI, MCP, HTTP, import, review-gate, run-log, and concurrent-pick tests.
-- `.planr/`: repo-local Planr project data.
 - `skills/planr-*`: public Planr-native skill templates for coding agents.
 - `docs/planr-spec/`: production-ready product specification package for Planr V1.
 - `examples/real-world-flow.md`: executable real-world operator flow.
@@ -120,7 +119,6 @@ Open `http://127.0.0.1:8484/review` after `planr serve` for the local browser re
 cargo fmt --check
 cargo test
 cargo clippy --all-targets -- -D warnings
-./.planr/tooling/test_planr
 ```
 
 Release-grade verification also covers the checksum installer, MCP contract fixture, browser review workspace, recovery sweep, package export/import, prompt output, and a fresh consumer E2E project at `~/projects/planr-test`.

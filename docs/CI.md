@@ -14,7 +14,6 @@ shellcheck scripts/*.sh
 cargo build --release
 npm pack --dry-run
 node npm/bin/planr.js --version
-./.planr/tooling/test_planr
 cargo audit --deny warnings
 ```
 

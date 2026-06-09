@@ -627,7 +627,7 @@ Dependencies:
 - TASK-DATA-003.
 
 Do not do:
-- Do not delete old `.codex/skills/planr-*` unless user asks.
+- Do not reintroduce private runtime copies of agent skills; public templates live under `skills/`.
 
 ## MCP And Agent Integrations
 

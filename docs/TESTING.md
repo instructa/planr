@@ -8,7 +8,6 @@ Planr has two test layers plus a release-grade V1.1 verification ladder.
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
-./.planr/tooling/test_planr
 ```
 
 Focused V1.1 checks should be run when their surfaces change:

@@ -48,7 +48,6 @@ jobs:
           cargo build --release
           npm pack --dry-run
           node npm/bin/planr.js --version
-          ./.planr/tooling/test_planr
 
       - name: Cargo audit
         run: |

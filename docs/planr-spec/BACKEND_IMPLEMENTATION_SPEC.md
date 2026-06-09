@@ -155,7 +155,7 @@ REQ-BE-060: Import must detect:
 - `.planr/plans/*.plan.md`;
 - `.planr/status/current.json`;
 - `.planr/reviews/*.review.md`;
-- `.codex/skills/planr-*`.
+- `skills/planr-*` when present in an exported package.
 
 REQ-BE-061: Import must read existing plan files and live status scopes without deleting originals.
 

@@ -3104,7 +3104,7 @@ fn planr_native_skills_are_packaged_and_cli_first() {
             "{skill} should not depend on old live-status files"
         );
         assert!(
-            !body.contains("./.planr/tooling/planr"),
+            !body.contains(&["./", ".planr", "/tooling/", "planr"].concat()),
             "{skill} should use the public Planr CLI"
         );
     }

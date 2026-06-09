@@ -9,8 +9,6 @@ Use the specification package in `docs/planr-spec/` as the product source of tru
 - `API_AND_DATA_MODEL.md` for project, plan, map, item, log, review, and API contracts.
 - `TASKS.md` for executable coding-agent tasks.
 
-The existing `.planr/` folder and `.codex/skills/planr-*` files are local Planr assets. Preserve useful concepts, but do not assume their file formats are the final product architecture.
-
 Core rules:
 
 - Build Planr as a self-owned product with original implementation, docs, and naming.
