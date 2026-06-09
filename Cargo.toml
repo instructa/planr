@@ -4,6 +4,12 @@ version = "1.0.0"
 edition = "2021"
 license = "MIT"
 description = "Local-first planning and execution coordination for coding agents"
+repository = "https://github.com/instructa/planr"
+homepage = "https://github.com/instructa/planr"
+readme = "README.md"
+keywords = ["planning", "agents", "mcp", "cli", "task-graph"]
+categories = ["command-line-utilities", "development-tools"]
+rust-version = "1.80"
 
 [[bin]]
 name = "planr"
@@ -25,3 +31,8 @@ uuid = { version = "1", features = ["v4"] }
 assert_cmd = "2"
 predicates = "3"
 tempfile = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

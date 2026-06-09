@@ -1,0 +1,196 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  create-release:
+    name: Create Draft Release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Verify tag matches Cargo.toml version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          crate_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)"
+          if [ "v$crate_version" != "$TAG" ]; then
+            echo "tag $TAG does not match Cargo.toml version $crate_version" >&2
+            exit 1
+          fi
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release $TAG already exists; reusing"
+          else
+            gh release create "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --draft \
+              --title "planr $TAG" \
+              --generate-notes
+          fi
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-arm64
+            rust_target: aarch64-apple-darwin
+            runner: macos-14
+          - target: darwin-x86_64
+            rust_target: x86_64-apple-darwin
+            runner: macos-14
+          - target: linux-x86_64
+            rust_target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+          - target: linux-arm64
+            rust_target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.rust_target }}
+
+      - name: Build release artifact
+        env:
+          PLANR_TARGET: ${{ matrix.target }}
+          PLANR_CARGO_TARGET: ${{ matrix.rust_target }}
+        run: scripts/build-release.sh
+
+      - name: Smoke-test binary
+        if: matrix.target != 'darwin-x86_64'
+        env:
+          PLANR_CARGO_TARGET: ${{ matrix.rust_target }}
+        run: "./target/$PLANR_CARGO_TARGET/release/planr --version"
+
+      - name: Upload release asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          PLANR_TARGET: ${{ matrix.target }}
+        run: |
+          gh release upload "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber \
+            "dist/planr-$PLANR_TARGET.tar.gz"
+
+  finalize:
+    name: Publish Checksums And Release
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          mkdir -p assets
+          gh release download "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern 'planr-*.tar.gz' \
+            --dir assets
+
+      - name: Generate aggregated SHA256SUMS
+        run: |
+          cd assets
+          sha256sum planr-*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Upload checksums and publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release upload "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber \
+            assets/SHA256SUMS
+          gh release edit "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft=false
+
+      - name: Save checksums for tap job
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sha256sums
+          path: assets/SHA256SUMS
+
+  homebrew-tap:
+    name: Update Homebrew Tap
+    needs: finalize
+    runs-on: ubuntu-24.04
+    permissions: {}
+    if: ${{ vars.HOMEBREW_TAP_ENABLED == 'true' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Download checksums
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sha256sums
+          path: assets
+
+      - name: Generate formula
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="${TAG#v}"
+          scripts/generate-formula.sh "$version" assets/SHA256SUMS > planr.rb
+          cat planr.rb
+
+      - name: Push formula to tap
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+          TAP_REPO: instructa/tap
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "TAP_GITHUB_TOKEN secret is not configured; skipping tap update" >&2
+            exit 1
+          fi
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git" tap
+          mkdir -p tap/Formula
+          cp planr.rb tap/Formula/planr.rb
+          cd tap
+          git config user.name "planr-release-bot"
+          git config user.email "release-bot@users.noreply.github.com"
+          git add Formula/planr.rb
+          if git diff --cached --quiet; then
+            echo "formula unchanged; nothing to push"
+          else
+            git commit -m "planr ${TAG}"
+            git push origin HEAD
+          fi

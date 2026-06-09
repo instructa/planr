@@ -11,6 +11,24 @@ The v1 repository-owned public install order is:
 
 The npm wrapper is maintained for development and consumer E2E coverage. Do not present npm or npx as the primary user install path until native binary packages are published with the npm artifact.
 
+## Automated Release Pipeline
+
+Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`:
+
+1. `create-release` verifies the tag matches the `Cargo.toml` version and creates a draft GitHub Release.
+2. `build` compiles and packages `planr-<os>-<arch>.tar.gz` for `darwin-arm64`, `darwin-x86_64`, `linux-x86_64`, and `linux-arm64`, then uploads each asset to the draft release.
+3. `finalize` downloads all uploaded assets, writes one aggregated `SHA256SUMS` covering every tarball, uploads it, and publishes the release.
+4. `homebrew-tap` regenerates `Formula/planr.rb` with `scripts/generate-formula.sh` and pushes it to `instructa/tap`.
+
+Tag flow:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+The Homebrew job only runs when the repository variable `HOMEBREW_TAP_ENABLED` is `true` and requires a `TAP_GITHUB_TOKEN` secret with write access to `instructa/tap`. The tap repository must exist before enabling it.
+
 ## Preflight
 
 Run:

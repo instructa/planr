@@ -27,20 +27,39 @@ detect_target() {
   echo "$os-$arch"
 }
 
+sha256_tool() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$@"
+  elif command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$@"
+  else
+    echo "shasum or sha256sum is required" >&2
+    exit 1
+  fi
+}
+
 target="${PLANR_TARGET:-$(detect_target)}"
+cargo_target="${PLANR_CARGO_TARGET:-}"
 target_dir="dist/planr-$version"
 asset="planr-$target.tar.gz"
 
 rm -rf "$target_dir" "dist/$asset"
 mkdir -p "$target_dir"
 
-cargo build --release
-cp target/release/planr "$target_dir/planr"
+if [ -n "$cargo_target" ]; then
+  cargo build --release --target "$cargo_target"
+  built_bin="target/$cargo_target/release/planr"
+else
+  cargo build --release
+  built_bin="target/release/planr"
+fi
+
+cp "$built_bin" "$target_dir/planr"
 cp README.md LICENSE.md "$target_dir/"
 
 (
   cd "$target_dir"
-  shasum -a 256 planr README.md LICENSE.md > SHA256SUMS
+  sha256_tool planr README.md LICENSE.md > SHA256SUMS
 )
 
 (
@@ -48,9 +67,11 @@ cp README.md LICENSE.md "$target_dir/"
   tar -czf "../$asset" planr README.md LICENSE.md SHA256SUMS
 )
 
+# Aggregate checksums over every asset present in dist/ so multi-target
+# builds into the same dist directory produce one complete SHA256SUMS.
 (
   cd dist
-  shasum -a 256 "$asset" > SHA256SUMS
+  sha256_tool planr-*.tar.gz > SHA256SUMS
 )
 
 echo "release artifact prepared at $target_dir"
