@@ -21,11 +21,13 @@ cargo test template_export_import -- --nocapture
 
 ## Consumer E2E Project
 
-The standalone consumer suite lives at:
+The standalone consumer suite is a maintainer-local project that is not part of this repository. On maintainer machines it lives at:
 
 ```bash
 ~/projects/planr-test
 ```
+
+Contributors without that project should rely on the in-repo suite (`cargo test`), which covers the same CLI, MCP, and HTTP surfaces.
 
 Run against the local native binary:
 

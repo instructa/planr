@@ -32,6 +32,8 @@ Manual release downloads are published at:
 
 - https://github.com/instructa/planr/releases
 
+Release assets for darwin/linux on arm64/x86_64 are built and published automatically by the tag-driven pipeline described in `docs/RELEASE.md`.
+
 Homebrew is the preferred package-manager path once the tap is published:
 
 ```bash

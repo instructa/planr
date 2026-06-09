@@ -86,7 +86,7 @@ Global flags: `--db <path>`, `--json`, `--no-color`.
 
 `review evidence` reports Git worktree status scoped to files named by item logs or artifacts. Dirty files without item provenance are listed as unrelated and are not treated as agent-owned evidence. `--pr-url` records an item-scoped PR reference before returning the evidence package.
 
-`recover sweep` previews by default. With `--apply`, it releases stale or timed-out picked work back to `ready`, schedules retryable failed work according to the item's retry policy, and records recovery events. Item pre/post conditions are visible in pick context, trace output, and close previews; post conditions are reported as manual verification gates instead of being guessed automatically.
+`recover sweep` previews by default. With `--apply`, timed-out picked work that has a retry budget (`max_retries > 0`) is marked `failed` with an `item_timed_out` event; stale work and timeouts without a retry budget are released back to `ready`. Failed work re-enters `ready` once its retry delay has elapsed (`retry_delay_ms`, doubled per retry under `exponential` backoff) until the budget is exhausted. Every transition records a recovery event. Item pre/post conditions are visible in pick context, trace output, and close previews; post conditions are reported as manual verification gates instead of being guessed automatically.
 
 `serve` exposes the local review workspace at `/review` and its JSON projection at `/v1/review-workspace`.
 
