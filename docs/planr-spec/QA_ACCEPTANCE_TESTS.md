@@ -2,7 +2,7 @@
 
 ## Test Strategy
 
-Planr needs fast deterministic tests around graph correctness, plan parsing, MCP contracts, and migration. The smallest relevant test should run before broader suites.
+Planr needs fast deterministic tests around graph correctness, plan parsing, MCP contracts, package import/export, and schema upgrades. The smallest relevant test should run before broader suites.
 
 ## Unit Tests
 
@@ -137,7 +137,7 @@ Before release:
 - CLI integration suite passes.
 - MCP schema tests pass.
 - Local HTTP and browser review workspace tests pass.
-- Migration fixture tests pass.
+- Package import/export fixture tests pass.
 - Secret/log scrubbing tests pass.
 - Release checksum verification passes.
 - Installer file-url smoke test passes.

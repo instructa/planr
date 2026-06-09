@@ -47,7 +47,7 @@ MCP tools must be small and composable:
 - Mutation tools: create item, breakdown item, pick item, heartbeat, progress, pause, resume, approval request, approval decision, add log, close item, context create, review annotate, review ingest, review artifact, review close.
 - Destructive tools: cancel, archive, delete must require preview or explicit confirmation fields.
 
-REQ-AI-010: Tool responses must include next recommended actions, but must not coerce agents into auto-running unrelated work.
+REQ-AI-010: Tool responses must include next recommended actions, but must not pressure agents into auto-running unrelated work.
 
 ## Context Construction
 
@@ -117,7 +117,7 @@ AI evals should test whether agents:
 - A review item tries to close the parent despite open fix findings.
 - A prompt asks Planr to store an API key in context.
 
-## Fallback Behavior
+## Client Capability Boundaries
 
 - If MCP prompts are unavailable, print CLI prompt snippets.
 - If mutation tools are disabled, provide read-only status and manual commands.

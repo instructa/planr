@@ -18,17 +18,17 @@
 - REQ-REL-001: Release binaries must be checksummed.
 - REQ-REL-002: Install script must be readable, idempotent, and avoid hidden global config edits.
 - REQ-REL-003: Agent integration commands must support dry-run.
-- REQ-REL-004: Upgrade must not rewrite `.planr` files without explicit migration command.
+- REQ-REL-004: Upgrade must not rewrite `.planr` files without an explicit Planr write command.
 - REQ-REL-005: Download installs must verify `SHA256SUMS` from the same release location by default.
 - REQ-REL-006: `PLANR_SKIP_CHECKSUM=1` may exist only as an explicit development-mirror escape hatch.
 - REQ-REL-007: Release docs must distinguish release installs, Homebrew after tap publication, source builds, and Windows/WSL expectations.
 
-## Migration Readiness
+## Upgrade Readiness
 
-- Detect existing `.planr` data.
-- Back up or leave originals untouched.
-- Import with report.
-- Provide rollback instructions.
+- Open current Planr workspaces without rewriting Markdown artifacts.
+- Back up the SQLite database before schema upgrades.
+- Report package import/export results before mutation.
+- Provide rollback instructions for binary and database backups.
 
 ## Documentation Readiness
 
@@ -41,7 +41,7 @@ Required:
 - Codex guide.
 - Claude Code guide.
 - Cursor guide.
-- Import guide for existing `.planr` data.
+- Package import/export guide.
 - Security and privacy notes.
 - Troubleshooting/doctor guide.
 
@@ -59,7 +59,7 @@ Before public release:
 ## QA Release Checklist
 
 - `planr project init` smoke test in empty repo.
-- Migration fixture smoke test.
+- Package import/export smoke test.
 - Codex MCP registration smoke test.
 - Claude Code MCP config smoke test.
 - Cursor MCP config smoke test.
@@ -75,12 +75,12 @@ Before public release:
 ## Rollback
 
 - Binary rollback: install previous version.
-- Database rollback: not guaranteed after migration; create automatic backup before schema migration.
+- Database rollback: restore the automatic backup created before schema upgrades.
 - Plan files: never silently rewritten.
 
 ## Legal/Platform Items
 
-- Confirm license compatibility for any retained code, docs, or assets.
+- Confirm license review for any retained code, docs, or assets.
 - Ensure final product docs use Planr-owned naming, examples, and command vocabulary.
 - Ensure README states local privacy behavior clearly.
 
@@ -92,4 +92,4 @@ Before public release:
 - `planr prompt cli|mcp|http` prints actionable instructions without editing config.
 - Fresh consumer E2E passes in `~/projects/planr-test`.
 - No content telemetry.
-- Migration does not destroy old Planr files.
+- Release smoke tests do not rewrite workspace files unexpectedly.

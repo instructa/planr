@@ -20,7 +20,7 @@ Planr V1 is a single Rust binary with explicit module ownership. The crate stays
 - `src/app/inspection.rs`: local inspection helpers. Owns debug bundles, context/link snapshots, pick context, secret scans, export value assembly, run recording, search results, and Planr-directory import parsing.
 - `src/model.rs`: JSON-facing data transfer types. Owns serializable Planr DTOs used by CLI JSON, MCP, HTTP, and tests.
 - `src/storage/mod.rs`: SQLite connection boundary. Owns default database path, connection setup, pragma configuration, and storage submodule exports.
-- `src/storage/schema.rs`: SQLite schema boundary. Owns DDL, additive schema migration helpers, and schema version recording.
+- `src/storage/schema.rs`: SQLite schema boundary. Owns DDL, additive schema upgrade helpers, and schema version recording.
 - `src/storage/rows.rs`: SQLite row mapping boundary. Owns row-to-DTO and row-to-JSON mapping functions.
 - `src/planpack.rs`: Markdown package generation. Owns project context templates and product/build plan file templates.
 - `src/integrations.rs`: agent-client integration descriptors. Owns Codex, Claude Code, Cursor, and MCP install metadata.
@@ -54,7 +54,7 @@ A Cargo workspace should be introduced only after a concrete deployable, reuse, 
 If Planr grows past the V1 binary shape, the first clean extraction path is:
 
 - `planr-core`: `model.rs`, graph invariants, plan package contracts, and pure use-case types.
-- `planr-storage`: `src/storage/*`, storage repositories, migrations, and import/export adapters.
+- `planr-storage`: `src/storage/*`, storage repositories, schema upgrades, and import/export packages.
 - `planr-cli`: `src/cli.rs`, human output, and install helpers.
 - `planr-server`: `src/app/http.rs`, `src/app/mcp.rs`, and runtime server adapters.
 

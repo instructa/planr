@@ -51,7 +51,7 @@ Local aggregate metrics:
 - failed run count;
 - review finding count;
 - MCP call count by tool name;
-- database migration version.
+- database schema version.
 
 ## Logs
 
@@ -79,7 +79,7 @@ Debug bundle preview must include counts, ids, paths, event metadata, and logs, 
 `planr doctor` must check:
 
 - binary version;
-- database open/migration status;
+- database open/schema-upgrade status;
 - `.planr` pack presence;
 - Git repo status;
 - Codex availability and MCP config hint;

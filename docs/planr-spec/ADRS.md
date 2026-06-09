@@ -27,7 +27,7 @@ Planr will be a new codebase and brand. Implementation, docs, assets, command na
 ### Risks
 
 - Rebuilding core graph behavior can introduce bugs.
-- Compatibility expectations must be managed.
+- Public contracts must be explicit before release.
 
 ### Follow-Up Tasks
 

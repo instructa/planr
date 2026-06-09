@@ -75,7 +75,7 @@ Allowed local diagnostics:
 - command name;
 - status code;
 - duration;
-- db migration version;
+- db schema version;
 - number of items;
 - event type;
 - client integration type.
@@ -135,7 +135,7 @@ Forbidden logs:
 - REQ-SEC-022: HTTP server binds to localhost by default.
 - REQ-SEC-023: Shell/agent runner commands must be explicit and auditable.
 - REQ-SEC-024: Destructive operations require preview or confirmation.
-- REQ-SEC-025: Database migrations must be tested against existing schemas.
+- REQ-SEC-025: Database schema upgrades must be tested against existing schemas.
 
 ## Abuse Prevention
 

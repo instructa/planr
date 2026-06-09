@@ -32,7 +32,7 @@ Optional dashboard
 ## Component Boundaries
 
 - `core`: map graph operations, state machine, item readiness, worker runtime state, approval gates, log, reviews, contexts, search.
-- `storage`: SQLite schema, migrations, transactions, FTS indexes.
+- `storage`: SQLite schema, schema upgrades, transactions, FTS indexes.
 - `planpack`: `.planr` project pack, plan parsing, Markdown frontmatter, review artifacts.
 - `cli`: user commands and deterministic output.
 - `mcp`: tools, resources, prompts, capability negotiation.
@@ -121,7 +121,7 @@ Planr does not call model providers by default. It guides external agents throug
 - CI: headless CLI mode with explicit db/path.
 - Hosted/team: out of scope for V1.
 
-## Failure Modes And Fallback Behavior
+## Failure Modes
 
 - Database locked: retry bounded writes, then return actionable diagnostic.
 - Corrupt Markdown plan: preserve file, mark parse status degraded, keep map usable.

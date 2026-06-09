@@ -293,7 +293,7 @@ Acceptance criteria:
 
 Tests:
 - Export/import E2E tests.
-- Compatibility and conflict tests.
+- Package requirement and conflict tests.
 
 Dependencies:
 - TASK-V11-001.
@@ -381,7 +381,7 @@ Supports REQ-PROD-002 and ADR-001.
 
 Requirements:
 - Create package metadata for `planr`.
-- Preserve existing local `.planr` data unless the user explicitly imports or migrates it.
+- Create source-owned Planr files only through explicit Planr commands.
 - Add README sections for product direction, local-first data, and supported agents.
 
 Files or areas likely involved:
@@ -466,7 +466,7 @@ Do not do:
 
 ## Data And Graph
 
-### TASK-DATA-001: Implement SQLite Schema And Migrations
+### TASK-DATA-001: Implement SQLite Schema And Upgrades
 
 Goal:
 Create the local map database schema.
@@ -489,7 +489,7 @@ Acceptance criteria:
 - Schema version is queryable.
 
 Tests:
-- Migration tests.
+- Schema upgrade tests.
 - Fresh/open existing database tests.
 
 Dependencies:
@@ -670,7 +670,7 @@ Goal:
 Create provider-neutral prompts/skills that encode Planr's plan+map workflow.
 
 Context:
-Brings old `planr-plan`, `planr-fix`, `planr-review`, `planr-status`, and `planr-summary` forward under the new Planr vocabulary.
+Defines Planr-owned workflow prompts for planning, work, review, status, and summaries.
 
 Requirements:
 - Write prompts for plan, work, review, map, summary.
@@ -693,7 +693,7 @@ Dependencies:
 - TASK-BE-003.
 
 Do not do:
-- Do not copy old skill text verbatim without review and product naming cleanup.
+- Do not copy prompt text from another product.
 
 ### TASK-CLIENT-001: Add Codex, Claude Code, And Cursor Install Helpers
 
@@ -868,14 +868,14 @@ Goal:
 Create the test suite described in QA_ACCEPTANCE_TESTS.md.
 
 Context:
-Prevents graph and migration regressions.
+Prevents graph, package, and schema regressions.
 
 Requirements:
 - State machine tests.
 - Concurrent pick tests.
 - Plan parser tests.
 - MCP tests.
-- Migration tests.
+- Schema upgrade tests.
 - Security/logging tests.
 
 Files or areas likely involved:

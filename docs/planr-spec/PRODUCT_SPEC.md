@@ -29,7 +29,7 @@ Planr turns broad product ideas and coding work into a coherent flow: product pl
 - Product plans capture intent, build plans capture implementation context, and the map coordinates live work.
 - Log over optimism: completion is proven, not declared.
 - Cross-agent by default: Codex, Claude Code, Cursor, and MCP clients are peers.
-- Hard-cut bias: avoid compatibility shells and duplicate sources of truth.
+- Hard-cut bias: avoid duplicate sources of truth and transitional shells.
 - Human-readable artifacts: all important plans and decisions must be inspectable without a proprietary UI.
 
 ## V1 Scope
@@ -85,7 +85,7 @@ idea -> product plan -> build plan -> map -> pick -> log -> review/evidence -> r
 ## Core Objects And Vocabulary
 
 - Project: one repository or multi-root project tracked by Planr.
-- Plan: Markdown artifact under `.planr/plans/` with an internal stage such as `product`, `build`, `review`, or `migration`.
+- Plan: Markdown artifact under `.planr/plans/` with an internal stage such as `product`, `build`, or `review`.
 - Map: live graph for work items, links, picks, reviews, log, and status.
 - Item: graph node with status, work type, owner, acceptance summary, and optional plan links.
 - Link: directed relationship between items; blocking or non-blocking.

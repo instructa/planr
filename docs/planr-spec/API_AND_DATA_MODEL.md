@@ -129,7 +129,6 @@ Plan stages:
 - product
 - build
 - review
-- migration
 
 ### source_links
 

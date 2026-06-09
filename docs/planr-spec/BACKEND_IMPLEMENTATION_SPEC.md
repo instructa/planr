@@ -27,13 +27,13 @@ src/
     search.rs
   storage/
     schema.rs
-    migrations.rs
+    upgrades.rs
     sqlite.rs
   planpack/
     markdown.rs
     frontmatter.rs
     project_pack.rs
-    import_planr_data.rs
+    packages.rs
   cli/
   mcp/
   server/

@@ -34,7 +34,7 @@ Avoid hype, gamification, and vague success language.
   - done: green.
   - blocked/failed: red.
   - review: violet only as accent, not dominant palette.
-- Provide no-color fallback.
+- Provide no-color output mode.
 
 ## Typography
 

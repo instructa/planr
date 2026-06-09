@@ -60,7 +60,7 @@ Create a story log for:
 - a large architecture or ownership change;
 - a multi-round review/fix sequence;
 - a discovery that invalidates earlier assumptions;
-- a release or migration path that future agents must understand;
+- a release or schema-upgrade path that future agents must understand;
 - interruption-prone work where the "why" matters as much as the status.
 
 Recommended location for repo-versioned product stories:

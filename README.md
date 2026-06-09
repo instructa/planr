@@ -8,7 +8,7 @@ Planr is a local-first task planning and execution coordination tool for coding 
 
 Planr combines three layers:
 
-- **Plans:** reviewable Markdown artifacts for product specs, PRDs, architecture, UX, build contracts, migrations, and reviews.
+- **Plans:** reviewable Markdown artifacts for product specs, PRDs, architecture, UX, build contracts, and reviews.
 - **Map:** the live dependency graph for items, links, picks, reviews, logs, and progress.
 - **Agent loops:** provider-neutral CLI and MCP workflows for Codex, Claude Code, Cursor, and generic clients.
 

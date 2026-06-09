@@ -778,7 +778,6 @@ pub(crate) enum PlanStageArg {
     Product,
     Build,
     Review,
-    Migration,
 }
 
 #[derive(ValueEnum, Clone, Debug, PartialEq, Eq)]

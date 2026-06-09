@@ -36,7 +36,7 @@ cd ~/projects/planr-test
 npm test
 ```
 
-Run through the npm package shim:
+Run through the npm package wrapper:
 
 ```bash
 cd ~/projects/planr

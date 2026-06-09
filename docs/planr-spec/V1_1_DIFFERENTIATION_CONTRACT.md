@@ -174,4 +174,4 @@ The final V1.1 review must treat missing, stale, narrow, or indirect evidence as
 - Uploading private plans, source files, prompts, responses, or review content to a hosted service by default.
 - Full project-management SaaS workflows unrelated to coding-agent execution.
 - Silent global agent-client configuration edits.
-- Claiming PR-provider support that was not verified with a real provider or documented local fallback.
+- Claiming PR-provider support that was not verified with a real provider or documented local capability boundary.

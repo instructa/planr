@@ -5,7 +5,7 @@
 Planr V1 is CLI-first with optional TUI/dashboard. Public commands use Planr-native vocabulary:
 
 - `planr project`: setup and integration.
-- `planr plan`: reviewable Markdown plans for product specs, build contracts, migrations, and review packages.
+- `planr plan`: reviewable Markdown plans for product specs, build contracts, and review packages.
 - `planr map`: live graph inspection and mutation.
 - `planr item`: item creation and detail.
 - `planr pick`: atomically pick the next ready item.
