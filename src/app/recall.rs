@@ -6,10 +6,14 @@ use rusqlite::params;
 use serde_json::{json, Value};
 
 impl App {
-    pub(crate) fn pick_context(&self, item_id: &str) -> Result<Value> {
-        let item = self.get_item(item_id)?;
-        let links = self.links_for(item_id)?;
-        let contexts = self.list_contexts(Some(item_id))?;
+    /// The flat pick work packet: each fact appears exactly once. Base is
+    /// the trace packet (item, links, logs, runtime, recovery, conditions,
+    /// approval) extended with recall context and board progress. Empty
+    /// collections and null sub-objects are omitted — a missing key means
+    /// "empty"; `remaining.counts` always carries the full status vocabulary.
+    pub(crate) fn work_packet(&self, item_id: &str, worker: &str) -> Result<Value> {
+        let mut packet = self.trace_item_value(item_id)?;
+        packet["worker_id"] = json!(worker);
         let mut stmt = self.conn.prepare("SELECT source_type, source_id, section_id, relationship FROM source_links WHERE item_id = ?1 ORDER BY id")?;
         let source_links = collect_rows(stmt.query_map(params![item_id], |row| {
             Ok(json!({
@@ -19,41 +23,43 @@ impl App {
                 "relationship": row.get::<_, String>(3)?,
             }))
         })?)?;
+        packet["source_links"] = json!(source_links);
+        packet["contexts"] = json!(self.list_contexts(Some(item_id))?);
+        packet["relevant_contexts"] = json!(self.relevant_contexts_for_pick(item_id, 5)?);
+        packet["upstream_handoffs"] = json!(self.upstream_handoffs(item_id, 5)?);
+        packet["review_history"] = json!(self.review_history(item_id)?);
         let close_effect = self.close_effect(item_id)?;
-        Ok(json!({
-            "summary": {
-                "item_id": item.id,
-                "title": item.title,
-                "work_type": item.work_type,
-                "status": item.status,
-            },
-            "links": links,
-            "source_links": source_links,
-            "contexts": contexts,
-            "relevant_contexts": self.relevant_contexts_for_pick(item_id, 5)?,
-            "upstream_handoffs": self.upstream_handoffs(item_id, 5)?,
-            "review_history": self.review_history(item_id)?,
-            "recovery": self.item_recovery(item_id)?,
-            "conditions": self.item_conditions(item_id)?,
-            "close_effect": {
-                "would_unlock": close_effect.would_unlock,
-                "would_remain_blocked": close_effect.would_remain_blocked,
-            },
-            "possible_file_conflicts": self.possible_file_conflicts(item_id)?,
-            "privacy": {
-                "source_file_content_included": false,
-                "prompt_or_response_content_included": false,
-                "large_artifact_content_included": false,
-                "secret_like_contexts_omitted": true
-            },
-            "deeper_reads": [
-                format!("planr trace item {item_id}"),
-                "planr map show --json",
-                format!("planr log list --item {item_id}"),
-                format!("planr context list --item {item_id}"),
-                "planr search <query>"
-            ]
-        }))
+        packet["close_effect"] = json!({
+            "would_unlock": close_effect.would_unlock,
+            "would_remain_blocked": close_effect.would_remain_blocked,
+        });
+        packet["possible_file_conflicts"] = json!(self.possible_file_conflicts(item_id)?);
+        packet["privacy"] = json!({
+            "source_file_content_included": false,
+            "prompt_or_response_content_included": false,
+            "large_artifact_content_included": false,
+            "secret_like_contexts_omitted": true
+        });
+        packet["deeper_reads"] = json!([
+            format!("planr trace item {item_id} --json"),
+            "planr map show --json",
+            format!("planr log list --item {item_id}"),
+            format!("planr context list --item {item_id}"),
+            "planr search <query>"
+        ]);
+        packet["remaining"] = self.progress_value()?;
+        if packet["approval"]["status"].is_null() {
+            packet["approval"] = Value::Null;
+        }
+        if packet["conditions"]["pre"].is_null() && packet["conditions"]["post"].is_null() {
+            packet["conditions"] = Value::Null;
+        }
+        if let Value::Object(map) = &mut packet {
+            map.retain(|_, value| {
+                !value.is_null() && !value.as_array().is_some_and(|array| array.is_empty())
+            });
+        }
+        Ok(packet)
     }
 
     pub(crate) fn relevant_contexts_for_pick(

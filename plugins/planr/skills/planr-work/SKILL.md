@@ -13,7 +13,7 @@ Use this for one picked item at a time.
 planr pick --json
 ```
 
-The pick output already contains the full work packet (`trace`: links, logs, runtime, conditions, approval) plus recall context — no separate `trace item` call needed. Read the linked plan/context, implement the smallest correct slice, then finish the step in one command:
+The pick output is one flat work packet — item, links, logs, runtime, recovery, conditions, recall context (`upstream_handoffs`, `relevant_contexts`, `review_history`), and `remaining` progress. Each fact appears once; a missing key means "empty". No separate `trace item` call needed. Read the linked plan/context, implement the smallest correct slice, then finish the step in one command:
 
 ```bash
 planr done <item-id> --summary "what changed" --files path-a --files path-b --cmd "exact verification command" --tests "exact test command" --review

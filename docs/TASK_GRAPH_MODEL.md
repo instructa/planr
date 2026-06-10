@@ -68,7 +68,7 @@ Picking is the concurrency boundary:
 planr pick --json
 ```
 
-One ready item should be picked by one worker. The pick output includes recall context and the full `trace` work packet. Picked work records `worker_id`, `pick_token`, `picked_at`, and `last_heartbeat_at`. Worker identity is stable per client, host, and user, so heartbeats keep working across the many short-lived processes of an agent session. Parallel workers on the same machine must set `PLANR_SESSION_ID` to distinct values. Evidence written via `log add` or `done` by the owner refreshes the heartbeat automatically; the explicit runtime commands cover long silent stretches:
+One ready item should be picked by one worker. The pick output is one flat work packet — item, links, logs, runtime, recovery, conditions, recall context, and a `remaining` progress snapshot, each fact exactly once; empty collections are omitted. Picked work records `worker_id`, `pick_token`, `picked_at`, and `last_heartbeat_at`. Worker identity is stable per client, host, and user, so heartbeats keep working across the many short-lived processes of an agent session. Parallel workers on the same machine must set `PLANR_SESSION_ID` to distinct values. Evidence written via `log add` or `done` by the owner refreshes the heartbeat automatically; the explicit runtime commands cover long silent stretches:
 
 ```bash
 planr pick heartbeat [item-id]

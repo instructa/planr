@@ -498,16 +498,13 @@ fn pick_returns_ranked_privacy_safe_recall_context() {
         .clone();
     let picked: Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(picked["item"]["id"], item_id);
-    let relevant = picked["context"]["relevant_contexts"].as_array().unwrap();
+    let relevant = picked["relevant_contexts"].as_array().unwrap();
     assert_eq!(relevant.len(), 1);
     assert!(relevant[0]["content"]
         .as_str()
         .unwrap()
         .contains("session cache"));
-    assert_eq!(
-        picked["context"]["privacy"]["source_file_content_included"],
-        false
-    );
+    assert_eq!(picked["privacy"]["source_file_content_included"], false);
     assert!(!serde_json::to_string(&picked)
         .unwrap()
         .contains("sk-test-should-not-appear"));
@@ -2099,9 +2096,31 @@ fn done_command_collapses_log_review_close_and_next_pick() {
     let picked: Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(picked["item"]["id"], first);
     assert!(
-        picked["trace"]["links"].is_array(),
-        "pick must include the trace work packet"
+        picked["runtime"]["pick_token"].is_string(),
+        "pick must include the flat work packet runtime: {picked}"
     );
+    assert!(
+        picked.get("context").is_none() && picked.get("trace").is_none(),
+        "pick packet must be flat without nested context/trace duplication: {picked}"
+    );
+    let counts = picked["remaining"]["counts"].as_object().unwrap();
+    for status in [
+        "pending",
+        "ready",
+        "picked",
+        "running",
+        "in_review",
+        "blocked",
+        "failed",
+        "cancelled",
+        "closed",
+        "closed_partial",
+    ] {
+        assert!(
+            counts.contains_key(status),
+            "remaining.counts must carry explicit zero for {status}: {picked}"
+        );
+    }
 
     let output = planr()
         .current_dir(dir.path())
@@ -2886,7 +2905,8 @@ fn local_http_api_smoke_uses_same_core_engine() {
     assert_eq!(unpicked_progress["error"]["code"], "invalid_transition");
 
     let pick = http_json(&http_request(port, "POST", "/v1/pick", "{}"));
-    assert!(pick["context"].is_object(), "{pick}");
+    assert!(pick["runtime"].is_object(), "{pick}");
+    assert!(pick["remaining"]["counts"].is_object(), "{pick}");
     let item_id = pick["item"]["id"].as_str().unwrap();
 
     let heartbeat = http_json(&http_request(
@@ -3205,10 +3225,10 @@ fn recovery_sweep_recovers_timed_out_and_retryable_work() {
     let pick: Value = serde_json::from_slice(&pick).unwrap();
     assert_eq!(pick["item"]["id"], timed_out_id);
     assert_eq!(
-        pick["context"]["conditions"]["pre"],
+        pick["conditions"]["pre"],
         "Confirm environment is bootstrapped"
     );
-    assert_eq!(pick["context"]["recovery"]["timeout_seconds"], 1);
+    assert_eq!(pick["recovery"]["timeout_seconds"], 1);
 
     let retryable = planr()
         .current_dir(dir.path())

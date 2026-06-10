@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.1.9] - 2026-06-10
+
+Polish pack from the v1.1.8 dogfood run.
+
+### Changed
+
+- The pick output is now one flat work packet: the nested `context` and `trace` envelopes are gone, every fact (item, links, logs, runtime, recovery, conditions, recall context, `close_effect`, `privacy`, `deeper_reads`) appears exactly once, and empty collections or inactive gates are omitted — a missing key means "empty". The same shape is returned by `planr pick`, `done --next`, MCP `planr_pick_item`, and HTTP `POST /v1/pick`.
+- `remaining.counts` always carries the full status vocabulary (`pending`, `ready`, `picked`, `running`, `in_review`, `blocked`, `failed`, `cancelled`, `closed`, `closed_partial`) with explicit zeros, so consumers never infer missing statuses.
+- The pick packet includes the `remaining` board-progress snapshot, matching `done`, `close`, and `review close`.
+- Docs clarify that global flags (`--json`, `--db`, `--no-color`) are valid before and after the subcommand.
+
 ## [1.1.8] - 2026-06-10
 
 Friction findings from the v1.1.7 comparison dogfood run.
@@ -122,7 +133,8 @@ Initial Planr product release.
 - Tag-driven release pipeline with multi-target builds (darwin/linux, arm64/x86_64) and Homebrew tap automation.
 - Skill workflow documentation for Codex, Claude Code, Cursor, and MCP-only clients.
 
-[Unreleased]: https://github.com/instructa/planr/compare/v1.1.8...HEAD
+[Unreleased]: https://github.com/instructa/planr/compare/v1.1.9...HEAD
+[1.1.9]: https://github.com/instructa/planr/compare/v1.1.8...v1.1.9
 [1.1.8]: https://github.com/instructa/planr/compare/v1.1.7...v1.1.8
 [1.1.7]: https://github.com/instructa/planr/compare/v1.1.6...v1.1.7
 [1.1.6]: https://github.com/instructa/planr/compare/v1.1.5...v1.1.6

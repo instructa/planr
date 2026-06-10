@@ -31,7 +31,7 @@ Store the contract in Planr so it survives compaction, session loss, and host sw
 planr context add "GOAL CONTRACT <plan-id>: DONE when ... Iteration budget: 10." --tag goal-contract
 ```
 
-`$planr-goal` does this during prep; if the loop starts without a stored contract, store it in iteration 1 before picking. Every iteration re-reads the contract from Planr (`planr context list` or `planr search "GOAL CONTRACT"`), never from chat history. `done` and `close` responses include a `remaining` progress snapshot (`counts`, `settled`, `total`), so the orchestrator can evaluate the stop condition from the completion output without an extra `map status` call.
+`$planr-goal` does this during prep; if the loop starts without a stored contract, store it in iteration 1 before picking. Every iteration re-reads the contract from Planr (`planr context list` or `planr search "GOAL CONTRACT"`), never from chat history. `done`, `close`, and `review close` responses and the pick packet include a `remaining` progress snapshot (`counts` with explicit zeros for every status, `settled`, `total`), so the orchestrator can evaluate the stop condition from the completion output without an extra `map status` call.
 
 ## Iteration Shape
 
@@ -46,7 +46,7 @@ Each iteration is one dispatch through the routing skill — never a hand-writte
 6. repeat             fix items are just the next ready items
 ```
 
-The short path per item is three commands: `planr pick --json` (includes the trace work packet), `planr done <item-id> --summary ... --cmd ... --review [--next]`, and the reviewer's `planr review close <review-id> --verdict complete --close-target`. Parent gates roll up automatically.
+The short path per item is three commands: `planr pick --json` (one flat work packet), `planr done <item-id> --summary ... --cmd ... --review [--next]`, and the reviewer's `planr review close <review-id> --verdict complete --close-target`. Parent gates roll up automatically.
 
 After any `planr map build`, dependency linking is part of step 2, not optional: add `blocks` links for every execution-order dependency before the first pick. An unlinked map makes the loop pick items in arbitrary order.
 

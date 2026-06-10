@@ -131,10 +131,27 @@ impl App {
             })
             .map(|(_, n)| n)
             .sum();
-        let counts: serde_json::Map<String, Value> = rows
-            .into_iter()
-            .map(|(status, n)| (status, json!(n)))
-            .collect();
+        // Counts always carry the full status vocabulary, so consumers never
+        // have to treat a missing key as zero.
+        const STATUS_VOCABULARY: [&str; 10] = [
+            "pending",
+            "ready",
+            "picked",
+            "running",
+            "in_review",
+            "blocked",
+            "failed",
+            "cancelled",
+            "closed",
+            "closed_partial",
+        ];
+        let mut counts = serde_json::Map::new();
+        for status in STATUS_VOCABULARY {
+            counts.insert(status.to_string(), json!(0));
+        }
+        for (status, n) in rows {
+            counts.insert(status, json!(n));
+        }
         Ok(json!({"counts": counts, "settled": settled, "total": total}))
     }
 
@@ -154,12 +171,7 @@ impl App {
 
     pub(crate) fn next_pick_value_excluding(&self, exclude: Option<&str>) -> Result<Value> {
         if let Some((id, worker)) = self.pick_next_ready_item_excluding(exclude)? {
-            Ok(json!({
-                "item": self.get_item(&id)?,
-                "worker_id": worker,
-                "context": self.pick_context(&id)?,
-                "trace": self.trace_item_value(&id)?,
-            }))
+            self.work_packet(&id, &worker)
         } else {
             Ok(json!({"item": null}))
         }

@@ -63,7 +63,7 @@ planr import <file> [--preview] [--confirm]
 planr export --out planr.json [--include-plans] [--include-logs] [--template-name "..."] [--tag tag]
 ```
 
-Global flags: `--db <path>`, `--json`, `--no-color`.
+Global flags: `--db <path>`, `--json`, `--no-color`. They are valid in both positions: `planr --json pick` and `planr pick --json` behave identically.
 
 ## JSON Envelope Convention
 
@@ -101,9 +101,9 @@ With `--json`, responses follow one convention so agents never guess where data 
 
 `trace item` on a review item inlines the target item and its evidence logs under `target`, so a reviewer's first trace already contains what is being audited. The human (non-JSON) mode renders the packet: status, owner, links, logs.
 
-`done` is the compound worker command: it writes a completion log, then requests a review (`--review`) or closes the item, and optionally picks the next ready item (`--next`). It chains the same single-owner operations as `log add`, `review request`, `close`, and `pick` — identical evidence, fewer commands. `done` and `close` responses include a `remaining` progress snapshot (`counts`, `settled`, `total`) so loop agents can evaluate their stop condition without an extra `map status` call.
+`done` is the compound worker command: it writes a completion log, then requests a review (`--review`) or closes the item, and optionally picks the next ready item (`--next`). It chains the same single-owner operations as `log add`, `review request`, `close`, and `pick` — identical evidence, fewer commands. `done`, `close`, `review close`, and the pick packet include a `remaining` progress snapshot so loop agents can evaluate their stop condition without an extra `map status` call. `remaining.counts` always carries the full status vocabulary (`pending`, `ready`, `picked`, `running`, `in_review`, `blocked`, `failed`, `cancelled`, `closed`, `closed_partial`) with explicit zeros — a missing count never has to be inferred.
 
-`pick --json` returns the full work packet: the item, recall `context`, and a `trace` object (links, logs, runtime, recovery, conditions, approval), so no separate `trace item` call is needed. Evidence written via `log add` or `done` by the pick owner refreshes the runtime heartbeat automatically.
+`pick --json` returns one flat work packet in which every fact appears exactly once: `item`, `worker_id`, `links`, `logs`, `runtime`, `recovery`, `conditions`, `approval`, recall context (`contexts`, `relevant_contexts`, `upstream_handoffs`, `review_history`, `source_links`, `possible_file_conflicts`), `close_effect`, `privacy`, `deeper_reads`, and `remaining`. Empty collections and inactive gates are omitted — a missing key means "empty". No separate `trace item` call is needed. Evidence written via `log add` or `done` by the pick owner refreshes the runtime heartbeat automatically. The same packet shape is returned by MCP `planr_pick_item`, HTTP `POST /v1/pick`, and `done --next`.
 
 `review evidence` reports Git worktree status scoped to files named by item logs or artifacts. Dirty files without item provenance are listed as unrelated and are not treated as agent-owned evidence. `--pr-url` records an item-scoped PR reference before returning the evidence package.
 

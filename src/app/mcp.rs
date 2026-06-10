@@ -415,9 +415,7 @@ impl App {
             }
             "planr_pick_item" => {
                 if let Some((id, worker)) = self.pick_next_ready_item()? {
-                    return Ok(mcp_json(
-                        json!({"item": self.get_item(&id)?, "worker_id": worker, "runtime": self.item_runtime(&id)?, "context": self.pick_context(&id)?}),
-                    ));
+                    return Ok(mcp_json(self.work_packet(&id, &worker)?));
                 }
                 Ok(mcp_json(json!({"item": null})))
             }

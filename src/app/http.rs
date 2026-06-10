@@ -473,10 +473,8 @@ impl App {
                     serde_json::to_string(&json!({"approvals": self.list_approvals(open)?}))?
                 }
                 ("POST", "/v1/pick") => {
-                    if let Some((id, _worker)) = self.pick_next_ready_item()? {
-                        serde_json::to_string(
-                            &json!({"item": self.get_item(&id)?, "context": self.pick_context(&id)?}),
-                        )?
+                    if let Some((id, worker)) = self.pick_next_ready_item()? {
+                        serde_json::to_string(&self.work_packet(&id, &worker)?)?
                     } else {
                         serde_json::to_string(&json!({"item": null}))?
                     }
