@@ -108,6 +108,38 @@ impl App {
         Ok(review)
     }
 
+    /// Board progress snapshot included in `done` and `close` responses so a
+    /// loop agent can evaluate its stop condition without an extra
+    /// `map status` call.
+    pub(crate) fn progress_value(&self) -> Result<Value> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT status, COUNT(*) FROM items GROUP BY status ORDER BY status")?;
+        let rows: Vec<(String, i64)> =
+            crate::util::collect_rows(stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?)?;
+        let total: i64 = rows.iter().map(|(_, n)| n).sum();
+        let settled: i64 = rows
+            .iter()
+            .filter(|(status, _)| {
+                matches!(status.as_str(), "closed" | "closed_partial" | "cancelled")
+            })
+            .map(|(_, n)| n)
+            .sum();
+        let counts: serde_json::Map<String, Value> = rows
+            .into_iter()
+            .map(|(status, n)| (status, json!(n)))
+            .collect();
+        Ok(json!({"counts": counts, "settled": settled, "total": total}))
+    }
+
+    pub(crate) fn progress_human(progress: &Value) -> String {
+        let ready = progress["counts"]["ready"].as_i64().unwrap_or(0);
+        format!(
+            " [{}/{} settled · {} ready]",
+            progress["settled"], progress["total"], ready
+        )
+    }
+
     /// Picks the next ready item and returns it as a JSON work packet, or
     /// `{"item": null}` when nothing is ready.
     pub(crate) fn next_pick_value(&self) -> Result<Value> {
@@ -168,6 +200,8 @@ impl App {
                 None => human.push_str("; no ready item"),
             }
         }
+        let progress = self.progress_value()?;
+        human.push_str(&Self::progress_human(&progress));
         self.emit(
             json!({
                 "item": self.get_item(&item_id)?,
@@ -175,6 +209,7 @@ impl App {
                 "review": review,
                 "closed": if args.review { Value::Null } else { json!(item_id) },
                 "next": next,
+                "remaining": progress,
             }),
             human,
         )

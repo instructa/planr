@@ -2128,6 +2128,10 @@ fn done_command_collapses_log_review_close_and_next_pick() {
     let done: Value = serde_json::from_slice(&output).unwrap();
     let review_id = done["review"]["id"].as_str().unwrap().to_string();
     assert_eq!(done["closed"], Value::Null, "--review must not close");
+    assert!(
+        done["remaining"]["total"].as_i64().unwrap_or(0) > 0,
+        "done must report board progress for the loop stop condition"
+    );
     assert_eq!(
         done["next"]["item"]["id"], second,
         "--next must pick the following ready item"

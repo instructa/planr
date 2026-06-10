@@ -615,8 +615,10 @@ impl App {
                 None => human.push_str("; no ready item"),
             }
         }
+        let progress = self.progress_value()?;
+        human.push_str(&Self::progress_human(&progress));
         self.emit(
-            json!({"closed": item_id, "item": self.get_item(&item_id)?, "log_id": log_id, "next": next}),
+            json!({"closed": item_id, "item": self.get_item(&item_id)?, "log_id": log_id, "next": next, "remaining": progress}),
             human,
         )
     }
