@@ -38,12 +38,12 @@ planr approval request <item-id> [--reason "..."]
 planr approval approve <item-id> --by "name" [--comment "..."]
 planr approval deny <item-id> --by "name" [--comment "..."]
 planr approval list [--open]
-planr artifact add "name" [--item <item-id>] [--kind evidence] [--path file] [--content "..."] [--mime text/plain]
+planr artifact add "name"|--name "name" [--item <item-id>] [--kind evidence] [--path file] [--content "..."] [--mime text/plain]
 planr artifact show <artifact-id>
 planr artifact list [--item <item-id>]
 planr event list [--item <item-id>] [--limit 50]
 planr debug bundle [--item <item-id>] --preview
-planr log add --item <item-id> --summary "..." [--files a,b] [--cmd "..."]
+planr log add --item <item-id> --summary "..." [--files a --files b | --files a,b] [--cmd "..."]
 planr review request <item-id>
 planr review annotate <item-id> --message "..." [--severity info|warning|blocking] [--file path] [--line N] [--author "..."]
 planr review ingest <item-id> (--from feedback.json|--stdin)
@@ -63,6 +63,18 @@ planr export --out planr.json [--include-plans] [--include-logs] [--template-nam
 ```
 
 Global flags: `--db <path>`, `--json`, `--no-color`.
+
+## JSON Envelope Convention
+
+With `--json`, responses follow one convention so agents never guess where data lives:
+
+- Errors: `{"error": {"code": "...", "message": "..."}}` with a non-zero exit code.
+- The affected single item is always available under the top-level `item` key (`pick`, `close`, `item create/update/cancel`, `pick release`, `item breakdown`, approval and runtime commands). Action-specific keys like `closed`, `cancelled`, or `released` carry the id and stay for context.
+- Collections use plural keys: `items`, `plans`, `logs`, `reviews`, `artifacts`, `approvals`, `events`.
+- Other single objects use their semantic key: `plan`, `log`, `review`, `artifact`, `context`.
+- Optional guidance appears under `hint` or `next` when a follow-up command is the expected move.
+
+`plan check` validates path, YAML frontmatter, and that required sections have content: build plans need `## Scope Decision`, `## Verification`, and `## Acceptance Criteria` filled; product plans need `## Problem`, `## Requirements`, and `## Success Criteria` filled in `PRODUCT_SPEC.md`. Empty scaffolds fail with named warnings.
 
 `review ingest` accepts hook-compatible JSON and records it as feedback only. It never closes review work and never approves an item by itself.
 

@@ -18,7 +18,7 @@ planr pick heartbeat <item-id>
 Read the linked plan/context, implement the smallest correct slice, then record evidence:
 
 ```bash
-planr log add --item <item-id> --summary "what changed" --files path-a,path-b --cmd "exact verification command"
+planr log add --item <item-id> --summary "what changed" --files path-a --files path-b --cmd "exact verification command"
 planr review request <item-id>
 ```
 

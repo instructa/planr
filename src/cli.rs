@@ -438,8 +438,9 @@ pub(crate) struct LogAddArgs {
     pub(crate) item: String,
     #[arg(long)]
     pub(crate) summary: String,
-    #[arg(long)]
-    pub(crate) files: Option<String>,
+    /// Changed file; repeat the flag or pass a comma-separated list.
+    #[arg(long, value_delimiter = ',')]
+    pub(crate) files: Vec<String>,
     #[arg(long)]
     pub(crate) cmd: Vec<String>,
     #[arg(long)]
@@ -661,7 +662,11 @@ pub(crate) enum ArtifactCommand {
 
 #[derive(Args, Debug)]
 pub(crate) struct ArtifactAddArgs {
-    pub(crate) name: String,
+    /// Artifact name; alternatively pass --name anywhere in the command.
+    #[arg(value_name = "NAME")]
+    pub(crate) name: Option<String>,
+    #[arg(long = "name", value_name = "NAME", conflicts_with = "name")]
+    pub(crate) name_flag: Option<String>,
     #[arg(long)]
     pub(crate) item: Option<String>,
     #[arg(long)]

@@ -90,6 +90,50 @@ pub fn build_plan_body(title: &str, source: &str, slice: &str) -> String {
     )
 }
 
+pub const BUILD_PLAN_REQUIRED_SECTIONS: &[&str] =
+    &["Scope Decision", "Verification", "Acceptance Criteria"];
+pub const PRODUCT_PLAN_REQUIRED_SECTIONS: &[&str] =
+    &["Problem", "Requirements", "Success Criteria"];
+
+/// Report required `##` sections that are missing or have no body content.
+/// Sub-headings (`###`) and list items count as content; another `##` or a
+/// top-level `#` heading ends a section.
+pub fn unfilled_required_sections(text: &str, required: &[&str]) -> Vec<String> {
+    use std::collections::HashSet;
+    let mut current: Option<String> = None;
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut filled: HashSet<String> = HashSet::new();
+    for line in text.lines() {
+        if let Some(heading) = line.strip_prefix("## ") {
+            let name = heading.trim().to_string();
+            seen.insert(name.clone());
+            current = Some(name);
+            continue;
+        }
+        if line.starts_with("# ") {
+            current = None;
+            continue;
+        }
+        if let Some(section) = &current {
+            if !line.trim().is_empty() {
+                filled.insert(section.clone());
+            }
+        }
+    }
+    required
+        .iter()
+        .filter_map(|name| {
+            if !seen.contains(*name) {
+                Some(format!("required section `## {name}` is missing"))
+            } else if !filled.contains(*name) {
+                Some(format!("required section `## {name}` is empty"))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 pub fn parse_plan_metadata(path: &Path) -> (Value, String) {
     let target = if path.is_dir() {
         path.join("README.md")

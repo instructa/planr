@@ -1,4 +1,8 @@
 use super::App;
+use crate::planpack::{
+    parse_plan_metadata, unfilled_required_sections, BUILD_PLAN_REQUIRED_SECTIONS,
+    PRODUCT_PLAN_REQUIRED_SECTIONS,
+};
 use crate::storage::row_to_context;
 use crate::util::{
     collect_rows, detect_client, now_string, query_json, quote_fts, short_id, worker_id,
@@ -49,6 +53,53 @@ fn find_token(text: &str, pattern: &str, from: usize) -> Option<usize> {
 }
 
 impl App {
+    /// Shared plan-check logic for CLI and MCP: path, frontmatter, and
+    /// required-section content. Structure alone is not enough; the
+    /// load-bearing sections must have content before a plan checks out.
+    pub(crate) fn plan_check_value(&self, plan_id: &str) -> Result<Value> {
+        let plan = self.get_plan(plan_id)?;
+        let path = std::path::PathBuf::from(&plan.path);
+        let mut warnings = Vec::new();
+        if !path.exists() {
+            warnings.push("plan path missing".to_string());
+        } else {
+            self.rehash_plan(&plan.id)?;
+            let (frontmatter, parse_status) = parse_plan_metadata(&path);
+            if parse_status != "ok" {
+                let detail = frontmatter["error"]
+                    .as_str()
+                    .unwrap_or("invalid frontmatter");
+                warnings.push(format!("frontmatter parse error: {detail}"));
+            }
+            let (section_file, required, label) = if path.is_dir() {
+                (
+                    path.join("PRODUCT_SPEC.md"),
+                    PRODUCT_PLAN_REQUIRED_SECTIONS,
+                    "PRODUCT_SPEC.md: ",
+                )
+            } else {
+                (path.clone(), BUILD_PLAN_REQUIRED_SECTIONS, "")
+            };
+            match fs::read_to_string(&section_file) {
+                Ok(text) => {
+                    for warning in unfilled_required_sections(&text, required) {
+                        warnings.push(format!("{label}{warning}"));
+                    }
+                }
+                Err(_) => warnings.push(format!(
+                    "missing plan file: {}",
+                    section_file
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| section_file.display().to_string())
+                )),
+            }
+        }
+        let plan = self.get_plan(plan_id)?;
+        let ok = warnings.is_empty();
+        Ok(json!({"plan": plan, "ok": ok, "warnings": warnings}))
+    }
+
     pub(crate) fn debug_bundle(&self, item: Option<&str>) -> Result<Value> {
         let events = self.list_events(item, 50)?;
         let artifacts = self.list_artifacts(item)?;

@@ -169,16 +169,6 @@ pub fn append_line(path: &Path, content: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn json_array(csv: Option<&str>) -> String {
-    let values: Vec<_> = csv
-        .unwrap_or("")
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .collect();
-    serde_json::to_string(&values).unwrap_or_else(|_| "[]".to_string())
-}
-
 pub fn command_exists(name: &str) -> bool {
     env::var_os("PATH")
         .map(|paths| env::split_paths(&paths).any(|dir| dir.join(name).exists()))

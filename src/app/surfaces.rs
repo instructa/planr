@@ -1,7 +1,7 @@
 use super::App;
 use crate::cli::{ArtifactCommand, DebugCommand, EventCommand, ScrubArgs, TraceCommand};
 use crate::util::short_id;
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use rusqlite::params;
 use serde_json::json;
 use std::fs;
@@ -47,6 +47,11 @@ impl App {
     pub(crate) fn artifact(&self, command: ArtifactCommand) -> Result<()> {
         match command {
             ArtifactCommand::Add(args) => {
+                let name = args.name.clone().or(args.name_flag.clone()).ok_or_else(|| {
+                    anyhow!(
+                        "artifact name is required: `planr artifact add \"<name>\" ...` or `planr artifact add --name \"<name>\" ...`"
+                    )
+                })?;
                 if args.path.is_some() && args.content.is_some() {
                     bail!("provide --path or --content, not both");
                 }
@@ -71,7 +76,7 @@ impl App {
                         id,
                         self.default_project()?.id,
                         args.item.as_deref(),
-                        args.name,
+                        name,
                         args.kind.as_deref().unwrap_or("evidence"),
                         path_string,
                         args.content,
@@ -83,7 +88,7 @@ impl App {
                 self.record_event(
                     "artifact_created",
                     args.item.as_deref(),
-                    json!({"artifact_id": id, "name": args.name, "kind": args.kind}),
+                    json!({"artifact_id": id, "name": name, "kind": args.kind}),
                 )?;
                 self.emit(
                     json!({"artifact": self.get_artifact(&id)?}),

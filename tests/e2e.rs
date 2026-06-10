@@ -1995,6 +1995,152 @@ fn parent_gate_waits_for_open_review_then_auto_closes() {
 }
 
 #[test]
+fn log_files_flag_is_repeatable_and_artifact_name_works_as_flag() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Friction"])
+        .assert()
+        .success();
+    let item_id = create_test_item(dir.path(), &db, "Friction item", "cli friction test");
+
+    // --files must accept repetition and comma-separated values together.
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "log",
+            "add",
+            "--item",
+            &item_id,
+            "--summary",
+            "touched files",
+            "--files",
+            "src/a.rs",
+            "--files",
+            "src/b.rs,src/c.rs",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output).unwrap();
+    let files = value["log"]["files"].as_array().unwrap();
+    let files: Vec<_> = files.iter().filter_map(Value::as_str).collect();
+    assert_eq!(files, vec!["src/a.rs", "src/b.rs", "src/c.rs"]);
+
+    // artifact add must accept the name via --name anywhere in the command.
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "artifact",
+            "add",
+            "--item",
+            &item_id,
+            "--name",
+            "flag-named artifact",
+            "--content",
+            "evidence",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["artifact"]["name"], "flag-named artifact");
+
+    // Missing name must produce an actionable error, not a clap usage puzzle.
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "artifact",
+            "add",
+            "--item",
+            &item_id,
+            "--content",
+            "evidence",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("artifact name is required"));
+}
+
+#[test]
+fn map_build_is_idempotent_per_plan() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Idem"])
+        .assert()
+        .success();
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "plan", "new", "App"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let plan_id = serde_json::from_slice::<Value>(&output).unwrap()["plan"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let build = |expect_created: usize| {
+        let output = planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "map",
+                "build",
+                "--from",
+                &plan_id,
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let value: Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(
+            value["created"].as_array().unwrap().len(),
+            expect_created,
+            "unexpected created count on map build"
+        );
+        value
+    };
+    let first = build(1);
+    assert!(
+        first["hint"].as_str().unwrap().contains("breakdown"),
+        "single coarse item must carry a breakdown hint"
+    );
+    let second = build(0);
+    assert!(
+        second["hint"].as_str().unwrap().contains("already mapped"),
+        "re-running map build must say the plan is already mapped"
+    );
+
+    let conn = Connection::open(&db).unwrap();
+    let item_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM items", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(item_count, 1, "repeat map build must not duplicate items");
+}
+
+#[test]
 fn heartbeat_and_ownership_survive_new_processes_without_session_id() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
@@ -4124,6 +4270,50 @@ fn plan_split_with_colon_slice_stays_parseable_and_check_is_honest() {
     );
     let build_id = value["plan"]["id"].as_str().unwrap().to_string();
     let build_path = value["plan"]["path"].as_str().unwrap().to_string();
+
+    // A fresh build plan has empty mandatory sections; plan check must say so
+    // instead of waving structure-only plans through.
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "--json", "plan", "check", &build_id])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        value["ok"].as_bool(),
+        Some(false),
+        "empty mandatory sections must fail plan check"
+    );
+    for section in ["Scope Decision", "Verification", "Acceptance Criteria"] {
+        assert!(
+            value["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|w| w.as_str().unwrap_or_default().contains(section)),
+            "warnings must name the empty section {section}"
+        );
+    }
+
+    // Fill the mandatory sections; plan check must pass afterwards.
+    let text = fs::read_to_string(&build_path).unwrap();
+    let filled = text
+        .replace(
+            "## Scope Decision\n",
+            "## Scope Decision\n\nShip the MVP slice only.\n",
+        )
+        .replace(
+            "## Verification\n",
+            "## Verification\n\nRun the app and exercise the changed flow.\n",
+        )
+        .replace(
+            "## Acceptance Criteria\n",
+            "## Acceptance Criteria\n\n- Habit can be added and checked in.\n",
+        );
+    fs::write(&build_path, filled).unwrap();
 
     planr()
         .current_dir(dir.path())

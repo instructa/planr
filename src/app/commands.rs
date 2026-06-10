@@ -6,12 +6,10 @@ use crate::cli::{
     ProjectCommand, PromptCommand, ReviewCommand, SearchArgs,
 };
 use crate::integrations::{agent_roles, install_snippet, mcp_json_config};
-use crate::planpack::{
-    build_plan_body, parse_plan_metadata, product_plan_files, project_pack_files,
-};
+use crate::planpack::{build_plan_body, product_plan_files, project_pack_files};
 use crate::util::{
-    append_line, command_exists, format_item, format_project, json_array, now_string, print_json,
-    short_id, worker_id, write_if_missing,
+    append_line, command_exists, format_item, format_project, now_string, print_json, short_id,
+    worker_id, write_if_missing,
 };
 use anyhow::{anyhow, bail, Result};
 use rusqlite::params;
@@ -180,31 +178,24 @@ impl App {
                 )
             }
             PlanCommand::Check(args) => {
-                let plan = self.get_plan(&args.id)?;
-                let path = PathBuf::from(&plan.path);
-                let mut warnings = Vec::new();
-                if !path.exists() {
-                    warnings.push("plan path missing".to_string());
+                let value = self.plan_check_value(&args.id)?;
+                let ok = value["ok"].as_bool().unwrap_or(false);
+                let human = if ok {
+                    "plan check passed".to_string()
                 } else {
-                    self.rehash_plan(&plan.id)?;
-                    let (frontmatter, parse_status) = parse_plan_metadata(&path);
-                    if parse_status != "ok" {
-                        let detail = frontmatter["error"]
-                            .as_str()
-                            .unwrap_or("invalid frontmatter");
-                        warnings.push(format!("frontmatter parse error: {detail}"));
-                    }
-                }
-                let plan = self.get_plan(&args.id)?;
-                let ok = warnings.is_empty();
-                self.emit(
-                    json!({"plan": plan, "ok": ok, "warnings": warnings}),
-                    if ok {
-                        "plan check passed".to_string()
-                    } else {
-                        "plan check failed".to_string()
-                    },
-                )
+                    let warnings = value["warnings"]
+                        .as_array()
+                        .map(|warnings| {
+                            warnings
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .collect::<Vec<_>>()
+                                .join("; ")
+                        })
+                        .unwrap_or_default();
+                    format!("plan check failed: {warnings}")
+                };
+                self.emit(value, human)
             }
             PlanCommand::Show(args) => {
                 let plan = self.get_plan(&args.id)?;
@@ -235,9 +226,11 @@ impl App {
                 let plan = self.get_plan(&args.from)?;
                 let created = self.seed_items_from_plan(&plan)?;
                 self.promote_ready()?;
-                let hint = (created.len() <= 1).then_some(
-                    "created a single coarse item; run `planr item breakdown <item-id> --into \"...\"` before picking",
-                );
+                let hint = match created.len() {
+                    0 => Some("no new items created; this plan is already mapped"),
+                    1 => Some("created a single coarse item; run `planr item breakdown <item-id> --into \"...\"` before picking"),
+                    _ => None,
+                };
                 let mut message = format!("created {} map item(s)", created.len());
                 if let Some(hint) = hint {
                     message.push_str("; ");
@@ -380,7 +373,7 @@ impl App {
                 self.conn.execute("UPDATE items SET status = 'blocked', updated_at = datetime('now') WHERE id = ?1", params![parent.id])?;
                 self.promote_ready()?;
                 self.emit(
-                    json!({"items": created}),
+                    json!({"items": created, "item": self.get_item(&parent.id)?}),
                     format!("created {} child item(s)", created.len()),
                 )
             }
@@ -397,7 +390,10 @@ impl App {
                 }
                 self.conn.execute("UPDATE items SET status = 'cancelled', updated_at = datetime('now') WHERE id = ?1", params![args.id])?;
                 self.promote_ready()?;
-                self.emit(json!({"cancelled": args.id}), "item cancelled".to_string())
+                self.emit(
+                    json!({"cancelled": args.id, "item": self.get_item(&args.id)?}),
+                    "item cancelled".to_string(),
+                )
             }
         }
     }
@@ -448,7 +444,7 @@ impl App {
                     json!({"force": args.force}),
                 )?;
                 self.emit(
-                    json!({"released": args.item_id}),
+                    json!({"released": args.item_id, "item": self.get_item(&args.item_id)?}),
                     "pick released".to_string(),
                 )
             }
@@ -544,7 +540,14 @@ impl App {
                         run_id,
                         args.kind,
                         args.summary,
-                        json_array(args.files.as_deref()),
+                        serde_json::to_string(
+                            &args
+                                .files
+                                .iter()
+                                .map(|file| file.trim())
+                                .filter(|file| !file.is_empty())
+                                .collect::<Vec<_>>(),
+                        )?,
                         serde_json::to_string(&args.cmd)?,
                         serde_json::to_string(&args.tests)?,
                     ],
@@ -648,7 +651,7 @@ impl App {
             None
         };
         self.emit(
-            json!({"closed": item_id, "log_id": log_id, "next": next}),
+            json!({"closed": item_id, "item": self.get_item(&item_id)?, "log_id": log_id, "next": next}),
             "item closed".to_string(),
         )
     }

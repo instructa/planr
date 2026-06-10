@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use slug::slugify;
 use std::fs;
 use std::io::{self, BufRead, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 impl App {
     pub(crate) fn mcp(&self) -> Result<()> {
@@ -191,12 +191,7 @@ impl App {
                     json!({"plan": plan, "next": "planr map build --from <plan-id>"}),
                 ))
             }
-            "planr_plan_check" => {
-                let plan = self.get_plan(required_arg(&args, "id")?)?;
-                Ok(mcp_json(
-                    json!({"plan": plan, "ok": Path::new(&plan.path).exists()}),
-                ))
-            }
+            "planr_plan_check" => Ok(mcp_json(self.plan_check_value(required_arg(&args, "id")?)?)),
             "planr_plan_link" => {
                 let source_id = required_arg(&args, "source_id")?;
                 let item_id = required_arg(&args, "item_id")?;

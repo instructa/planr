@@ -112,6 +112,9 @@ impl App {
         Ok(())
     }
 
+    /// Idempotent: re-running `map build` on the same plan skips work specs
+    /// that already exist as live items linked to that plan instead of
+    /// duplicating the graph.
     pub(crate) fn seed_items_from_plan(&self, plan: &Plan) -> Result<Vec<Item>> {
         let mut specs = extract_work_specs(Path::new(&plan.path))?;
         if specs.is_empty() {
@@ -122,6 +125,17 @@ impl App {
         }
         let mut created = Vec::new();
         for (title, description) in specs {
+            let already_seeded: i64 = self.conn.query_row(
+                "SELECT COUNT(*) FROM source_links sl JOIN items i ON i.id = sl.item_id
+                 WHERE sl.source_type = 'plan' AND sl.source_id = ?1
+                 AND sl.relationship = 'implements' AND i.title = ?2
+                 AND i.status != 'cancelled'",
+                params![plan.id, title],
+                |row| row.get(0),
+            )?;
+            if already_seeded > 0 {
+                continue;
+            }
             let item = self.create_item(None, &title, &description, "code", Some(&plan.path))?;
             self.conn.execute(
                 "INSERT INTO source_links(source_type, source_id, item_id, section_id, relationship) VALUES ('plan', ?1, ?2, NULL, 'implements')",
