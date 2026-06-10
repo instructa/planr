@@ -586,22 +586,8 @@ impl App {
                 ("POST", p) if p.ends_with("/reviews") => {
                     let item_id = path_item_id(p)
                         .ok_or_else(|| anyhow!("missing item id in reviews route"))?;
-                    let target = self.get_item(item_id)?;
-                    let review = self.create_item(
-                        None,
-                        &format!("Review {}", target.title),
-                        "Review item against plan, logs, diff, and verification.",
-                        "review",
-                        target.plan_path.as_deref(),
-                    )?;
-                    self.add_link(&review.id, item_id, "reviews")?;
-                    self.promote_ready()?;
-                    self.record_event(
-                        "review_requested",
-                        Some(item_id),
-                        json!({"review_id": review.id.clone(), "source": "http"}),
-                    )?;
-                    serde_json::to_string(&json!({"review": self.get_item(&review.id)?}))?
+                    let review = self.request_review_for(item_id)?;
+                    serde_json::to_string(&json!({"review": review}))?
                 }
                 ("POST", p) if p.ends_with("/review-annotations") => {
                     let item_id = path_item_id(p)

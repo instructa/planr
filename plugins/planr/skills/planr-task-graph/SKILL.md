@@ -34,13 +34,14 @@ planr doctor --client all
 
 ## Core Loop
 
-Use one item at a time:
+Use one item at a time. The short path is two commands per step:
 
 ```bash
 planr pick --json
-planr trace item <item-id>
-planr pick heartbeat <item-id>
+planr done <item-id> --summary "what changed" --files a --files b --cmd "exact verification command" --review [--next]
 ```
+
+`pick --json` includes the full work packet (`trace`: links, logs, runtime, conditions, approval). `done` writes the completion log, requests review (`--review`) or closes directly, and `--next` picks the following item. Evidence logs refresh the heartbeat automatically.
 
 For longer work, keep the live claim visible:
 
@@ -65,13 +66,15 @@ planr log add --item <item-id> \
   --cmd "exact verification command"
 ```
 
-Request review, close review, then close the item:
+Granular alternative: request review, close review, then close the item:
 
 ```bash
 planr review request <item-id>
-planr review close <review-id> --verdict complete
+planr review close <review-id> --verdict complete --close-target
 planr close <item-id> --summary "Verified with evidence"
 ```
+
+`--close-target` closes the reviewed item together with the review when the verdict is complete and a completion log exists; the separate `planr close` is then unnecessary.
 
 If human approval is part of the gate, request it and do not close until it is approved:
 

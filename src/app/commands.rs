@@ -509,15 +509,16 @@ impl App {
                 )
             }
             None => {
-                if let Some((id, worker)) = self.pick_next_ready_item()? {
-                    let item = self.get_item(&id)?;
-                    let context = self.pick_context(&id)?;
-                    return self.emit(
-                        json!({"item": item, "worker_id": worker, "context": context}),
-                        format!("picked {} {}", item.id, item.title),
-                    );
-                }
-                self.emit(json!({"item": null}), "no ready item".to_string())
+                let pick = self.next_pick_value()?;
+                let human = match pick["item"]["id"].as_str() {
+                    Some(id) => format!(
+                        "picked {} {}",
+                        id,
+                        pick["item"]["title"].as_str().unwrap_or_default()
+                    ),
+                    None => "no ready item".to_string(),
+                };
+                self.emit(pick, human)
             }
         }
     }
@@ -525,38 +526,13 @@ impl App {
     pub(crate) fn log(&self, command: LogCommand) -> Result<()> {
         match command {
             LogCommand::Add(args) => {
-                let id = short_id("log");
-                let run_id = if args.cmd.is_empty() && args.tests.is_empty() {
-                    None
-                } else {
-                    Some(self.record_run(&args.item, &args.cmd, "closed")?)
-                };
-                self.conn.execute(
-                    "INSERT INTO logs(id, project_id, item_id, run_id, kind, summary, files, commands, tests, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, datetime('now'))",
-                    params![
-                        id,
-                        self.default_project()?.id,
-                        args.item,
-                        run_id,
-                        args.kind,
-                        args.summary,
-                        serde_json::to_string(
-                            &args
-                                .files
-                                .iter()
-                                .map(|file| file.trim())
-                                .filter(|file| !file.is_empty())
-                                .collect::<Vec<_>>(),
-                        )?,
-                        serde_json::to_string(&args.cmd)?,
-                        serde_json::to_string(&args.tests)?,
-                    ],
-                )?;
-                self.index_search("log", &id, &args.summary, &args.summary, None)?;
-                self.record_event(
-                    "log_created",
-                    Some(&args.item),
-                    json!({"log_id": id, "kind": args.kind}),
+                let id = self.add_log_entry(
+                    &args.item,
+                    &args.kind,
+                    &args.summary,
+                    &args.files,
+                    &args.cmd,
+                    &args.tests,
                 )?;
                 self.emit(
                     json!({"log": self.get_log(&id)?}),
@@ -626,55 +602,29 @@ impl App {
             self.current_item_for_worker()?
                 .ok_or_else(|| anyhow!("no picked item for this worker"))?
         };
-        // Reconcile gate state first so a parent whose children are already
-        // settled is closable instead of stuck in `blocked`.
-        self.promote_ready()?;
-        self.ensure_can_close(&item_id)?;
-        self.conn.execute("UPDATE items SET status = 'closed', completed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1", params![item_id])?;
-        let log_id = short_id("log");
-        self.conn.execute(
-            "INSERT INTO logs(id, project_id, item_id, kind, summary, created_at) VALUES (?1, ?2, ?3, 'completion', ?4, datetime('now'))",
-            params![log_id, self.default_project()?.id, item_id, args.summary],
-        )?;
-        self.promote_ready()?;
-        self.record_event(
-            "item_closed",
-            Some(&item_id),
-            json!({"log_id": log_id, "summary": args.summary}),
-        )?;
+        let log_id = self.close_item_core(&item_id, &args.summary, true)?;
         let next = if args.next {
-            let before = self.json;
-            let _ = before;
-            self.pick(None)?;
-            None::<Value>
+            Some(self.next_pick_value()?)
         } else {
             None
         };
+        let mut human = "item closed".to_string();
+        if let Some(next) = &next {
+            match next["item"]["id"].as_str() {
+                Some(next_id) => human.push_str(&format!("; picked {next_id}")),
+                None => human.push_str("; no ready item"),
+            }
+        }
         self.emit(
             json!({"closed": item_id, "item": self.get_item(&item_id)?, "log_id": log_id, "next": next}),
-            "item closed".to_string(),
+            human,
         )
     }
 
     pub(crate) fn review(&self, command: ReviewCommand) -> Result<()> {
         match command {
             ReviewCommand::Request(args) => {
-                let target = self.get_item(&args.item_id)?;
-                let review = self.create_item(
-                    None,
-                    &format!("Review {}", target.title),
-                    "Review item against plan, logs, diff, and verification.",
-                    "review",
-                    target.plan_path.as_deref(),
-                )?;
-                self.add_link(&review.id, &target.id, "reviews")?;
-                self.promote_ready()?;
-                let review = self.get_item(&review.id)?;
-                self.record_event(
-                    "review_requested",
-                    Some(&target.id),
-                    json!({"review_id": review.id.clone()}),
-                )?;
+                let review = self.request_review_for(&args.item_id)?;
                 self.emit(json!({"review": review}), "review requested".to_string())
             }
             ReviewCommand::Annotate(args) => {
@@ -730,9 +680,40 @@ impl App {
             }
             ReviewCommand::Close(args) => {
                 let verdict = args.verdict.as_str();
-                let result =
+                if args.close_target && verdict != "complete" {
+                    bail!("--close-target requires --verdict complete; findings create fix work instead");
+                }
+                let mut result =
                     self.close_review_item(&args.review_item_id, verdict, args.findings, "cli")?;
-                self.emit(result, "review closed".to_string())
+                let mut human = "review closed".to_string();
+                if args.close_target {
+                    let target_id: String = self.conn.query_row(
+                        "SELECT to_item FROM links WHERE from_item = ?1 AND kind = 'reviews'",
+                        params![args.review_item_id],
+                        |row| row.get(0),
+                    )?;
+                    let completion_logs: i64 = self.conn.query_row(
+                        "SELECT COUNT(*) FROM logs WHERE item_id = ?1 AND kind = 'completion'",
+                        params![target_id],
+                        |row| row.get(0),
+                    )?;
+                    if completion_logs == 0 {
+                        bail!(
+                            "cannot close target {target_id}: no completion log; the worker must log evidence first (planr done / planr log add)"
+                        );
+                    }
+                    self.close_item_core(
+                        &target_id,
+                        &format!(
+                            "closed by review {} (verdict complete)",
+                            args.review_item_id
+                        ),
+                        true,
+                    )?;
+                    result["closed_target"] = json!(self.get_item(&target_id)?);
+                    human.push_str(&format!("; closed target {target_id}"));
+                }
+                self.emit(result, human)
             }
             ReviewCommand::List(args) => {
                 let status_filter = if args.open { Some("closed") } else { None };

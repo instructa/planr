@@ -2076,6 +2076,251 @@ fn log_files_flag_is_repeatable_and_artifact_name_works_as_flag() {
 }
 
 #[test]
+fn done_command_collapses_log_review_close_and_next_pick() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Flow"])
+        .assert()
+        .success();
+    let first = create_test_item(dir.path(), &db, "First slice", "compound flow test");
+    let second = create_test_item(dir.path(), &db, "Second slice", "compound flow test");
+
+    // Pick the first item, then finish it with review + next in one command.
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "pick"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let picked: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(picked["item"]["id"], first);
+    assert!(
+        picked["trace"]["links"].is_array(),
+        "pick must include the trace work packet"
+    );
+
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "done",
+            &first,
+            "--summary",
+            "implemented first slice",
+            "--files",
+            "src/a.rs,src/b.rs",
+            "--cmd",
+            "cargo test",
+            "--review",
+            "--next",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let done: Value = serde_json::from_slice(&output).unwrap();
+    let review_id = done["review"]["id"].as_str().unwrap().to_string();
+    assert_eq!(done["closed"], Value::Null, "--review must not close");
+    assert_eq!(
+        done["next"]["item"]["id"], second,
+        "--next must pick the following ready item"
+    );
+    assert_eq!(item_status(&db, &first), "running");
+
+    // The reviewer closes review and target in one command.
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "review",
+            "close",
+            &review_id,
+            "--verdict",
+            "complete",
+            "--close-target",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let closed: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(closed["closed_target"]["id"], first);
+    assert_eq!(item_status(&db, &first), "closed");
+
+    // done without --review closes directly.
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "done",
+            &second,
+            "--summary",
+            "second slice done",
+        ])
+        .assert()
+        .success();
+    assert_eq!(item_status(&db, &second), "closed");
+
+    // --next must never hand the worker its own freshly requested review.
+    let third = create_test_item(dir.path(), &db, "Third slice", "maker checker split");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "pick"])
+        .assert()
+        .success();
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "done",
+            &third,
+            "--summary",
+            "third slice done",
+            "--review",
+            "--next",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let done: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        done["next"]["item"],
+        Value::Null,
+        "worker must not pick its own review; only the review was ready"
+    );
+}
+
+#[test]
+fn close_target_requires_completion_log_and_complete_verdict() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Gate"])
+        .assert()
+        .success();
+    let item = create_test_item(dir.path(), &db, "Unlogged item", "close target guard");
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "review",
+            "request",
+            &item,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let review_id = serde_json::from_slice::<Value>(&output).unwrap()["review"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "review",
+            "close",
+            &review_id,
+            "--verdict",
+            "not-complete",
+            "--findings",
+            "missing tests",
+            "--close-target",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--close-target requires"));
+
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "review",
+            "close",
+            &review_id,
+            "--verdict",
+            "complete",
+            "--close-target",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no completion log"));
+    assert_ne!(item_status(&db, &item), "closed");
+}
+
+#[test]
+fn log_add_refreshes_heartbeat_for_the_owner() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "HB"])
+        .assert()
+        .success();
+    let item = create_test_item(dir.path(), &db, "Heartbeat item", "heartbeat folding");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "pick"])
+        .assert()
+        .success();
+    let conn = Connection::open(&db).unwrap();
+    conn.execute(
+        "UPDATE items SET last_heartbeat_at = datetime('now', '-1 hour') WHERE id = ?1",
+        [&item],
+    )
+    .unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "log",
+            "add",
+            "--item",
+            &item,
+            "--summary",
+            "progress evidence",
+        ])
+        .assert()
+        .success();
+    let (status, fresh): (String, i64) = conn
+        .query_row(
+            "SELECT status, last_heartbeat_at >= datetime('now', '-60 seconds') FROM items WHERE id = ?1",
+            [&item],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        status, "running",
+        "owner log must promote picked to running"
+    );
+    assert_eq!(fresh, 1, "owner log must refresh the heartbeat");
+}
+
+#[test]
 fn map_build_is_idempotent_per_plan() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
@@ -4118,6 +4363,7 @@ fn rust_implementation_has_owned_module_boundaries() {
         "src/cli.rs",
         "src/app/mod.rs",
         "src/app/commands.rs",
+        "src/app/flow.rs",
         "src/app/git_review.rs",
         "src/app/mcp.rs",
         "src/app/packages.rs",
@@ -4171,6 +4417,7 @@ fn rust_implementation_has_owned_module_boundaries() {
         ("src/cli.rs", 900usize),
         ("src/app/mod.rs", 180),
         ("src/app/commands.rs", 1_000),
+        ("src/app/flow.rs", 250),
         ("src/app/git_review.rs", 350),
         ("src/app/mcp.rs", 900),
         ("src/app/packages.rs", 450),
@@ -4197,6 +4444,7 @@ fn rust_implementation_has_owned_module_boundaries() {
         "src/cli.rs",
         "src/app/mod.rs",
         "src/app/commands.rs",
+        "src/app/flow.rs",
         "src/app/git_review.rs",
         "src/app/mcp.rs",
         "src/app/packages.rs",

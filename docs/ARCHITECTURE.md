@@ -19,6 +19,7 @@ Planr V1 is a single Rust binary with explicit module ownership. The crate stays
 - `src/cli.rs`: CLI contract boundary. Owns `clap` command definitions, option parsing types, value enums, and command DTOs used by app dispatch.
 - `src/app/mod.rs`: application composition boundary. Owns the `App` runtime state, top-level dispatch, shared app-local row helpers, and app submodule wiring.
 - `src/app/commands.rs`: CLI use-case orchestration. Owns project, plan, map, item, link, pick, approval, log, close, review, context, search, doctor, and install command handlers.
+- `src/app/flow.rs`: compound work-flow boundary. Owns evidence log writing (with heartbeat folding), the close transition core, review-request creation, the pick work packet, and the `done` command that chains them for CLI, HTTP, and MCP surfaces.
 - `src/app/git_review.rs`: Git and PR review evidence boundary. Owns worktree detection, scoped changed-file provenance, PR URL context, and dirty-worktree safety projections.
 - `src/app/mcp.rs`: MCP stdio boundary. Owns MCP protocol request routing, tool calls, resource reads, and prompt responses.
 - `src/app/packages.rs`: package import/export boundary. Owns reusable JSON templates, preview-before-import, review artifact package import, and local-first encrypted bundle metadata.

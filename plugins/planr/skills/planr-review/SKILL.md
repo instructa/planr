@@ -18,8 +18,10 @@ planr map show --json
 Inspect the actual changed files and verification evidence. Then close the review:
 
 ```bash
-planr review close <review-id> --verdict complete
+planr review close <review-id> --verdict complete --close-target
 ```
+
+`--close-target` also closes the reviewed item when the verdict is complete and a completion log exists — the worker does not need a separate close round-trip. Omit it when the worker should close explicitly.
 
 or:
 

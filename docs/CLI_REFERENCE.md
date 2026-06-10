@@ -49,8 +49,9 @@ planr review annotate <item-id> --message "..." [--severity info|warning|blockin
 planr review ingest <item-id> (--from feedback.json|--stdin)
 planr review artifact <review-item-id> [--out .planr/reviews/custom.review.md]
 planr review evidence <item-id> [--pr-url https://...]
-planr review close <review-item-id> --verdict complete|not-complete|unclear
+planr review close <review-item-id> --verdict complete|not-complete|unclear [--close-target]
 planr close [item-id] --summary "..." [--next]
+planr done [item-id] --summary "..." [--files a --files b] [--cmd "..."] [--tests "..."] [--review] [--next]
 planr context add "text" [--item <item-id>] [--tag discovery]
 planr search "query"
 planr doctor [--client codex|claude|cursor|all]
@@ -94,7 +95,11 @@ With `--json`, responses follow one convention so agents never guess where data 
 }
 ```
 
-`review close` writes `.planr/reviews/<review-item-id>.review.md` and registers it as a review artifact. A `not-complete` or `unclear` verdict creates fix and follow-up review work.
+`review close` writes `.planr/reviews/<review-item-id>.review.md` and registers it as a review artifact. A `not-complete` or `unclear` verdict creates fix and follow-up review work. With `--close-target` (complete verdicts only) the reviewed item is closed in the same command, provided it already has a completion log.
+
+`done` is the compound worker command: it writes a completion log, then requests a review (`--review`) or closes the item, and optionally picks the next ready item (`--next`). It chains the same single-owner operations as `log add`, `review request`, `close`, and `pick` — identical evidence, fewer commands.
+
+`pick --json` returns the full work packet: the item, recall `context`, and a `trace` object (links, logs, runtime, recovery, conditions, approval), so no separate `trace item` call is needed. Evidence written via `log add` or `done` by the pick owner refreshes the runtime heartbeat automatically.
 
 `review evidence` reports Git worktree status scoped to files named by item logs or artifacts. Dirty files without item provenance are listed as unrelated and are not treated as agent-owned evidence. `--pr-url` records an item-scoped PR reference before returning the evidence package.
 

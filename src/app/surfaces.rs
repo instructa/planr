@@ -7,25 +7,27 @@ use serde_json::json;
 use std::fs;
 
 impl App {
+    /// Full work packet for an item: graph links, evidence logs, runtime,
+    /// recovery, conditions, and approval state. Shared by `trace item` and
+    /// the `pick` output so picking does not need a second command.
+    pub(crate) fn trace_item_value(&self, item_id: &str) -> Result<serde_json::Value> {
+        Ok(json!({
+            "item": self.get_item(item_id)?,
+            "links": self.links_for(item_id)?,
+            "logs": self.list_logs(Some(item_id))?,
+            "runtime": self.item_runtime(item_id)?,
+            "recovery": self.item_recovery(item_id)?,
+            "conditions": self.item_conditions(item_id)?,
+            "approval": self.item_approval(item_id)?,
+        }))
+    }
+
     pub(crate) fn trace(&self, command: TraceCommand) -> Result<()> {
         match command {
-            TraceCommand::Item(args) => {
-                let item = self.get_item(&args.id)?;
-                let logs = self.list_logs(Some(&args.id))?;
-                let links = self.links_for(&args.id)?;
-                self.emit(
-                    json!({
-                        "item": item,
-                        "links": links,
-                        "logs": logs,
-                        "runtime": self.item_runtime(&args.id)?,
-                        "recovery": self.item_recovery(&args.id)?,
-                        "conditions": self.item_conditions(&args.id)?,
-                        "approval": self.item_approval(&args.id)?,
-                    }),
-                    "trace complete".to_string(),
-                )
-            }
+            TraceCommand::Item(args) => self.emit(
+                self.trace_item_value(&args.id)?,
+                "trace complete".to_string(),
+            ),
         }
     }
 

@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 
 mod commands;
+mod flow;
 mod git_review;
 mod graph;
 mod http;
@@ -81,6 +82,7 @@ impl App {
             Command::Approval(args) => self.approval(args.command),
             Command::Log(args) => self.log(args.command),
             Command::Close(args) => self.close(args),
+            Command::Done(args) => self.done(args),
             Command::Review(args) => self.review(args.command),
             Command::Context(args) => self.context(args.command),
             Command::Note(args) => self.context(args.command),

@@ -30,11 +30,13 @@ Each iteration is one dispatch through the routing skill — never a hand-writte
 ```text
 1. $planr-status      read honest state; if stop condition holds -> exit loop
 2. $planr-plan / $planr-task-graph   only if scope or map structure is missing
-3. $planr-work        pick exactly one ready item, implement, log evidence
+3. $planr-work        pick exactly one ready item, implement, finish with planr done --review
 4. live verify        run the platform verification (below), log it with planr log add --cmd
-5. $planr-review      independent audit; complete -> close, findings -> Planr creates fix items
+5. $planr-review      independent audit; complete -> review close --close-target, findings -> Planr creates fix items
 6. repeat             fix items are just the next ready items
 ```
+
+The short path per item is three commands: `planr pick --json` (includes the trace work packet), `planr done <item-id> --summary ... --cmd ... --review [--next]`, and the reviewer's `planr review close <review-id> --verdict complete --close-target`. Parent gates roll up automatically.
 
 After any `planr map build`, dependency linking is part of step 2, not optional: add `blocks` links for every execution-order dependency before the first pick. An unlinked map makes the loop pick items in arbitrary order.
 

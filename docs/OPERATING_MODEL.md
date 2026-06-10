@@ -49,13 +49,14 @@ Product-plan task lists are candidates. Work becomes a live commitment only afte
 
 ## Daily Agent Loop
 
-Agents should work one map item at a time:
+Agents should work one map item at a time. The short path is:
 
 ```bash
 planr pick --json
-planr trace item <item-id>
-planr pick heartbeat <item-id>
+planr done <item-id> --summary "what changed" --files a --files b --cmd "exact verification command" --review [--next]
 ```
+
+`pick --json` returns the item with recall context and the full `trace` work packet, so no separate `trace item` call is needed. `done` writes the completion log, then requests review (`--review`) or closes directly, and `--next` picks the following item. Evidence logging refreshes the heartbeat, so explicit `pick heartbeat` calls are only needed during long silent stretches.
 
 For longer work, update runtime state instead of relying on chat history:
 
@@ -98,9 +99,10 @@ planr review request <item-id>
 planr review annotate <item-id> --message "review note" --severity warning
 planr review evidence <item-id> --pr-url https://example.invalid/pr/123
 planr review ingest <item-id> --from .planr/tmp/review-feedback.json
-planr review close <review-id> --verdict complete
-planr close <item-id> --summary "Verified with evidence"
+planr review close <review-id> --verdict complete --close-target
 ```
+
+With `--close-target` a complete verdict also closes the reviewed item (it must already carry a completion log); otherwise finish with `planr close <item-id> --summary "Verified with evidence"`.
 
 `review evidence` records Git branch, commit, dirty state, item-scoped changed-file provenance, and optional PR URL context without treating unrelated dirty files as proof. Review ingestion records hook-compatible JSON feedback as contexts and logs only. It does not close the review, approve the item, or unblock downstream work.
 

@@ -11,21 +11,23 @@ Use this for one picked item at a time.
 
 ```bash
 planr pick --json
-planr trace item <item-id>
-planr pick heartbeat <item-id>
 ```
 
-Read the linked plan/context, implement the smallest correct slice, then record evidence:
+The pick output already contains the full work packet (`trace`: links, logs, runtime, conditions, approval) plus recall context — no separate `trace item` call needed. Read the linked plan/context, implement the smallest correct slice, then finish the step in one command:
 
 ```bash
-planr log add --item <item-id> --summary "what changed" --files path-a --files path-b --cmd "exact verification command"
+planr done <item-id> --summary "what changed" --files path-a --files path-b --cmd "exact verification command" --review
+```
+
+`done --review` writes the completion log and requests the review; add `--next` to pick the following item in the same call. Without `--review` it closes the item directly (only for items that need no review gate).
+
+Evidence logging refreshes the heartbeat automatically — a separate `planr pick heartbeat` is only needed for long silent stretches without logs.
+
+The granular commands remain available when you need them:
+
+```bash
+planr log add --item <item-id> --summary "..." --files a --files b --cmd "..."
 planr review request <item-id>
-```
-
-Only close after review is complete:
-
-```bash
-planr review close <review-id> --verdict complete
 planr close <item-id> --summary "Verified"
 ```
 

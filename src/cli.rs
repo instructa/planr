@@ -29,6 +29,9 @@ pub(crate) enum Command {
     Approval(ApprovalArgs),
     Log(LogArgs),
     Close(CloseArgs),
+    /// Log evidence and finish the step in one command: completion log,
+    /// then review request (--review) or close, optionally pick the next item.
+    Done(DoneArgs),
     Review(ReviewArgs),
     Context(ContextArgs),
     Note(NoteArgs),
@@ -465,6 +468,26 @@ pub(crate) struct CloseArgs {
 }
 
 #[derive(Args, Debug)]
+pub(crate) struct DoneArgs {
+    pub(crate) item_id: Option<String>,
+    #[arg(long)]
+    pub(crate) summary: String,
+    /// Changed file; repeat the flag or pass a comma-separated list.
+    #[arg(long, value_delimiter = ',')]
+    pub(crate) files: Vec<String>,
+    #[arg(long)]
+    pub(crate) cmd: Vec<String>,
+    #[arg(long)]
+    pub(crate) tests: Vec<String>,
+    /// Request a review instead of closing the item directly.
+    #[arg(long)]
+    pub(crate) review: bool,
+    /// Pick the next ready item after finishing this step.
+    #[arg(long)]
+    pub(crate) next: bool,
+}
+
+#[derive(Args, Debug)]
 pub(crate) struct ReviewArgs {
     #[command(subcommand)]
     pub(crate) command: ReviewCommand,
@@ -532,6 +555,10 @@ pub(crate) struct ReviewCloseArgs {
     pub(crate) verdict: ReviewVerdict,
     #[arg(long)]
     pub(crate) findings: Vec<String>,
+    /// On a complete verdict, also close the reviewed item when it already
+    /// has a completion log.
+    #[arg(long)]
+    pub(crate) close_target: bool,
 }
 
 #[derive(Args, Debug)]

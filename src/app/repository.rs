@@ -554,6 +554,15 @@ impl App {
     }
 
     pub(crate) fn pick_next_ready_item(&self) -> Result<Option<(String, String)>> {
+        self.pick_next_ready_item_excluding(None)
+    }
+
+    /// `exclude` keeps a worker from picking an item it must not own, e.g.
+    /// the review it just requested via `done --review --next`.
+    pub(crate) fn pick_next_ready_item_excluding(
+        &self,
+        exclude: Option<&str>,
+    ) -> Result<Option<(String, String)>> {
         let project = self.default_project()?;
         self.promote_ready()?;
         let worker = worker_id();
@@ -571,6 +580,7 @@ impl App {
                  WHERE id = (
                      SELECT id FROM items
                      WHERE project_id = ?3 AND status = 'ready'
+                     AND id IS NOT ?4
                      AND NOT EXISTS (
                        SELECT 1 FROM items c WHERE c.parent_item_id = items.id
                        AND c.status NOT IN ('cancelled')
@@ -580,7 +590,7 @@ impl App {
                  )
                  AND status = 'ready'
                  RETURNING id",
-                params![worker, token, project.id],
+                params![worker, token, project.id, exclude],
                 |row| row.get(0),
             )
             .optional()?;
