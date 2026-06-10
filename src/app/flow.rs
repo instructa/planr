@@ -163,20 +163,6 @@ impl App {
         )
     }
 
-    /// Picks the next ready item and returns it as a JSON work packet, or
-    /// `{"item": null}` when nothing is ready.
-    pub(crate) fn next_pick_value(&self) -> Result<Value> {
-        self.next_pick_value_excluding(None)
-    }
-
-    pub(crate) fn next_pick_value_excluding(&self, exclude: Option<&str>) -> Result<Value> {
-        if let Some((id, worker)) = self.pick_next_ready_item_excluding(exclude)? {
-            self.work_packet(&id, &worker)
-        } else {
-            Ok(json!({"item": null}))
-        }
-    }
-
     /// `planr done`: completion log, then review request or close, then an
     /// optional next pick — one command instead of three, same evidence.
     pub(crate) fn done(&self, args: DoneArgs) -> Result<()> {

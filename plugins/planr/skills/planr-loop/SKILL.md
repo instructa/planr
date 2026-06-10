@@ -46,7 +46,7 @@ Each iteration is one dispatch through the routing skill — never a hand-writte
 6. repeat             fix items are just the next ready items
 ```
 
-The short path per item is three commands: `planr pick --json` (one flat work packet), `planr done <item-id> --summary ... --cmd ... --review [--next]`, and the reviewer's `planr review close <review-id> --verdict complete --close-target`. Parent gates roll up automatically.
+The short path per item is three commands: `planr pick --json` (one flat work packet; makers add `--work-type code`), `planr done <item-id> --summary ... --cmd ... --review [--next]`, and the reviewer's `planr --json pick --work-type review` followed by `planr review close <review-id> --verdict complete --reviewer <id> --close-target` — run exactly once. Parent gates roll up automatically.
 
 After any `planr map build`, dependency linking is part of step 2, not optional: add `blocks` links for every execution-order dependency before the first pick. An unlinked map makes the loop pick items in arbitrary order.
 

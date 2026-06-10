@@ -472,13 +472,10 @@ impl App {
                         .any(|(key, value)| key == "open" && value == "true");
                     serde_json::to_string(&json!({"approvals": self.list_approvals(open)?}))?
                 }
-                ("POST", "/v1/pick") => {
-                    if let Some((id, worker)) = self.pick_next_ready_item()? {
-                        serde_json::to_string(&self.work_packet(&id, &worker)?)?
-                    } else {
-                        serde_json::to_string(&json!({"item": null}))?
-                    }
-                }
+                ("POST", "/v1/pick") => serde_json::to_string(&self.next_pick_value_filtered(
+                    None,
+                    body_json.get("work_type").and_then(Value::as_str),
+                )?)?,
                 ("POST", p) if p.ends_with("/log") => {
                     let item_id =
                         path_item_id(p).ok_or_else(|| anyhow!("missing item id in log route"))?;
@@ -545,9 +542,13 @@ impl App {
                                 .collect::<Vec<_>>()
                         })
                         .unwrap_or_default();
-                    serde_json::to_string(
-                        &self.close_review_item(review_id, verdict, findings, "http")?,
-                    )?
+                    serde_json::to_string(&self.close_review_item(
+                        review_id,
+                        verdict,
+                        findings,
+                        "http",
+                        body_json.get("reviewer").and_then(Value::as_str),
+                    )?)?
                 }
                 ("GET", p) if p.starts_with("/v1/reviews/") && p.ends_with("/artifact") => {
                     let review_id = p
@@ -568,6 +569,7 @@ impl App {
                         None,
                         &[],
                         &[],
+                        None,
                         None,
                     )?}))?
                 }

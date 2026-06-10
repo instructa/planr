@@ -2268,6 +2268,218 @@ fn done_command_collapses_log_review_close_and_next_pick() {
 }
 
 #[test]
+fn review_close_guard_reviewer_identity_and_role_aware_picks() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "FixPack"])
+        .assert()
+        .success();
+    let first = create_test_item(dir.path(), &db, "Build the slice", "fix pack run");
+    let second = create_test_item(dir.path(), &db, "Downstream slice", "fix pack run");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "link", "add", &first, &second])
+        .assert()
+        .success();
+
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "pick"])
+        .assert()
+        .success();
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "done",
+            &first,
+            "--summary",
+            "built the slice",
+            "--review",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let done: Value = serde_json::from_slice(&output).unwrap();
+    let review_id = done["review"]["id"].as_str().unwrap().to_string();
+
+    // Role-aware pick: a maker asking for code work must not lease the
+    // review, and the null pick must explain itself instead of being blind.
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "pick",
+            "--work-type",
+            "code",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let null_pick: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(null_pick["item"], Value::Null);
+    assert_eq!(null_pick["reason"], "no_ready_item_of_work_type");
+    assert!(
+        null_pick["remaining"]["counts"]["ready"].as_i64().unwrap() > 0,
+        "null pick must carry the remaining snapshot: {null_pick}"
+    );
+
+    // A checker asking for review work leases exactly the review item, and
+    // its close effect previews the --close-target cascade: closing this
+    // review settles the target, which unlocks the downstream item.
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "pick",
+            "--work-type",
+            "review",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let review_pick: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(review_pick["item"]["id"], review_id);
+    assert!(
+        review_pick.get("worker_id").is_none(),
+        "worker identity lives in item/runtime, not a third top-level copy: {review_pick}"
+    );
+    let unlocked = review_pick["close_effect"]["would_unlock"]
+        .as_array()
+        .unwrap();
+    assert!(
+        unlocked.iter().any(|item| item["id"] == second),
+        "review close effect must model the --close-target cascade: {review_pick}"
+    );
+
+    // Reviewer identity is recorded on the response and the artifact.
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "review",
+            "close",
+            &review_id,
+            "--verdict",
+            "complete",
+            "--reviewer",
+            "checker-1",
+            "--close-target",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let closed: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(closed["reviewer"], "checker-1");
+    assert_eq!(closed["closed_target"]["id"], first);
+    let artifact = fs::read_to_string(
+        dir.path()
+            .join(".planr/reviews")
+            .join(format!("{review_id}.review.md")),
+    )
+    .unwrap();
+    assert!(
+        artifact.contains("Reviewer: checker-1"),
+        "artifact must attribute the checker: {artifact}"
+    );
+
+    // Double close must fail instead of silently duplicating evidence logs.
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "review",
+            "close",
+            &review_id,
+            "--verdict",
+            "complete",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("already_closed"));
+
+    // map show reports the same explicit-zero counts vocabulary as the
+    // remaining snapshot, plus settled/total.
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "map", "show"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let map: Value = serde_json::from_slice(&output).unwrap();
+    let counts = map["counts"].as_object().unwrap();
+    for status in [
+        "pending",
+        "ready",
+        "picked",
+        "running",
+        "in_review",
+        "blocked",
+        "failed",
+        "cancelled",
+        "closed",
+        "closed_partial",
+    ] {
+        assert!(
+            counts.contains_key(status),
+            "map counts must carry explicit zero for {status}: {map}"
+        );
+    }
+    assert!(map["settled"].is_number() && map["total"].is_number());
+
+    // Settle the rest, then the null pick explains the finished board.
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "pick"])
+        .assert()
+        .success();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "done",
+            &second,
+            "--summary",
+            "downstream slice done",
+        ])
+        .assert()
+        .success();
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "pick"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let final_pick: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(final_pick["item"], Value::Null);
+    assert_eq!(final_pick["reason"], "all_settled");
+}
+
+#[test]
 fn close_target_requires_completion_log_and_complete_verdict() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");

@@ -10,23 +10,23 @@ Use this when a task needs a correctness and completion audit.
 ## Workflow
 
 ```bash
-planr --json trace item <review-id>
+planr --json pick --work-type review
 ```
 
-Tracing the review item inlines the target item and its evidence logs under `target` — one trace is enough to see what is being audited, its status (`in_review` while waiting on you), files, and verification commands. Use `planr log list --item <target-id>` or `planr map show --json` only for deeper reads.
+`--work-type review` leases only review items, so a checker never accidentally takes maker work. The pick packet inlines the target item and its evidence logs under `target` — one command is enough to see what is being audited, its status (`in_review` while waiting on you), files, and verification commands. If you already hold a review id, `planr --json trace item <review-id>` returns the same packet. Use `planr log list --item <target-id>` or `planr map show --json` only for deeper reads.
 
-Inspect the actual changed files and re-run the logged verification evidence. Then close the review:
+Inspect the actual changed files and re-run the logged verification evidence. Then close the review exactly once:
 
 ```bash
-planr review close <review-id> --verdict complete --close-target
+planr review close <review-id> --verdict complete --reviewer <your-id> --close-target
 ```
 
-`--close-target` also closes the reviewed item when the verdict is complete and a completion log exists — the worker does not need a separate close round-trip. Omit it when the worker should close explicitly.
+`--close-target` also closes the reviewed item when the verdict is complete and a completion log exists — the worker does not need a separate close round-trip. Omit it when the worker should close explicitly. `--reviewer` records your checker identity on the log, artifact, and event so maker and checker stay distinguishable in the audit trail. A second close of the same review fails with `already_closed` — never retry a close that succeeded.
 
 or:
 
 ```bash
-planr review close <review-id> --verdict not-complete --findings "specific actionable finding"
+planr review close <review-id> --verdict not-complete --reviewer <your-id> --findings "specific actionable finding"
 ```
 
 ## Findings Rules

@@ -152,16 +152,28 @@ impl App {
         verdict: &str,
         findings: Vec<String>,
         source: &str,
+        reviewer: Option<&str>,
     ) -> Result<Value> {
         let review = self.get_item(review_id)?;
         if review.work_type != "review" {
             bail!("invalid_transition: item is not a review: {review_id}");
         }
+        // Closing twice would duplicate review logs and the auto-completion
+        // log on the target, polluting handoff evidence for downstream work.
+        if matches!(
+            review.status.as_str(),
+            "closed" | "closed_partial" | "cancelled"
+        ) {
+            bail!("already_closed: review {review_id} is already settled; a second close would duplicate evidence logs");
+        }
         let verdict = match verdict {
             "complete" | "not-complete" | "unclear" => verdict,
             other => bail!("unsupported review verdict: {other}"),
         };
-        let summary = format!("review verdict: {verdict}");
+        let reviewer = reviewer
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(crate::util::worker_id);
+        let summary = format!("review verdict: {verdict} (reviewer: {reviewer})");
         let log_id = short_id("log");
         self.conn.execute(
             "INSERT INTO logs(id, project_id, item_id, kind, summary, review_findings, created_at) VALUES (?1, ?2, ?3, 'review', ?4, ?5, datetime('now'))",
@@ -201,14 +213,21 @@ impl App {
             created.push(fix);
             created.push(next_review);
         }
-        let artifact =
-            self.write_review_artifact(review_id, Some(verdict), &findings, &created, None)?;
+        let artifact = self.write_review_artifact(
+            review_id,
+            Some(verdict),
+            &findings,
+            &created,
+            None,
+            Some(&reviewer),
+        )?;
         self.promote_ready()?;
         self.record_event(
             "review_closed",
             Some(&review.id),
             json!({
                 "verdict": verdict,
+                "reviewer": reviewer,
                 "created": created.len(),
                 "source": source,
                 "artifact_id": artifact["id"]
@@ -217,6 +236,7 @@ impl App {
         Ok(json!({
             "closed": review.id,
             "verdict": verdict,
+            "reviewer": reviewer,
             "log_id": log_id,
             "created": created,
             "artifact": artifact
@@ -230,6 +250,7 @@ impl App {
         findings: &[String],
         created: &[Item],
         out: Option<PathBuf>,
+        reviewer: Option<&str>,
     ) -> Result<Value> {
         let review = self.get_item(review_id)?;
         let target = self.review_target(review_id)?;
@@ -275,6 +296,9 @@ impl App {
         }
         if let Some(verdict) = verdict {
             body.push_str(&format!("- Verdict: {verdict}\n"));
+        }
+        if let Some(reviewer) = reviewer {
+            body.push_str(&format!("- Reviewer: {reviewer}\n"));
         }
         body.push_str("\n## Findings\n\n");
         if findings.is_empty() {
@@ -361,7 +385,7 @@ impl App {
                 path.file_name().and_then(|s| s.to_str()).unwrap_or("review.md"),
                 path.to_string_lossy(),
                 size,
-                json!({"review_item_id": review_id, "target_item_id": target.as_ref().map(|item| item.id.clone()), "verdict": verdict}).to_string()
+                json!({"review_item_id": review_id, "target_item_id": target.as_ref().map(|item| item.id.clone()), "verdict": verdict, "reviewer": reviewer}).to_string()
             ],
         )?;
         self.record_event(

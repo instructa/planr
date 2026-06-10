@@ -6,6 +6,46 @@ use rusqlite::params;
 use serde_json::{json, Value};
 
 impl App {
+    /// Picks the next ready item and returns it as a flat work packet, or a
+    /// null pick with `reason` and `remaining` when nothing is pickable.
+    pub(crate) fn next_pick_value(&self) -> Result<Value> {
+        self.next_pick_value_filtered(None, None)
+    }
+
+    pub(crate) fn next_pick_value_excluding(&self, exclude: Option<&str>) -> Result<Value> {
+        self.next_pick_value_filtered(exclude, None)
+    }
+
+    /// Optionally restricted to one work type so checker agents lease only
+    /// reviews and makers only work items. A null pick carries a `reason`
+    /// and the `remaining` snapshot instead of leaving the agent blind.
+    pub(crate) fn next_pick_value_filtered(
+        &self,
+        exclude: Option<&str>,
+        work_type: Option<&str>,
+    ) -> Result<Value> {
+        if let Some((id, worker)) = self.pick_next_ready_item_filtered(exclude, work_type)? {
+            self.work_packet(&id, &worker)
+        } else {
+            let remaining = self.progress_value()?;
+            let total = remaining["total"].as_i64().unwrap_or(0);
+            let settled = remaining["settled"].as_i64().unwrap_or(0);
+            let ready = remaining["counts"]["ready"].as_i64().unwrap_or(0);
+            let reason = if total == 0 {
+                "empty_map"
+            } else if settled == total {
+                "all_settled"
+            } else if ready == 0 {
+                "nothing_ready"
+            } else if work_type.is_some() {
+                "no_ready_item_of_work_type"
+            } else {
+                "ready_items_not_pickable"
+            };
+            Ok(json!({"item": null, "reason": reason, "remaining": remaining}))
+        }
+    }
+
     /// The flat pick work packet: each fact appears exactly once. Base is
     /// the trace packet (item, links, logs, runtime, recovery, conditions,
     /// approval) extended with recall context and board progress. Empty
@@ -13,7 +53,9 @@ impl App {
     /// "empty"; `remaining.counts` always carries the full status vocabulary.
     pub(crate) fn work_packet(&self, item_id: &str, worker: &str) -> Result<Value> {
         let mut packet = self.trace_item_value(item_id)?;
-        packet["worker_id"] = json!(worker);
+        // Worker identity lives in `item.worker_id` and `runtime.worker_id`
+        // already; `worker` is the same value, so no third top-level copy.
+        debug_assert_eq!(packet["item"]["worker_id"].as_str(), Some(worker));
         let mut stmt = self.conn.prepare("SELECT source_type, source_id, section_id, relationship FROM source_links WHERE item_id = ?1 ORDER BY id")?;
         let source_links = collect_rows(stmt.query_map(params![item_id], |row| {
             Ok(json!({
@@ -223,11 +265,21 @@ fn looks_secret_like(text: &str) -> bool {
         .any(|pattern| text.contains(pattern))
 }
 
+/// Truncates at a word boundary so handoff summaries never cut a token in
+/// half; the marker tells agents the full text is one `log list` away.
 fn compact_text(text: &str, max_chars: usize) -> String {
     let mut compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if compact.len() > max_chars {
-        compact.truncate(max_chars.saturating_sub(3));
-        compact.push_str("...");
+        let mut budget = max_chars.saturating_sub(12).max(1);
+        while !compact.is_char_boundary(budget) {
+            budget -= 1;
+        }
+        let cut = compact[..budget]
+            .rfind(' ')
+            .filter(|index| *index > budget / 2)
+            .unwrap_or(budget);
+        compact.truncate(cut);
+        compact.push_str(" [truncated]");
     }
     compact
 }

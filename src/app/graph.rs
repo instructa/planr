@@ -45,6 +45,39 @@ impl App {
                 }));
             }
         }
+        // A review's real close effect includes the `--close-target` cascade:
+        // closing the review settles the reviewed item, which unlocks that
+        // item's downstream work. Without this, the preview claims "nothing
+        // unlocks" right before the close visibly promotes the next item.
+        let item = self.get_item(item_id)?;
+        if item.work_type == "review" {
+            if let Some(review_target) = self.review_target(item_id)? {
+                if !matches!(
+                    review_target.status.as_str(),
+                    "closed" | "closed_partial" | "cancelled"
+                ) {
+                    for downstream in self.direct_downstream_items(&review_target.id)? {
+                        let mut remaining =
+                            self.blocking_items_for_excluding(&downstream.id, &review_target.id)?;
+                        remaining.retain(|blocker| blocker.id != item_id);
+                        if remaining.is_empty() {
+                            if !would_unlock
+                                .iter()
+                                .any(|unlocked: &Item| unlocked.id == downstream.id)
+                            {
+                                would_unlock.push(downstream);
+                            }
+                        } else {
+                            would_remain_blocked.push(json!({
+                                "item": downstream,
+                                "remaining_blockers": remaining,
+                                "via_close_target": review_target.id,
+                            }));
+                        }
+                    }
+                }
+            }
+        }
         Ok(CloseEffect {
             would_unlock,
             would_remain_blocked,

@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.1.10] - 2026-06-10
+
+Fix pack from the v1.1.9 dogfood run.
+
+### Added
+
+- `review close --reviewer <id>` records the checker's identity on the review log summary, the review artifact (`Reviewer:` line and metadata), and the `review_closed` event; defaults to the worker id. Maker and checker stay distinguishable in the audit trail.
+- `pick --work-type <type>` (CLI, MCP `planr_pick_item`, HTTP `POST /v1/pick`) restricts the lease to one work type, so checker agents pick only `review` items and makers only work items.
+- A null pick is never blind: `{"item": null}` now carries a `reason` (`empty_map`, `all_settled`, `nothing_ready`, `no_ready_item_of_work_type`, `ready_items_not_pickable`) and the `remaining` snapshot — across CLI, MCP, and HTTP.
+
+### Fixed
+
+- `review close` on an already-settled review now fails with `already_closed` instead of exiting 0 and silently duplicating review logs, the target's auto-completion log, and the artifact — duplicates polluted handoff evidence for downstream items.
+- `close_effect` on a review item now previews the `--close-target` cascade: it lists the work that closing the review (and with it the reviewed item) would unlock, instead of claiming nothing unlocks right before the close promotes the next item.
+
+### Changed
+
+- `map show` and `map status` report the same explicit-zero status counts as the `remaining` snapshot (full 10-status vocabulary), plus `settled` and `total` — one counts shape across all surfaces.
+- The pick packet no longer carries a third top-level `worker_id` copy; worker identity lives in `item.worker_id` and `runtime.worker_id`.
+- Handoff and recall summaries truncate at a word boundary with a `[truncated]` marker instead of cutting tokens in half.
+
 ## [1.1.9] - 2026-06-10
 
 Polish pack from the v1.1.8 dogfood run.
@@ -133,7 +154,8 @@ Initial Planr product release.
 - Tag-driven release pipeline with multi-target builds (darwin/linux, arm64/x86_64) and Homebrew tap automation.
 - Skill workflow documentation for Codex, Claude Code, Cursor, and MCP-only clients.
 
-[Unreleased]: https://github.com/instructa/planr/compare/v1.1.9...HEAD
+[Unreleased]: https://github.com/instructa/planr/compare/v1.1.10...HEAD
+[1.1.10]: https://github.com/instructa/planr/compare/v1.1.9...v1.1.10
 [1.1.9]: https://github.com/instructa/planr/compare/v1.1.8...v1.1.9
 [1.1.8]: https://github.com/instructa/planr/compare/v1.1.7...v1.1.8
 [1.1.7]: https://github.com/instructa/planr/compare/v1.1.6...v1.1.7

@@ -56,7 +56,7 @@ planr pick --json
 planr done <item-id> --summary "what changed" --files a --files b --cmd "exact verification command" --review [--next]
 ```
 
-`pick --json` returns one flat work packet (item, links, logs, runtime, recovery, conditions, recall context, `remaining` progress), so no separate `trace item` call is needed. `done` writes the completion log, then requests review (`--review`) or closes directly, and `--next` picks the following item. Evidence logging refreshes the heartbeat, so explicit `pick heartbeat` calls are only needed during long silent stretches.
+`pick --json` returns one flat work packet (item, links, logs, runtime, recovery, conditions, recall context, `remaining` progress), so no separate `trace item` call is needed. `pick --work-type review` (or `code`) keeps checker and maker leases separate, and a null pick always carries a `reason` plus the `remaining` snapshot. `done` writes the completion log, then requests review (`--review`) or closes directly, and `--next` picks the following item. Evidence logging refreshes the heartbeat, so explicit `pick heartbeat` calls are only needed during long silent stretches.
 
 For longer work, update runtime state instead of relying on chat history:
 

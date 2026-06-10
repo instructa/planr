@@ -78,7 +78,7 @@ impl App {
             Command::Map(args) => self.map(args.command),
             Command::Item(args) => self.item(args.command),
             Command::Link(args) => self.link(args.command),
-            Command::Pick(args) => self.pick(args.command),
+            Command::Pick(args) => self.pick(args.command, args.work_type),
             Command::Approval(args) => self.approval(args.command),
             Command::Log(args) => self.log(args.command),
             Command::Close(args) => self.close(args),

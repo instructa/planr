@@ -426,7 +426,11 @@ impl App {
         }
     }
 
-    pub(crate) fn pick(&self, command: Option<PickCommand>) -> Result<()> {
+    pub(crate) fn pick(
+        &self,
+        command: Option<PickCommand>,
+        work_type: Option<String>,
+    ) -> Result<()> {
         match command {
             Some(PickCommand::Release(args)) => {
                 let item = self.get_item(&args.item_id)?;
@@ -509,14 +513,17 @@ impl App {
                 )
             }
             None => {
-                let pick = self.next_pick_value()?;
+                let pick = self.next_pick_value_filtered(None, work_type.as_deref())?;
                 let human = match pick["item"]["id"].as_str() {
                     Some(id) => format!(
                         "picked {} {}",
                         id,
                         pick["item"]["title"].as_str().unwrap_or_default()
                     ),
-                    None => "no ready item".to_string(),
+                    None => format!(
+                        "no pickable item ({})",
+                        pick["reason"].as_str().unwrap_or("unknown")
+                    ),
                 };
                 self.emit(pick, human)
             }
@@ -659,8 +666,14 @@ impl App {
                 self.emit(result, "review feedback ingested".to_string())
             }
             ReviewCommand::Artifact(args) => {
-                let artifact =
-                    self.write_review_artifact(&args.review_item_id, None, &[], &[], args.out)?;
+                let artifact = self.write_review_artifact(
+                    &args.review_item_id,
+                    None,
+                    &[],
+                    &[],
+                    args.out,
+                    None,
+                )?;
                 self.emit(
                     json!({"artifact": artifact}),
                     "review artifact written".to_string(),
@@ -685,8 +698,13 @@ impl App {
                 if args.close_target && verdict != "complete" {
                     bail!("--close-target requires --verdict complete; findings create fix work instead");
                 }
-                let mut result =
-                    self.close_review_item(&args.review_item_id, verdict, args.findings, "cli")?;
+                let mut result = self.close_review_item(
+                    &args.review_item_id,
+                    verdict,
+                    args.findings,
+                    "cli",
+                    args.reviewer.as_deref(),
+                )?;
                 let mut human = "review closed".to_string();
                 if args.close_target {
                     let target_id = self

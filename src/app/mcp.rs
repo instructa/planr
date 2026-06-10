@@ -413,12 +413,10 @@ impl App {
                     json!({"cancelled": cancellable, "created": created}),
                 ))
             }
-            "planr_pick_item" => {
-                if let Some((id, worker)) = self.pick_next_ready_item()? {
-                    return Ok(mcp_json(self.work_packet(&id, &worker)?));
-                }
-                Ok(mcp_json(json!({"item": null})))
-            }
+            "planr_pick_item" => Ok(mcp_json(self.next_pick_value_filtered(
+                None,
+                args.get("work_type").and_then(Value::as_str),
+            )?)),
             "planr_pick_heartbeat" => {
                 let item_id = args
                     .get("item_id")
@@ -590,6 +588,7 @@ impl App {
                     &[],
                     &[],
                     None,
+                    None,
                 )?})))
             }
             "planr_review_evidence" => {
@@ -646,9 +645,13 @@ impl App {
                             .collect::<Vec<_>>()
                     })
                     .unwrap_or_default();
-                Ok(mcp_json(
-                    self.close_review_item(review_id, verdict, findings, "mcp")?,
-                ))
+                Ok(mcp_json(self.close_review_item(
+                    review_id,
+                    verdict,
+                    findings,
+                    "mcp",
+                    args.get("reviewer").and_then(Value::as_str),
+                )?))
             }
             "planr_close_item" => {
                 let item_id = required_arg(&args, "item_id")?;

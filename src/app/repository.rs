@@ -7,7 +7,6 @@ use crate::util::{collect_rows, item_id, print_json, short_id, worker_id};
 use anyhow::{anyhow, bail, Result};
 use rusqlite::{params, OptionalExtension};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
 use std::path::Path;
 
 impl App {
@@ -553,15 +552,12 @@ impl App {
             .map_err(Into::into)
     }
 
-    pub(crate) fn pick_next_ready_item(&self) -> Result<Option<(String, String)>> {
-        self.pick_next_ready_item_excluding(None)
-    }
-
     /// `exclude` keeps a worker from picking an item it must not own, e.g.
     /// the review it just requested via `done --review --next`.
-    pub(crate) fn pick_next_ready_item_excluding(
+    pub(crate) fn pick_next_ready_item_filtered(
         &self,
         exclude: Option<&str>,
+        work_type: Option<&str>,
     ) -> Result<Option<(String, String)>> {
         let project = self.default_project()?;
         self.promote_ready()?;
@@ -581,6 +577,7 @@ impl App {
                      SELECT id FROM items
                      WHERE project_id = ?3 AND status = 'ready'
                      AND id IS NOT ?4
+                     AND (?5 IS NULL OR work_type = ?5)
                      AND NOT EXISTS (
                        SELECT 1 FROM items c WHERE c.parent_item_id = items.id
                        AND c.status NOT IN ('cancelled')
@@ -590,7 +587,7 @@ impl App {
                  )
                  AND status = 'ready'
                  RETURNING id",
-                params![worker, token, project.id, exclude],
+                params![worker, token, project.id, exclude, work_type],
                 |row| row.get(0),
             )
             .optional()?;
@@ -793,24 +790,30 @@ impl App {
     pub(crate) fn map_value(&self) -> Result<Value> {
         let items = self.all_items()?;
         let links = self.all_links()?;
-        let mut counts = BTreeMap::new();
-        for item in &items {
-            *counts.entry(item.status.clone()).or_insert(0usize) += 1;
-        }
-        Ok(json!({"items": items, "links": links, "counts": counts}))
+        // Same explicit-zero status vocabulary as the `remaining` snapshot in
+        // pick/done/close responses: one counts shape across all surfaces.
+        let progress = self.progress_value()?;
+        Ok(json!({
+            "items": items,
+            "links": links,
+            "counts": progress["counts"],
+            "settled": progress["settled"],
+            "total": progress["total"],
+        }))
     }
 
     pub(crate) fn map_status_value(&self) -> Result<Value> {
         let items = self.all_items()?;
         let links = self.all_links()?;
-        let mut counts = BTreeMap::new();
+        // Same explicit-zero status vocabulary as the `remaining` snapshot in
+        // pick/done/close responses: one counts shape across all surfaces.
+        let progress = self.progress_value()?;
         let mut ready = Vec::new();
         let mut picked = Vec::new();
         let mut in_review = Vec::new();
         let mut blocked = Vec::new();
         let mut reviews = Vec::new();
         for item in items {
-            *counts.entry(item.status.clone()).or_insert(0usize) += 1;
             match item.status.as_str() {
                 "ready" => ready.push(item),
                 "picked" | "running" => picked.push(json!({
@@ -834,7 +837,9 @@ impl App {
             }
         }
         Ok(json!({
-            "counts": counts,
+            "counts": progress["counts"],
+            "settled": progress["settled"],
+            "total": progress["total"],
             "ready": ready,
             "picked": picked,
             "in_review": in_review,

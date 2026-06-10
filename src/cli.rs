@@ -333,6 +333,10 @@ pub(crate) struct LinkRemoveArgs {
 pub(crate) struct PickArgs {
     #[command(subcommand)]
     pub(crate) command: Option<PickCommand>,
+    /// Only lease items of this work type (e.g. `review` for checker
+    /// agents, `code` for makers).
+    #[arg(long)]
+    pub(crate) work_type: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -555,6 +559,10 @@ pub(crate) struct ReviewCloseArgs {
     pub(crate) verdict: ReviewVerdict,
     #[arg(long)]
     pub(crate) findings: Vec<String>,
+    /// Reviewer identity recorded on the review log, artifact, and event.
+    /// Defaults to this process's worker id.
+    #[arg(long)]
+    pub(crate) reviewer: Option<String>,
     /// On a complete verdict, also close the reviewed item when it already
     /// has a completion log.
     #[arg(long)]
