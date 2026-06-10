@@ -2136,7 +2136,42 @@ fn done_command_collapses_log_review_close_and_next_pick() {
         done["next"]["item"]["id"], second,
         "--next must pick the following ready item"
     );
-    assert_eq!(item_status(&db, &first), "running");
+    assert_eq!(
+        item_status(&db, &first),
+        "in_review",
+        "done --review must surface the review-wait state instead of running"
+    );
+
+    // A reviewer's first trace of the review item must already contain the
+    // target's evidence, and the human mode must render the packet.
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "trace",
+            "item",
+            &review_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let trace: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(trace["target"]["item"]["id"], first);
+    assert!(
+        !trace["target"]["logs"].as_array().unwrap().is_empty(),
+        "review trace must inline the target completion log"
+    );
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "trace", "item", &review_id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(&first))
+        .stdout(predicate::str::contains("target log"));
 
     // The reviewer closes review and target in one command.
     let output = planr()
@@ -2159,6 +2194,10 @@ fn done_command_collapses_log_review_close_and_next_pick() {
         .clone();
     let closed: Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(closed["closed_target"]["id"], first);
+    assert!(
+        closed["remaining"]["total"].as_i64().unwrap_or(0) > 0,
+        "review close must report board progress"
+    );
     assert_eq!(item_status(&db, &first), "closed");
 
     // done without --review closes directly.
@@ -4763,4 +4802,26 @@ fn follow_up_review_is_not_ready_while_fix_item_is_open() {
         by_id[&follow_up_id], "ready",
         "follow-up review must become ready once the fix item closes"
     );
+    assert_eq!(
+        by_id[&item_id], "in_review",
+        "target must stay visibly in_review while the review chain is open"
+    );
+
+    // The follow-up review gates the same target, so closing it complete
+    // with --close-target settles the original item through the chain.
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "review",
+            "close",
+            &follow_up_id,
+            "--verdict",
+            "complete",
+            "--close-target",
+        ])
+        .assert()
+        .success();
+    assert_eq!(item_status(&db, &item_id), "closed");
 }

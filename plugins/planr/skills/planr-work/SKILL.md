@@ -16,10 +16,10 @@ planr pick --json
 The pick output already contains the full work packet (`trace`: links, logs, runtime, conditions, approval) plus recall context — no separate `trace item` call needed. Read the linked plan/context, implement the smallest correct slice, then finish the step in one command:
 
 ```bash
-planr done <item-id> --summary "what changed" --files path-a --files path-b --cmd "exact verification command" --review
+planr done <item-id> --summary "what changed" --files path-a --files path-b --cmd "exact verification command" --tests "exact test command" --review
 ```
 
-`done --review` writes the completion log and requests the review; add `--next` to pick the following item in the same call. Without `--review` it closes the item directly (only for items that need no review gate).
+Put build/serve commands in `--cmd` and test runs in `--tests` — both are recorded as evidence. `done --review` writes the completion log, requests the review, and moves the item to `in_review` (you keep ownership; it is waiting on the gate, not abandoned); add `--next` to pick the following item in the same call. Without `--review` it closes the item directly (only for items that need no review gate).
 
 Evidence logging refreshes the heartbeat automatically — a separate `planr pick heartbeat` is only needed for long silent stretches without logs.
 

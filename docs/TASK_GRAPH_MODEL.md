@@ -33,9 +33,12 @@ Readiness is derived from state and links:
 
 - an item may become ready when its blocking upstream items are closed;
 - picked items are owned by one worker session;
+- requesting a review moves a picked or running item to `in_review` (ownership kept) so the wait state is visible instead of masquerading as active work;
 - closed items can unlock downstream items;
 - open review items block target closure;
 - cancelled items should not silently unlock unrelated work.
+
+The status lifecycle for work items is `pending -> ready -> picked -> running -> in_review -> closed` (with `blocked`, `failed`, `cancelled`, and `closed_partial` as branch states). `in_review` items still accept evidence logs and heartbeats from their owner, are excluded from new picks, and close either through `review close --verdict complete --close-target` or an explicit `planr close` after the review completes. Findings keep the target `in_review`: the follow-up review gates the same target until the chain settles.
 
 Use:
 

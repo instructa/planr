@@ -95,7 +95,11 @@ With `--json`, responses follow one convention so agents never guess where data 
 }
 ```
 
-`review close` writes `.planr/reviews/<review-item-id>.review.md` and registers it as a review artifact. A `not-complete` or `unclear` verdict creates fix and follow-up review work. With `--close-target` (complete verdicts only) the reviewed item is closed in the same command, provided it already has a completion log.
+`review request` (and `done --review`) moves a picked or running target to `in_review`: work is finished, evidence is logged, the item waits on its gate. The owner keeps the pick and can still log evidence; `in_review` items are never handed out by `pick`.
+
+`review close` writes `.planr/reviews/<review-item-id>.review.md` and registers it as a review artifact. A `not-complete` or `unclear` verdict creates fix and follow-up review work; the follow-up review gates the same target item, so the chain keeps working with `--close-target`. With `--close-target` (complete verdicts only) the reviewed item is closed in the same command, provided it already has a completion log. `review close` responses include the same `remaining` progress snapshot as `done` and `close`.
+
+`trace item` on a review item inlines the target item and its evidence logs under `target`, so a reviewer's first trace already contains what is being audited. The human (non-JSON) mode renders the packet: status, owner, links, logs.
 
 `done` is the compound worker command: it writes a completion log, then requests a review (`--review`) or closes the item, and optionally picks the next ready item (`--next`). It chains the same single-owner operations as `log add`, `review request`, `close`, and `pick` — identical evidence, fewer commands. `done` and `close` responses include a `remaining` progress snapshot (`counts`, `settled`, `total`) so loop agents can evaluate their stop condition without an extra `map status` call.
 

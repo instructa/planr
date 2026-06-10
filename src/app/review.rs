@@ -192,6 +192,12 @@ impl App {
                 review.plan_path.as_deref(),
             )?;
             self.add_link(&fix.id, &next_review.id, "blocks")?;
+            // The follow-up review gates the same target, so the chain keeps
+            // working with `review close --close-target` and the target stays
+            // visibly `in_review` until the chain settles.
+            if let Some(target) = self.review_target(&review.id)? {
+                self.add_link(&next_review.id, &target.id, "reviews")?;
+            }
             created.push(fix);
             created.push(next_review);
         }

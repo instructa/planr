@@ -8,10 +8,11 @@ use std::fs;
 
 impl App {
     /// Full work packet for an item: graph links, evidence logs, runtime,
-    /// recovery, conditions, and approval state. Shared by `trace item` and
-    /// the `pick` output so picking does not need a second command.
+    /// recovery, conditions, and approval state. Review items additionally
+    /// inline their target item with its evidence logs, so a reviewer's
+    /// first trace already contains what is being audited.
     pub(crate) fn trace_item_value(&self, item_id: &str) -> Result<serde_json::Value> {
-        Ok(json!({
+        let mut value = json!({
             "item": self.get_item(item_id)?,
             "links": self.links_for(item_id)?,
             "logs": self.list_logs(Some(item_id))?,
@@ -19,15 +20,67 @@ impl App {
             "recovery": self.item_recovery(item_id)?,
             "conditions": self.item_conditions(item_id)?,
             "approval": self.item_approval(item_id)?,
-        }))
+        });
+        if value["item"]["work_type"] == "review" {
+            if let Some(target) = self.review_target(item_id)? {
+                value["target"] = json!({
+                    "item": self.get_item(&target.id)?,
+                    "logs": self.list_logs(Some(&target.id))?,
+                });
+            }
+        }
+        Ok(value)
+    }
+
+    /// Human rendering of a trace; the JSON mode stays the full packet.
+    fn trace_human(trace: &serde_json::Value) -> String {
+        let item = &trace["item"];
+        let mut out = format!(
+            "{} {} [{}]",
+            item["id"].as_str().unwrap_or_default(),
+            item["title"].as_str().unwrap_or_default(),
+            item["status"].as_str().unwrap_or_default(),
+        );
+        if let Some(worker) = item["worker_id"].as_str() {
+            out.push_str(&format!(" owner {worker}"));
+        }
+        for link in trace["links"].as_array().into_iter().flatten() {
+            out.push_str(&format!(
+                "\n  link {} -{}-> {}",
+                link["from"].as_str().unwrap_or_default(),
+                link["kind"].as_str().unwrap_or_default(),
+                link["to"].as_str().unwrap_or_default(),
+            ));
+        }
+        fn render_logs(out: &mut String, label: &str, logs: &serde_json::Value) {
+            for log in logs.as_array().into_iter().flatten() {
+                out.push_str(&format!(
+                    "\n  {label} {} [{}] {}",
+                    log["id"].as_str().unwrap_or_default(),
+                    log["kind"].as_str().unwrap_or_default(),
+                    log["summary"].as_str().unwrap_or_default(),
+                ));
+            }
+        }
+        render_logs(&mut out, "log", &trace["logs"]);
+        if let Some(target) = trace.get("target") {
+            out.push_str(&format!(
+                "\n  target {} [{}]",
+                target["item"]["id"].as_str().unwrap_or_default(),
+                target["item"]["status"].as_str().unwrap_or_default(),
+            ));
+            render_logs(&mut out, "target log", &target["logs"]);
+        }
+        out
     }
 
     pub(crate) fn trace(&self, command: TraceCommand) -> Result<()> {
         match command {
-            TraceCommand::Item(args) => self.emit(
-                self.trace_item_value(&args.id)?,
-                "trace complete".to_string(),
-            ),
+            TraceCommand::Item(args) => {
+                let trace = self.trace_item_value(&args.id)?;
+                let human = Self::trace_human(&trace);
+                self.emit(trace, human)
+            }
         }
     }
 

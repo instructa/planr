@@ -437,7 +437,7 @@ impl App {
                         item.worker_id
                     );
                 }
-                self.conn.execute("UPDATE items SET status = 'ready', worker_id = NULL, pick_token = NULL, last_heartbeat_at = NULL, paused_at = NULL, updated_at = datetime('now') WHERE id = ?1 AND status IN ('picked','running')", params![args.item_id])?;
+                self.conn.execute("UPDATE items SET status = 'ready', worker_id = NULL, pick_token = NULL, last_heartbeat_at = NULL, paused_at = NULL, updated_at = datetime('now') WHERE id = ?1 AND status IN ('picked','running','in_review')", params![args.item_id])?;
                 self.record_event(
                     "pick_released",
                     Some(&args.item_id),
@@ -689,11 +689,15 @@ impl App {
                     self.close_review_item(&args.review_item_id, verdict, args.findings, "cli")?;
                 let mut human = "review closed".to_string();
                 if args.close_target {
-                    let target_id: String = self.conn.query_row(
-                        "SELECT to_item FROM links WHERE from_item = ?1 AND kind = 'reviews'",
-                        params![args.review_item_id],
-                        |row| row.get(0),
-                    )?;
+                    let target_id = self
+                        .review_target(&args.review_item_id)?
+                        .map(|target| target.id)
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "review {} has no `reviews` link to a target item",
+                                args.review_item_id
+                            )
+                        })?;
                     let completion_logs: i64 = self.conn.query_row(
                         "SELECT COUNT(*) FROM logs WHERE item_id = ?1 AND kind = 'completion'",
                         params![target_id],
@@ -715,6 +719,9 @@ impl App {
                     result["closed_target"] = json!(self.get_item(&target_id)?);
                     human.push_str(&format!("; closed target {target_id}"));
                 }
+                let progress = self.progress_value()?;
+                human.push_str(&Self::progress_human(&progress));
+                result["remaining"] = progress;
                 self.emit(result, human)
             }
             ReviewCommand::List(args) => {

@@ -10,12 +10,12 @@ Use this when a task needs a correctness and completion audit.
 ## Workflow
 
 ```bash
-planr trace item <item-id>
-planr log list --item <item-id>
-planr map show --json
+planr --json trace item <review-id>
 ```
 
-Inspect the actual changed files and verification evidence. Then close the review:
+Tracing the review item inlines the target item and its evidence logs under `target` — one trace is enough to see what is being audited, its status (`in_review` while waiting on you), files, and verification commands. Use `planr log list --item <target-id>` or `planr map show --json` only for deeper reads.
+
+Inspect the actual changed files and re-run the logged verification evidence. Then close the review:
 
 ```bash
 planr review close <review-id> --verdict complete --close-target

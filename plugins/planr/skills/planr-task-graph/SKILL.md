@@ -38,10 +38,10 @@ Use one item at a time. The short path is two commands per step:
 
 ```bash
 planr pick --json
-planr done <item-id> --summary "what changed" --files a --files b --cmd "exact verification command" --review [--next]
+planr done <item-id> --summary "what changed" --files a --files b --cmd "exact verification command" --tests "exact test command" --review [--next]
 ```
 
-`pick --json` includes the full work packet (`trace`: links, logs, runtime, conditions, approval). `done` writes the completion log, requests review (`--review`) or closes directly, and `--next` picks the following item. Evidence logs refresh the heartbeat automatically.
+`pick --json` includes the full work packet (`trace`: links, logs, runtime, conditions, approval). `done` writes the completion log (test runs belong in `--tests`, build/serve commands in `--cmd`), requests review (`--review`, which moves the item to `in_review`) or closes directly, and `--next` picks the following item. Evidence logs refresh the heartbeat automatically.
 
 For longer work, keep the live claim visible:
 

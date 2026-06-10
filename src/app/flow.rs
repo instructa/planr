@@ -55,7 +55,7 @@ impl App {
             json!({"log_id": id, "kind": kind}),
         )?;
         self.conn.execute(
-            "UPDATE items SET status = CASE WHEN status = 'picked' THEN 'running' ELSE status END, last_heartbeat_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1 AND worker_id = ?2 AND status IN ('picked','running')",
+            "UPDATE items SET status = CASE WHEN status = 'picked' THEN 'running' ELSE status END, last_heartbeat_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1 AND worker_id = ?2 AND status IN ('picked','running','in_review')",
             params![item_id, worker_id()],
         )?;
         Ok(id)
@@ -87,7 +87,9 @@ impl App {
         Ok(log_id)
     }
 
-    /// Single owner for creating a review gate on an item.
+    /// Single owner for creating a review gate on an item. A picked or
+    /// running target moves to `in_review` (ownership kept) so the wait
+    /// state is visible instead of masquerading as active work.
     pub(crate) fn request_review_for(&self, item_id: &str) -> Result<Item> {
         let target = self.get_item(item_id)?;
         let review = self.create_item(
@@ -98,6 +100,10 @@ impl App {
             target.plan_path.as_deref(),
         )?;
         self.add_link(&review.id, &target.id, "reviews")?;
+        self.conn.execute(
+            "UPDATE items SET status = 'in_review', updated_at = datetime('now') WHERE id = ?1 AND status IN ('picked','running')",
+            params![target.id],
+        )?;
         self.promote_ready()?;
         let review = self.get_item(&review.id)?;
         self.record_event(

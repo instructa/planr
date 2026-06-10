@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.1.8] - 2026-06-10
+
+Friction findings from the v1.1.7 comparison dogfood run.
+
+### Added
+
+- `in_review` status: `done --review` / `review request` moves a picked or running item to `in_review` (ownership kept), so "work finished, waiting on the gate" is visible instead of masquerading as `running`. `in_review` items accept owner evidence and heartbeats, are excluded from new picks and stale sweeps, and `map status` reports them in their own bucket.
+- `trace item` on a review item inlines the target item and its completion logs under `target` — a reviewer's first trace already contains what is being audited.
+- `trace item` human mode renders the packet (status, owner, links, logs) instead of printing only "trace complete".
+- `review close` responses include the `remaining` board-progress snapshot, like `done` and `close`.
+
+### Changed
+
+- Follow-up reviews created by a `not-complete`/`unclear` verdict now gate the same target item (`reviews` link), so `review close --close-target` keeps working across the fix chain and the target stays `in_review` until the chain settles.
+- Skills teach `--tests` for test evidence (test runs in `--tests`, build/serve commands in `--cmd`).
+
 ## [1.1.7] - 2026-06-10
 
 ### Added
@@ -106,7 +122,8 @@ Initial Planr product release.
 - Tag-driven release pipeline with multi-target builds (darwin/linux, arm64/x86_64) and Homebrew tap automation.
 - Skill workflow documentation for Codex, Claude Code, Cursor, and MCP-only clients.
 
-[Unreleased]: https://github.com/instructa/planr/compare/v1.1.7...HEAD
+[Unreleased]: https://github.com/instructa/planr/compare/v1.1.8...HEAD
+[1.1.8]: https://github.com/instructa/planr/compare/v1.1.7...v1.1.8
 [1.1.7]: https://github.com/instructa/planr/compare/v1.1.6...v1.1.7
 [1.1.6]: https://github.com/instructa/planr/compare/v1.1.5...v1.1.6
 [1.1.5]: https://github.com/instructa/planr/compare/v1.1.4...v1.1.5

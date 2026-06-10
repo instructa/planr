@@ -545,7 +545,7 @@ impl App {
     pub(crate) fn current_item_for_worker(&self) -> Result<Option<String>> {
         self.conn
             .query_row(
-                "SELECT id FROM items WHERE worker_id = ?1 AND status IN ('picked','running') ORDER BY picked_at DESC LIMIT 1",
+                "SELECT id FROM items WHERE worker_id = ?1 AND status IN ('picked','running','in_review') ORDER BY picked_at DESC LIMIT 1",
                 params![worker_id()],
                 |row| row.get(0),
             )
@@ -636,7 +636,7 @@ impl App {
     pub(crate) fn heartbeat_item(&self, item_id: &str) -> Result<()> {
         self.ensure_worker_owns_or_unowned(item_id)?;
         let changed = self.conn.execute(
-            "UPDATE items SET status = CASE WHEN status = 'picked' THEN 'running' ELSE status END, last_heartbeat_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1 AND status IN ('picked','running')",
+            "UPDATE items SET status = CASE WHEN status = 'picked' THEN 'running' ELSE status END, last_heartbeat_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1 AND status IN ('picked','running','in_review')",
             params![item_id],
         )?;
         self.ensure_runtime_update_changed(item_id, changed)?;
@@ -806,6 +806,7 @@ impl App {
         let mut counts = BTreeMap::new();
         let mut ready = Vec::new();
         let mut picked = Vec::new();
+        let mut in_review = Vec::new();
         let mut blocked = Vec::new();
         let mut reviews = Vec::new();
         for item in items {
@@ -816,6 +817,10 @@ impl App {
                     "item": item,
                     "runtime": self.item_runtime(&item.id)?,
                     "approval": self.item_approval(&item.id)?,
+                })),
+                "in_review" => in_review.push(json!({
+                    "item": item,
+                    "open_reviews": self.open_review_items(&item.id)?,
                 })),
                 "pending" | "blocked" => blocked.push(json!({
                     "item": item,
@@ -832,6 +837,7 @@ impl App {
             "counts": counts,
             "ready": ready,
             "picked": picked,
+            "in_review": in_review,
             "blocked": blocked,
             "reviews": reviews,
             "links": links,
