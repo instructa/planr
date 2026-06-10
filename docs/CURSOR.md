@@ -17,7 +17,7 @@ Dry-run prints `.cursor/mcp.json` content. The non-dry command writes the projec
 Planr V1 defaults to MCP stdio. Local HTTP/SSE is available through:
 
 ```bash
-planr serve --port 8484
+planr serve --port 7526
 ```
 
 Cursor tasks can attach review feedback through either MCP stdio or the local HTTP API:

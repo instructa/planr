@@ -103,7 +103,7 @@ UNIQUE(from_item, to_item, kind)
 Link kinds:
 
 - blocks: upstream must complete before downstream is ready.
-- feeds_into: upstream result is included in downstream handoff.
+- hands_to: upstream result is included in downstream handoff.
 - reviews: review item blocks parent/target closure.
 - relates_to: non-blocking context relationship.
 
@@ -322,7 +322,7 @@ planr doctor [--client codex|claude|cursor|all]
 planr install codex|claude|cursor [--dry-run]
 planr prompt cli|mcp|http [--client codex|claude|cursor|all]
 planr mcp
-planr serve --port 8484
+planr serve --port 7526
 planr import <file> [--preview] [--confirm]
 planr export --out planr.json [--include-plans] [--include-logs] [--template-name "..."] [--tag tag]
 ```

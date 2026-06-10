@@ -57,7 +57,7 @@ planr doctor [--client codex|claude|cursor|all]
 planr install codex|claude|cursor [--dry-run]
 planr prompt cli|mcp|http [--client codex|claude|cursor|all]
 planr mcp
-planr serve --port 8484
+planr serve --port 7526
 planr import <file> [--preview] [--confirm]
 planr export --out planr.json [--include-plans] [--include-logs] [--template-name "..."] [--tag tag]
 ```

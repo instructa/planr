@@ -107,8 +107,8 @@ planr close <item-id> --summary "Verified with evidence"
 For a browser-based local review pass:
 
 ```bash
-planr serve --port 8484
-open http://127.0.0.1:8484/review
+planr serve --port 7526
+open http://127.0.0.1:7526/review
 ```
 
 The review workspace shows review queues, linked plans, item evidence, diff-safe Git evidence, annotations, and approve/request-changes actions over the same local HTTP API.

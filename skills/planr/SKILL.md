@@ -24,6 +24,8 @@ If no project exists, initialize before anything else:
 planr project init "Project Name" --client all
 ```
 
+Initialization happens once per repository. If a project already exists, never re-init: new features, refactors, and fixes get their own feature-scoped plan (`planr plan new "Feature"`), and `planr map build --from <build-plan-id>` extends the existing map with new linked items.
+
 ## Routing Table
 
 Evaluate top to bottom; pick the first row that matches both intent and state:
@@ -34,6 +36,7 @@ Evaluate top to bottom; pick the first row that matches both intent and state:
 | status, "what's left", "what's blocked" | any | `planr-status` |
 | summary of completed scope | any | `planr-summary` |
 | new idea, PRD, scope, architecture | no plan, or plan needs refinement | `planr-plan` |
+| new feature, refactor, or fix on an existing project | project exists, scope has no plan yet | `planr-plan` (feature-scoped plan, then extend the map) |
 | plan exists but no map / map needs structure, dependencies, breakdown | build plan checked, map missing or stale | `planr-task-graph` |
 | review requested or open review exists | open review on the map | `planr-review` |
 | implement, fix, continue work | ready items exist on the map | `planr-work` |

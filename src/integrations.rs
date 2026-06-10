@@ -14,7 +14,7 @@ pub fn install_snippet(client: &str, db: &Path) -> String {
             db.display()
         ),
         "cursor" => format!(
-            "# Cursor project scope: .cursor/mcp.json\n# stdio is the V1 default. SSE/streamable HTTP can point at planr serve --port 8484 when enabled for local dashboard automation.\n{{\n  \"mcpServers\": {{\n    \"planr\": {{\"command\": \"planr\", \"args\": [\"--db\", \"{}\", \"mcp\"]}}\n  }}\n}}\n",
+            "# Cursor project scope: .cursor/mcp.json\n# stdio is the V1 default. SSE/streamable HTTP can point at planr serve --port 7526 when enabled for local dashboard automation.\n{{\n  \"mcpServers\": {{\n    \"planr\": {{\"command\": \"planr\", \"args\": [\"--db\", \"{}\", \"mcp\"]}}\n  }}\n}}\n",
             db.display()
         ),
         _ => String::new(),

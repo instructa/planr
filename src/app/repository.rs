@@ -391,7 +391,7 @@ impl App {
 
     pub(crate) fn demote_if_blocked(&self, item_id: &str) -> Result<()> {
         let blocked: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM links l JOIN items i ON i.id = l.from_item WHERE l.to_item = ?1 AND l.kind IN ('blocks','feeds_into') AND i.status NOT IN ('closed','closed_partial')",
+            "SELECT COUNT(*) FROM links l JOIN items i ON i.id = l.from_item WHERE l.to_item = ?1 AND l.kind IN ('blocks','hands_to') AND i.status NOT IN ('closed','closed_partial')",
             params![item_id],
             |row| row.get(0),
         )?;
@@ -407,7 +407,7 @@ impl App {
              WHERE status = 'pending'
              AND id NOT IN (
                SELECT l.to_item FROM links l JOIN items upstream ON upstream.id = l.from_item
-               WHERE l.kind IN ('blocks','feeds_into') AND upstream.status NOT IN ('closed','closed_partial')
+               WHERE l.kind IN ('blocks','hands_to') AND upstream.status NOT IN ('closed','closed_partial')
              )",
             [],
         )?;
@@ -672,7 +672,7 @@ impl App {
             .into_iter()
             .filter_map(|link| {
                 let kind = link.get("kind")?.as_str()?;
-                if kind != "blocks" && kind != "feeds_into" {
+                if kind != "blocks" && kind != "hands_to" {
                     return None;
                 }
                 Some(super::render::RenderEdge {
@@ -841,7 +841,7 @@ impl App {
         let mut stmt = self.conn.prepare(
             "SELECT i.id, i.project_id, i.parent_item_id, i.title, i.description, i.status, i.work_type, i.priority, i.worker_id, i.plan_path
              FROM links l JOIN items i ON i.id = l.from_item
-             WHERE l.to_item = ?1 AND l.kind IN ('blocks','feeds_into') AND i.status NOT IN ('closed','closed_partial')
+             WHERE l.to_item = ?1 AND l.kind IN ('blocks','hands_to') AND i.status NOT IN ('closed','closed_partial')
              ORDER BY i.created_at",
         )?;
         let rows = stmt.query_map(params![item_id], row_to_item)?;

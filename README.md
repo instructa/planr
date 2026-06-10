@@ -2,6 +2,25 @@
 
 Planr is a local-first task planning and execution coordination tool for coding agents. It combines reviewable Markdown plans with a dependency-aware work map so Codex, Claude Code, Cursor, and other MCP-capable clients can coordinate safely.
 
+## Table of Contents
+
+- [Why a Graph-Based Planner](#why-a-graph-based-planner)
+- [Product Direction](#product-direction)
+- [Quick Start](#quick-start)
+- [From Source](#from-source)
+- [Target Agents](#target-agents)
+- [Current Repository Contents](#current-repository-contents)
+- [Install The Plugin (Skills)](#install-the-plugin-skills)
+  - [Codex](#install-plugin-codex)
+  - [Claude Code](#install-plugin-claude-code)
+  - [Cursor](#install-plugin-cursor)
+  - [opencode](#install-plugin-opencode)
+- [Integrations](#integrations)
+- [Verification](#verification)
+- [Specification Package](#specification-package)
+- [Guides](#guides)
+- [License](#license)
+
 ## Why a Graph-Based Planner
 
 Flat todo lists and Markdown checklists break down the moment real work has structure. Planr models work as a dependency graph because that is what work actually is:
@@ -109,23 +128,72 @@ cargo run -- close <item-id> --summary "Verified"
 - `docs/planr-spec/`: production-ready product specification package for Planr V1.
 - `examples/real-world-flow.md`: executable real-world operator flow.
 
-## Skills And Plugin
+## Install The Plugin (Skills)
 
-Install the Planr skills as one plugin instead of copying folders:
+The repository root doubles as an installable plugin for Codex, Claude Code, and Cursor. The plugin carries the nine Planr skills plus the `planr-worker` and `planr-reviewer` subagent roles; the `planr` CLI itself must be installed separately (see [Quick Start](#quick-start)).
+
+<a id="install-plugin-codex"></a>
+<details>
+<summary><strong>Codex</strong></summary>
 
 ```bash
-# Codex
 codex plugin marketplace add instructa/planr
 codex plugin install planr
 ```
 
+Then invoke skills directly in a session:
+
 ```text
-# Claude Code
+$planr build me a habit tracker web app
+$planr-loop ship the export feature until verified
+```
+
+</details>
+
+<a id="install-plugin-claude-code"></a>
+<details>
+<summary><strong>Claude Code</strong></summary>
+
+Inside a Claude Code session:
+
+```text
 /plugin marketplace add instructa/planr
 /plugin install planr@planr
 ```
 
-Then drive everything through two skills: `$planr <any request>` routes to the right stage skill from live map state, and `$planr-loop` drives one feature through work, live verification, and independent review until the map is clean. See [docs/SKILLS.md](docs/SKILLS.md).
+Restart Claude Code afterwards. Skills are namespaced (`/planr:planr`, `/planr:planr-loop`), and the plugin registers the `planr-worker` and `planr-reviewer` subagents automatically.
+
+</details>
+
+<a id="install-plugin-cursor"></a>
+<details>
+<summary><strong>Cursor</strong></summary>
+
+Pending marketplace review. Until the plugin is listed, wire Planr in via MCP and the CLI prompt:
+
+```bash
+planr install cursor        # writes .cursor/mcp.json
+planr prompt cli --client cursor
+```
+
+</details>
+
+<a id="install-plugin-opencode"></a>
+<details>
+<summary><strong>opencode</strong></summary>
+
+No plugin yet. Use Planr as an MCP server and paste the CLI prompt into your agent instructions:
+
+```bash
+planr mcp                   # stdio MCP server
+planr prompt cli
+```
+
+</details>
+
+After install, drive everything through two skills: `$planr <any request>` routes to the right stage skill from live map state, and `$planr-loop` drives one feature through work, live verification, and independent review until the map is clean.
+
+This works the same whether you are starting from an idea or adding to an existing project — a new feature, refactor, or fix on a running project gets its own feature-scoped plan and extends the existing map. Both journeys with example prompts: [Two Journeys in docs/SKILLS.md](docs/SKILLS.md#two-journeys-new-project-vs-existing-project).
 
 ## Integrations
 
@@ -138,12 +206,12 @@ planr prompt mcp
 planr prompt cli --client codex
 planr prompt http
 planr mcp
-planr serve --port 8484
+planr serve --port 7526
 ```
 
 `planr install claude` writes a project `.mcp.json`; `planr install cursor` writes `.cursor/mcp.json`; dry-runs print the exact config and scope notes first.
 
-Open `http://127.0.0.1:8484/review` after `planr serve` for the local browser review workspace.
+Open `http://127.0.0.1:7526/review` after `planr serve` for the local browser review workspace.
 
 ## Verification
 

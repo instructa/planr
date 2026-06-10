@@ -155,7 +155,7 @@ impl App {
              FROM links l
              JOIN items upstream ON upstream.id = l.from_item
              JOIN items target ON target.id = l.to_item
-             WHERE l.kind IN ('blocks','feeds_into')
+             WHERE l.kind IN ('blocks','hands_to')
              AND upstream.status NOT IN ('closed','closed_partial','cancelled')
              AND target.status NOT IN ('closed','closed_partial','cancelled')
              ORDER BY l.id",
@@ -175,7 +175,7 @@ impl App {
             "SELECT target.id, target.project_id, target.parent_item_id, target.title, target.description, target.status, target.work_type, target.priority, target.worker_id, target.plan_path
              FROM links direct JOIN items target ON target.id = direct.to_item
              WHERE direct.from_item = ?1
-             AND direct.kind IN ('blocks','feeds_into')
+             AND direct.kind IN ('blocks','hands_to')
              AND target.status NOT IN ('closed','closed_partial','cancelled')
              ORDER BY target.priority DESC, target.created_at",
         )?;
@@ -189,7 +189,7 @@ impl App {
              FROM links l JOIN items i ON i.id = l.from_item
              WHERE l.to_item = ?1
              AND l.from_item != ?2
-             AND l.kind IN ('blocks','feeds_into')
+             AND l.kind IN ('blocks','hands_to')
              AND i.status NOT IN ('closed','closed_partial','cancelled')
              ORDER BY i.created_at",
         )?;

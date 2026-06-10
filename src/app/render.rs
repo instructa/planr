@@ -354,13 +354,13 @@ mod tests {
             item("itm_b", "Reviewing", "in_review"),
             item("itm_c", "Shipped", "closed"),
         ];
-        let edges = vec![edge("itm_a", "itm_b", "feeds_into")];
+        let edges = vec![edge("itm_a", "itm_b", "hands_to")];
         let critical = ["itm_a".to_string(), "itm_b".to_string()]
             .into_iter()
             .collect::<HashSet<_>>();
         let out = render_map("demo", &items, &edges, &critical, &[]);
         assert!(out.contains("◉ running itm_a Hot path (worker-7) ★ ⏶1"));
-        assert!(out.contains("└─feeds_into─▶ ◇ in_review itm_b Reviewing ★"));
+        assert!(out.contains("└─hands_to─▶ ◇ in_review itm_b Reviewing ★"));
         assert!(out.contains("✓ closed itm_c Shipped"));
         assert!(out.contains("1/3 done (33%)"));
     }

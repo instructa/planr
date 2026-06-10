@@ -623,7 +623,7 @@ pub(crate) struct PromptPrintArgs {
 
 #[derive(Args, Debug)]
 pub(crate) struct ServeArgs {
-    #[arg(long, short, default_value_t = 8484)]
+    #[arg(long, short, default_value_t = 7526)]
     pub(crate) port: u16,
 }
 

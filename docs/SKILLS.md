@@ -99,6 +99,62 @@ state current, log changed files and real verification commands, then request re
 Do not close the item until review is complete.
 ```
 
+## Two Journeys: New Project vs. Existing Project
+
+Both journeys use the same entry point (`$planr` or `$planr-loop`). What differs is the state the router finds, and what kind of plan the work gets.
+
+### Journey 1 — start a project from an idea
+
+Initialize once per repository, then hand the idea to the router:
+
+```bash
+planr project init "Habit Tracker" --client all
+```
+
+```text
+Use $planr.
+
+Create a production-ready Habit Tracker web app plan. Create the product plan,
+split an MVP build plan, check it, then build the Planr map. Do not implement yet.
+```
+
+The router runs the full stage order: product plan -> build plan -> map -> work. From there, `$planr-loop` or `$planr-work` executes against the map.
+
+### Journey 2 — mid-project: add a feature, refactor, or fix
+
+Never re-run `project init`; the project and map already exist. Every new scope — a feature like an auth system, a refactor, a non-trivial fix — gets its own feature-scoped plan on the same map:
+
+```text
+Use $planr.
+
+Add an auth system (email+password, sessions, protected routes) to this app.
+Create a feature plan for it, record what existing code it builds on, split a
+narrow build slice, check it, and extend the map with linked items. Do not implement yet.
+```
+
+What the router does with that, and why:
+
+1. `$planr-plan` creates a new plan scoped to the feature (`planr plan new "Auth system" ...`), not a new project. Refine notes capture constraints from the existing codebase; the build plan's "existing leverage" field records what is reused instead of rebuilt.
+2. `$planr-task-graph` extends the existing map: new items, plus `blocks` links to anything already on the map that must land first.
+3. Execution is identical to journey 1: `$planr-loop` for autonomous, `$planr-work` / `$planr-review` for human-in-the-loop.
+
+Or autonomous in one prompt:
+
+```text
+Use $planr-loop.
+
+Goal: ship an auth system (email+password, sessions, protected routes).
+DONE when every auth map item is closed with log evidence, all reviews are closed
+complete, and a live verification log shows login and a protected route working
+in the browser. Iteration budget: 10.
+```
+
+Rules that hold in both journeys:
+
+- No map items without a checked build plan — even a small fix gets a minimal slice (`plan new` -> `plan split` with a tiny scope). This keeps closure evidence and reviews attached to a contract.
+- Plans accumulate: `planr plan list` shows the project's history of scopes; the map stays the single live source of item status.
+- Status, review, and summary requests (`$planr-status`, `$planr-review`, `$planr-summary`) work the same at any point in either journey.
+
 ## Loop Roles
 
 `planr-loop` keeps maker and checker separate. Hosts with subagents get dedicated roles that are prompted with skills, not hand-written prompts:
@@ -178,7 +234,7 @@ planr prompt mcp --client cursor
 planr prompt cli --client cursor
 ```
 
-`planr install cursor` writes `.cursor/mcp.json` when not run as a dry-run. Use `planr serve --port 8484` and `planr prompt http --client cursor` if a Cursor workflow should inspect the local HTTP/review workspace.
+`planr install cursor` writes `.cursor/mcp.json` when not run as a dry-run. Use `planr serve --port 7526` and `planr prompt http --client cursor` if a Cursor workflow should inspect the local HTTP/review workspace.
 
 ## MCP-Only Clients
 

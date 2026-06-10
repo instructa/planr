@@ -108,7 +108,7 @@ impl App {
         let mut stmt = self.conn.prepare(
             "SELECT upstream.id, upstream.project_id, upstream.parent_item_id, upstream.title, upstream.description, upstream.status, upstream.work_type, upstream.priority, upstream.worker_id, upstream.plan_path
              FROM links l JOIN items upstream ON upstream.id = l.from_item
-             WHERE l.to_item = ?1 AND l.kind IN ('blocks','feeds_into')
+             WHERE l.to_item = ?1 AND l.kind IN ('blocks','hands_to')
              ORDER BY upstream.updated_at DESC, upstream.created_at DESC LIMIT ?2",
         )?;
         let upstream = collect_rows(stmt.query_map(params![item_id, limit as i64], row_to_item)?)?;

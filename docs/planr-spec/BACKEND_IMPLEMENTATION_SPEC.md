@@ -140,7 +140,7 @@ REQ-BE-054: Prompts must expose Planr workflow prompts.
 
 Optional V1:
 
-- `planr serve --port 8484`.
+- `planr serve --port 7526`.
 - localhost default bind.
 - JSON REST API.
 - SSE stream for events.
