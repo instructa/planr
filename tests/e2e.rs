@@ -4229,6 +4229,7 @@ fn planr_native_skills_are_packaged_and_cli_first() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     for skill in [
         "planr",
+        "planr-goal",
         "planr-loop",
         "planr-verify-web",
         "planr-task-graph",

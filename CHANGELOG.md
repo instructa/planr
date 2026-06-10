@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.1.7] - 2026-06-10
+
 ### Added
 
 - Long-running goal workflow: new `planr-goal` prep skill compiles a broad goal into a checked plan, a linked map, and a durable goal contract (`planr context --tag goal-contract`), then prints the starter command for the host's loop driver (Codex/Claude Code `/goal`, automations, or manual re-dispatch). Documented end-to-end in `docs/GOALS.md`.
@@ -104,7 +106,8 @@ Initial Planr product release.
 - Tag-driven release pipeline with multi-target builds (darwin/linux, arm64/x86_64) and Homebrew tap automation.
 - Skill workflow documentation for Codex, Claude Code, Cursor, and MCP-only clients.
 
-[Unreleased]: https://github.com/instructa/planr/compare/v1.1.6...HEAD
+[Unreleased]: https://github.com/instructa/planr/compare/v1.1.7...HEAD
+[1.1.7]: https://github.com/instructa/planr/compare/v1.1.6...v1.1.7
 [1.1.6]: https://github.com/instructa/planr/compare/v1.1.5...v1.1.6
 [1.1.5]: https://github.com/instructa/planr/compare/v1.1.4...v1.1.5
 [1.1.4]: https://github.com/instructa/planr/compare/v1.1.3...v1.1.4
