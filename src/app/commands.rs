@@ -6,7 +6,9 @@ use crate::cli::{
     ProjectCommand, PromptCommand, ReviewCommand, SearchArgs,
 };
 use crate::integrations::{agent_roles, install_snippet, mcp_json_config};
-use crate::planpack::{build_plan_body, parse_plan_metadata, product_plan_files, project_pack_files};
+use crate::planpack::{
+    build_plan_body, parse_plan_metadata, product_plan_files, project_pack_files,
+};
 use crate::util::{
     append_line, command_exists, format_item, format_project, json_array, now_string, print_json,
     short_id, worker_id, write_if_missing,
@@ -187,7 +189,9 @@ impl App {
                     self.rehash_plan(&plan.id)?;
                     let (frontmatter, parse_status) = parse_plan_metadata(&path);
                     if parse_status != "ok" {
-                        let detail = frontmatter["error"].as_str().unwrap_or("invalid frontmatter");
+                        let detail = frontmatter["error"]
+                            .as_str()
+                            .unwrap_or("invalid frontmatter");
                         warnings.push(format!("frontmatter parse error: {detail}"));
                     }
                 }

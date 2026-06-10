@@ -1665,7 +1665,10 @@ fn map_show_renders_visual_dag_tree_and_state_line() {
     let value: Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(value["items"].as_array().unwrap().len(), 3);
     assert_eq!(value["links"].as_array().unwrap().len(), 2);
-    assert_eq!(value["counts"]["ready"], 1, "blocked downstream items must not count as ready");
+    assert_eq!(
+        value["counts"]["ready"], 1,
+        "blocked downstream items must not count as ready"
+    );
 }
 
 #[test]
@@ -3955,7 +3958,10 @@ fn project_init_and_install_provision_loop_agent_roles() {
         .assert()
         .success();
     let edited = fs::read_to_string(dir2.path().join(".codex/agents/planr-worker.toml")).unwrap();
-    assert_eq!(edited, "# user-edited\n", "install must not overwrite roles");
+    assert_eq!(
+        edited, "# user-edited\n",
+        "install must not overwrite roles"
+    );
 }
 
 #[test]
@@ -4140,12 +4146,17 @@ fn plan_split_with_colon_slice_stays_parseable_and_check_is_honest() {
         .stdout
         .clone();
     let value: Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(value["ok"].as_bool(), Some(false), "parse error must fail plan check");
+    assert_eq!(
+        value["ok"].as_bool(),
+        Some(false),
+        "parse error must fail plan check"
+    );
     let warnings = value["warnings"].as_array().unwrap();
     assert!(
-        warnings
-            .iter()
-            .any(|w| w.as_str().unwrap_or_default().contains("frontmatter parse error")),
+        warnings.iter().any(|w| w
+            .as_str()
+            .unwrap_or_default()
+            .contains("frontmatter parse error")),
         "warnings must name the frontmatter parse error, got {warnings:?}"
     );
     assert_eq!(
@@ -4168,7 +4179,15 @@ fn follow_up_review_is_not_ready_while_fix_item_is_open() {
         .success();
     planr()
         .current_dir(dir.path())
-        .args(["--db", &db_arg, "item", "create", "Demo work", "--description", "demo"])
+        .args([
+            "--db",
+            &db_arg,
+            "item",
+            "create",
+            "Demo work",
+            "--description",
+            "demo",
+        ])
         .assert()
         .success();
 
@@ -4185,7 +4204,18 @@ fn follow_up_review_is_not_ready_while_fix_item_is_open() {
 
     planr()
         .current_dir(dir.path())
-        .args(["--db", &db_arg, "log", "add", "--item", &item_id, "--summary", "s", "--cmd", "c"])
+        .args([
+            "--db",
+            &db_arg,
+            "log",
+            "add",
+            "--item",
+            &item_id,
+            "--summary",
+            "s",
+            "--cmd",
+            "c",
+        ])
         .assert()
         .success();
     let output = planr()
@@ -4258,7 +4288,18 @@ fn follow_up_review_is_not_ready_while_fix_item_is_open() {
     // Closing the fix item must promote the follow-up review.
     planr()
         .current_dir(dir.path())
-        .args(["--db", &db_arg, "log", "add", "--item", &fix_id, "--summary", "fixed", "--cmd", "c"])
+        .args([
+            "--db",
+            &db_arg,
+            "log",
+            "add",
+            "--item",
+            &fix_id,
+            "--summary",
+            "fixed",
+            "--cmd",
+            "c",
+        ])
         .assert()
         .success();
     planr()

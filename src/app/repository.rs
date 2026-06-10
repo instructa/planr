@@ -458,8 +458,7 @@ impl App {
                      AND COALESCE(approval_status, '') NOT IN ('requested','denied')
                      RETURNING id, status",
                 )?;
-                let rows =
-                    collect_rows(stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?)?;
+                let rows = collect_rows(stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?)?;
                 rows
             };
             for (item_id, status) in &auto_closed {
