@@ -126,6 +126,8 @@ planr review close <review-id> \
 
 The target item may close only when required review items are closed.
 
+Every `review close` records a derived `review_mode`: the closing reviewer identity is compared against the target item's lease holder and recorded as `single_agent` (same identity), `independent` (different identity), or `unattributed` (no recorded maker). The mode lands in the close response, review log, artifact, and event — independence is proven by recorded identity, not declared by a note.
+
 ## Evidence
 
 Logs make closure auditable:
@@ -137,7 +139,19 @@ planr log add --item <item-id> \
   --cmd "cargo test parser"
 ```
 
-Use multiple `--cmd` or `--tests` values when more than one verification command matters.
+Use multiple `--cmd` or `--tests` values when more than one verification command matters. `--cmd` records what was executed; `--tests` records test commands/results specifically — both are evidence fields, not gates.
+
+Live verification evidence (browser runs, smoke tests against a running app) uses `--kind verification`:
+
+```bash
+planr log add --item <item-id> --kind verification \
+  --summary "Verified upload flow in browser: video plays after publish" \
+  --cmd "agent-browser snapshot http://localhost:3000/watch/1"
+```
+
+`plan audit` checks for verification logs when a goal contract exists. Log persistent evidence, not transient states: a failure that you immediately fix belongs in the final log's narrative, not as a standalone failure log.
+
+Settling commands (`done`, `close`, `review close`) report what they `unlocked` — every item that became ready because of that settlement — plus the item's `post_condition` and an evidence hint when downstream work depends on an item closed without `--cmd`/`--tests`.
 
 ## Graph Inspection
 

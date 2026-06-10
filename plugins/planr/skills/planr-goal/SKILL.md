@@ -30,10 +30,15 @@ planr plan new "<goal>" --platform <p>
 planr plan refine <plan-id> --note "constraint, assumption, or user-provided plan fact"
 planr plan check <plan-id>                # strict: empty required sections fail
 planr map build --from <plan-id>          # idempotent: safe to re-run
-planr link add <earlier-item> <later-item> --type blocks   # for every execution-order dependency
 ```
 
-Linking is part of prep, not optional: an unlinked map makes the loop pick items in arbitrary order.
+`plan refine` appends notes; the plan body is yours to edit. When `plan check` fails, each warning names the exact file and section — edit that file directly, fill the section with real content, and re-run the check. Scaffold sections (`## Scope Decision`, `## Verification`, `## Acceptance Criteria`) are filled by editing the plan markdown, not by more `refine` notes.
+
+`map build` creates one item per plan step and chains them in plan order with `blocks` links; the output lists the created items and links. Review that chain and adjust it only where execution order differs from document order:
+
+```bash
+planr link add <earlier-item> <later-item> --type blocks
+```
 
 ## Store The Goal Contract
 
@@ -43,7 +48,7 @@ The contract must survive compaction, session loss, and host switches, so it liv
 planr context add "GOAL CONTRACT <plan-id>: DONE when every in-scope map item is closed with log evidence, all reviews closed with verdict complete, no open approvals in scope, and a live verification log exists for <oracle>. Iteration budget: 10." --tag goal-contract
 ```
 
-One contract per plan scope. Any agent on any host can recover it with `planr context list` or `planr search "GOAL CONTRACT"`. Never weaken a stored contract mid-run; scope changes go through `$planr-plan` and the user. During the run, workers lease with `planr pick --plan <plan-id>` so the loop never picks items outside this contract, even when other plans share the board.
+One contract per plan scope. Any agent on any host can recover it with `planr context list` or `planr search "GOAL CONTRACT"`. Never weaken a stored contract mid-run; scope changes go through `$planr-plan` and the user. During the run, workers lease with `planr pick --plan <plan-id>` so the loop never picks items outside this contract, even when other plans share the board. The loop checks the contract with `planr plan audit <plan-id>`, which evaluates exactly these clauses with evidence and answers `holds: true/false`.
 
 ## Hand Off
 

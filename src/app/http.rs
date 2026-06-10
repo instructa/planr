@@ -572,23 +572,21 @@ impl App {
                         .trim_end_matches("/artifact")
                         .trim_end_matches('/');
                     serde_json::to_string(&json!({"artifact": self.write_review_artifact(
-                        review_id,
-                        None,
-                        &[],
-                        &[],
-                        None,
-                        None,
+                        crate::app::ReviewArtifactInput::bare(review_id),
                     )?}))?
                 }
                 ("POST", p) if p.ends_with("/close") => {
                     let item_id =
                         path_item_id(p).ok_or_else(|| anyhow!("missing item id in close route"))?;
+                    let ready_before = self.ready_item_ids()?;
                     self.promote_ready()?;
                     self.ensure_can_close(item_id)?;
                     self.conn.execute("UPDATE items SET status = 'closed', completed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1", params![item_id])?;
                     self.promote_ready()?;
                     self.record_event("item_closed", Some(item_id), json!({"source": "http"}))?;
-                    serde_json::to_string(&json!({"closed": item_id, "map": self.map_value()?}))?
+                    serde_json::to_string(
+                        &json!({"closed": item_id, "unlocked": self.unlocked_since(&ready_before)?, "map": self.map_value()?}),
+                    )?
                 }
                 ("POST", p) if p.ends_with("/reviews") => {
                     let item_id = path_item_id(p)

@@ -183,18 +183,21 @@ impl App {
                 let human = if ok {
                     "plan check passed".to_string()
                 } else {
-                    let warnings = value["warnings"]
-                        .as_array()
-                        .map(|warnings| {
-                            warnings
-                                .iter()
-                                .filter_map(Value::as_str)
-                                .collect::<Vec<_>>()
-                                .join("; ")
-                        })
-                        .unwrap_or_default();
-                    format!("plan check failed: {warnings}")
+                    let mut human = "plan check failed".to_string();
+                    for warning in value["warnings"].as_array().into_iter().flatten() {
+                        human.push_str(&format!(
+                            "\n  {}\n  fix: {}",
+                            warning["message"].as_str().unwrap_or_default(),
+                            warning["fix"].as_str().unwrap_or_default()
+                        ));
+                    }
+                    human
                 };
+                self.emit(value, human)
+            }
+            PlanCommand::Audit(args) => {
+                let value = self.plan_audit_value(&args.id)?;
+                let human = Self::plan_audit_human(&value);
                 self.emit(value, human)
             }
             PlanCommand::Show(args) => {
@@ -226,17 +229,29 @@ impl App {
                 let plan = self.get_plan(&args.from)?;
                 let created = self.seed_items_from_plan(&plan)?;
                 self.promote_ready()?;
+                // Re-fetch: chaining demotes blocked items after creation.
+                let created = created
+                    .iter()
+                    .map(|item| self.get_item(&item.id))
+                    .collect::<Result<Vec<_>>>()?;
+                let links = created
+                    .windows(2)
+                    .map(|pair| json!({"from": pair[0].id, "to": pair[1].id, "kind": "blocks"}))
+                    .collect::<Vec<_>>();
                 let hint = match created.len() {
-                    0 => Some("no new items created; this plan is already mapped"),
-                    1 => Some("created a single coarse item; run `planr item breakdown <item-id> --into \"...\"` before picking"),
-                    _ => None,
+                    0 => "no new items created; this plan is already mapped",
+                    1 => "created a single coarse item; run `planr item breakdown <item-id> --into \"...\"` before picking",
+                    _ => "items are chained in plan order; adjust with `planr link add <from> <to> --type blocks` if execution order differs, then `planr pick --plan <plan-id>`",
                 };
                 let mut message = format!("created {} map item(s)", created.len());
-                if let Some(hint) = hint {
-                    message.push_str("; ");
-                    message.push_str(hint);
+                for item in &created {
+                    message.push_str(&format!("\n  {} [{}] {}", item.id, item.status, item.title));
                 }
-                self.emit(json!({"created": created, "hint": hint}), message)
+                message.push_str(&format!("\n{hint}"));
+                self.emit(
+                    json!({"created": created, "links": links, "hint": hint, "next": format!("planr pick --plan {}", plan.id)}),
+                    message,
+                )
             }
             MapCommand::Lane(args) => {
                 let lane = if args.critical {
@@ -610,7 +625,9 @@ impl App {
             self.current_item_for_worker()?
                 .ok_or_else(|| anyhow!("no picked item for this worker"))?
         };
+        let ready_before = self.ready_item_ids()?;
         let log_id = self.close_item_core(&item_id, &args.summary, true)?;
+        let extras = self.settlement_extras(&item_id, &ready_before, false)?;
         let next = if args.next {
             Some(self.next_pick_value(None, None, None)?)
         } else {
@@ -625,8 +642,9 @@ impl App {
         }
         let progress = self.progress_value()?;
         human.push_str(&Self::progress_human(&progress));
+        human.push_str(&Self::settlement_extras_human(&extras));
         self.emit(
-            json!({"closed": item_id, "item": self.get_item(&item_id)?, "log_id": log_id, "next": next, "remaining": progress}),
+            json!({"closed": item_id, "item": self.get_item(&item_id)?, "log_id": log_id, "unlocked": extras["unlocked"], "post_condition": extras["post_condition"], "hint": extras["hint"], "next": next, "remaining": progress}),
             human,
         )
     }
@@ -667,14 +685,10 @@ impl App {
                 self.emit(result, "review feedback ingested".to_string())
             }
             ReviewCommand::Artifact(args) => {
-                let artifact = self.write_review_artifact(
-                    &args.review_item_id,
-                    None,
-                    &[],
-                    &[],
-                    args.out,
-                    None,
-                )?;
+                let artifact = self.write_review_artifact(super::ReviewArtifactInput {
+                    out: args.out,
+                    ..super::ReviewArtifactInput::bare(&args.review_item_id)
+                })?;
                 self.emit(
                     json!({"artifact": artifact}),
                     "review artifact written".to_string(),
@@ -695,6 +709,7 @@ impl App {
                 )
             }
             ReviewCommand::Close(args) => {
+                let ready_before = self.ready_item_ids()?;
                 let mut result = self.close_review_item(
                     &args.review_item_id,
                     args.verdict.as_str(),
@@ -703,12 +718,18 @@ impl App {
                     args.reviewer.as_deref(),
                     args.close_target,
                 )?;
+                let unlocked = self.unlocked_since(&ready_before)?;
                 let mut human = "review closed".to_string();
+                if let Some(mode) = result["review_mode"].as_str() {
+                    human.push_str(&format!(" ({mode})"));
+                }
                 if let Some(target_id) = result["closed_target"]["id"].as_str() {
                     human.push_str(&format!("; closed target {target_id}"));
                 }
                 let progress = self.progress_value()?;
                 human.push_str(&Self::progress_human(&progress));
+                human.push_str(&Self::unlocked_human(&unlocked));
+                result["unlocked"] = json!(unlocked);
                 result["remaining"] = progress;
                 self.emit(result, human)
             }

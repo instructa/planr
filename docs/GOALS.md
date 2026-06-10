@@ -45,13 +45,15 @@ planr context add "GOAL CONTRACT pl-csv-export: DONE when every in-scope map ite
 Each iteration follows the `$planr-loop` protocol:
 
 ```text
-1. $planr-status   read map state + stored contract; contract holds -> exit
+1. planr plan audit <plan-id>   one-call contract verdict; holds -> exit
 2. $planr-work     pick exactly one ready item, implement, finish with planr done --review
-3. live verify     run the platform verification, log it with planr log add --cmd
+3. live verify     run the platform verification, log it with planr log add --kind verification --cmd
 4. $planr-review   independent audit; complete -> review close --close-target,
                    findings -> fix items become the next ready items
 5. repeat
 ```
+
+`plan audit` replaces the hand-rolled final audit: it checks `items_settled`, `reviews_complete`, `approvals_clear`, and `verification_logged` clause by clause with evidence, includes the stored goal contract, and answers `holds: true/false` in one command.
 
 The per-item path is three commands since v1.1.6:
 
@@ -63,7 +65,7 @@ planr review close <review-id> --verdict complete --reviewer <id> --close-target
 
 `--plan` keeps the lease inside the goal contract: when several plans share the board (a parallel feature, leftovers from an aborted prep run), a plan-scoped goal run never picks work outside its own plan. A pick that finds nothing in scope reports `reason: "no_ready_item_in_plan"` instead of silently widening.
 
-`done`/`close`/`review close` responses and the pick packet include a `remaining` snapshot (`counts` with explicit zeros for every status, `settled`, `total`), so the orchestrator evaluates the stop condition straight from the completion output — no extra `map status` round-trip. `--next` never hands a worker its own freshly created review, so maker and checker stay separate even in compact loops.
+`done`/`close`/`review close` responses and the pick packet include a `remaining` snapshot (`counts` with explicit zeros for every status, `settled`, `total`), so the orchestrator evaluates the stop condition straight from the completion output — no extra `map status` round-trip. The same responses list what each settlement `unlocked`, so the loop sees its next work without re-reading the map. `--next` never hands a worker its own freshly created review, so maker and checker stay separate even in compact loops. The review verdict records `review_mode` (`single_agent` or `independent`) automatically from worker identity — no ceremony note needed.
 
 ### 3. Finish
 

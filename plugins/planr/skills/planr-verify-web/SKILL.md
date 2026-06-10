@@ -19,8 +19,11 @@ If a `capability`-tagged entry records a web verification tool, use it. Otherwis
 
 1. A browser skill the host already provides (for example browser-harness): drive the real flow, screenshot the result.
 2. A browser MCP already configured (Playwright, chrome-devtools, native browser tools): same.
-3. A scriptable fallback when Node is available: a one-off headless check via `npx playwright` whose exit code is the signal.
-4. HTTP-level checks (`curl` against rendered routes or endpoints): weakest tier, only for SSR/API-shaped changes, and the log must say "HTTP-level only, not browser-verified".
+3. The system browser over CDP: launch the installed Chrome/Chromium with `--remote-debugging-port=<port> --user-data-dir=<tmp>` and drive it via the DevTools protocol. This is the standard rescue when a browser tool exists but its bundled browser is missing — the tool's download step is not a dependency, the protocol is.
+4. A scriptable fallback when Node is available: a one-off headless check via `npx playwright` whose exit code is the signal.
+5. HTTP-level checks (`curl` against rendered routes or endpoints): weakest tier, only for SSR/API-shaped changes, and the log must say "HTTP-level only, not browser-verified".
+
+If a tier fails for an environmental reason (missing download, sandbox restriction), drop to the next tier and record what actually worked — do not log the environmental failure as item evidence.
 
 Record the decision once so later iterations and other agents reuse it instead of re-discovering:
 
@@ -41,10 +44,12 @@ Exercise the flow the item changed — not the homepage. Interact, assert on ren
 Then log evidence on the item:
 
 ```bash
-planr log add --item <item-id> \
+planr log add --item <item-id> --kind verification \
   --summary "live verification (<tier>): <what was exercised and observed>" \
   --cmd "<exact replayable command>"
 ```
+
+`--kind verification` marks the log as live-verify evidence; `planr plan audit` checks for it when a goal contract exists.
 
 Attach screenshots or traces as artifacts on the item:
 

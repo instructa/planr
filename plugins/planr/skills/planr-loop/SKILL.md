@@ -31,24 +31,26 @@ Store the contract in Planr so it survives compaction, session loss, and host sw
 planr context add "GOAL CONTRACT <plan-id>: DONE when ... Iteration budget: 10." --tag goal-contract
 ```
 
-`$planr-goal` does this during prep; if the loop starts without a stored contract, store it in iteration 1 before picking. Every iteration re-reads the contract from Planr (`planr context list` or `planr search "GOAL CONTRACT"`), never from chat history. `done`, `close`, and `review close` responses and the pick packet include a `remaining` progress snapshot (`counts` with explicit zeros for every status, `settled`, `total`), so the orchestrator can evaluate the stop condition from the completion output without an extra `map status` call.
+`$planr-goal` does this during prep; if the loop starts without a stored contract, store it in iteration 1 before picking. Every iteration re-reads the contract from Planr (`planr context list` or `planr search "GOAL CONTRACT"`), never from chat history. `done`, `close`, and `review close` responses and the pick packet include a `remaining` progress snapshot (`counts` with explicit zeros for every status, `settled`, `total`) plus the list of items each settlement `unlocked`, so the orchestrator can evaluate the stop condition from the completion output without an extra `map status` call.
+
+The stop condition itself is one command: `planr plan audit <plan-id> --json` evaluates the contract clause by clause (items settled, reviews complete, approvals clear, verification logged) with evidence and answers `holds: true/false`. Use it at the top of every iteration and as the final audit — never hand-assemble the verdict from separate calls.
 
 ## Iteration Shape
 
 Each iteration is one dispatch through the routing skill — never a hand-written prompt:
 
 ```text
-1. $planr-status      read honest state + stored goal-contract; if the contract holds -> exit loop
+1. planr plan audit <plan-id> --json   contract holds -> exit loop ($planr-status for deeper reads)
 2. $planr-plan / $planr-task-graph   only if scope or map structure is missing
 3. $planr-work        pick exactly one ready item, implement, finish with planr done --review
-4. live verify        run the platform verification (below), log it with planr log add --cmd
+4. live verify        run the platform verification (below), log it with planr log add --kind verification
 5. $planr-review      independent audit; complete -> review close --close-target, findings -> Planr creates fix items
 6. repeat             fix items are just the next ready items
 ```
 
 The short path per item is three commands: `planr pick --json` (one flat work packet; makers add `--work-type code`), `planr done <item-id> --summary ... --cmd ... --review [--next]`, and the reviewer's `planr --json pick --work-type review` followed by `planr review close <review-id> --verdict complete --reviewer <id> --close-target` — run exactly once. Parent gates roll up automatically. When the loop runs against one plan (every `/goal` run does), add `--plan <plan-id>` to every pick so the lease never leaves the goal contract, even when other plans share the board; an empty scope reports `reason: "no_ready_item_in_plan"`.
 
-After any `planr map build`, dependency linking is part of step 2, not optional: add `blocks` links for every execution-order dependency before the first pick. An unlinked map makes the loop pick items in arbitrary order.
+`map build` chains created items in plan order with `blocks` links automatically and prints the created items and links. In step 2, verify that chain against real execution-order dependencies and adjust with `planr link add` only where document order and execution order differ.
 
 The loop never closes its own reviews when the host supports a second agent. Maker and checker stay separate.
 
@@ -63,7 +65,7 @@ Host wiring:
 
 - Codex: project agents in `.codex/agents/*.toml` preload the skill via `[[skills.config]]` (TOML templates in `agents/` next to this skill). Spawn explicitly: "spawn the planr_worker agent for item X". Keep `[agents] max_depth = 1`.
 - Claude Code: subagents preload via the `skills:` frontmatter field. The Planr plugin registers `planr-worker` and `planr-reviewer` automatically from its `agents/` directory; standalone installs copy them to `.claude/agents/`. The reviewer subagent is read-only except for `planr review` commands.
-- Single-agent hosts: run worker and checker as separate sequential dispatches with a fresh read of map state in between; never carry the worker's self-assessment into the review step. Record the mode honestly per `$planr-review` single-agent mode (`planr context add ... --tag review-mode`).
+- Single-agent hosts: run worker and checker as separate sequential dispatches with a fresh read of map state in between; never carry the worker's self-assessment into the review step. The mode is recorded automatically: `review close` derives `review_mode` (`single_agent`/`independent`) from worker identity.
 
 ## Live Verification By Platform
 
@@ -77,10 +79,12 @@ Host wiring:
 | `api`/`backend` | start the service, hit the changed endpoints with real requests, assert responses |
 
 ```bash
-planr log add --item <item-id> \
-  --summary "live verification on <platform>" \
+planr log add --item <item-id> --kind verification \
+  --summary "live verification on <platform>: <observed outcome>" \
   --cmd "<exact command actually run>"
 ```
+
+`--kind verification` is what `plan audit` checks for its `verification_logged` clause. Log the final passing run; a transient failure you immediately fixed belongs in the summary narrative, not as a separate failure log.
 
 If the needed capability is missing (no simulator, no browser tooling), do not fake it: log the gap as context, request human approval, and pause the loop:
 

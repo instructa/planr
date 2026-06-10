@@ -192,6 +192,7 @@ impl App {
                 ))
             }
             "planr_plan_check" => Ok(mcp_json(self.plan_check_value(required_arg(&args, "id")?)?)),
+            "planr_plan_audit" => Ok(mcp_json(self.plan_audit_value(required_arg(&args, "id")?)?)),
             "planr_plan_link" => {
                 let source_id = required_arg(&args, "source_id")?;
                 let item_id = required_arg(&args, "item_id")?;
@@ -211,7 +212,17 @@ impl App {
                 let plan = self.get_plan(required_arg(&args, "from")?)?;
                 let created = self.seed_items_from_plan(&plan)?;
                 self.promote_ready()?;
-                Ok(mcp_json(json!({"created": created, "next": "planr pick"})))
+                let created = created
+                    .iter()
+                    .map(|item| self.get_item(&item.id))
+                    .collect::<Result<Vec<_>>>()?;
+                let links = created
+                    .windows(2)
+                    .map(|pair| json!({"from": pair[0].id, "to": pair[1].id, "kind": "blocks"}))
+                    .collect::<Vec<_>>();
+                Ok(mcp_json(
+                    json!({"created": created, "links": links, "next": format!("planr pick --plan {}", plan.id)}),
+                ))
             }
             "planr_item_create" => {
                 let item = self.create_item(
@@ -584,12 +595,7 @@ impl App {
             "planr_review_artifact" => {
                 let review_id = required_arg(&args, "review_item_id")?;
                 Ok(mcp_json(json!({"artifact": self.write_review_artifact(
-                    review_id,
-                    None,
-                    &[],
-                    &[],
-                    None,
-                    None,
+                    crate::app::ReviewArtifactInput::bare(review_id),
                 )?})))
             }
             "planr_review_evidence" => {
@@ -661,12 +667,15 @@ impl App {
             }
             "planr_close_item" => {
                 let item_id = required_arg(&args, "item_id")?;
+                let ready_before = self.ready_item_ids()?;
                 self.promote_ready()?;
                 self.ensure_can_close(item_id)?;
                 self.conn.execute("UPDATE items SET status = 'closed', completed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1", params![item_id])?;
                 self.promote_ready()?;
                 self.record_event("item_closed", Some(item_id), json!({"source": "mcp"}))?;
-                Ok(mcp_json(json!({"closed": item_id, "next": "planr pick"})))
+                Ok(mcp_json(
+                    json!({"closed": item_id, "unlocked": self.unlocked_since(&ready_before)?, "next": "planr pick"}),
+                ))
             }
             "planr_context_create" => {
                 let id = short_id("ctx");

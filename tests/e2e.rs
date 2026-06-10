@@ -4916,6 +4916,7 @@ fn rust_implementation_has_owned_module_boundaries() {
         "src/main.rs",
         "src/cli.rs",
         "src/app/mod.rs",
+        "src/app/audit.rs",
         "src/app/commands.rs",
         "src/app/flow.rs",
         "src/app/git_review.rs",
@@ -4970,8 +4971,9 @@ fn rust_implementation_has_owned_module_boundaries() {
     for (file, max_lines) in [
         ("src/cli.rs", 900usize),
         ("src/app/mod.rs", 180),
+        ("src/app/audit.rs", 200),
         ("src/app/commands.rs", 1_000),
-        ("src/app/flow.rs", 250),
+        ("src/app/flow.rs", 320),
         ("src/app/git_review.rs", 350),
         ("src/app/mcp.rs", 900),
         ("src/app/packages.rs", 450),
@@ -4998,6 +5000,7 @@ fn rust_implementation_has_owned_module_boundaries() {
         "src/main.rs",
         "src/cli.rs",
         "src/app/mod.rs",
+        "src/app/audit.rs",
         "src/app/commands.rs",
         "src/app/flow.rs",
         "src/app/git_review.rs",
@@ -5092,13 +5095,23 @@ fn plan_split_with_colon_slice_stays_parseable_and_check_is_honest() {
         "empty mandatory sections must fail plan check"
     );
     for section in ["Scope Decision", "Verification", "Acceptance Criteria"] {
+        let warning = value["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|w| w["section"].as_str() == Some(section))
+            .unwrap_or_else(|| panic!("warnings must name the empty section {section}"));
+        assert_eq!(
+            warning["file"].as_str(),
+            Some(build_path.as_str()),
+            "warning must name the exact file to repair"
+        );
         assert!(
-            value["warnings"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|w| w.as_str().unwrap_or_default().contains(section)),
-            "warnings must name the empty section {section}"
+            warning["fix"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("plan check"),
+            "warning must carry the re-run command: {warning}"
         );
     }
 
@@ -5147,7 +5160,7 @@ fn plan_split_with_colon_slice_stays_parseable_and_check_is_honest() {
     );
     let warnings = value["warnings"].as_array().unwrap();
     assert!(
-        warnings.iter().any(|w| w
+        warnings.iter().any(|w| w["message"]
             .as_str()
             .unwrap_or_default()
             .contains("frontmatter parse error")),
@@ -5336,4 +5349,265 @@ fn follow_up_review_is_not_ready_while_fix_item_is_open() {
         .assert()
         .success();
     assert_eq!(item_status(&db, &item_id), "closed");
+}
+
+#[test]
+fn guess_killer_pack_auto_chain_audit_review_mode_unlocked_and_repair_errors() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    let db_arg = db.to_str().unwrap().to_string();
+    let run = |worker: &str, args: &[&str]| -> Value {
+        let output = planr()
+            .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", worker)
+            .args(["--db", &db_arg, "--json"])
+            .args(args)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice(&output).unwrap()
+    };
+
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "project", "init", "GuessKiller"])
+        .assert()
+        .success();
+    let value = run("prep", &["plan", "new", "Guess killer app"]);
+    let product_id = value["plan"]["id"].as_str().unwrap().to_string();
+    let value = run("prep", &["plan", "split", &product_id, "--slice", "MVP"]);
+    let build_id = value["plan"]["id"].as_str().unwrap().to_string();
+    let build_path = value["plan"]["path"].as_str().unwrap().to_string();
+
+    // Fill required sections and define three ordered steps.
+    let text = fs::read_to_string(&build_path).unwrap();
+    let frontmatter_end = text.find("\n---\n").unwrap() + 5;
+    let body = format!(
+        "{}\n# Build Plan\n\n## Scope Decision\n\nMVP only.\n\n## Verification\n\nRun the flow.\n\n## Acceptance Criteria\n\n- The flow works end to end.\n\n## Steps\n\n### Add schema\n\nCreate the table.\n\n### Add endpoint\n\nServe the data.\n\n### Add page\n\nRender the data.\n",
+        &text[..frontmatter_end]
+    );
+    fs::write(&build_path, body).unwrap();
+
+    // F1: map build chains the created items in plan order with blocks links
+    // and the output already carries items, links, and the next command.
+    let build = run("prep", &["map", "build", "--from", &build_id]);
+    let created = build["created"].as_array().unwrap();
+    assert_eq!(created.len(), 3, "expected one item per plan step: {build}");
+    let ids: Vec<String> = created
+        .iter()
+        .map(|item| item["id"].as_str().unwrap().to_string())
+        .collect();
+    let links = build["links"].as_array().unwrap();
+    assert_eq!(links.len(), 2, "consecutive items must be chained: {build}");
+    assert_eq!(links[0]["from"].as_str(), Some(ids[0].as_str()));
+    assert_eq!(links[0]["to"].as_str(), Some(ids[1].as_str()));
+    assert_eq!(links[1]["from"].as_str(), Some(ids[1].as_str()));
+    assert_eq!(links[1]["to"].as_str(), Some(ids[2].as_str()));
+    assert_eq!(created[0]["status"], "ready");
+    assert_eq!(
+        created[1]["status"], "pending",
+        "chained items must not be ready before their blocker settles"
+    );
+    let rebuilt = run("prep", &["map", "build", "--from", &build_id]);
+    assert!(rebuilt["created"].as_array().unwrap().is_empty());
+    assert!(rebuilt["links"].as_array().unwrap().is_empty());
+
+    // F3: the audit verdict before any work is an evidence-backed "open".
+    let audit = run("prep", &["plan", "audit", &build_id]);
+    assert_eq!(audit["holds"], false);
+    let clause = |audit: &Value, name: &str| -> Value {
+        audit["clauses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|clause| clause["clause"] == name)
+            .unwrap_or_else(|| panic!("missing clause {name}: {audit}"))
+            .clone()
+    };
+    let items_clause = clause(&audit, "items_settled");
+    assert_eq!(items_clause["pass"], false);
+    assert_eq!(items_clause["open"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        clause(&audit, "verification_logged")["required"],
+        false,
+        "verification is contract-scoped; no contract stored yet"
+    );
+
+    // F7: closing a blocked item names the repair, not just the rejection.
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "close", &ids[2], "--summary", "premature"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("settle its blockers first"));
+
+    // Item 1: maker ships with evidence, an independent checker closes.
+    let pick = run("maker-1", &["pick", "--plan", &build_id]);
+    assert_eq!(pick["item"]["id"].as_str(), Some(ids[0].as_str()));
+    let done = run(
+        "maker-1",
+        &[
+            "done",
+            &ids[0],
+            "--summary",
+            "schema added",
+            "--cmd",
+            "cargo test schema",
+            "--review",
+        ],
+    );
+    let review_id = done["review"]["id"].as_str().unwrap().to_string();
+    assert!(
+        done["unlocked"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|unlocked| unlocked["id"].as_str() == Some(review_id.as_str())),
+        "the freshly ready review must be reported as unlocked: {done}"
+    );
+    assert!(
+        done["hint"].is_null(),
+        "evidence was attached; no hint expected: {done}"
+    );
+    let review_pick = run(
+        "checker-1",
+        &["pick", "--work-type", "review", "--plan", &build_id],
+    );
+    assert_eq!(review_pick["item"]["id"].as_str(), Some(review_id.as_str()));
+    let closed = run(
+        "checker-1",
+        &[
+            "review",
+            "close",
+            &review_id,
+            "--verdict",
+            "complete",
+            "--close-target",
+        ],
+    );
+    // F4: the maker/checker split is derived from recorded identity.
+    assert_eq!(closed["review_mode"], "independent", "{closed}");
+    // F6: settling the gate reports the step it unlocked.
+    assert!(
+        closed["unlocked"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|unlocked| unlocked["id"].as_str() == Some(ids[1].as_str())),
+        "closing the gate must report the unlocked next step: {closed}"
+    );
+
+    // Item 2: settled without evidence while downstream work exists -> hint.
+    run("maker-1", &["pick", "--plan", &build_id]);
+    let done = run("maker-1", &["done", &ids[1], "--summary", "endpoint added"]);
+    assert!(
+        done["hint"].as_str().unwrap_or_default().contains("--cmd"),
+        "missing evidence with downstream work must hint: {done}"
+    );
+    assert!(
+        done["unlocked"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|unlocked| unlocked["id"].as_str() == Some(ids[2].as_str())),
+        "{done}"
+    );
+
+    // Item 3: the same identity closes its own review -> single_agent.
+    run("maker-1", &["pick", "--plan", &build_id]);
+    let done = run(
+        "maker-1",
+        &[
+            "done",
+            &ids[2],
+            "--summary",
+            "page added",
+            "--cmd",
+            "vitest --run page",
+            "--review",
+        ],
+    );
+    let review_id = done["review"]["id"].as_str().unwrap().to_string();
+    run(
+        "maker-1",
+        &["pick", "--work-type", "review", "--plan", &build_id],
+    );
+    let closed = run(
+        "maker-1",
+        &[
+            "review",
+            "close",
+            &review_id,
+            "--verdict",
+            "complete",
+            "--close-target",
+        ],
+    );
+    assert_eq!(closed["review_mode"], "single_agent", "{closed}");
+
+    // F3 arc: settled board holds without a contract; a stored contract
+    // makes verification binding; a verification log satisfies it.
+    let audit = run("prep", &["plan", "audit", &build_id]);
+    assert_eq!(audit["holds"], true, "all settled, no contract: {audit}");
+    run(
+        "prep",
+        &[
+            "context",
+            "add",
+            &format!("GOAL CONTRACT {build_id}: DONE when all items closed and live verification logged."),
+            "--tag",
+            "goal-contract",
+        ],
+    );
+    let audit = run("prep", &["plan", "audit", &build_id]);
+    assert_eq!(
+        audit["holds"], false,
+        "a stored contract makes the verification clause binding: {audit}"
+    );
+    assert!(audit["contract"]["content"]
+        .as_str()
+        .unwrap()
+        .contains(&build_id));
+    run(
+        "maker-1",
+        &[
+            "log",
+            "add",
+            "--item",
+            &ids[2],
+            "--kind",
+            "verification",
+            "--summary",
+            "verified page in browser",
+            "--cmd",
+            "curl localhost:3000/page",
+        ],
+    );
+    let audit = run("prep", &["plan", "audit", &build_id]);
+    assert_eq!(audit["holds"], true, "{audit}");
+    let verification = clause(&audit, "verification_logged");
+    assert_eq!(verification["pass"], true);
+    assert_eq!(verification["logs"].as_array().unwrap().len(), 1);
+
+    // F8: the post condition is echoed at completion time.
+    let manual = run(
+        "prep",
+        &[
+            "item",
+            "create",
+            "Manual gate",
+            "--description",
+            "standalone",
+            "--post",
+            "verify the deploy manually",
+        ],
+    );
+    let manual_id = manual["item"]["id"].as_str().unwrap().to_string();
+    let closed_manual = run("prep", &["close", &manual_id, "--summary", "done"]);
+    assert_eq!(
+        closed_manual["post_condition"], "verify the deploy manually",
+        "{closed_manual}"
+    );
 }

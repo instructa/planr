@@ -31,6 +31,7 @@ Planr V1 is a single Rust binary with explicit module ownership. The crate stays
 - `src/app/review_workspace.rs`: local review workspace boundary. Owns the browser review HTML, workspace data projection, and privacy-minimized Git diff evidence.
 - `src/app/surfaces.rs`: non-CLI runtime surfaces. Owns trace, scrub, artifact, event, debug, export, and import command handlers.
 - `src/app/inspection.rs`: local inspection helpers. Owns debug bundles, context/link snapshots, pick context, secret scans, export value assembly, run recording, search results, and Planr-directory import parsing.
+- `src/app/audit.rs`: goal contract audit boundary. Owns the clause-by-clause `plan audit` verdict (items settled, reviews complete, approvals clear, verification logged) and its human rendering.
 - `src/model.rs`: JSON-facing data transfer types. Owns serializable Planr DTOs used by CLI JSON, MCP, HTTP, and tests.
 - `src/storage/mod.rs`: SQLite connection boundary. Owns default database path, connection setup, pragma configuration, and storage submodule exports.
 - `src/storage/schema.rs`: SQLite schema boundary. Owns DDL, additive schema upgrade helpers, and schema version recording.

@@ -60,8 +60,17 @@ impl App {
         let plan = self.get_plan(plan_id)?;
         let path = std::path::PathBuf::from(&plan.path);
         let mut warnings = Vec::new();
+        let warning = |file: &str, section: Option<&str>, message: String, fix: String| json!({"file": file, "section": section, "message": message, "fix": fix});
         if !path.exists() {
-            warnings.push("plan path missing".to_string());
+            warnings.push(warning(
+                &plan.path,
+                None,
+                "plan path missing".to_string(),
+                format!(
+                    "restore the plan file at {} or recreate it with `planr plan create`",
+                    plan.path
+                ),
+            ));
         } else {
             self.rehash_plan(&plan.id)?;
             let (frontmatter, parse_status) = parse_plan_metadata(&path);
@@ -69,29 +78,46 @@ impl App {
                 let detail = frontmatter["error"]
                     .as_str()
                     .unwrap_or("invalid frontmatter");
-                warnings.push(format!("frontmatter parse error: {detail}"));
+                let frontmatter_file = if path.is_dir() {
+                    path.join("README.md").display().to_string()
+                } else {
+                    plan.path.clone()
+                };
+                warnings.push(warning(
+                    &frontmatter_file,
+                    None,
+                    format!("frontmatter parse error: {detail}"),
+                    format!("fix the YAML frontmatter in {frontmatter_file}, then re-run `planr plan check {plan_id}`"),
+                ));
             }
-            let (section_file, required, label) = if path.is_dir() {
-                (
-                    path.join("PRODUCT_SPEC.md"),
-                    PRODUCT_PLAN_REQUIRED_SECTIONS,
-                    "PRODUCT_SPEC.md: ",
-                )
+            let (section_file, required) = if path.is_dir() {
+                (path.join("PRODUCT_SPEC.md"), PRODUCT_PLAN_REQUIRED_SECTIONS)
             } else {
-                (path.clone(), BUILD_PLAN_REQUIRED_SECTIONS, "")
+                (path.clone(), BUILD_PLAN_REQUIRED_SECTIONS)
             };
+            let section_path = section_file.display().to_string();
             match fs::read_to_string(&section_file) {
                 Ok(text) => {
-                    for warning in unfilled_required_sections(&text, required) {
-                        warnings.push(format!("{label}{warning}"));
+                    for (section, state) in unfilled_required_sections(&text, required) {
+                        warnings.push(warning(
+                            &section_path,
+                            Some(&section),
+                            format!("required section `## {section}` is {state}"),
+                            format!("edit {section_path} and fill `## {section}` with content, then re-run `planr plan check {plan_id}`"),
+                        ));
                     }
                 }
-                Err(_) => warnings.push(format!(
-                    "missing plan file: {}",
-                    section_file
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_else(|| section_file.display().to_string())
+                Err(_) => warnings.push(warning(
+                    &section_path,
+                    None,
+                    format!(
+                        "missing plan file: {}",
+                        section_file
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| section_path.clone())
+                    ),
+                    format!("create {section_path} with the required sections, then re-run `planr plan check {plan_id}`"),
                 )),
             }
         }

@@ -10,6 +10,7 @@
     "planr_plan_refine",
     "planr_plan_split",
     "planr_plan_check",
+    "planr_plan_audit",
     "planr_plan_link",
     "planr_map_build",
     "planr_item_create",

@@ -142,6 +142,12 @@ impl App {
             )?;
             created.push(item);
         }
+        // Build plans are ordered steps, so the map inherits that order:
+        // consecutive new items are chained with `blocks` links instead of
+        // leaving the agent to infer execution order from titles.
+        for pair in created.windows(2) {
+            self.add_link(&pair[0].id, &pair[1].id, "blocks")?;
+        }
         Ok(created)
     }
 
@@ -500,15 +506,19 @@ impl App {
 
     pub(crate) fn ensure_can_close(&self, item_id: &str) -> Result<()> {
         let item = self.get_item(item_id)?;
-        if matches!(
-            item.status.as_str(),
-            "pending" | "blocked" | "cancelled" | "failed"
-        ) {
-            bail!(
-                "invalid_transition: cannot close item {} from status {}",
+        match item.status.as_str() {
+            "pending" | "blocked" => bail!(
+                "invalid_transition: cannot close item {} from status {}; settle its blockers first (`planr trace item {} --json` lists them)",
+                item.id,
+                item.status,
+                item.id
+            ),
+            "cancelled" | "failed" => bail!(
+                "invalid_transition: cannot close item {} from status {}; the item is settled, create a follow-up with `planr item create` instead",
                 item.id,
                 item.status
-            );
+            ),
+            _ => {}
         }
         let open_children: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM items WHERE parent_item_id = ?1 AND status NOT IN ('closed','closed_partial','cancelled')",
@@ -516,15 +526,19 @@ impl App {
             |row| row.get(0),
         )?;
         if open_children > 0 {
-            bail!("invalid_transition: cannot close item with open child items");
+            bail!(
+                "invalid_transition: cannot close item with open child items; close or cancel them first (`planr trace item {item_id} --json` lists them)"
+            );
         }
-        let open_reviews: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM links l JOIN items r ON r.id = l.from_item WHERE l.to_item = ?1 AND l.kind = 'reviews' AND r.status NOT IN ('closed','closed_partial','cancelled')",
+        let open_review: Option<String> = self.conn.query_row(
+            "SELECT r.id FROM links l JOIN items r ON r.id = l.from_item WHERE l.to_item = ?1 AND l.kind = 'reviews' AND r.status NOT IN ('closed','closed_partial','cancelled') LIMIT 1",
             params![item_id],
             |row| row.get(0),
-        )?;
-        if open_reviews > 0 {
-            bail!("invalid_transition: cannot close item with open reviews");
+        ).optional()?;
+        if let Some(review_id) = open_review {
+            bail!(
+                "invalid_transition: cannot close item with open reviews; close the review first: `planr review close {review_id} --verdict complete --close-target`"
+            );
         }
         let approval_status: Option<String> = self.conn.query_row(
             "SELECT approval_status FROM items WHERE id = ?1",
@@ -533,9 +547,13 @@ impl App {
         )?;
         match approval_status.as_deref() {
             Some("requested") => {
-                bail!("invalid_transition: cannot close item with pending approval")
+                bail!(
+                    "invalid_transition: cannot close item with pending approval; resolve it first: `planr approval approve {item_id}` or `planr approval deny {item_id}`"
+                )
             }
-            Some("denied") => bail!("invalid_transition: cannot close item with denied approval"),
+            Some("denied") => bail!(
+                "invalid_transition: cannot close item with denied approval; request again after fixes: `planr approval request {item_id}`"
+            ),
             _ => {}
         }
         Ok(())

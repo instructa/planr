@@ -41,11 +41,7 @@ planr review close <review-id> --verdict not-complete --reviewer <your-id> --fin
 
 ## Single-Agent Mode
 
-When no independent reviewer instance is available (single-agent host), do not pretend a second instance reviewed the work. Re-read the diff, logs, and evidence with fresh eyes, then record the mode honestly before closing the review:
-
-```bash
-planr context add "review performed single-agent: same session re-read diff, logs, and evidence" --item <review-id> --tag review-mode
-```
+When no independent reviewer instance is available (single-agent host), do not pretend a second instance reviewed the work. Re-read the diff, logs, and evidence with fresh eyes, then close normally. The review mode is recorded automatically: `review close` compares your identity against the maker's lease and stamps `review_mode: single_agent | independent | unattributed` on the close response, review log, artifact, and event. No extra context note is needed — honesty is derived from recorded identity. To run an honest independent review on a multi-instance host, export a distinct `PLANR_WORKER_ID` before picking.
 
 ## Completion Rule
 

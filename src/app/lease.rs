@@ -105,10 +105,21 @@ impl App {
     ) -> Result<()> {
         if changed == 0 {
             let item = self.get_item(item_id)?;
+            let repair = match item.status.as_str() {
+                "ready" => "lease it first: `planr pick`",
+                "pending" | "blocked" => {
+                    "settle its blockers first (`planr trace item <id> --json` lists them)"
+                }
+                "closed" | "closed_partial" | "cancelled" | "failed" => {
+                    "the item is settled; create a follow-up with `planr item create` instead"
+                }
+                _ => "lease it first: `planr pick`",
+            };
             bail!(
-                "invalid_transition: item {} is {}; pick it before updating runtime",
+                "invalid_transition: item {} is {}; {}",
                 item.id,
-                item.status
+                item.status,
+                repair
             );
         }
         Ok(())

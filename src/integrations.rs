@@ -144,6 +144,12 @@ pub fn mcp_tools() -> Vec<Value> {
             &["id"],
         ),
         tool(
+            "planr_plan_audit",
+            "Audit a plan's goal contract: clause-by-clause pass/fail with evidence",
+            json!({"id": prop("string", "Plan id")}),
+            &["id"],
+        ),
+        tool(
             "planr_plan_link",
             "Link a plan source to an item",
             json!({

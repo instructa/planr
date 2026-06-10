@@ -98,7 +98,9 @@ pub const PRODUCT_PLAN_REQUIRED_SECTIONS: &[&str] =
 /// Report required `##` sections that are missing or have no body content.
 /// Sub-headings (`###`) and list items count as content; another `##` or a
 /// top-level `#` heading ends a section.
-pub fn unfilled_required_sections(text: &str, required: &[&str]) -> Vec<String> {
+/// Returns (section name, "missing" | "empty") for each required section that
+/// has no heading or no body content.
+pub fn unfilled_required_sections(text: &str, required: &[&str]) -> Vec<(String, &'static str)> {
     use std::collections::HashSet;
     let mut current: Option<String> = None;
     let mut seen: HashSet<String> = HashSet::new();
@@ -124,9 +126,9 @@ pub fn unfilled_required_sections(text: &str, required: &[&str]) -> Vec<String> 
         .iter()
         .filter_map(|name| {
             if !seen.contains(*name) {
-                Some(format!("required section `## {name}` is missing"))
+                Some((name.to_string(), "missing"))
             } else if !filled.contains(*name) {
-                Some(format!("required section `## {name}` is empty"))
+                Some((name.to_string(), "empty"))
             } else {
                 None
             }

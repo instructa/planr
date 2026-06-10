@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.1.13] - 2026-06-10
+
+Guess-killer pack from the first fully manual Codex dogfood run (YT clone): every place the agent had to guess now answers itself.
+
+### Added
+
+- `planr plan audit <plan-id>` (CLI, MCP `planr_plan_audit`): one-call contract verdict over a plan's map scope. Evaluates `items_settled`, `reviews_complete`, `approvals_clear`, and `verification_logged` clause by clause with evidence, includes the stored goal contract, and answers `holds: true/false`. Replaces the hand-assembled final audit in goal loops.
+- `done`, `close`, and `review close` report what the settlement `unlocked` — every item that became ready, with id, title, and work type — in JSON and human output (also on MCP `planr_close_item` and HTTP `POST /v1/items/{id}/close`).
+- `done`/`close` echo the item's `post_condition` at completion time and emit a `hint` when downstream items depend on an item that settled without `--cmd`/`--tests` evidence.
+- `review_mode` is derived automatically on `review close`: the closing reviewer identity is compared against the target's lease holder and recorded as `single_agent`, `independent`, or `unattributed` on the close response, review log, artifact, and event. The maker/checker ceremony note is gone.
+- `log add --kind verification` is the canonical shape for live-verify evidence; `plan audit` checks for it when a goal contract exists.
+
+### Changed
+
+- `map build` chains created items in plan order with `blocks` links and lists every created item, link, and the next command — no more flat unordered maps and no post-build `map show` round-trip.
+- `plan check` warnings are structured (`{"file", "section", "message", "fix"}`); the human output names the exact file to edit and the re-run command.
+- `invalid_transition` errors carry the exact repair command for the current state: which review to close, which approval to resolve, that blockers must settle first, or that a settled item needs a follow-up instead.
+- Skills: `planr-loop`/`planr-status` use `plan audit` as the stop condition, `planr-goal` teaches direct plan-file repair, `planr-work` teaches verification logs and transient-failure hygiene, `planr-verify-web` adds the system-Chrome-over-CDP fallback tier, `planr-review` drops the single-agent ceremony note.
+
 ## [1.1.12] - 2026-06-10
 
 Plan-scoped picks, from the first live `/goal` run with Codex.

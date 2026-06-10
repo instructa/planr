@@ -155,6 +155,48 @@ impl App {
         Ok(json!({"counts": counts, "settled": settled, "total": total}))
     }
 
+    /// Completion-time context shared by `done` and `close`: what the
+    /// settlement unlocked, the post condition to verify, and an evidence
+    /// hint when downstream work exists but no commands/tests were logged.
+    pub(crate) fn settlement_extras(
+        &self,
+        item_id: &str,
+        ready_before: &std::collections::HashSet<String>,
+        has_evidence: bool,
+    ) -> Result<Value> {
+        let unlocked = self.unlocked_since(ready_before)?;
+        let post_condition = self.item_conditions(item_id)?["post"]
+            .as_str()
+            .map(ToOwned::to_owned);
+        let downstream: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM links WHERE from_item = ?1 AND kind = 'blocks'",
+            params![item_id],
+            |row| row.get(0),
+        )?;
+        let hint = (!has_evidence && downstream > 0).then(|| {
+            format!(
+                "downstream items depend on {item_id} but this log has no --cmd/--tests evidence; attach it with `planr log add {item_id} --summary ... --cmd ...`"
+            )
+        });
+        Ok(json!({"unlocked": unlocked, "post_condition": post_condition, "hint": hint}))
+    }
+
+    pub(crate) fn settlement_extras_human(extras: &Value) -> String {
+        let mut human = Self::unlocked_human(
+            extras["unlocked"]
+                .as_array()
+                .map(Vec::as_slice)
+                .unwrap_or(&[]),
+        );
+        if let Some(post) = extras["post_condition"].as_str() {
+            human.push_str(&format!("\npost condition to verify: {post}"));
+        }
+        if let Some(hint) = extras["hint"].as_str() {
+            human.push_str(&format!("\nhint: {hint}"));
+        }
+        human
+    }
+
     pub(crate) fn progress_human(progress: &Value) -> String {
         let ready = progress["counts"]["ready"].as_i64().unwrap_or(0);
         format!(
@@ -172,6 +214,7 @@ impl App {
             self.current_item_for_worker()?
                 .ok_or_else(|| anyhow!("no picked item for this worker"))?
         };
+        let ready_before = self.ready_item_ids()?;
         let log_id = self.add_log_entry(
             &item_id,
             "completion",
@@ -186,6 +229,11 @@ impl App {
             self.close_item_core(&item_id, &args.summary, false)?;
             None
         };
+        let extras = self.settlement_extras(
+            &item_id,
+            &ready_before,
+            !args.cmd.is_empty() || !args.tests.is_empty(),
+        )?;
         let next = if args.next {
             // A worker must not pick the review it just requested:
             // maker and checker stay separate.
@@ -206,12 +254,16 @@ impl App {
         }
         let progress = self.progress_value()?;
         human.push_str(&Self::progress_human(&progress));
+        human.push_str(&Self::settlement_extras_human(&extras));
         self.emit(
             json!({
                 "item": self.get_item(&item_id)?,
                 "log_id": log_id,
                 "review": review,
                 "closed": if args.review { Value::Null } else { json!(item_id) },
+                "unlocked": extras["unlocked"],
+                "post_condition": extras["post_condition"],
+                "hint": extras["hint"],
                 "next": next,
                 "remaining": progress,
             }),

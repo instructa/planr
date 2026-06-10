@@ -8,6 +8,31 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::PathBuf;
 
+pub(crate) struct ReviewArtifactInput<'a> {
+    pub(crate) review_id: &'a str,
+    pub(crate) verdict: Option<&'a str>,
+    pub(crate) findings: &'a [String],
+    pub(crate) created: &'a [Item],
+    pub(crate) out: Option<PathBuf>,
+    pub(crate) reviewer: Option<&'a str>,
+    pub(crate) review_mode: Option<&'a str>,
+}
+
+impl<'a> ReviewArtifactInput<'a> {
+    /// Bare artifact render (no close in flight): only the review id is known.
+    pub(crate) fn bare(review_id: &'a str) -> Self {
+        Self {
+            review_id,
+            verdict: None,
+            findings: &[],
+            created: &[],
+            out: None,
+            reviewer: None,
+            review_mode: None,
+        }
+    }
+}
+
 impl App {
     pub(crate) fn add_review_annotation(&self, input: ReviewAnnotationInput<'_>) -> Result<Value> {
         self.get_item(input.item_id)?;
@@ -200,7 +225,18 @@ impl App {
         let reviewer = reviewer
             .map(ToOwned::to_owned)
             .unwrap_or_else(crate::util::worker_id);
-        let summary = format!("review verdict: {verdict} (reviewer: {reviewer})");
+        // Maker/checker split is derived from recorded identity, not from a
+        // ceremony note: the target's lease holder is the maker.
+        let maker = self
+            .review_target(review_id)?
+            .and_then(|target| target.worker_id);
+        let review_mode = match maker.as_deref() {
+            Some(maker) if maker == reviewer => "single_agent",
+            Some(_) => "independent",
+            None => "unattributed",
+        };
+        let summary =
+            format!("review verdict: {verdict} (reviewer: {reviewer}, mode: {review_mode})");
         let log_id = short_id("log");
         self.conn.execute(
             "INSERT INTO logs(id, project_id, item_id, kind, summary, review_findings, created_at) VALUES (?1, ?2, ?3, 'review', ?4, ?5, datetime('now'))",
@@ -252,14 +288,15 @@ impl App {
         } else {
             None
         };
-        let artifact = self.write_review_artifact(
+        let artifact = self.write_review_artifact(ReviewArtifactInput {
             review_id,
-            Some(verdict),
-            &findings,
-            &created,
-            None,
-            Some(&reviewer),
-        )?;
+            verdict: Some(verdict),
+            findings: &findings,
+            created: &created,
+            out: None,
+            reviewer: Some(&reviewer),
+            review_mode: Some(review_mode),
+        })?;
         self.promote_ready()?;
         self.record_event(
             "review_closed",
@@ -267,6 +304,7 @@ impl App {
             json!({
                 "verdict": verdict,
                 "reviewer": reviewer,
+                "review_mode": review_mode,
                 "created": created.len(),
                 "source": source,
                 "artifact_id": artifact["id"]
@@ -276,6 +314,7 @@ impl App {
             "closed": review.id,
             "verdict": verdict,
             "reviewer": reviewer,
+            "review_mode": review_mode,
             "log_id": log_id,
             "created": created,
             "artifact": artifact
@@ -286,15 +325,16 @@ impl App {
         Ok(result)
     }
 
-    pub(crate) fn write_review_artifact(
-        &self,
-        review_id: &str,
-        verdict: Option<&str>,
-        findings: &[String],
-        created: &[Item],
-        out: Option<PathBuf>,
-        reviewer: Option<&str>,
-    ) -> Result<Value> {
+    pub(crate) fn write_review_artifact(&self, input: ReviewArtifactInput<'_>) -> Result<Value> {
+        let ReviewArtifactInput {
+            review_id,
+            verdict,
+            findings,
+            created,
+            out,
+            reviewer,
+            review_mode,
+        } = input;
         let review = self.get_item(review_id)?;
         let target = self.review_target(review_id)?;
         let evidence = target
@@ -342,6 +382,9 @@ impl App {
         }
         if let Some(reviewer) = reviewer {
             body.push_str(&format!("- Reviewer: {reviewer}\n"));
+        }
+        if let Some(review_mode) = review_mode {
+            body.push_str(&format!("- Review mode: {review_mode}\n"));
         }
         body.push_str("\n## Findings\n\n");
         if findings.is_empty() {

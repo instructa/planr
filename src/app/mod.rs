@@ -4,6 +4,7 @@ use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
+mod audit;
 mod commands;
 mod flow;
 mod git_review;
@@ -20,6 +21,8 @@ mod repository;
 mod review;
 mod review_workspace;
 mod surfaces;
+
+pub(crate) use review::ReviewArtifactInput;
 
 pub(crate) struct App {
     pub(crate) conn: Connection,

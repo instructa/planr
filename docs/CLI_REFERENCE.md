@@ -10,6 +10,7 @@ planr plan new "App idea" [--platform web] [--ai] [--backend]
 planr plan refine <plan-id> [--note "..."]
 planr plan split <plan-id> --slice "MVP backend"
 planr plan check <plan-id>
+planr plan audit <plan-id>
 planr plan show <plan-id>
 planr plan archive <plan-id>
 planr map show
@@ -43,7 +44,7 @@ planr artifact show <artifact-id>
 planr artifact list [--item <item-id>]
 planr event list [--item <item-id>] [--limit 50]
 planr debug bundle [--item <item-id>] --preview
-planr log add --item <item-id> --summary "..." [--files a --files b | --files a,b] [--cmd "..."]
+planr log add --item <item-id> --summary "..." [--files a --files b | --files a,b] [--cmd "..."] [--kind completion|progress|verification]
 planr review request <item-id>
 planr review annotate <item-id> --message "..." [--severity info|warning|blocking] [--file path] [--line N] [--author "..."]
 planr review ingest <item-id> (--from feedback.json|--stdin)
@@ -69,14 +70,18 @@ Global flags: `--db <path>`, `--json`, `--no-color`. They are valid in both posi
 
 With `--json`, responses follow one convention so agents never guess where data lives:
 
-- Errors: `{"error": {"code": "...", "message": "..."}}` with a non-zero exit code. Codes include `not_found`, `invalid_transition`, `already_closed`, `bad_request`, `locked`, `parse_error`, and `internal_error`.
+- Errors: `{"error": {"code": "...", "message": "..."}}` with a non-zero exit code. Codes include `not_found`, `invalid_transition`, `already_closed`, `bad_request`, `locked`, `parse_error`, and `internal_error`. `invalid_transition` messages carry the exact repair command for the current state (e.g. which review to close, which approval to resolve, or that blockers must settle first) — the error is the instruction.
 - List fields on logs (`files`, `commands`, `tests`, `review_findings`) are always arrays — `[]` when empty, never `null`.
 - The affected single item is always available under the top-level `item` key (`pick`, `close`, `item create/update/cancel`, `pick release`, `item breakdown`, approval and runtime commands). Action-specific keys like `closed`, `cancelled`, or `released` carry the id and stay for context.
 - Collections use plural keys: `items`, `plans`, `logs`, `reviews`, `artifacts`, `approvals`, `events`.
 - Other single objects use their semantic key: `plan`, `log`, `review`, `artifact`, `context`.
 - Optional guidance appears under `hint` or `next` when a follow-up command is the expected move.
 
-`plan check` validates path, YAML frontmatter, and that required sections have content: build plans need `## Scope Decision`, `## Verification`, and `## Acceptance Criteria` filled; product plans need `## Problem`, `## Requirements`, and `## Success Criteria` filled in `PRODUCT_SPEC.md`. Empty scaffolds fail with named warnings.
+`plan check` validates path, YAML frontmatter, and that required sections have content: build plans need `## Scope Decision`, `## Verification`, and `## Acceptance Criteria` filled; product plans need `## Problem`, `## Requirements`, and `## Success Criteria` filled in `PRODUCT_SPEC.md`. Each warning is structured — `{"file", "section", "message", "fix"}` — and names the exact file to edit plus the re-run command, so a failed check is a repair instruction, not a riddle.
+
+`plan audit <plan-id>` is the one-call contract verdict for a plan's map scope. It evaluates four clauses with evidence: `items_settled` (open items listed), `reviews_complete` (open review items listed), `approvals_clear` (requested/denied approvals listed), and `verification_logged` (logs with `--kind verification` on scope items). The stored goal contract (`planr context --tag goal-contract` mentioning the plan id) is included; the verification clause is binding only when such a contract exists. `holds: true` means the contract is satisfied — loop agents use this as their stop condition instead of stitching the verdict together from `map status`, `log list`, and `approval list`. Also available as MCP `planr_plan_audit`.
+
+`map build` chains the created items in plan order with `blocks` links — build plan steps are ordered, so the map inherits that order instead of leaving everything flat. The output lists every created item with its status, the created links, and the next command; adjust order with `planr link add` before picking if execution order differs from document order.
 
 `review ingest` accepts hook-compatible JSON and records it as feedback only. It never closes review work and never approves an item by itself.
 
@@ -98,11 +103,11 @@ With `--json`, responses follow one convention so agents never guess where data 
 
 `review request` (and `done --review`) moves a picked or running target to `in_review`: work is finished, evidence is logged, the item waits on its gate. The owner keeps the pick and can still log evidence; `in_review` items are never handed out by `pick`.
 
-`review close` writes `.planr/reviews/<review-item-id>.review.md` and registers it as a review artifact. A `not-complete` or `unclear` verdict creates fix and follow-up review work; the follow-up review gates the same target item, so the chain keeps working with `--close-target`. With `--close-target` (complete verdicts only) the reviewed item is closed in the same command, provided it already has a completion log; the artifact is rendered after the target transition, so it snapshots the final target status. `--close-target` is also available through MCP `planr_review_close` and HTTP `POST /v1/reviews/{id}/close` (`"close_target": true`). `review close` responses include the same `remaining` progress snapshot as `done` and `close`. `--reviewer <id>` records the checker's identity on the review log, artifact, and event (defaults to the worker id), keeping maker and checker distinguishable in the audit trail. Closing an already-settled review fails with error code `already_closed` instead of silently duplicating evidence logs.
+`review close` writes `.planr/reviews/<review-item-id>.review.md` and registers it as a review artifact. A `not-complete` or `unclear` verdict creates fix and follow-up review work; the follow-up review gates the same target item, so the chain keeps working with `--close-target`. With `--close-target` (complete verdicts only) the reviewed item is closed in the same command, provided it already has a completion log; the artifact is rendered after the target transition, so it snapshots the final target status. `--close-target` is also available through MCP `planr_review_close` and HTTP `POST /v1/reviews/{id}/close` (`"close_target": true`). `review close` responses include the same `remaining` progress snapshot as `done` and `close`. `--reviewer <id>` records the checker's identity on the review log, artifact, and event (defaults to the worker id), keeping maker and checker distinguishable in the audit trail. Closing an already-settled review fails with error code `already_closed` instead of silently duplicating evidence logs. The maker/checker split is derived, not declared: `review_mode` compares the closing reviewer identity against the target item's lease holder and reports `single_agent`, `independent`, or `unattributed` in the response, review log, artifact, and event — no ceremony note required.
 
 `trace item` on a review item inlines the target item and its evidence logs under `target`, so a reviewer's first trace already contains what is being audited. The human (non-JSON) mode renders the packet: status, owner, links, logs.
 
-`done` is the compound worker command: it writes a completion log, then requests a review (`--review`) or closes the item, and optionally picks the next ready item (`--next`). It chains the same single-owner operations as `log add`, `review request`, `close`, and `pick` — identical evidence, fewer commands. `done`, `close`, `review close`, and the pick packet include a `remaining` progress snapshot so loop agents can evaluate their stop condition without an extra `map status` call. `remaining.counts` always carries the full status vocabulary (`pending`, `ready`, `picked`, `running`, `in_review`, `blocked`, `failed`, `cancelled`, `closed`, `closed_partial`) with explicit zeros — a missing count never has to be inferred.
+`done` is the compound worker command: it writes a completion log, then requests a review (`--review`) or closes the item, and optionally picks the next ready item (`--next`). It chains the same single-owner operations as `log add`, `review request`, `close`, and `pick` — identical evidence, fewer commands. `done`, `close`, and `review close` report what the settlement `unlocked` (id, title, work type of every item that became ready), `done` and `close` echo the item's `post_condition` at completion time, and a `hint` asks for `--cmd`/`--tests` evidence when downstream items depend on an item that closed without any. `done`, `close`, `review close`, and the pick packet include a `remaining` progress snapshot so loop agents can evaluate their stop condition without an extra `map status` call. `remaining.counts` always carries the full status vocabulary (`pending`, `ready`, `picked`, `running`, `in_review`, `blocked`, `failed`, `cancelled`, `closed`, `closed_partial`) with explicit zeros — a missing count never has to be inferred.
 
 `pick --json` returns one flat work packet in which every fact appears exactly once: `item`, `links`, `logs`, `runtime`, `recovery`, `conditions`, `approval`, recall context (`contexts`, `relevant_contexts`, `upstream_handoffs`, `review_history`, `source_links`, `possible_file_conflicts`), `close_effect`, `privacy`, `deeper_reads`, and `remaining`. Worker identity lives in `item.worker_id` and `runtime.worker_id`. Empty collections and inactive gates are omitted — a missing key means "empty". No separate `trace item` call is needed. Evidence written via `log add` or `done` by the pick owner refreshes the runtime heartbeat automatically. The same packet shape is returned by MCP `planr_pick_item`, HTTP `POST /v1/pick`, and `done --next`.
 

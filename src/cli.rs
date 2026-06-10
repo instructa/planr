@@ -102,6 +102,7 @@ pub(crate) enum PlanCommand {
     Refine(PlanRefineArgs),
     Split(PlanSplitArgs),
     Check(IdArg),
+    Audit(IdArg),
     Show(IdArg),
     List(PlanListArgs),
     Archive(IdArg),
@@ -456,6 +457,8 @@ pub(crate) struct LogAddArgs {
     pub(crate) cmd: Vec<String>,
     #[arg(long)]
     pub(crate) tests: Vec<String>,
+    /// Log kind: completion (default), progress, or verification
+    /// (live-verify evidence; `plan audit` checks for it).
     #[arg(long, default_value = "completion")]
     pub(crate) kind: String,
 }

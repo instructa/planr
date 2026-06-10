@@ -21,6 +21,49 @@ pub(crate) struct CloseEffect {
 }
 
 impl App {
+    /// Ids of items currently in `ready`. Snapshot before a settling command
+    /// and diff after it to report what the settlement actually unlocked.
+    pub(crate) fn ready_item_ids(&self) -> Result<HashSet<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id FROM items WHERE status = 'ready'")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        Ok(collect_rows(rows)?.into_iter().collect())
+    }
+
+    /// Items that are ready now but were not in `before`: the work a
+    /// settlement unlocked, reported as `{id, title, work_type}`.
+    pub(crate) fn unlocked_since(&self, before: &HashSet<String>) -> Result<Vec<Value>> {
+        let mut unlocked = Vec::new();
+        for id in self.ready_item_ids()? {
+            if !before.contains(&id) {
+                let item = self.get_item(&id)?;
+                unlocked
+                    .push(json!({"id": item.id, "title": item.title, "work_type": item.work_type}));
+            }
+        }
+        unlocked.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+        Ok(unlocked)
+    }
+
+    pub(crate) fn unlocked_human(unlocked: &[Value]) -> String {
+        if unlocked.is_empty() {
+            return String::new();
+        }
+        let names = unlocked
+            .iter()
+            .map(|item| {
+                format!(
+                    "{} {}",
+                    item["id"].as_str().unwrap_or_default(),
+                    item["title"].as_str().unwrap_or_default()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("\nunlocked: {names}")
+    }
+
     pub(crate) fn graph_status_value(&self) -> Result<Value> {
         let cycles = self.graph_cycles()?;
         Ok(json!({
