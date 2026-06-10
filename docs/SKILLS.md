@@ -262,12 +262,12 @@ planr project show --json
 planr plan new "App idea"
 planr map build --from <plan-id>
 planr pick --json
-planr pick heartbeat <item-id>
+planr done <item-id> --summary "..." --files a --files b --cmd "..." --review --next
+planr review close <review-id> --verdict complete --close-target
 planr approval list --open
-planr log add --item <item-id> --summary "..." --cmd "..."
-planr review request <item-id>
-planr close <item-id> --summary "Verified"
 ```
+
+The granular commands (`log add`, `review request`, `close`, `pick heartbeat`) remain available; `done` chains them with identical evidence.
 
 See also:
 

@@ -376,8 +376,9 @@ planr review annotate <item-id> --message "..." [--severity info|warning|blockin
 planr review ingest <item-id> (--from feedback.json|--stdin)
 planr review artifact <review-item-id> [--out path]
 planr review evidence <item-id> [--pr-url https://...]
-planr review close <review-item-id> --verdict complete|not-complete|unclear
+planr review close <review-item-id> --verdict complete|not-complete|unclear [--close-target]
 planr close [item-id] --summary "..." [--next]
+planr done [item-id] --summary "..." [--files a --files b] [--cmd "..."] [--tests "..."] [--review] [--next]
 planr map lane --critical
 planr map pressure
 ```
