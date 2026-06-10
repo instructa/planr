@@ -106,6 +106,15 @@ planr map build --from <build-plan-id>
 
 Product plan work lists are candidates. They become live commitments only after `planr map build --from ...`.
 
+`map build` creates items without ordering: everything starts ready. Linking is mandatory before the first pick — add a `blocks` link for every real execution dependency:
+
+```bash
+planr link add <earlier-item> <later-item> --type blocks
+planr map lane --critical
+```
+
+Do not pick from a freshly built map that has zero links unless the items are genuinely independent.
+
 ## Parent Gate Pattern
 
 Model material changes as parent gates. The parent is the completion gate; linked children do the work.

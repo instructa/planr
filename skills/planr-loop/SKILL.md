@@ -36,6 +36,8 @@ Each iteration is one dispatch through the routing skill — never a hand-writte
 6. repeat             fix items are just the next ready items
 ```
 
+After any `planr map build`, dependency linking is part of step 2, not optional: add `blocks` links for every execution-order dependency before the first pick. An unlinked map makes the loop pick items in arbitrary order.
+
 The loop never closes its own reviews when the host supports a second agent. Maker and checker stay separate.
 
 ## Skills Are The Prompts

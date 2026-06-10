@@ -1638,7 +1638,7 @@ fn map_show_renders_visual_dag_tree_and_state_line() {
         .clone();
     let human = String::from_utf8(output).unwrap();
     assert!(
-        human.contains("Graph View: 0/3 done (0%) | ready 3 | active 0 | in_review 0 | blocked 0"),
+        human.contains("Graph View: 0/3 done (0%) | ready 1 | active 0 | in_review 0 | blocked 2"),
         "missing state line in:\n{human}"
     );
     assert!(
@@ -1646,11 +1646,11 @@ fn map_show_renders_visual_dag_tree_and_state_line() {
         "missing root node with critical marker and pressure in:\n{human}"
     );
     assert!(
-        human.contains(&format!("└─blocks─▶ ○ ready {mid} Middle work ★ ⏶1")),
+        human.contains(&format!("└─blocks─▶ · pending {mid} Middle work ★ ⏶1")),
         "missing nested middle node in:\n{human}"
     );
     assert!(
-        human.contains(&format!("   └─blocks─▶ ○ ready {leaf} Leaf work ★")),
+        human.contains(&format!("   └─blocks─▶ · pending {leaf} Leaf work ★")),
         "missing doubly nested leaf node in:\n{human}"
     );
 
@@ -1665,7 +1665,7 @@ fn map_show_renders_visual_dag_tree_and_state_line() {
     let value: Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(value["items"].as_array().unwrap().len(), 3);
     assert_eq!(value["links"].as_array().unwrap().len(), 2);
-    assert_eq!(value["counts"]["ready"], 3);
+    assert_eq!(value["counts"]["ready"], 1, "blocked downstream items must not count as ready");
 }
 
 #[test]
@@ -3680,4 +3680,216 @@ fn rust_implementation_has_owned_module_boundaries() {
             "architecture docs should document {owner}"
         );
     }
+}
+
+#[test]
+fn plan_split_with_colon_slice_stays_parseable_and_check_is_honest() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    let db_arg = db.to_str().unwrap().to_string();
+
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "project", "init", "Example"])
+        .assert()
+        .success();
+
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "--json", "plan", "new", "Example app"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output).unwrap();
+    let product_id = value["plan"]["id"].as_str().unwrap().to_string();
+
+    // A slice containing colons used to produce unquoted, unparseable YAML frontmatter.
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "--json",
+            "plan",
+            "split",
+            &product_id,
+            "--slice",
+            "MVP: add habit, daily check-in: streak display",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        value["plan"]["parse_status"].as_str().unwrap(),
+        "ok",
+        "split frontmatter must be YAML-safe for colon-bearing slices"
+    );
+    let build_id = value["plan"]["id"].as_str().unwrap().to_string();
+    let build_path = value["plan"]["path"].as_str().unwrap().to_string();
+
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "plan", "check", &build_id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("plan check passed"));
+
+    // Corrupt the frontmatter on disk; plan check must fail and refresh parse_status.
+    let text = fs::read_to_string(&build_path).unwrap();
+    let broken = text.replacen("overview:", "overview: broken: colon: value", 1);
+    fs::write(&build_path, broken).unwrap();
+
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "--json", "plan", "check", &build_id])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["ok"].as_bool(), Some(false), "parse error must fail plan check");
+    let warnings = value["warnings"].as_array().unwrap();
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.as_str().unwrap_or_default().contains("frontmatter parse error")),
+        "warnings must name the frontmatter parse error, got {warnings:?}"
+    );
+    assert_eq!(
+        value["plan"]["parse_status"].as_str().unwrap(),
+        "parse_error",
+        "plan check must refresh stored parse_status from disk"
+    );
+}
+
+#[test]
+fn follow_up_review_is_not_ready_while_fix_item_is_open() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    let db_arg = db.to_str().unwrap().to_string();
+
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "project", "init", "Example"])
+        .assert()
+        .success();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "item", "create", "Demo work", "--description", "demo"])
+        .assert()
+        .success();
+
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "--json", "pick"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output).unwrap();
+    let item_id = value["item"]["id"].as_str().unwrap().to_string();
+
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "log", "add", "--item", &item_id, "--summary", "s", "--cmd", "c"])
+        .assert()
+        .success();
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "--json", "review", "request", &item_id])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output).unwrap();
+    let review_id = value["review"]["id"].as_str().unwrap().to_string();
+
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "review",
+            "close",
+            &review_id,
+            "--verdict",
+            "not-complete",
+            "--findings",
+            "finding x",
+        ])
+        .assert()
+        .success();
+
+    let statuses = |raw: &[u8]| -> std::collections::BTreeMap<String, String> {
+        let value: Value = serde_json::from_slice(raw).unwrap();
+        value["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| {
+                (
+                    i["id"].as_str().unwrap().to_string(),
+                    i["status"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect()
+    };
+
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "--json", "map", "show"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let by_id = statuses(&output);
+    let fix_id = by_id
+        .keys()
+        .find(|id| id.starts_with("i-fix-findings"))
+        .expect("fix item created")
+        .clone();
+    let follow_up_id = by_id
+        .keys()
+        .find(|id| id.starts_with("i-follow-up-review"))
+        .expect("follow-up review created")
+        .clone();
+    assert_eq!(by_id[&fix_id], "ready", "fix item must be ready");
+    assert_eq!(
+        by_id[&follow_up_id], "pending",
+        "follow-up review must not be ready while its blocking fix item is open"
+    );
+
+    // Closing the fix item must promote the follow-up review.
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "log", "add", "--item", &fix_id, "--summary", "fixed", "--cmd", "c"])
+        .assert()
+        .success();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "close", &fix_id, "--summary", "fixed"])
+        .assert()
+        .success();
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "--json", "map", "show"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let by_id = statuses(&output);
+    assert_eq!(
+        by_id[&follow_up_id], "ready",
+        "follow-up review must become ready once the fix item closes"
+    );
 }

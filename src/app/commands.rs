@@ -6,7 +6,7 @@ use crate::cli::{
     ProjectCommand, PromptCommand, ReviewCommand, SearchArgs,
 };
 use crate::integrations::{install_snippet, mcp_json_config};
-use crate::planpack::{build_plan_body, product_plan_files, project_pack_files};
+use crate::planpack::{build_plan_body, parse_plan_metadata, product_plan_files, project_pack_files};
 use crate::util::{
     append_line, command_exists, format_item, format_project, json_array, now_string, print_json,
     short_id, worker_id, write_if_missing,
@@ -165,12 +165,19 @@ impl App {
             PlanCommand::Check(args) => {
                 let plan = self.get_plan(&args.id)?;
                 let path = PathBuf::from(&plan.path);
-                let ok = path.exists();
-                let warnings = if ok {
-                    vec![]
+                let mut warnings = Vec::new();
+                if !path.exists() {
+                    warnings.push("plan path missing".to_string());
                 } else {
-                    vec!["plan path missing".to_string()]
-                };
+                    self.rehash_plan(&plan.id)?;
+                    let (frontmatter, parse_status) = parse_plan_metadata(&path);
+                    if parse_status != "ok" {
+                        let detail = frontmatter["error"].as_str().unwrap_or("invalid frontmatter");
+                        warnings.push(format!("frontmatter parse error: {detail}"));
+                    }
+                }
+                let plan = self.get_plan(&args.id)?;
+                let ok = warnings.is_empty();
                 self.emit(
                     json!({"plan": plan, "ok": ok, "warnings": warnings}),
                     if ok {
@@ -375,7 +382,6 @@ impl App {
         match command {
             LinkCommand::Add(args) => {
                 self.add_link(&args.from_item, &args.to_item, &args.r#type)?;
-                self.demote_if_blocked(&args.to_item)?;
                 self.promote_ready()?;
                 self.emit(
                     json!({"from": args.from_item, "to": args.to_item, "type": args.r#type}),

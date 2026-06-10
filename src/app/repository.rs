@@ -102,10 +102,12 @@ impl App {
 
     pub(crate) fn rehash_plan(&self, id: &str) -> Result<()> {
         let plan = self.get_plan(id)?;
-        let hash = hash_path(Path::new(&plan.path))?;
+        let path = Path::new(&plan.path);
+        let hash = hash_path(path)?;
+        let (frontmatter, parse_status) = parse_plan_metadata(path);
         self.conn.execute(
-            "UPDATE plans SET content_hash = ?1, updated_at = datetime('now') WHERE id = ?2",
-            params![hash, id],
+            "UPDATE plans SET content_hash = ?1, frontmatter = ?2, parse_status = ?3, updated_at = datetime('now') WHERE id = ?4",
+            params![hash, frontmatter.to_string(), parse_status, id],
         )?;
         Ok(())
     }
@@ -190,6 +192,10 @@ impl App {
             "INSERT OR IGNORE INTO links(from_item, to_item, kind, condition) VALUES (?1, ?2, ?3, 'all')",
             params![from, to, kind],
         )?;
+        // The link owner also owns the readiness consequence: a target that is
+        // now blocked must not stay 'ready' (e.g. follow-up reviews created
+        // before their blocking fix item link exists).
+        self.demote_if_blocked(to)?;
         self.record_event(
             "link_added",
             Some(to),

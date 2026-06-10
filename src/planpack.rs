@@ -71,10 +71,22 @@ pub fn product_plan_files(
     ]
 }
 
+/// Quote a free-text value as a YAML scalar. A JSON string is a valid YAML
+/// double-quoted scalar, which keeps colons, quotes, and hashes parseable.
+fn yaml_quote(value: &str) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| format!("{value:?}"))
+}
+
 pub fn build_plan_body(title: &str, source: &str, slice: &str) -> String {
     format!(
-        "---\nname: {}\noverview: Build plan for {}.\ntodos:\n  - id: phase-1\n    content: Implement {}\n    status: pending\nisProject: false\nstage: build\nsource_plan: {}\nslice: {}\n---\n\n# {}\n\n## Scope Decision\n\n## Ownership Target\n\n## Existing Leverage\n\n## Phase 1\n\n- [ ] Implement {}\n\n## Out Of Scope\n\n## Verification\n\n## Acceptance Criteria\n\n",
-        slugify(title), title, slice, source, slice, title, slice
+        "---\nname: {}\noverview: {}\ntodos:\n  - id: phase-1\n    content: {}\n    status: pending\nisProject: false\nstage: build\nsource_plan: {}\nslice: {}\n---\n\n# {}\n\n## Scope Decision\n\n## Ownership Target\n\n## Existing Leverage\n\n## Phase 1\n\n- [ ] Implement {}\n\n## Out Of Scope\n\n## Verification\n\n## Acceptance Criteria\n\n",
+        slugify(title),
+        yaml_quote(&format!("Build plan for {title}.")),
+        yaml_quote(&format!("Implement {slice}")),
+        source,
+        yaml_quote(slice),
+        title,
+        slice
     )
 }
 
