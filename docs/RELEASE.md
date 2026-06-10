@@ -27,6 +27,14 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
+## Changelog
+
+`CHANGELOG.md` at the repository root is the persistent release log ([Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format). Maintain it continuously, not at release time only:
+
+- Every user-visible change (CLI surface, JSON envelope, skills, MCP/HTTP contract, install paths) lands in the `[Unreleased]` section in the same PR or commit that makes the change.
+- Before pushing a release tag, rename `[Unreleased]` to the new version with the release date, add a fresh empty `[Unreleased]` section, and update the compare links at the bottom. The tag must not ship with a non-empty `[Unreleased]` section describing its own changes.
+- The version section is the source for the GitHub Release notes body.
+
 The Homebrew job only runs when the repository variable `HOMEBREW_TAP_ENABLED` is `true` and requires a `TAP_GITHUB_TOKEN` secret with write access to `instructa/homebrew-tap`. The tap repository must exist before enabling it.
 
 ## Preflight
@@ -104,6 +112,7 @@ from the external consumer E2E project.
 
 Before publishing, record:
 
+- `CHANGELOG.md` updated: `[Unreleased]` rolled into the tagged version section;
 - exact commit or source snapshot;
 - `cargo test` result;
 - consumer E2E result;
