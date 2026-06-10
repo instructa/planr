@@ -189,7 +189,7 @@ impl App {
         let next = if args.next {
             // A worker must not pick the review it just requested:
             // maker and checker stay separate.
-            Some(self.next_pick_value_excluding(review.as_ref().map(|r| r.id.as_str()))?)
+            Some(self.next_pick_value(review.as_ref().map(|r| r.id.as_str()), None, None)?)
         } else {
             None
         };

@@ -413,9 +413,10 @@ impl App {
                     json!({"cancelled": cancellable, "created": created}),
                 ))
             }
-            "planr_pick_item" => Ok(mcp_json(self.next_pick_value_filtered(
+            "planr_pick_item" => Ok(mcp_json(self.next_pick_value(
                 None,
                 args.get("work_type").and_then(Value::as_str),
+                args.get("plan").and_then(Value::as_str),
             )?)),
             "planr_pick_heartbeat" => {
                 let item_id = args

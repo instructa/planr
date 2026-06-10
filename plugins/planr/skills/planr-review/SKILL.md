@@ -16,7 +16,7 @@ export PLANR_WORKER_ID=checker-1
 planr --json pick --work-type review
 ```
 
-`--work-type review` leases only review items, so a checker never accidentally takes maker work. The pick packet inlines the target item and its evidence logs under `target` — one command is enough to see what is being audited, its status (`in_review` while waiting on you), files, and verification commands. If you already hold a review id, `planr --json trace item <review-id>` returns the same packet. Use `planr log list --item <target-id>` or `planr map show --json` only for deeper reads.
+`--work-type review` leases only review items, so a checker never accidentally takes maker work. Add `--plan <plan-id>` when your dispatch names a plan so the lease stays inside that scope. The pick packet inlines the target item and its evidence logs under `target` — one command is enough to see what is being audited, its status (`in_review` while waiting on you), files, and verification commands. If you already hold a review id, `planr --json trace item <review-id>` returns the same packet. Use `planr log list --item <target-id>` or `planr map show --json` only for deeper reads.
 
 Inspect the actual changed files and re-run the logged verification evidence. Then close the review exactly once:
 

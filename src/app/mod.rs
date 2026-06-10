@@ -10,6 +10,7 @@ mod git_review;
 mod graph;
 mod http;
 mod inspection;
+mod lease;
 mod mcp;
 mod packages;
 mod recall;
@@ -78,7 +79,7 @@ impl App {
             Command::Map(args) => self.map(args.command),
             Command::Item(args) => self.item(args.command),
             Command::Link(args) => self.link(args.command),
-            Command::Pick(args) => self.pick(args.command, args.work_type),
+            Command::Pick(args) => self.pick(args.command, args.work_type, args.plan),
             Command::Approval(args) => self.approval(args.command),
             Command::Log(args) => self.log(args.command),
             Command::Close(args) => self.close(args),

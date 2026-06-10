@@ -56,10 +56,12 @@ Each iteration follows the `$planr-loop` protocol:
 The per-item path is three commands since v1.1.6:
 
 ```bash
-planr pick --json                                            # flat work packet incl. remaining progress
+planr pick --json --plan <plan-id>                           # flat work packet, leased only from the goal's plan
 planr done <item-id> --summary "..." --cmd "..." --review --next
 planr review close <review-id> --verdict complete --reviewer <id> --close-target
 ```
+
+`--plan` keeps the lease inside the goal contract: when several plans share the board (a parallel feature, leftovers from an aborted prep run), a plan-scoped goal run never picks work outside its own plan. A pick that finds nothing in scope reports `reason: "no_ready_item_in_plan"` instead of silently widening.
 
 `done`/`close`/`review close` responses and the pick packet include a `remaining` snapshot (`counts` with explicit zeros for every status, `settled`, `total`), so the orchestrator evaluates the stop condition straight from the completion output — no extra `map status` round-trip. `--next` never hands a worker its own freshly created review, so maker and checker stay separate even in compact loops.
 

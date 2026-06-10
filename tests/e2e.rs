@@ -2654,6 +2654,110 @@ fn cosmetic_batch_stable_shapes_ids_and_worker_identity() {
 }
 
 #[test]
+fn plan_scoped_pick_never_leases_items_of_another_plan() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Scoped"])
+        .assert()
+        .success();
+    let new_plan = |title: &str| {
+        let output = planr()
+            .current_dir(dir.path())
+            .args(["--db", db.to_str().unwrap(), "--json", "plan", "new", title])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let plan: Value = serde_json::from_slice(&output).unwrap();
+        (
+            plan["plan"]["id"].as_str().unwrap().to_string(),
+            plan["plan"]["path"].as_str().unwrap().to_string(),
+        )
+    };
+    let map_build = |plan_id: &str| {
+        planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "map",
+                "build",
+                "--from",
+                plan_id,
+            ])
+            .assert()
+            .success();
+    };
+    let (alpha_id, _) = new_plan("Alpha");
+    let (beta_id, beta_path) = new_plan("Beta");
+    let (gamma_id, _) = new_plan("Gamma");
+    map_build(&alpha_id);
+    map_build(&beta_id);
+
+    // Alpha's item is older and would win an unscoped pick; --plan must
+    // lease Beta's item instead.
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "pick",
+            "--plan",
+            &beta_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let pick: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        pick["item"]["plan_path"].as_str().unwrap(),
+        beta_path,
+        "plan-scoped pick leased an item outside the plan: {pick}"
+    );
+
+    // Gamma has no mapped items: the null pick names the plan scope as the
+    // reason even though other plans still have ready work.
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "pick",
+            "--plan",
+            &gamma_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let null_pick: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(null_pick["item"], Value::Null);
+    assert_eq!(null_pick["reason"], "no_ready_item_in_plan");
+
+    // An unknown plan id is an error, not a silent unscoped pick.
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "pick",
+            "--plan",
+            "pln-does-not-exist",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("plan not found"));
+}
+
+#[test]
 fn close_target_requires_completion_log_and_complete_verdict() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
@@ -4873,6 +4977,7 @@ fn rust_implementation_has_owned_module_boundaries() {
         ("src/app/packages.rs", 450),
         ("src/app/http.rs", 900),
         ("src/app/repository.rs", 1_100),
+        ("src/app/lease.rs", 300),
         ("src/app/review.rs", 600),
         ("src/app/recovery.rs", 450),
         ("src/app/review_workspace.rs", 500),
@@ -4900,6 +5005,7 @@ fn rust_implementation_has_owned_module_boundaries() {
         "src/app/packages.rs",
         "src/app/http.rs",
         "src/app/repository.rs",
+        "src/app/lease.rs",
         "src/app/review.rs",
         "src/app/recovery.rs",
         "src/app/review_workspace.rs",

@@ -337,6 +337,10 @@ pub(crate) struct PickArgs {
     /// agents, `code` for makers).
     #[arg(long)]
     pub(crate) work_type: Option<String>,
+    /// Only lease items belonging to this plan (plan id), so plan-scoped
+    /// goal runs never pick work outside their contract.
+    #[arg(long)]
+    pub(crate) plan: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]

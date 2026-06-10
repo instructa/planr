@@ -472,9 +472,10 @@ impl App {
                         .any(|(key, value)| key == "open" && value == "true");
                     serde_json::to_string(&json!({"approvals": self.list_approvals(open)?}))?
                 }
-                ("POST", "/v1/pick") => serde_json::to_string(&self.next_pick_value_filtered(
+                ("POST", "/v1/pick") => serde_json::to_string(&self.next_pick_value(
                     None,
                     body_json.get("work_type").and_then(Value::as_str),
+                    body_json.get("plan").and_then(Value::as_str),
                 )?)?,
                 ("POST", p) if p.ends_with("/log") => {
                     let item_id =

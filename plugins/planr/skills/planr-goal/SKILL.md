@@ -43,7 +43,7 @@ The contract must survive compaction, session loss, and host switches, so it liv
 planr context add "GOAL CONTRACT <plan-id>: DONE when every in-scope map item is closed with log evidence, all reviews closed with verdict complete, no open approvals in scope, and a live verification log exists for <oracle>. Iteration budget: 10." --tag goal-contract
 ```
 
-One contract per plan scope. Any agent on any host can recover it with `planr context list` or `planr search "GOAL CONTRACT"`. Never weaken a stored contract mid-run; scope changes go through `$planr-plan` and the user.
+One contract per plan scope. Any agent on any host can recover it with `planr context list` or `planr search "GOAL CONTRACT"`. Never weaken a stored contract mid-run; scope changes go through `$planr-plan` and the user. During the run, workers lease with `planr pick --plan <plan-id>` so the loop never picks items outside this contract, even when other plans share the board.
 
 ## Hand Off
 

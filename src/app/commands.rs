@@ -430,6 +430,7 @@ impl App {
         &self,
         command: Option<PickCommand>,
         work_type: Option<String>,
+        plan: Option<String>,
     ) -> Result<()> {
         match command {
             Some(PickCommand::Release(args)) => {
@@ -513,7 +514,7 @@ impl App {
                 )
             }
             None => {
-                let pick = self.next_pick_value_filtered(None, work_type.as_deref())?;
+                let pick = self.next_pick_value(None, work_type.as_deref(), plan.as_deref())?;
                 let human = match pick["item"]["id"].as_str() {
                     Some(id) => format!(
                         "picked {} {}",
@@ -611,7 +612,7 @@ impl App {
         };
         let log_id = self.close_item_core(&item_id, &args.summary, true)?;
         let next = if args.next {
-            Some(self.next_pick_value()?)
+            Some(self.next_pick_value(None, None, None)?)
         } else {
             None
         };

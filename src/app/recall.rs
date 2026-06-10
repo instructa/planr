@@ -1,3 +1,4 @@
+use super::lease::PickFilter;
 use super::App;
 use crate::storage::row_to_item;
 use crate::util::collect_rows;
@@ -8,23 +9,23 @@ use serde_json::{json, Value};
 impl App {
     /// Picks the next ready item and returns it as a flat work packet, or a
     /// null pick with `reason` and `remaining` when nothing is pickable.
-    pub(crate) fn next_pick_value(&self) -> Result<Value> {
-        self.next_pick_value_filtered(None, None)
-    }
-
-    pub(crate) fn next_pick_value_excluding(&self, exclude: Option<&str>) -> Result<Value> {
-        self.next_pick_value_filtered(exclude, None)
-    }
-
-    /// Optionally restricted to one work type so checker agents lease only
-    /// reviews and makers only work items. A null pick carries a `reason`
-    /// and the `remaining` snapshot instead of leaving the agent blind.
-    pub(crate) fn next_pick_value_filtered(
+    /// `work_type` restricts the lease for role-aware picks (checkers lease
+    /// only reviews), `plan` (a plan id) restricts it to one plan's items so
+    /// goal runs never lease work outside their contract, and `exclude`
+    /// keeps a worker from picking an item it must not own.
+    pub(crate) fn next_pick_value(
         &self,
         exclude: Option<&str>,
         work_type: Option<&str>,
+        plan: Option<&str>,
     ) -> Result<Value> {
-        if let Some((id, worker)) = self.pick_next_ready_item_filtered(exclude, work_type)? {
+        let plan_path = plan.map(|id| self.get_plan(id)).transpose()?;
+        let filter = PickFilter {
+            exclude,
+            work_type,
+            plan_path: plan_path.as_ref().map(|plan| plan.path.as_str()),
+        };
+        if let Some((id, worker)) = self.pick_next_ready_item_filtered(&filter)? {
             self.work_packet(&id, &worker)
         } else {
             let remaining = self.progress_value()?;
@@ -37,6 +38,8 @@ impl App {
                 "all_settled"
             } else if ready == 0 {
                 "nothing_ready"
+            } else if plan.is_some() {
+                "no_ready_item_in_plan"
             } else if work_type.is_some() {
                 "no_ready_item_of_work_type"
             } else {

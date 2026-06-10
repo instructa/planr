@@ -16,7 +16,7 @@ export PLANR_WORKER_ID=maker-1
 planr pick --json
 ```
 
-The pick output is one flat work packet — item, links, logs, runtime, recovery, conditions, recall context (`upstream_handoffs`, `relevant_contexts`, `review_history`), and `remaining` progress. Each fact appears once; a missing key means "empty". No separate `trace item` call needed. Add `--work-type code` to skip review items when checker agents work the same board. A null pick explains itself: `{"item": null}` carries a `reason` (`all_settled`, `nothing_ready`, ...) plus the `remaining` snapshot. Read the linked plan/context, implement the smallest correct slice, then finish the step in one command:
+The pick output is one flat work packet — item, links, logs, runtime, recovery, conditions, recall context (`upstream_handoffs`, `relevant_contexts`, `review_history`), and `remaining` progress. Each fact appears once; a missing key means "empty". No separate `trace item` call needed. Add `--work-type code` to skip review items when checker agents work the same board, and `--plan <plan-id>` when your dispatch names a plan so the lease stays inside that scope. A null pick explains itself: `{"item": null}` carries a `reason` (`all_settled`, `nothing_ready`, `no_ready_item_in_plan`, ...) plus the `remaining` snapshot. Read the linked plan/context, implement the smallest correct slice, then finish the step in one command:
 
 ```bash
 planr done <item-id> --summary "what changed" --files path-a --files path-b --cmd "exact verification command" --tests "exact test command" --review

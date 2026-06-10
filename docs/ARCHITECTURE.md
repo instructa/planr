@@ -25,6 +25,7 @@ Planr V1 is a single Rust binary with explicit module ownership. The crate stays
 - `src/app/packages.rs`: package import/export boundary. Owns reusable JSON templates, preview-before-import, review artifact package import, and local-first encrypted bundle metadata.
 - `src/app/http.rs`: localhost HTTP/SSE boundary. Owns HTTP request parsing, routes, SSE stream output, and HTTP response mapping.
 - `src/app/repository.rs`: application data access helpers. Owns Planr query/update helpers over projects, plans, graph items, links, runs, logs, artifacts, events, approvals, search, and map projections.
+- `src/app/lease.rs`: worker lease ownership. Owns the single pick query (`PickFilter`: exclude, work type, plan scope), worker ownership checks, runtime heartbeat/progress/pause state, and stale-pick detection.
 - `src/app/review.rs`: review-gate application logic. Owns review annotations, feedback ingestion, evidence artifacts, review closure, and review target lookup.
 - `src/app/recovery.rs`: recovery automation logic. Owns item retry policy configuration, task conditions, stale/timed-out sweeps, retry scheduling, and recovery result projections.
 - `src/app/review_workspace.rs`: local review workspace boundary. Owns the browser review HTML, workspace data projection, and privacy-minimized Git diff evidence.

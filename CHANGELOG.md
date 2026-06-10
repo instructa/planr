@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.1.12] - 2026-06-10
+
+Plan-scoped picks, from the first live `/goal` run with Codex.
+
+### Added
+
+- `pick --plan <plan-id>` (CLI, MCP `planr_pick_item`, HTTP `POST /v1/pick`) restricts the lease to one plan's items, so plan-scoped goal runs never pick work outside their contract when several plans share the board. An unknown plan id is an error, never a silent unscoped pick. A null pick in plan scope reports `reason: "no_ready_item_in_plan"`.
+
+### Changed
+
+- All pick surfaces lease through one query contract (`PickFilter`: exclude, work type, plan scope) owned by the new `src/app/lease.rs` module; the `next_pick_value`/`next_pick_value_excluding` wrapper functions are gone.
+
 ## [1.1.11] - 2026-06-10
 
 Cosmetic batch from the v1.1.10 dogfood run.
