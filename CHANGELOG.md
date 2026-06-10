@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.1.11] - 2026-06-10
+
+Cosmetic batch from the v1.1.10 dogfood run.
+
+### Added
+
+- `PLANR_WORKER_ID` environment override: agents export an explicit identity (e.g. `maker-1`, `checker-1`) once per session and every pick, log, heartbeat, and ownership check attributes to it instead of `client:host:user`. Takes precedence over `PLANR_SESSION_ID`.
+- `close_target` is available through MCP `planr_review_close` and HTTP `POST /v1/reviews/{id}/close` — full parity with `review close --close-target`.
+
+### Fixed
+
+- JSON errors carry the specific machine-readable code: closing a settled review reports `{"error": {"code": "already_closed"}}` instead of `internal_error`.
+- The review artifact written by `review close --close-target` snapshots the target after its transition, so the evidence shows the final status (`closed`) instead of the stale `in_review`.
+- Item ids no longer contain `--` when the 32-char slug truncation lands on a hyphen.
+- `plan split` no longer duplicates the source title in the build plan title, slug, and filename when the slice already repeats it.
+
+### Changed
+
+- Log list fields (`files`, `commands`, `tests`, `review_findings`) always serialize as `[]` instead of `null` — one stable shape across `log list`, `log show`, the pick packet, and traces.
+- `deeper_reads` hints in the pick packet consistently include `--json`.
+
 ## [1.1.10] - 2026-06-10
 
 Fix pack from the v1.1.9 dogfood run.

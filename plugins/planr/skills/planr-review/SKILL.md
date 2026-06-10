@@ -9,7 +9,10 @@ Use this when a task needs a correctness and completion audit.
 
 ## Workflow
 
+Export your checker identity once per session so the lease attributes to you:
+
 ```bash
+export PLANR_WORKER_ID=checker-1
 planr --json pick --work-type review
 ```
 

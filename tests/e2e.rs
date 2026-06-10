@@ -2400,6 +2400,12 @@ fn review_close_guard_reviewer_identity_and_role_aware_picks() {
         artifact.contains("Reviewer: checker-1"),
         "artifact must attribute the checker: {artifact}"
     );
+    // The artifact is evidence: it must show the final target status after
+    // --close-target, not the pre-close in_review snapshot.
+    assert!(
+        artifact.contains(&format!("Target item: {first} (closed)")),
+        "artifact must snapshot the target after --close-target: {artifact}"
+    );
 
     // Double close must fail instead of silently duplicating evidence logs.
     planr()
@@ -2416,6 +2422,28 @@ fn review_close_guard_reviewer_identity_and_role_aware_picks() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("already_closed"));
+
+    // In JSON mode the same failure carries a machine-readable error code
+    // instead of the generic internal_error.
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "review",
+            "close",
+            &review_id,
+            "--verdict",
+            "complete",
+        ])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let error: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(error["error"]["code"], "already_closed");
 
     // map show reports the same explicit-zero counts vocabulary as the
     // remaining snapshot, plus settled/total.
@@ -2477,6 +2505,152 @@ fn review_close_guard_reviewer_identity_and_role_aware_picks() {
     let final_pick: Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(final_pick["item"], Value::Null);
     assert_eq!(final_pick["reason"], "all_settled");
+}
+
+#[test]
+fn cosmetic_batch_stable_shapes_ids_and_worker_identity() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Polish"])
+        .assert()
+        .success();
+
+    // Item ids never contain a double dash, even when the 32-char slug
+    // truncation lands on a hyphen.
+    let long_title = format!("{} b suffix", "a".repeat(31));
+    let id = create_test_item(dir.path(), &db, &long_title, "slug truncation");
+    assert!(!id.contains("--"), "item id must not contain '--': {id}");
+
+    // PLANR_WORKER_ID attributes the lease to the agent, not client:host:user.
+    let output = planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "maker-7")
+        .args(["--db", db.to_str().unwrap(), "--json", "pick"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let pick: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(pick["item"]["worker_id"], "maker-7");
+
+    // deeper_reads hints consistently carry the --json flag.
+    for hint in pick["deeper_reads"].as_array().unwrap() {
+        assert!(
+            hint.as_str().unwrap().contains("--json"),
+            "deeper read hints must be JSON-mode commands: {hint}"
+        );
+    }
+
+    // Log list shapes are stable: list fields are [] instead of null even on
+    // logs that never set files/commands/tests (e.g. review logs).
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "done",
+            &id,
+            "--summary",
+            "slice done",
+            "--review",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let done: Value = serde_json::from_slice(&output).unwrap();
+    let review_id = done["review"]["id"].as_str().unwrap().to_string();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "review",
+            "close",
+            &review_id,
+            "--verdict",
+            "complete",
+            "--close-target",
+        ])
+        .assert()
+        .success();
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "log",
+            "list",
+            "--item",
+            &review_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let logs: Value = serde_json::from_slice(&output).unwrap();
+    let review_log = logs["logs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|log| log["kind"] == "review")
+        .expect("review log exists");
+    for field in ["files", "commands", "tests"] {
+        assert!(
+            review_log[field].is_array(),
+            "log {field} must be [] instead of null: {review_log}"
+        );
+    }
+
+    // Plan split does not duplicate the source title in the build plan slug
+    // when the slice already repeats it.
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "plan",
+            "new",
+            "Habit MVP",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let plan: Value = serde_json::from_slice(&output).unwrap();
+    let plan_id = plan["plan"]["id"].as_str().unwrap().to_string();
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "plan",
+            "split",
+            &plan_id,
+            "--slice",
+            "Habit MVP build slice",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let build: Value = serde_json::from_slice(&output).unwrap();
+    let path = build["plan"]["path"].as_str().unwrap();
+    assert!(
+        path.ends_with("habit-mvp-build-slice.plan.md"),
+        "build plan filename must not duplicate the source title: {path}"
+    );
 }
 
 #[test]

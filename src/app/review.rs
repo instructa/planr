@@ -153,6 +153,7 @@ impl App {
         findings: Vec<String>,
         source: &str,
         reviewer: Option<&str>,
+        close_target: bool,
     ) -> Result<Value> {
         let review = self.get_item(review_id)?;
         if review.work_type != "review" {
@@ -169,6 +170,32 @@ impl App {
         let verdict = match verdict {
             "complete" | "not-complete" | "unclear" => verdict,
             other => bail!("unsupported review verdict: {other}"),
+        };
+        // Validate the --close-target preconditions before any mutation so a
+        // rejected target close never leaves the review half-settled.
+        let target_to_close = if close_target {
+            if verdict != "complete" {
+                bail!(
+                    "--close-target requires --verdict complete; findings create fix work instead"
+                );
+            }
+            let target = self.review_target(review_id)?.ok_or_else(|| {
+                anyhow!("review {review_id} has no `reviews` link to a target item")
+            })?;
+            let completion_logs: i64 = self.conn.query_row(
+                "SELECT COUNT(*) FROM logs WHERE item_id = ?1 AND kind = 'completion'",
+                params![target.id],
+                |row| row.get(0),
+            )?;
+            if completion_logs == 0 {
+                bail!(
+                    "cannot close target {}: no completion log; the worker must log evidence first (planr done / planr log add)",
+                    target.id
+                );
+            }
+            Some(target)
+        } else {
+            None
         };
         let reviewer = reviewer
             .map(ToOwned::to_owned)
@@ -213,6 +240,18 @@ impl App {
             created.push(fix);
             created.push(next_review);
         }
+        // Close the target before rendering the artifact so the artifact
+        // snapshot shows the final target status instead of `in_review`.
+        let closed_target = if let Some(target) = &target_to_close {
+            self.close_item_core(
+                &target.id,
+                &format!("closed by review {} (verdict complete)", review.id),
+                true,
+            )?;
+            Some(self.get_item(&target.id)?)
+        } else {
+            None
+        };
         let artifact = self.write_review_artifact(
             review_id,
             Some(verdict),
@@ -233,14 +272,18 @@ impl App {
                 "artifact_id": artifact["id"]
             }),
         )?;
-        Ok(json!({
+        let mut result = json!({
             "closed": review.id,
             "verdict": verdict,
             "reviewer": reviewer,
             "log_id": log_id,
             "created": created,
             "artifact": artifact
-        }))
+        });
+        if let Some(target) = closed_target {
+            result["closed_target"] = json!(target);
+        }
+        Ok(result)
     }
 
     pub(crate) fn write_review_artifact(

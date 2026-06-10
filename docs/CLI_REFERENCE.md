@@ -69,7 +69,8 @@ Global flags: `--db <path>`, `--json`, `--no-color`. They are valid in both posi
 
 With `--json`, responses follow one convention so agents never guess where data lives:
 
-- Errors: `{"error": {"code": "...", "message": "..."}}` with a non-zero exit code.
+- Errors: `{"error": {"code": "...", "message": "..."}}` with a non-zero exit code. Codes include `not_found`, `invalid_transition`, `already_closed`, `bad_request`, `locked`, `parse_error`, and `internal_error`.
+- List fields on logs (`files`, `commands`, `tests`, `review_findings`) are always arrays — `[]` when empty, never `null`.
 - The affected single item is always available under the top-level `item` key (`pick`, `close`, `item create/update/cancel`, `pick release`, `item breakdown`, approval and runtime commands). Action-specific keys like `closed`, `cancelled`, or `released` carry the id and stay for context.
 - Collections use plural keys: `items`, `plans`, `logs`, `reviews`, `artifacts`, `approvals`, `events`.
 - Other single objects use their semantic key: `plan`, `log`, `review`, `artifact`, `context`.
@@ -97,7 +98,7 @@ With `--json`, responses follow one convention so agents never guess where data 
 
 `review request` (and `done --review`) moves a picked or running target to `in_review`: work is finished, evidence is logged, the item waits on its gate. The owner keeps the pick and can still log evidence; `in_review` items are never handed out by `pick`.
 
-`review close` writes `.planr/reviews/<review-item-id>.review.md` and registers it as a review artifact. A `not-complete` or `unclear` verdict creates fix and follow-up review work; the follow-up review gates the same target item, so the chain keeps working with `--close-target`. With `--close-target` (complete verdicts only) the reviewed item is closed in the same command, provided it already has a completion log. `review close` responses include the same `remaining` progress snapshot as `done` and `close`. `--reviewer <id>` records the checker's identity on the review log, artifact, and event (defaults to the worker id), keeping maker and checker distinguishable in the audit trail. Closing an already-settled review fails with `already_closed` instead of silently duplicating evidence logs.
+`review close` writes `.planr/reviews/<review-item-id>.review.md` and registers it as a review artifact. A `not-complete` or `unclear` verdict creates fix and follow-up review work; the follow-up review gates the same target item, so the chain keeps working with `--close-target`. With `--close-target` (complete verdicts only) the reviewed item is closed in the same command, provided it already has a completion log; the artifact is rendered after the target transition, so it snapshots the final target status. `--close-target` is also available through MCP `planr_review_close` and HTTP `POST /v1/reviews/{id}/close` (`"close_target": true`). `review close` responses include the same `remaining` progress snapshot as `done` and `close`. `--reviewer <id>` records the checker's identity on the review log, artifact, and event (defaults to the worker id), keeping maker and checker distinguishable in the audit trail. Closing an already-settled review fails with error code `already_closed` instead of silently duplicating evidence logs.
 
 `trace item` on a review item inlines the target item and its evidence logs under `target`, so a reviewer's first trace already contains what is being audited. The human (non-JSON) mode renders the packet: status, owner, links, logs.
 

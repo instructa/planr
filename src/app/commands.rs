@@ -156,7 +156,7 @@ impl App {
             PlanCommand::Split(args) => {
                 let source = self.get_plan(&args.id)?;
                 let project = self.default_project()?;
-                let title = format!("{} - {}", source.title, args.slice);
+                let title = crate::util::split_plan_title(&source.title, &args.slice);
                 let slug = slugify(&title);
                 let path = self
                     .root
@@ -694,47 +694,16 @@ impl App {
                 )
             }
             ReviewCommand::Close(args) => {
-                let verdict = args.verdict.as_str();
-                if args.close_target && verdict != "complete" {
-                    bail!("--close-target requires --verdict complete; findings create fix work instead");
-                }
                 let mut result = self.close_review_item(
                     &args.review_item_id,
-                    verdict,
+                    args.verdict.as_str(),
                     args.findings,
                     "cli",
                     args.reviewer.as_deref(),
+                    args.close_target,
                 )?;
                 let mut human = "review closed".to_string();
-                if args.close_target {
-                    let target_id = self
-                        .review_target(&args.review_item_id)?
-                        .map(|target| target.id)
-                        .ok_or_else(|| {
-                            anyhow!(
-                                "review {} has no `reviews` link to a target item",
-                                args.review_item_id
-                            )
-                        })?;
-                    let completion_logs: i64 = self.conn.query_row(
-                        "SELECT COUNT(*) FROM logs WHERE item_id = ?1 AND kind = 'completion'",
-                        params![target_id],
-                        |row| row.get(0),
-                    )?;
-                    if completion_logs == 0 {
-                        bail!(
-                            "cannot close target {target_id}: no completion log; the worker must log evidence first (planr done / planr log add)"
-                        );
-                    }
-                    self.close_item_core(
-                        &target_id,
-                        &format!(
-                            "closed by review {} (verdict complete)",
-                            args.review_item_id
-                        ),
-                        true,
-                    )?;
-                    result["closed_target"] = json!(self.get_item(&target_id)?);
+                if let Some(target_id) = result["closed_target"]["id"].as_str() {
                     human.push_str(&format!("; closed target {target_id}"));
                 }
                 let progress = self.progress_value()?;

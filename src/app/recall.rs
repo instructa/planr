@@ -85,9 +85,9 @@ impl App {
         packet["deeper_reads"] = json!([
             format!("planr trace item {item_id} --json"),
             "planr map show --json",
-            format!("planr log list --item {item_id}"),
-            format!("planr context list --item {item_id}"),
-            "planr search <query>"
+            format!("planr log list --item {item_id} --json"),
+            format!("planr context list --item {item_id} --json"),
+            "planr search <query> --json"
         ]);
         packet["remaining"] = self.progress_value()?;
         if packet["approval"]["status"].is_null() {

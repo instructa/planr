@@ -46,10 +46,10 @@ pub fn row_to_log(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
         "item_id": row.get::<_, String>(1)?,
         "kind": row.get::<_, String>(2)?,
         "summary": row.get::<_, String>(3)?,
-        "files": parse_json_cell(row.get::<_, Option<String>>(4)?),
-        "commands": parse_json_cell(row.get::<_, Option<String>>(5)?),
-        "tests": parse_json_cell(row.get::<_, Option<String>>(6)?),
-        "review_findings": parse_json_cell(row.get::<_, Option<String>>(7)?),
+        "files": parse_list_cell(row.get::<_, Option<String>>(4)?),
+        "commands": parse_list_cell(row.get::<_, Option<String>>(5)?),
+        "tests": parse_list_cell(row.get::<_, Option<String>>(6)?),
+        "review_findings": parse_list_cell(row.get::<_, Option<String>>(7)?),
         "created_at": row.get::<_, String>(8)?,
     }))
 }
@@ -68,4 +68,15 @@ pub fn row_to_context(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
 fn parse_json_cell(text: Option<String>) -> Value {
     text.and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or(Value::Null)
+}
+
+/// List columns (files, commands, tests, findings) always serialize as `[]`
+/// instead of `null` so log consumers see one stable shape.
+fn parse_list_cell(text: Option<String>) -> Value {
+    let value = parse_json_cell(text);
+    if value.is_array() {
+        value
+    } else {
+        json!([])
+    }
 }

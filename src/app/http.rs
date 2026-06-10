@@ -542,13 +542,19 @@ impl App {
                                 .collect::<Vec<_>>()
                         })
                         .unwrap_or_default();
-                    serde_json::to_string(&self.close_review_item(
-                        review_id,
-                        verdict,
-                        findings,
-                        "http",
-                        body_json.get("reviewer").and_then(Value::as_str),
-                    )?)?
+                    serde_json::to_string(
+                        &self.close_review_item(
+                            review_id,
+                            verdict,
+                            findings,
+                            "http",
+                            body_json.get("reviewer").and_then(Value::as_str),
+                            body_json
+                                .get("close_target")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false),
+                        )?,
+                    )?
                 }
                 ("GET", p) if p.starts_with("/v1/reviews/") && p.ends_with("/artifact") => {
                     let review_id = p

@@ -172,7 +172,7 @@ impl App {
                 let slice = required_arg(&args, "slice")?;
                 let source = self.get_plan(id)?;
                 let project = self.default_project()?;
-                let title = format!("{} - {}", source.title, slice);
+                let title = crate::util::split_plan_title(&source.title, slice);
                 let slug = slugify(&title);
                 let path = self
                     .root
@@ -645,13 +645,18 @@ impl App {
                             .collect::<Vec<_>>()
                     })
                     .unwrap_or_default();
-                Ok(mcp_json(self.close_review_item(
-                    review_id,
-                    verdict,
-                    findings,
-                    "mcp",
-                    args.get("reviewer").and_then(Value::as_str),
-                )?))
+                Ok(mcp_json(
+                    self.close_review_item(
+                        review_id,
+                        verdict,
+                        findings,
+                        "mcp",
+                        args.get("reviewer").and_then(Value::as_str),
+                        args.get("close_target")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false),
+                    )?,
+                ))
             }
             "planr_close_item" => {
                 let item_id = required_arg(&args, "item_id")?;

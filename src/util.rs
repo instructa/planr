@@ -48,6 +48,8 @@ pub fn infer_error_code(message: &str) -> &'static str {
         "not_found"
     } else if message.contains("invalid_transition") {
         "invalid_transition"
+    } else if message.contains("already_closed") {
+        "already_closed"
     } else if message.contains("refusing")
         || message.contains("missing required")
         || message.contains("no project found")
@@ -114,7 +116,20 @@ pub fn short_id(prefix: &str) -> String {
 pub fn item_id(title: &str) -> String {
     let slug = slugify(title);
     let short = if slug.len() > 32 { &slug[..32] } else { &slug };
+    // Truncation can land on a hyphen; trim it so ids never contain `--`.
+    let short = short.trim_end_matches('-');
     format!("i-{short}-{}", &Uuid::new_v4().simple().to_string()[..4])
+}
+
+/// Title for a build plan split from a product plan. When the slice already
+/// repeats the source title (e.g. slice "Habit Tracker MVP build"), the slice
+/// is used as-is so plan slugs and filenames never duplicate the title.
+pub fn split_plan_title(source_title: &str, slice: &str) -> String {
+    if slugify(slice).starts_with(&slugify(source_title)) {
+        slice.to_string()
+    } else {
+        format!("{source_title} - {slice}")
+    }
 }
 
 pub fn now_string() -> String {
@@ -125,9 +140,13 @@ pub fn now_string() -> String {
 
 /// Worker identity must stay stable across tool processes within one agent
 /// session, otherwise heartbeats and ownership checks fail mid-loop. Default
-/// is client:host:user; parallel workers on the same machine must set
-/// PLANR_SESSION_ID (or run under a client that exposes a session id).
+/// is client:host:user; agents should export PLANR_WORKER_ID (explicit
+/// identity, e.g. `maker-1`) or PLANR_SESSION_ID for the whole session so
+/// pick, done, and log all attribute to the same worker.
 pub fn worker_id() -> String {
+    if let Ok(id) = env::var("PLANR_WORKER_ID") {
+        return id;
+    }
     if let Ok(id) = env::var("PLANR_SESSION_ID") {
         return id;
     }

@@ -410,7 +410,8 @@ pub fn mcp_tools() -> Vec<Value> {
                 "review_item_id": prop("string", "Review item id"),
                 "verdict": prop("string", "Verdict: complete, partial, failed, or unclear"),
                 "findings": string_array("Findings discovered during review"),
-                "reviewer": prop("string", "Reviewer identity recorded on the review log, artifact, and event (defaults to the worker id)")
+                "reviewer": prop("string", "Reviewer identity recorded on the review log, artifact, and event (defaults to the worker id)"),
+                "close_target": prop("boolean", "With verdict complete: also close the reviewed target item (requires a completion log on the target)")
             }),
             &["review_item_id"],
         ),

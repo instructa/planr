@@ -9,7 +9,10 @@ Use this for one picked item at a time.
 
 ## Workflow
 
+Export your worker identity once per session so picks, logs, and heartbeats attribute to you instead of `client:host:user`:
+
 ```bash
+export PLANR_WORKER_ID=maker-1
 planr pick --json
 ```
 
