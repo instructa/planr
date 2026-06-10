@@ -48,6 +48,7 @@ Windows native release assets are not part of the current public install contrac
 Planr does not edit global agent configuration during install. From a project, use:
 
 ```bash
+planr doctor --client all
 planr install codex --dry-run
 planr install claude --dry-run
 planr install cursor --dry-run
@@ -56,9 +57,20 @@ planr prompt cli --client codex
 planr prompt http
 ```
 
+`planr install claude` writes a project `.mcp.json`; `planr install cursor` writes `.cursor/mcp.json`; `planr install codex` writes a project MCP snippet. All install commands also provision the `planr-worker` and `planr-reviewer` subagent role files (`.codex/agents/`, `.claude/agents/`) without overwriting existing edits; `planr project init --client <client|all>` does the same at init time. Dry-runs print the exact config and scope notes first.
+
+Runtime surfaces:
+
+```bash
+planr mcp                # stdio MCP server for any MCP-capable client
+planr serve --port 7526  # localhost HTTP/SSE
+```
+
+Open `http://127.0.0.1:7526/review` after `planr serve` for the local browser review workspace.
+
 ## Agent Skills And Plugin
 
-The repository root is a plugin for Codex, Claude Code, and Cursor that bundles the Planr skills (`$planr`, `$planr-loop`, stage and capability skills). The plugin carries skills only; the CLI above must be installed separately. See [Skills](SKILLS.md) for plugin install commands and the skill workflow.
+The repository ships a plugin under `plugins/planr` for Codex, Claude Code, and Cursor that bundles the Planr skills (`$planr`, `$planr-loop`, stage and capability skills) and the subagent roles. The plugin carries skills and roles only; the CLI above must be installed separately. See [Skills](SKILLS.md) for plugin install commands and the skill workflow.
 
 ## From Source
 
@@ -72,6 +84,8 @@ planr doctor --client all
 ```
 
 The install script copies the selected binary to `PREFIX/bin/planr`. It is idempotent and does not edit global shell or agent-client configuration.
+
+During development, run any command directly without installing: `cargo run -- <command>` (for example `cargo run -- map show`).
 
 ## Release Artifact
 

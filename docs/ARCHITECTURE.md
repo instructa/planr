@@ -2,6 +2,17 @@
 
 Planr V1 is a single Rust binary with explicit module ownership. The crate stays small enough that a Cargo workspace would add more process overhead than value today, and there is only one deployable: the `planr` CLI. The source tree is split by ownership boundary inside that crate instead of using a premature workspace.
 
+## Repository Layout
+
+- `src/`: the Rust CLI (module ownership below).
+- `tests/e2e.rs`: real CLI, MCP, HTTP, import, review-gate, run-log, and concurrent-pick tests.
+- `plugins/planr/`: the installable plugin payload — all nine skills, the worker and reviewer subagent roles, and the per-host plugin manifests.
+- `.agents/plugins/marketplace.json`, `.claude-plugin/marketplace.json`: marketplace manifests pointing Codex and Claude Code at `plugins/planr`.
+- `docs/`: user and contributor guides; `docs/planr-spec/` is the production specification package for Planr V1.
+- `examples/real-world-flow.md`: executable real-world operator flow.
+- `scripts/`: installer and release packaging scripts.
+- `npm/`: the npm wrapper package.
+
 ## Module Ownership
 
 - `src/main.rs`: process composition root. Owns top-level module wiring, process startup, database opening, error printing, and dispatch into `App`.
