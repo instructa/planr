@@ -103,9 +103,29 @@ cargo run -- close <item-id> --summary "Verified"
 - `src/integrations.rs`: Codex, Claude Code, Cursor, and MCP install descriptors.
 - `src/util.rs`: small CLI-boundary helpers for ids, paths, output, and file writes.
 - `tests/e2e.rs`: real CLI, MCP, HTTP, import, review-gate, run-log, and concurrent-pick tests.
-- `skills/planr-*`: public Planr-native skill templates for coding agents.
+- `skills/`: public Planr-native skills — `planr` (router), `planr-loop` (autonomous closing loop), `planr-verify-web` (live verification capability), and the stage skills.
+- `agents/`: worker and reviewer subagent roles registered by the plugin.
+- `.codex-plugin/`, `.claude-plugin/`, `.cursor-plugin/`: the repository root doubles as an installable plugin for Codex, Claude Code, and Cursor.
 - `docs/planr-spec/`: production-ready product specification package for Planr V1.
 - `examples/real-world-flow.md`: executable real-world operator flow.
+
+## Skills And Plugin
+
+Install the Planr skills as one plugin instead of copying folders:
+
+```bash
+# Codex
+codex plugin marketplace add instructa/planr
+codex plugin install planr
+```
+
+```text
+# Claude Code
+/plugin marketplace add instructa/planr
+/plugin install planr@planr
+```
+
+Then drive everything through two skills: `$planr <any request>` routes to the right stage skill from live map state, and `$planr-loop` drives one feature through work, live verification, and independent review until the map is clean. See [docs/SKILLS.md](docs/SKILLS.md).
 
 ## Integrations
 

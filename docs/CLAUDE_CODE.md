@@ -1,5 +1,18 @@
 # Claude Code Integration
 
+## Plugin (preferred for skills)
+
+The Planr repository is a Claude Code plugin. Install it to get the skills (namespaced as `/planr:planr`, `/planr:planr-loop`, ...) plus the `planr-worker` and `planr-reviewer` subagents:
+
+```text
+/plugin marketplace add instructa/planr
+/plugin install planr@planr
+```
+
+See [Skills](SKILLS.md) for the skill workflow.
+
+## MCP
+
 ```bash
 planr install claude --dry-run
 planr install claude

@@ -1,5 +1,18 @@
 # Codex Integration
 
+## Plugin (preferred for skills)
+
+The Planr repository is a Codex plugin. Install it to get the `$planr`, `$planr-loop`, and stage skills without copying folders:
+
+```bash
+codex plugin marketplace add instructa/planr
+codex plugin install planr
+```
+
+See [Skills](SKILLS.md) for the skill workflow and subagent role templates.
+
+## MCP
+
 ```bash
 planr install codex --dry-run
 planr doctor --client codex

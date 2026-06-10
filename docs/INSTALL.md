@@ -56,6 +56,10 @@ planr prompt cli --client codex
 planr prompt http
 ```
 
+## Agent Skills And Plugin
+
+The repository root is a plugin for Codex, Claude Code, and Cursor that bundles the Planr skills (`$planr`, `$planr-loop`, stage and capability skills). The plugin carries skills only; the CLI above must be installed separately. See [Skills](SKILLS.md) for plugin install commands and the skill workflow.
+
 ## From Source
 
 Use Cargo when developing Planr or building from a checked-out source tree:

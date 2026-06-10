@@ -1,5 +1,11 @@
 # Cursor Integration
 
+## Plugin
+
+The repository carries a Cursor plugin manifest (`.cursor-plugin/plugin.json`) bundling the Planr skills. Marketplace listing is pending review; until it is listed, use MCP plus the CLI prompt below. See [Skills](SKILLS.md) for the skill workflow.
+
+## MCP
+
 ```bash
 planr install cursor --dry-run
 planr install cursor
