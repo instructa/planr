@@ -3614,6 +3614,71 @@ fn planr_native_skills_are_packaged_and_cli_first() {
 }
 
 #[test]
+fn project_init_and_install_provision_loop_agent_roles() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "project",
+            "init",
+            "Roles",
+            "--client",
+            "all",
+        ])
+        .assert()
+        .success();
+    for role in [
+        ".codex/agents/planr-worker.toml",
+        ".codex/agents/planr-reviewer.toml",
+        ".claude/agents/planr-worker.md",
+        ".claude/agents/planr-reviewer.md",
+    ] {
+        assert!(
+            dir.path().join(role).exists(),
+            "project init --client all should provision {role}"
+        );
+    }
+    let worker = fs::read_to_string(dir.path().join(".codex/agents/planr-worker.toml")).unwrap();
+    assert!(
+        worker.contains("planr_worker"),
+        "provisioned codex worker role should define the planr_worker agent"
+    );
+
+    // `planr install codex` provisions the same roles for projects initialized
+    // without a client, and never overwrites user-edited role files.
+    let dir2 = tempdir().unwrap();
+    let db2 = dir2.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir2.path())
+        .args(["--db", db2.to_str().unwrap(), "project", "init", "Roles2"])
+        .assert()
+        .success();
+    assert!(!dir2.path().join(".codex/agents/planr-worker.toml").exists());
+    planr()
+        .current_dir(dir2.path())
+        .args(["--db", db2.to_str().unwrap(), "install", "codex"])
+        .assert()
+        .success();
+    assert!(dir2.path().join(".codex/agents/planr-worker.toml").exists());
+    fs::write(
+        dir2.path().join(".codex/agents/planr-worker.toml"),
+        "# user-edited\n",
+    )
+    .unwrap();
+    planr()
+        .current_dir(dir2.path())
+        .args(["--db", db2.to_str().unwrap(), "install", "codex"])
+        .assert()
+        .success();
+    let edited = fs::read_to_string(dir2.path().join(".codex/agents/planr-worker.toml")).unwrap();
+    assert_eq!(edited, "# user-edited\n", "install must not overwrite roles");
+}
+
+#[test]
 fn rust_implementation_has_owned_module_boundaries() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     for file in [

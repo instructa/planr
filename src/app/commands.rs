@@ -5,7 +5,7 @@ use crate::cli::{
     ItemCommand, JsonOnlyArgs, LinkCommand, LogCommand, MapCommand, PickCommand, PlanCommand,
     ProjectCommand, PromptCommand, ReviewCommand, SearchArgs,
 };
-use crate::integrations::{install_snippet, mcp_json_config};
+use crate::integrations::{agent_roles, install_snippet, mcp_json_config};
 use crate::planpack::{build_plan_body, parse_plan_metadata, product_plan_files, project_pack_files};
 use crate::util::{
     append_line, command_exists, format_item, format_project, json_array, now_string, print_json,
@@ -50,11 +50,26 @@ impl App {
                     None,
                     json!({"project_id": project.id, "name": project.name}),
                 )?;
+                let client = args.client.map(|c| format!("{c:?}").to_lowercase());
+                let clients: Vec<&str> = match client.as_deref() {
+                    Some("all") => vec!["codex", "claude"],
+                    Some(name) => vec![name],
+                    None => Vec::new(),
+                };
+                let mut agent_paths = Vec::new();
+                for target in clients {
+                    for (relative, content) in agent_roles(target) {
+                        let path = self.root.join(relative);
+                        write_if_missing(&path, content, false)?;
+                        agent_paths.push(path);
+                    }
+                }
                 let out = json!({
                     "project": project,
                     "db": self.db_path,
                     "created_dirs": dirs,
-                    "client": args.client.map(|c| format!("{c:?}").to_lowercase())
+                    "agents": agent_paths,
+                    "client": client
                 });
                 self.emit(
                     out,
@@ -818,12 +833,18 @@ impl App {
             println!("{snippet}");
             return Ok(());
         }
+        let mut agent_paths = Vec::new();
+        for (relative, content) in agent_roles(client) {
+            let path = self.root.join(relative);
+            write_if_missing(&path, content, false)?;
+            agent_paths.push(path);
+        }
         match client {
             "codex" => {
                 let path = self.root.join(".planr/integrations/codex-mcp.toml");
                 write_if_missing(&path, &snippet, true)?;
                 self.emit(
-                    json!({"client": client, "path": path}),
+                    json!({"client": client, "path": path, "agents": agent_paths}),
                     "codex integration written".to_string(),
                 )
             }
@@ -831,7 +852,7 @@ impl App {
                 let path = self.root.join(".mcp.json");
                 write_if_missing(&path, &mcp_json_config(&self.db_path), true)?;
                 self.emit(
-                    json!({"client": client, "path": path}),
+                    json!({"client": client, "path": path, "agents": agent_paths}),
                     "claude integration written".to_string(),
                 )
             }

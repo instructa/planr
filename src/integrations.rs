@@ -21,6 +21,34 @@ pub fn install_snippet(client: &str, db: &Path) -> String {
     }
 }
 
+/// Subagent role files installed into a project so loop dispatches work
+/// without the host plugin system (Codex plugins cannot register agents).
+pub fn agent_roles(client: &str) -> &'static [(&'static str, &'static str)] {
+    match client {
+        "codex" => &[
+            (
+                ".codex/agents/planr-worker.toml",
+                include_str!("../plugins/planr/skills/planr-loop/agents/planr-worker.toml"),
+            ),
+            (
+                ".codex/agents/planr-reviewer.toml",
+                include_str!("../plugins/planr/skills/planr-loop/agents/planr-reviewer.toml"),
+            ),
+        ],
+        "claude" => &[
+            (
+                ".claude/agents/planr-worker.md",
+                include_str!("../plugins/planr/agents/planr-worker.md"),
+            ),
+            (
+                ".claude/agents/planr-reviewer.md",
+                include_str!("../plugins/planr/agents/planr-reviewer.md"),
+            ),
+        ],
+        _ => &[],
+    }
+}
+
 pub fn mcp_json_config(db: &Path) -> String {
     format!(
         "{{\n  \"mcpServers\": {{\n    \"planr\": {{\"command\": \"planr\", \"args\": [\"--db\", \"{}\", \"mcp\"]}}\n  }}\n}}\n",

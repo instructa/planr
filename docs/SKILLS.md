@@ -157,15 +157,16 @@ Rules that hold in both journeys:
 
 ## Loop Roles
 
-`planr-loop` keeps maker and checker separate. Hosts with subagents get dedicated roles that are prompted with skills, not hand-written prompts:
+`planr-loop` keeps maker and checker separate. Hosts with subagents get dedicated roles that are prompted with skills, not hand-written prompts.
+
+The CLI provisions the role files automatically — no manual copying:
 
 ```bash
-# Codex: project-scoped agents preloading planr-work / planr-review
-cp plugins/planr/skills/planr-loop/agents/*.toml .codex/agents/
-
-# Claude Code standalone (the plugin registers these automatically)
-cp plugins/planr/agents/*.md .claude/agents/
+planr project init "My Product" --client all   # writes .codex/agents/*.toml and .claude/agents/*.md
+planr install codex                            # provisions roles for an existing project
 ```
+
+Codex needs these project-scoped files because its plugin system carries skills only; the Claude Code plugin registers the same roles automatically, so the provisioned `.claude/agents/` copies only matter for standalone (non-plugin) installs. Existing role files are never overwritten.
 
 Dispatches stay one line: `Use $planr-work on item <id>` and `Use $planr-review on item <id>`. The map and logs are the loop memory, so any iteration can resume from zero context.
 
