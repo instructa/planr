@@ -2,7 +2,7 @@
 
 ## Plugin
 
-The repository carries a Cursor plugin manifest (`.cursor-plugin/plugin.json`) bundling the Planr skills. Marketplace listing is pending review; until it is listed, use MCP plus the CLI prompt below. See [Skills](SKILLS.md) for the skill workflow.
+The repository carries a Cursor plugin manifest (`.cursor-plugin/plugin.json`) bundling the Planr skills. Marketplace listing is pending review; until it is listed, use MCP plus the CLI prompt below. See [Skills](SKILLS.md) for the skill workflow and [Long-Running Goals](GOALS.md) for running goal loops without a native `/goal` primitive.
 
 ## MCP
 

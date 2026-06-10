@@ -32,6 +32,7 @@ opencode: no plugin yet; use `planr mcp` as an MCP server (below). A JS plugin w
 Entry points (what users invoke):
 
 - `planr`: master router. One entry point for any request; reads live map state and dispatches to the right skill. Users do not need to remember skill names.
+- `planr-goal`: goal prep compiler for long-running runs. Turns a broad goal into a checked plan, a linked map, and a durable goal contract (`planr context --tag goal-contract`), then prints the starter command for the host's loop driver (Codex/Claude Code `/goal`, or manual re-dispatch). Prep only — see [Long-Running Goals](GOALS.md).
 - `planr-loop`: autonomous closing loop. Drives one feature to verified completion — work, live verification, independent review, fix items — until the map is clean or the iteration budget runs out. Ships subagent templates under `plugins/planr/skills/planr-loop/agents/`.
 
 Capability skills (dispatched by the loop's live-verification step):
@@ -54,6 +55,7 @@ Default usage needs two skills:
 ```text
 $planr        any request -> routed to the right stage skill from live map state
 $planr-loop   one feature -> loop work/verify/review/fix until done or budget exhausted
+$planr-goal   broad goal -> plan + map + durable contract + starter for /goal or manual loops
 ```
 
 The stage order the router follows for a new app:

@@ -28,6 +28,16 @@ planr approval list --open
 planr pick stale --older-than-seconds 900
 ```
 
+## Goal Contract Check
+
+When a loop or `/goal` run asks whether its stop condition holds, read the stored contract from Planr — never from chat memory:
+
+```bash
+planr search "GOAL CONTRACT"     # or: planr context list
+```
+
+Evaluate each contract clause against map state and evidence: in-scope items closed with logs, reviews closed with verdict complete, no open approvals, live verification log present. Recent `done`/`close` output already carries a `remaining` snapshot (`counts`, `settled`, `total`); use it before re-querying the map. Report `contract holds` or `contract open` plus the exact unmet clauses.
+
 ## Verdicts
 
 Use one:

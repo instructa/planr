@@ -11,6 +11,17 @@ codex plugin add planr@planr
 
 See [Skills](SKILLS.md) for the skill workflow and subagent role templates.
 
+## Long-Running Goals With `/goal`
+
+Codex `/goal` is the recommended orchestrator for autonomous Planr runs: `/goal` supplies continuation pressure, Planr supplies durable state, evidence, reviews, and recovery. Prep once with `$planr-goal`, then start:
+
+```text
+$planr-goal <your goal>
+/goal Use $planr-loop on plan <plan-id>. The loop contract is stored in planr context (tag: goal-contract). Continue until the contract holds or the iteration budget is exhausted.
+```
+
+The stop condition lives in Planr (`--tag goal-contract`), so a dead session resumes with the same starter line from zero chat context. Full workflow, recovery, and per-host variants: [Long-Running Goals](GOALS.md).
+
 ## MCP
 
 ```bash

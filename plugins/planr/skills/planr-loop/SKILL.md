@@ -7,6 +7,8 @@ description: Drive one feature or scope to verified completion without per-step 
 
 A closing loop: the agent prompts itself with Planr skills until a verifiable stop condition holds. The human supplies the goal at the start and reviews at the end; the map is the loop memory between iterations.
 
+This skill is the iteration protocol, not the driver. Whoever re-prompts the next iteration — a native loop primitive like Codex `/goal`, an automation, or a human re-dispatching `$planr-loop` — acts as the orchestrator and follows this protocol verbatim. The protocol is identical on every host; only the re-dispatch mechanism differs (see Loop Drivers).
+
 ## Loop Contract
 
 Before iterating, pin the contract:
@@ -23,12 +25,20 @@ all reviews closed with verdict complete, no open approvals in scope,
 and a live verification log exists for the feature on its target platform.
 ```
 
+Store the contract in Planr so it survives compaction, session loss, and host switches — chat memory is not loop memory:
+
+```bash
+planr context add "GOAL CONTRACT <plan-id>: DONE when ... Iteration budget: 10." --tag goal-contract
+```
+
+`$planr-goal` does this during prep; if the loop starts without a stored contract, store it in iteration 1 before picking. Every iteration re-reads the contract from Planr (`planr context list` or `planr search "GOAL CONTRACT"`), never from chat history. `done` and `close` responses include a `remaining` progress snapshot (`counts`, `settled`, `total`), so the orchestrator can evaluate the stop condition from the completion output without an extra `map status` call.
+
 ## Iteration Shape
 
 Each iteration is one dispatch through the routing skill — never a hand-written prompt:
 
 ```text
-1. $planr-status      read honest state; if stop condition holds -> exit loop
+1. $planr-status      read honest state + stored goal-contract; if the contract holds -> exit loop
 2. $planr-plan / $planr-task-graph   only if scope or map structure is missing
 3. $planr-work        pick exactly one ready item, implement, finish with planr done --review
 4. live verify        run the platform verification (below), log it with planr log add --cmd
@@ -79,13 +89,15 @@ planr context add "live verification blocked: <missing capability>" --item <item
 planr approval request <item-id> --reason "manual live verification required"
 ```
 
-## Native Loop Runners
+## Loop Drivers
 
-Prefer the host's loop primitive over a bash while-loop so a separate model checks the stop condition:
+Prefer the host's loop primitive over a bash while-loop so a separate model checks the stop condition. The driver supplies continuation pressure; Planr supplies everything else (state, evidence, reviews, recovery), so the loop works on every host:
 
-- Claude Code: `/goal <stop condition>` with this skill loaded; or `/loop` for a fixed cadence.
-- Codex: `/goal`, or an Automation whose prompt is `Use $planr-loop on <scope>`.
-- Anywhere else: re-dispatch `$planr-loop` manually; the map makes every iteration resumable from zero context.
+- Codex: `/goal Use $planr-loop on plan <plan-id>. The loop contract is stored in planr context (tag: goal-contract).` — or an Automation with the same prompt. Full workflow: `docs/GOALS.md` in the Planr repository.
+- Claude Code: `/goal` with the same prompt shape, or `/loop` for a fixed cadence.
+- Anywhere else (Cursor, plain MCP clients, hosts without /goal): re-dispatch `Use $planr-loop on plan <plan-id> ...` manually or per session. Nothing is lost except automatic re-prompting.
+
+Recovery is the same in all cases: a fresh session starts at step 1 (`$planr-status`), reads the map and the stored goal-contract, and continues exactly where the last iteration stopped — zero chat context required.
 
 ## Hard Rules
 

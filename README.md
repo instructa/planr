@@ -127,6 +127,7 @@ Mid-project work (a new feature, refactor, or fix on an existing project) works 
 
 - [Install](docs/INSTALL.md)
 - [Skills](docs/SKILLS.md)
+- [Long-Running Goals](docs/GOALS.md)
 - [CLI Reference](docs/CLI_REFERENCE.md)
 - [MCP Guide](docs/MCP_GUIDE.md)
 - [Codex](docs/CODEX.md) · [Claude Code](docs/CLAUDE_CODE.md) · [Cursor](docs/CURSOR.md)

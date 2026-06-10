@@ -32,6 +32,7 @@ Evaluate top to bottom; pick the first row that matches both intent and state:
 
 | Intent | State condition | Route |
 | --- | --- | --- |
+| "set up a goal", "prepare a /goal run", broad long-running goal not yet planned | no plan or contract for that scope | `planr-goal` (prep only, prints the loop starter) |
 | "build until done", "loop", "finish this feature autonomously" | any | `planr-loop` |
 | status, "what's left", "what's blocked" | any | `planr-status` |
 | summary of completed scope | any | `planr-summary` |

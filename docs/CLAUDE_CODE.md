@@ -9,7 +9,7 @@ The Planr repository is a Claude Code plugin. Install it to get the skills (name
 /plugin install planr@planr
 ```
 
-See [Skills](SKILLS.md) for the skill workflow.
+See [Skills](SKILLS.md) for the skill workflow. For autonomous goal runs with `/goal` or `/loop` on top of Planr state, see [Long-Running Goals](GOALS.md).
 
 ## MCP
 
