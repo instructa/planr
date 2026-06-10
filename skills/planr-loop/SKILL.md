@@ -47,10 +47,10 @@ When the host supports subagents, delegate with skill references plus an item id
 - Worker dispatch: `Use $planr-work on item <item-id>. Stop after requesting review.`
 - Checker dispatch: `Use $planr-review on item <item-id>. Close the review with a verdict.`
 
-Host wiring (templates ship in `agents/` next to this skill):
+Host wiring:
 
-- Codex: project agents in `.codex/agents/*.toml` preload the skill via `[[skills.config]]`. Spawn explicitly: "spawn the planr_worker agent for item X". Keep `[agents] max_depth = 1`.
-- Claude Code: subagents in `.claude/agents/*.md` preload via the `skills:` frontmatter field. The reviewer subagent is read-only except for `planr review` commands.
+- Codex: project agents in `.codex/agents/*.toml` preload the skill via `[[skills.config]]` (TOML templates in `agents/` next to this skill). Spawn explicitly: "spawn the planr_worker agent for item X". Keep `[agents] max_depth = 1`.
+- Claude Code: subagents preload via the `skills:` frontmatter field. The Planr plugin registers `planr-worker` and `planr-reviewer` automatically from its `agents/` directory; standalone installs copy them to `.claude/agents/`. The reviewer subagent is read-only except for `planr review` commands.
 - Single-agent hosts: run worker and checker as separate sequential dispatches with a fresh read of map state in between; never carry the worker's self-assessment into the review step.
 
 ## Live Verification By Platform

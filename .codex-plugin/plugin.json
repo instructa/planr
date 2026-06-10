@@ -1,0 +1,25 @@
+{
+  "name": "planr",
+  "version": "1.1.0",
+  "description": "Skill-driven planning and execution loop for coding agents: one $planr entry point, an autonomous $planr-loop, and evidence-backed task graph skills powered by the planr CLI.",
+  "author": {
+    "name": "instructa",
+    "url": "https://github.com/instructa"
+  },
+  "homepage": "https://github.com/instructa/planr",
+  "repository": "https://github.com/instructa/planr",
+  "license": "MIT",
+  "keywords": ["planning", "task-graph", "agent-loop", "skills"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Planr",
+    "shortDescription": "Plan, loop, verify, and close coding work with evidence",
+    "longDescription": "Planr turns one product idea into a live task graph and drives features to verified completion. $planr routes any request to the right stage skill from live map state; $planr-loop runs work, live verification, and independent review until the map is clean. Requires the planr CLI (brew install instructa/tap/planr).",
+    "developerName": "instructa",
+    "category": "Productivity",
+    "defaultPrompt": [
+      "Use $planr to plan a production-ready app from my idea.",
+      "Use $planr-loop to ship one feature with verification until done."
+    ]
+  }
+}

@@ -10,6 +10,7 @@
   "files": [
     "npm/bin/planr.js",
     "skills",
+    "agents",
     "README.md",
     "LICENSE.md",
     "docs"

@@ -3550,6 +3550,9 @@ fn http_json(response: &str) -> Value {
 fn planr_native_skills_are_packaged_and_cli_first() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     for skill in [
+        "planr",
+        "planr-loop",
+        "planr-verify-web",
         "planr-task-graph",
         "planr-plan",
         "planr-work",
@@ -3567,6 +3570,27 @@ fn planr_native_skills_are_packaged_and_cli_first() {
         assert!(
             !body.contains(&["./", ".planr", "/tooling/", "planr"].concat()),
             "{skill} should use the public Planr CLI"
+        );
+    }
+
+    // The repo root doubles as a plugin for Codex, Claude Code, and Cursor.
+    for manifest in [
+        ".codex-plugin/plugin.json",
+        ".claude-plugin/plugin.json",
+        ".cursor-plugin/plugin.json",
+        ".claude-plugin/marketplace.json",
+        ".agents/plugins/marketplace.json",
+    ] {
+        let path = root.join(manifest);
+        assert!(path.exists(), "missing plugin file {manifest}");
+        let value: Value = serde_json::from_str(&fs::read_to_string(path).unwrap())
+            .unwrap_or_else(|e| panic!("{manifest} is not valid JSON: {e}"));
+        assert_eq!(value["name"], "planr", "{manifest} must be named planr");
+    }
+    for agent in ["planr-worker", "planr-reviewer"] {
+        assert!(
+            root.join("agents").join(format!("{agent}.md")).exists(),
+            "missing plugin agent {agent}"
         );
     }
 }

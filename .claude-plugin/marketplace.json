@@ -1,0 +1,17 @@
+{
+  "name": "planr",
+  "owner": {
+    "name": "instructa"
+  },
+  "metadata": {
+    "description": "Planr: skill-driven planning and execution loop for coding agents"
+  },
+  "plugins": [
+    {
+      "name": "planr",
+      "source": "./",
+      "description": "One $planr entry point, an autonomous $planr-loop, and evidence-backed task graph skills powered by the planr CLI.",
+      "category": "productivity"
+    }
+  ]
+}

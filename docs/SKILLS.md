@@ -2,6 +2,31 @@
 
 Planr ships agent-facing skill templates under `skills/`.
 
+The repository root is also a plugin for Codex (`.codex-plugin/`), Claude Code (`.claude-plugin/`), and Cursor (`.cursor-plugin/`), so the skills can be installed as one package instead of copied by hand. The plugin only carries skills and agent roles; the `planr` CLI must be installed separately (`brew install instructa/tap/planr`).
+
+## Install As Plugin (preferred)
+
+Codex:
+
+```bash
+codex plugin marketplace add instructa/planr
+# then install "planr" from the plugin directory picker, or:
+codex plugin install planr
+```
+
+Claude Code:
+
+```text
+/plugin marketplace add instructa/planr
+/plugin install planr@planr
+```
+
+Skills are namespaced in Claude Code: `/planr:planr`, `/planr:planr-loop`. The plugin also registers the `planr-worker` and `planr-reviewer` subagents from `agents/`.
+
+Cursor: pending marketplace review; until listed, use MCP plus the CLI prompt (below).
+
+opencode: no plugin yet; use `planr mcp` as an MCP server (below). A JS plugin wrapping the CLI as custom tools is a possible follow-up.
+
 ## Included Skills
 
 Entry points (what users invoke):
@@ -80,10 +105,10 @@ Do not close the item until review is complete.
 
 ```bash
 # Codex: project-scoped agents preloading planr-work / planr-review
-cp skills/planr-loop/agents/codex/*.toml .codex/agents/
+cp skills/planr-loop/agents/*.toml .codex/agents/
 
-# Claude Code: subagents preloading the same skills via frontmatter
-cp skills/planr-loop/agents/claude/*.md .claude/agents/
+# Claude Code standalone (the plugin registers these automatically)
+cp agents/*.md .claude/agents/
 ```
 
 Dispatches stay one line: `Use $planr-work on item <id>` and `Use $planr-review on item <id>`. The map and logs are the loop memory, so any iteration can resume from zero context.
