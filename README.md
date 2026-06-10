@@ -1,5 +1,7 @@
 # Planr
 
+![Planr — turn chaotic agent work into a verified task graph](public/planr_banner1.webp)
+
 Planr is a local-first planning and execution coordination tool for coding agents. It combines reviewable Markdown plans with a dependency-aware work map so Codex, Claude Code, Cursor, generic MCP clients, and human operators can drive the same work safely — from idea to verified completion.
 
 ```text
@@ -7,6 +9,8 @@ idea -> product plan -> build plan -> map -> pick -> log -> review/evidence -> c
 ```
 
 ## Why Planr
+
+![Why Planr exists — without Planr vs with Planr](public/planr_banner2.webp)
 
 Flat todo lists break down the moment real work has structure. Planr models work as a dependency graph because that is what work actually is:
 
