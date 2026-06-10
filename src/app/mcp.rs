@@ -659,6 +659,7 @@ impl App {
             }
             "planr_close_item" => {
                 let item_id = required_arg(&args, "item_id")?;
+                self.promote_ready()?;
                 self.ensure_can_close(item_id)?;
                 self.conn.execute("UPDATE items SET status = 'closed', completed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1", params![item_id])?;
                 self.promote_ready()?;

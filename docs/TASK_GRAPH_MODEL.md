@@ -65,7 +65,7 @@ Picking is the concurrency boundary:
 planr pick --json
 ```
 
-One ready item should be picked by one worker. Picked work records `worker_id`, `pick_token`, `picked_at`, and `last_heartbeat_at`. Active agents should keep the claim fresh and make progress visible:
+One ready item should be picked by one worker. Picked work records `worker_id`, `pick_token`, `picked_at`, and `last_heartbeat_at`. Worker identity is stable per client, host, and user, so heartbeats keep working across the many short-lived processes of an agent session. Parallel workers on the same machine must set `PLANR_SESSION_ID` to distinct values. Active agents should keep the claim fresh and make progress visible:
 
 ```bash
 planr pick heartbeat [item-id]

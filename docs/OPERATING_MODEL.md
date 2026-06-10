@@ -143,7 +143,7 @@ Model material changes as parent gates. The parent is not the work package; its 
 parent gate
 `- implementation or test child
    `- review item linked to that child
-      |- pass -> child can close -> parent can close
+      |- pass -> child can close -> parent gate auto-closes
       `- findings -> fix item -> follow-up review -> ...
 ```
 
@@ -156,6 +156,8 @@ Rules:
 - downstream top-level work should depend on the parent gate, not on the first implementation child.
 
 This keeps later work blocked until review is actually clean.
+
+Parent gates roll up automatically: once every child is closed or cancelled, the gate becomes ready and auto-closes when no review or approval on the gate itself is open (a cancelled or partially closed child rolls up as `closed_partial`). Parent gates are never returned by `planr pick`; the children are the work.
 
 ## Notes, Contexts, Logs, And Stories
 

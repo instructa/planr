@@ -125,7 +125,7 @@ Default shape:
 parent gate
 `- implementation or test child
    `- review item linked to that child
-      |- pass -> child can close -> parent can close
+      |- pass -> child can close -> parent gate auto-closes
       `- findings -> fix item -> follow-up review -> ...
 ```
 
@@ -136,6 +136,8 @@ Rules:
 - request review on the implementation or test child after evidence exists;
 - if review finds issues, let Planr create fix and follow-up review work from the review verdict;
 - make later top-level work depend on the parent gate, not only the first child.
+
+Parent gates roll up on their own: when every child is settled, the gate auto-closes unless a review or approval on the gate itself is still open. Do not pick a parent gate as work; `planr pick` skips them.
 
 ## Dependencies
 

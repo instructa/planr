@@ -34,6 +34,14 @@ planr review close <review-id> --verdict not-complete --findings "specific actio
 - Architecture or ownership drift is a finding when it creates duplicate policy or state owners.
 - If evidence is insufficient, use `--verdict unclear` rather than complete.
 
+## Single-Agent Mode
+
+When no independent reviewer instance is available (single-agent host), do not pretend a second instance reviewed the work. Re-read the diff, logs, and evidence with fresh eyes, then record the mode honestly before closing the review:
+
+```bash
+planr context add "review performed single-agent: same session re-read diff, logs, and evidence" --item <review-id> --tag review-mode
+```
+
 ## Completion Rule
 
 The target item may close only after required review items are closed. Use the map as the source of truth.

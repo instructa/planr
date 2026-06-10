@@ -51,7 +51,7 @@ Host wiring:
 
 - Codex: project agents in `.codex/agents/*.toml` preload the skill via `[[skills.config]]` (TOML templates in `agents/` next to this skill). Spawn explicitly: "spawn the planr_worker agent for item X". Keep `[agents] max_depth = 1`.
 - Claude Code: subagents preload via the `skills:` frontmatter field. The Planr plugin registers `planr-worker` and `planr-reviewer` automatically from its `agents/` directory; standalone installs copy them to `.claude/agents/`. The reviewer subagent is read-only except for `planr review` commands.
-- Single-agent hosts: run worker and checker as separate sequential dispatches with a fresh read of map state in between; never carry the worker's self-assessment into the review step.
+- Single-agent hosts: run worker and checker as separate sequential dispatches with a fresh read of map state in between; never carry the worker's self-assessment into the review step. Record the mode honestly per `$planr-review` single-agent mode (`planr context add ... --tag review-mode`).
 
 ## Live Verification By Platform
 

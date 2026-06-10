@@ -411,6 +411,78 @@ impl App {
              )",
             [],
         )?;
+        self.roll_up_parent_gates()?;
+        Ok(())
+    }
+
+    /// Parent items are gates over their children: breakdown/replan park them
+    /// in `blocked`. Once every child is settled the gate becomes `ready`, and
+    /// auto-closes when no review or approval remains open. Loops so closures
+    /// roll up through grandparents.
+    fn roll_up_parent_gates(&self) -> Result<()> {
+        loop {
+            let promoted = self.conn.execute(
+                "UPDATE items SET status = 'ready', updated_at = datetime('now')
+                 WHERE status = 'blocked'
+                 AND EXISTS (SELECT 1 FROM items c WHERE c.parent_item_id = items.id)
+                 AND NOT EXISTS (
+                   SELECT 1 FROM items c WHERE c.parent_item_id = items.id
+                   AND c.status NOT IN ('closed','closed_partial','cancelled')
+                 )
+                 AND id NOT IN (
+                   SELECT l.to_item FROM links l JOIN items upstream ON upstream.id = l.from_item
+                   WHERE l.kind IN ('blocks','hands_to') AND upstream.status NOT IN ('closed','closed_partial')
+                 )",
+                [],
+            )?;
+            let auto_closed: Vec<(String, String)> = {
+                let mut stmt = self.conn.prepare(
+                    "UPDATE items SET
+                       status = CASE WHEN EXISTS (
+                         SELECT 1 FROM items c WHERE c.parent_item_id = items.id
+                         AND c.status IN ('closed_partial','cancelled')
+                       ) THEN 'closed_partial' ELSE 'closed' END,
+                       completed_at = datetime('now'),
+                       updated_at = datetime('now')
+                     WHERE status = 'ready'
+                     AND EXISTS (SELECT 1 FROM items c WHERE c.parent_item_id = items.id)
+                     AND NOT EXISTS (
+                       SELECT 1 FROM items c WHERE c.parent_item_id = items.id
+                       AND c.status NOT IN ('closed','closed_partial','cancelled')
+                     )
+                     AND NOT EXISTS (
+                       SELECT 1 FROM links l JOIN items r ON r.id = l.from_item
+                       WHERE l.to_item = items.id AND l.kind = 'reviews'
+                       AND r.status NOT IN ('closed','closed_partial','cancelled')
+                     )
+                     AND COALESCE(approval_status, '') NOT IN ('requested','denied')
+                     RETURNING id, status",
+                )?;
+                let rows =
+                    collect_rows(stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?)?;
+                rows
+            };
+            for (item_id, status) in &auto_closed {
+                let log_id = short_id("log");
+                self.conn.execute(
+                    "INSERT INTO logs(id, project_id, item_id, kind, summary, created_at)
+                     SELECT ?1, project_id, id, 'completion', ?2, datetime('now') FROM items WHERE id = ?3",
+                    params![
+                        log_id,
+                        "parent gate auto-closed: all child items settled",
+                        item_id
+                    ],
+                )?;
+                self.record_event(
+                    "item_closed",
+                    Some(item_id),
+                    json!({"auto": true, "status": status, "log_id": log_id}),
+                )?;
+            }
+            if promoted == 0 && auto_closed.is_empty() {
+                break;
+            }
+        }
         Ok(())
     }
 
@@ -486,6 +558,10 @@ impl App {
                  WHERE id = (
                      SELECT id FROM items
                      WHERE project_id = ?3 AND status = 'ready'
+                     AND NOT EXISTS (
+                       SELECT 1 FROM items c WHERE c.parent_item_id = items.id
+                       AND c.status NOT IN ('cancelled')
+                     )
                      ORDER BY priority DESC, created_at ASC
                      LIMIT 1
                  )

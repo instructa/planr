@@ -123,6 +123,10 @@ pub fn now_string() -> String {
         .unwrap_or_else(|_| "unknown-time".to_string())
 }
 
+/// Worker identity must stay stable across tool processes within one agent
+/// session, otherwise heartbeats and ownership checks fail mid-loop. Default
+/// is client:host:user; parallel workers on the same machine must set
+/// PLANR_SESSION_ID (or run under a client that exposes a session id).
 pub fn worker_id() -> String {
     if let Ok(id) = env::var("PLANR_SESSION_ID") {
         return id;
@@ -131,7 +135,10 @@ pub fn worker_id() -> String {
         return format!("codex:{id}");
     }
     let host = env::var("HOSTNAME").unwrap_or_else(|_| "local".to_string());
-    format!("{}:{}:{}", detect_client(), host, std::process::id())
+    let user = env::var("USER")
+        .or_else(|_| env::var("USERNAME"))
+        .unwrap_or_else(|_| "worker".to_string());
+    format!("{}:{}:{}", detect_client(), host, user)
 }
 
 pub fn detect_client() -> String {

@@ -576,6 +576,7 @@ impl App {
                 ("POST", p) if p.ends_with("/close") => {
                     let item_id =
                         path_item_id(p).ok_or_else(|| anyhow!("missing item id in close route"))?;
+                    self.promote_ready()?;
                     self.ensure_can_close(item_id)?;
                     self.conn.execute("UPDATE items SET status = 'closed', completed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1", params![item_id])?;
                     self.promote_ready()?;

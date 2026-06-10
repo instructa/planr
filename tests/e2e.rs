@@ -1758,6 +1758,286 @@ fn create_test_item_after(
     value["item"]["id"].as_str().unwrap().to_string()
 }
 
+fn item_status(db: &std::path::Path, item_id: &str) -> String {
+    let conn = Connection::open(db).unwrap();
+    conn.query_row("SELECT status FROM items WHERE id = ?1", [item_id], |row| {
+        row.get(0)
+    })
+    .unwrap()
+}
+
+fn child_item_ids(db: &std::path::Path, parent_id: &str) -> Vec<String> {
+    let conn = Connection::open(db).unwrap();
+    let mut stmt = conn
+        .prepare("SELECT id FROM items WHERE parent_item_id = ?1 ORDER BY created_at")
+        .unwrap();
+    let ids = stmt
+        .query_map([parent_id], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    ids
+}
+
+#[test]
+fn parent_gate_rolls_up_and_auto_closes_when_children_settle() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Gates"])
+        .assert()
+        .success();
+    let parent = create_test_item(dir.path(), &db, "Parent feature", "parent gate rollup");
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "item",
+            "breakdown",
+            &parent,
+            "--into",
+            "Child A,Child B",
+        ])
+        .assert()
+        .success();
+    assert_eq!(item_status(&db, &parent), "blocked");
+    let children = child_item_ids(&db, &parent);
+    assert_eq!(children.len(), 2);
+
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "close",
+            &children[0],
+            "--summary",
+            "child a done",
+        ])
+        .assert()
+        .success();
+    assert_eq!(
+        item_status(&db, &parent),
+        "blocked",
+        "parent must stay blocked while a child is open"
+    );
+
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "close",
+            &children[1],
+            "--summary",
+            "child b done",
+        ])
+        .assert()
+        .success();
+    assert_eq!(
+        item_status(&db, &parent),
+        "closed",
+        "parent gate must auto-close once all children are closed"
+    );
+
+    let conn = Connection::open(&db).unwrap();
+    let completion_logs: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM logs WHERE item_id = ?1 AND kind = 'completion'",
+            [&parent],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(completion_logs, 1, "auto-close must write a completion log");
+
+    // A cancelled child downgrades the parent gate to closed_partial.
+    let partial_parent = create_test_item(dir.path(), &db, "Partial parent", "partial rollup");
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "item",
+            "breakdown",
+            &partial_parent,
+            "--into",
+            "Keep child,Drop child",
+        ])
+        .assert()
+        .success();
+    let partial_children = child_item_ids(&db, &partial_parent);
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "close",
+            &partial_children[0],
+            "--summary",
+            "kept child done",
+        ])
+        .assert()
+        .success();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "item",
+            "cancel",
+            &partial_children[1],
+            "--confirm",
+        ])
+        .assert()
+        .success();
+    assert_eq!(item_status(&db, &partial_parent), "closed_partial");
+}
+
+#[test]
+fn parent_gate_waits_for_open_review_then_auto_closes() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Gates"])
+        .assert()
+        .success();
+    let parent = create_test_item(dir.path(), &db, "Reviewed parent", "gate with review");
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "item",
+            "breakdown",
+            &parent,
+            "--into",
+            "Only child",
+        ])
+        .assert()
+        .success();
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "review",
+            "request",
+            &parent,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let review: Value = serde_json::from_slice(&output).unwrap();
+    let review_id = review["review"]["id"].as_str().unwrap().to_string();
+
+    let child = child_item_ids(&db, &parent)[0].clone();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "close",
+            &child,
+            "--summary",
+            "child done",
+        ])
+        .assert()
+        .success();
+    assert_eq!(
+        item_status(&db, &parent),
+        "ready",
+        "parent with open review must become ready, not auto-close"
+    );
+
+    // Parent gates are not pickable work even when ready.
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "pick"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let picked: Value = serde_json::from_slice(&output).unwrap();
+    assert_ne!(
+        picked["item"]["id"].as_str(),
+        Some(parent.as_str()),
+        "pick must not claim a parent gate"
+    );
+
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "review",
+            "close",
+            &review_id,
+            "--verdict",
+            "complete",
+        ])
+        .assert()
+        .success();
+    assert_eq!(
+        item_status(&db, &parent),
+        "closed",
+        "parent gate must auto-close once its review closes"
+    );
+}
+
+#[test]
+fn heartbeat_and_ownership_survive_new_processes_without_session_id() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Workers"])
+        .assert()
+        .success();
+    let item_id = create_test_item(dir.path(), &db, "Stable worker item", "worker id test");
+
+    let output = planr()
+        .current_dir(dir.path())
+        .env_remove("PLANR_SESSION_ID")
+        .env_remove("CODEX_SESSION_ID")
+        .args(["--db", db.to_str().unwrap(), "--json", "pick"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let picked: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(picked["item"]["id"], item_id);
+
+    // A different process without a session id must still own the pick:
+    // agent sessions spawn a new process per tool call.
+    let output = planr()
+        .current_dir(dir.path())
+        .env_remove("PLANR_SESSION_ID")
+        .env_remove("CODEX_SESSION_ID")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "pick",
+            "heartbeat",
+            &item_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let heartbeat: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(heartbeat["item"]["status"], "running");
+}
+
 #[test]
 fn graph_adaptation_primitives_preview_rewire_and_replan() {
     let dir = tempdir().unwrap();

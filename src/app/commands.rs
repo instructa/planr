@@ -231,10 +231,15 @@ impl App {
                 let plan = self.get_plan(&args.from)?;
                 let created = self.seed_items_from_plan(&plan)?;
                 self.promote_ready()?;
-                self.emit(
-                    json!({"created": created}),
-                    format!("created {} map item(s)", created.len()),
-                )
+                let hint = (created.len() <= 1).then_some(
+                    "created a single coarse item; run `planr item breakdown <item-id> --into \"...\"` before picking",
+                );
+                let mut message = format!("created {} map item(s)", created.len());
+                if let Some(hint) = hint {
+                    message.push_str("; ");
+                    message.push_str(hint);
+                }
+                self.emit(json!({"created": created, "hint": hint}), message)
             }
             MapCommand::Lane(args) => {
                 let lane = if args.critical {
@@ -614,6 +619,9 @@ impl App {
             self.current_item_for_worker()?
                 .ok_or_else(|| anyhow!("no picked item for this worker"))?
         };
+        // Reconcile gate state first so a parent whose children are already
+        // settled is closable instead of stuck in `blocked`.
+        self.promote_ready()?;
         self.ensure_can_close(&item_id)?;
         self.conn.execute("UPDATE items SET status = 'closed', completed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1", params![item_id])?;
         let log_id = short_id("log");
