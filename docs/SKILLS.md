@@ -1,8 +1,8 @@
 # Planr Skills
 
-Planr ships agent-facing skill templates under `skills/`.
+Planr ships agent-facing skill templates under `plugins/planr/skills/`.
 
-The repository root is also a plugin for Codex (`.codex-plugin/`), Claude Code (`.claude-plugin/`), and Cursor (`.cursor-plugin/`), so the skills can be installed as one package instead of copied by hand. The plugin only carries skills and agent roles; the `planr` CLI must be installed separately (`brew install instructa/tap/planr`).
+The repository ships an installable plugin under `plugins/planr` for Codex, Claude Code, and Cursor, so the skills can be installed as one package instead of copied by hand. Marketplace manifests at the repo root (`.agents/plugins/marketplace.json`, `.claude-plugin/marketplace.json`) point at that subdirectory — Codex silently ignores marketplaces whose plugin source is the repo root itself. The plugin only carries skills and agent roles; the `planr` CLI must be installed separately (`brew install instructa/tap/planr`).
 
 ## Install As Plugin (preferred)
 
@@ -11,7 +11,7 @@ Codex:
 ```bash
 codex plugin marketplace add instructa/planr
 # then install "planr" from the plugin directory picker, or:
-codex plugin install planr
+codex plugin add planr@planr
 ```
 
 Claude Code:
@@ -21,7 +21,7 @@ Claude Code:
 /plugin install planr@planr
 ```
 
-Skills are namespaced in Claude Code: `/planr:planr`, `/planr:planr-loop`. The plugin also registers the `planr-worker` and `planr-reviewer` subagents from `agents/`.
+Skills are namespaced in Claude Code: `/planr:planr`, `/planr:planr-loop`. The plugin also registers the `planr-worker` and `planr-reviewer` subagents from the plugin's `agents/` directory.
 
 Cursor: pending marketplace review; until listed, use MCP plus the CLI prompt (below).
 
@@ -32,7 +32,7 @@ opencode: no plugin yet; use `planr mcp` as an MCP server (below). A JS plugin w
 Entry points (what users invoke):
 
 - `planr`: master router. One entry point for any request; reads live map state and dispatches to the right skill. Users do not need to remember skill names.
-- `planr-loop`: autonomous closing loop. Drives one feature to verified completion — work, live verification, independent review, fix items — until the map is clean or the iteration budget runs out. Ships subagent templates under `skills/planr-loop/agents/`.
+- `planr-loop`: autonomous closing loop. Drives one feature to verified completion — work, live verification, independent review, fix items — until the map is clean or the iteration budget runs out. Ships subagent templates under `plugins/planr/skills/planr-loop/agents/`.
 
 Capability skills (dispatched by the loop's live-verification step):
 
@@ -161,10 +161,10 @@ Rules that hold in both journeys:
 
 ```bash
 # Codex: project-scoped agents preloading planr-work / planr-review
-cp skills/planr-loop/agents/*.toml .codex/agents/
+cp plugins/planr/skills/planr-loop/agents/*.toml .codex/agents/
 
 # Claude Code standalone (the plugin registers these automatically)
-cp agents/*.md .claude/agents/
+cp plugins/planr/agents/*.md .claude/agents/
 ```
 
 Dispatches stay one line: `Use $planr-work on item <id>` and `Use $planr-review on item <id>`. The map and logs are the loop memory, so any iteration can resume from zero context.
@@ -175,7 +175,7 @@ Copy the Planr skills into Codex's local skill directory:
 
 ```bash
 mkdir -p ~/.codex/skills
-cp -R skills/* ~/.codex/skills/
+cp -R plugins/planr/skills/* ~/.codex/skills/
 ```
 
 If Planr was installed from an npm package that includes `skills/`, copy from the package location instead:
@@ -183,7 +183,7 @@ If Planr was installed from an npm package that includes `skills/`, copy from th
 ```bash
 PLANR_PKG="$(npm root -g)/planr"
 mkdir -p ~/.codex/skills
-cp -R "$PLANR_PKG"/skills/* ~/.codex/skills/
+cp -R "$PLANR_PKG"/plugins/planr/skills/* ~/.codex/skills/
 ```
 
 Do not present `npx planr` as the primary install path until the npm artifact ships platform-native Planr binaries. Today the normal user path is the GitHub Release installer; npm is a development and consumer-test wrapper.
@@ -208,8 +208,8 @@ Claude Code loads project skills from `.claude/skills/`:
 
 ```bash
 mkdir -p .claude/skills .claude/agents
-cp -R skills/* .claude/skills/
-cp skills/planr-loop/agents/claude/*.md .claude/agents/
+cp -R plugins/planr/skills/* .claude/skills/
+cp plugins/planr/agents/*.md .claude/agents/
 ```
 
 Then add MCP and the Planr workflow prompt to project instructions when needed:

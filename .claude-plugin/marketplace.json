@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "planr",
-      "source": "./",
+      "source": "./plugins/planr",
       "description": "One $planr entry point, an autonomous $planr-loop, and evidence-backed task graph skills powered by the planr CLI.",
       "category": "productivity"
     }

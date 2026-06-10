@@ -6,7 +6,7 @@ The Planr repository is a Codex plugin. Install it to get the `$planr`, `$planr-
 
 ```bash
 codex plugin marketplace add instructa/planr
-codex plugin install planr
+codex plugin add planr@planr
 ```
 
 See [Skills](SKILLS.md) for the skill workflow and subagent role templates.

@@ -122,15 +122,14 @@ cargo run -- close <item-id> --summary "Verified"
 - `src/integrations.rs`: Codex, Claude Code, Cursor, and MCP install descriptors.
 - `src/util.rs`: small CLI-boundary helpers for ids, paths, output, and file writes.
 - `tests/e2e.rs`: real CLI, MCP, HTTP, import, review-gate, run-log, and concurrent-pick tests.
-- `skills/`: public Planr-native skills — `planr` (router), `planr-loop` (autonomous closing loop), `planr-verify-web` (live verification capability), and the stage skills.
-- `agents/`: worker and reviewer subagent roles registered by the plugin.
-- `.codex-plugin/`, `.claude-plugin/`, `.cursor-plugin/`: the repository root doubles as an installable plugin for Codex, Claude Code, and Cursor.
+- `plugins/planr/`: the installable plugin payload — all nine skills, the worker and reviewer subagent roles, and the per-host plugin manifests.
+- `.agents/plugins/marketplace.json`, `.claude-plugin/marketplace.json`: marketplace manifests pointing Codex and Claude Code at `plugins/planr`.
 - `docs/planr-spec/`: production-ready product specification package for Planr V1.
 - `examples/real-world-flow.md`: executable real-world operator flow.
 
 ## Install The Plugin (Skills)
 
-The repository root doubles as an installable plugin for Codex, Claude Code, and Cursor. The plugin carries the nine Planr skills plus the `planr-worker` and `planr-reviewer` subagent roles; the `planr` CLI itself must be installed separately (see [Quick Start](#quick-start)).
+The repository ships an installable plugin for Codex, Claude Code, and Cursor under `plugins/planr`. The plugin carries the nine Planr skills plus the `planr-worker` and `planr-reviewer` subagent roles; the `planr` CLI itself must be installed separately (see [Quick Start](#quick-start)).
 
 <a id="install-plugin-codex"></a>
 <details>
@@ -138,7 +137,7 @@ The repository root doubles as an installable plugin for Codex, Claude Code, and
 
 ```bash
 codex plugin marketplace add instructa/planr
-codex plugin install planr
+codex plugin add planr@planr
 ```
 
 Then invoke skills directly in a session:

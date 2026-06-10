@@ -3560,7 +3560,10 @@ fn planr_native_skills_are_packaged_and_cli_first() {
         "planr-status",
         "planr-summary",
     ] {
-        let path = root.join("skills").join(skill).join("SKILL.md");
+        let path = root
+            .join("plugins/planr/skills")
+            .join(skill)
+            .join("SKILL.md");
         assert!(path.exists(), "missing {skill}");
         let body = fs::read_to_string(path).unwrap();
         assert!(
@@ -3573,10 +3576,11 @@ fn planr_native_skills_are_packaged_and_cli_first() {
         );
     }
 
-    // The repo root doubles as a plugin for Codex, Claude Code, and Cursor.
+    // The plugin payload lives in plugins/planr; marketplace manifests at the
+    // repo root must point there because Codex ignores root-as-plugin sources.
     for manifest in [
-        ".codex-plugin/plugin.json",
-        ".claude-plugin/plugin.json",
+        "plugins/planr/.codex-plugin/plugin.json",
+        "plugins/planr/.claude-plugin/plugin.json",
         ".cursor-plugin/plugin.json",
         ".claude-plugin/marketplace.json",
         ".agents/plugins/marketplace.json",
@@ -3587,9 +3591,23 @@ fn planr_native_skills_are_packaged_and_cli_first() {
             .unwrap_or_else(|e| panic!("{manifest} is not valid JSON: {e}"));
         assert_eq!(value["name"], "planr", "{manifest} must be named planr");
     }
+    let codex_marketplace =
+        fs::read_to_string(root.join(".agents/plugins/marketplace.json")).unwrap();
+    assert!(
+        codex_marketplace.contains("./plugins/planr"),
+        "Codex marketplace must point at the plugins/planr subdirectory"
+    );
+    let claude_marketplace =
+        fs::read_to_string(root.join(".claude-plugin/marketplace.json")).unwrap();
+    assert!(
+        claude_marketplace.contains("./plugins/planr"),
+        "Claude marketplace must point at the plugins/planr subdirectory"
+    );
     for agent in ["planr-worker", "planr-reviewer"] {
         assert!(
-            root.join("agents").join(format!("{agent}.md")).exists(),
+            root.join("plugins/planr/agents")
+                .join(format!("{agent}.md"))
+                .exists(),
             "missing plugin agent {agent}"
         );
     }

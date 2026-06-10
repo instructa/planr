@@ -628,7 +628,7 @@ Dependencies:
 - TASK-DATA-003.
 
 Do not do:
-- Do not reintroduce private runtime copies of agent skills; public templates live under `skills/`.
+- Do not reintroduce private runtime copies of agent skills; public templates live under `plugins/planr/skills/`.
 
 ## MCP And Agent Integrations
 

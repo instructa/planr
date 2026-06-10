@@ -1,7 +1,7 @@
 {
   "name": "planr",
   "description": "Skill-driven planning and execution loop for coding agents: one planr entry point, an autonomous planr-loop, and evidence-backed task graph skills powered by the planr CLI.",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "author": {
     "name": "instructa"
   },

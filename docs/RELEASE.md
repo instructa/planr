@@ -78,7 +78,7 @@ The package must include:
 - `docs/`
 - `docs/MCP_CONTRACT.md`
 - `docs/fixtures/mcp-contract.json`
-- `skills/`
+- `plugins/`
 - `README.md`
 - `LICENSE.md`
 

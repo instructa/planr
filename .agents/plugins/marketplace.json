@@ -8,7 +8,7 @@
       "name": "planr",
       "source": {
         "source": "local",
-        "path": "./"
+        "path": "./plugins/planr"
       },
       "policy": {
         "installation": "AVAILABLE",
