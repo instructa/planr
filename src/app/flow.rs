@@ -2,7 +2,7 @@ use super::App;
 use crate::cli::DoneArgs;
 use crate::model::Item;
 use crate::util::{short_id, worker_id};
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use rusqlite::params;
 use serde_json::{json, Value};
 
@@ -87,11 +87,26 @@ impl App {
         Ok(log_id)
     }
 
-    /// Single owner for creating a review gate on an item. A picked or
-    /// running target moves to `in_review` (ownership kept) so the wait
-    /// state is visible instead of masquerading as active work.
+    /// Single owner for creating a review gate on an item. Reviews are
+    /// gates: they attach to any unsettled target (pre-attached gates on
+    /// pending/blocked work are legal and hold the close later), but a
+    /// settled target is rejected — there is nothing left to gate. Only a
+    /// picked or running target moves to `in_review` (work done, waiting on
+    /// the gate, ownership kept); ready targets keep their status so they
+    /// stay pickable. `done --review` adopts never-picked items first, so
+    /// that path always transitions and always has a maker.
     pub(crate) fn request_review_for(&self, item_id: &str) -> Result<Item> {
         let target = self.get_item(item_id)?;
+        if matches!(
+            target.status.as_str(),
+            "closed" | "closed_partial" | "cancelled" | "failed"
+        ) {
+            bail!(
+                "invalid_transition: cannot request review on item {} from status {}; the item is settled, create a follow-up with `planr item create` instead",
+                target.id,
+                target.status
+            );
+        }
         let review = self.create_item(
             None,
             &format!("Review {}", target.title),
@@ -215,6 +230,10 @@ impl App {
                 .ok_or_else(|| anyhow!("no picked item for this worker"))?
         };
         let ready_before = self.ready_item_ids()?;
+        // A never-picked ready item is adopted (leased retroactively) so the
+        // completion carries worker attribution and the review transition
+        // cannot be skipped.
+        let adopted = self.adopt_ready_item(&item_id)?;
         let log_id = self.add_log_entry(
             &item_id,
             "completion",
@@ -234,25 +253,40 @@ impl App {
             &ready_before,
             !args.cmd.is_empty() || !args.tests.is_empty(),
         )?;
+        let item = self.get_item(&item_id)?;
         let next = if args.next {
             // A worker must not pick the review it just requested:
             // maker and checker stay separate.
             Some(self.next_pick_value(review.as_ref().map(|r| r.id.as_str()), None, None)?)
         } else {
-            // Without --next, name the exact follow-up command so the
-            // settlement output still ends in an action, not a dead end.
+            // Without --next, name the exact follow-up command (plan-scoped
+            // when the item belongs to a plan) so the settlement output
+            // still ends in an action, not a dead end.
+            let plan_flag = item
+                .plan_path
+                .as_deref()
+                .and_then(|path| self.plan_id_for_path(path).transpose())
+                .transpose()?
+                .map(|id| format!(" --plan {id}"))
+                .unwrap_or_default();
             let command = if review.is_some() {
-                "planr pick --work-type review --json"
+                format!("planr pick{plan_flag} --work-type review --json")
             } else {
-                "planr pick --json"
+                format!("planr pick{plan_flag} --json")
             };
             Some(json!(command))
         };
         let mut human = if let Some(review) = &review {
-            format!("logged {item_id} and requested review {}", review.id)
+            format!(
+                "logged {item_id} and requested review {}; {item_id} is {}",
+                review.id, item.status
+            )
         } else {
             format!("logged and closed {item_id}")
         };
+        if adopted {
+            human.push_str(" (item was never picked; adopted under this worker)");
+        }
         if let Some(next) = &next {
             if let Some(command) = next.as_str() {
                 human.push_str(&format!("; next: {command}"));
@@ -268,7 +302,7 @@ impl App {
         human.push_str(&Self::settlement_extras_human(&extras));
         self.emit(
             json!({
-                "item": self.get_item(&item_id)?,
+                "item": item,
                 "log_id": log_id,
                 "review": review,
                 "closed": if args.review { Value::Null } else { json!(item_id) },

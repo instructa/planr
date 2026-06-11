@@ -87,6 +87,34 @@ impl App {
         }
     }
 
+    /// `done` on a never-picked ready item adopts it first: the lease is
+    /// written retroactively so completion always carries worker attribution
+    /// (review_mode stays derivable) and the in_review transition can never
+    /// be skipped silently. Same bookkeeping as a pick, scoped to one id.
+    pub(crate) fn adopt_ready_item(&self, item_id: &str) -> Result<bool> {
+        let worker = worker_id();
+        let token = short_id("pick");
+        let adopted = self.conn.execute(
+            "UPDATE items
+             SET status = 'picked',
+                 worker_id = ?1,
+                 pick_token = ?2,
+                 picked_at = datetime('now'),
+                 last_heartbeat_at = datetime('now'),
+                 updated_at = datetime('now')
+             WHERE id = ?3 AND status = 'ready'",
+            params![worker, token, item_id],
+        )?;
+        if adopted > 0 {
+            self.record_event(
+                "item_adopted",
+                Some(item_id),
+                json!({"worker_id": worker, "pick_token": token}),
+            )?;
+        }
+        Ok(adopted > 0)
+    }
+
     pub(crate) fn ensure_worker_owns_or_unowned(&self, item_id: &str) -> Result<()> {
         let item = self.get_item(item_id)?;
         let worker = worker_id();

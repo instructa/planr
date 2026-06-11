@@ -82,7 +82,10 @@ impl App {
                 if !repair.contains(&without_work_type) {
                     repair.push(without_work_type);
                 }
-                format!("work_type is `{}` but the pick requires `--work-type {required}`", item.work_type)
+                format!(
+                    "work_type is `{}` but the pick requires `--work-type {required}`",
+                    item.work_type
+                )
             } else if filter
                 .plan_path
                 .is_some_and(|path| item.plan_path.as_deref() != Some(path))

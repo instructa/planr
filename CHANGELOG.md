@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.1.17] - 2026-06-11
+
+Attribution can never fall through a crack: fixes from the third manual Codex dogfood run, where `done --review` on a never-picked item left the target `ready` and the review `unattributed`.
+
+### Fixed
+
+- `done` on a ready item that was never picked now adopts it: the lease (worker id, pick token, timestamps) is written retroactively before logging, so the completion always records a maker, the `in_review` transition is never skipped silently, and `review_mode` can no longer degrade to `unattributed` through this path. Inspired by plandb's lenient-complete-with-backfill, extended to carry identity, not just timestamps.
+- `review request` on a settled item (`closed`, `closed_partial`, `cancelled`, `failed`) fails with `invalid_transition` and a follow-up suggestion instead of creating a gate on finished work. Pre-attaching a review gate to pending/blocked work stays legal.
+
+### Added
+
+- `done --review` output names the target's resulting status ("… is in_review") and the `next` command is plan-scoped when the item belongs to a plan (`planr pick --plan <id> --work-type review --json`), so the reviewer command is copy-pastable without resolving the plan id.
+- `review close` explains an `unattributed` mode inline: the target carried no recorded lease — instead of stamping the word without context.
+
+### Changed
+
+- Skills: the goal contract's "all reviews closed" clause audits review items that exist — plain-`done` items satisfy the contract without a review gate, so skipping low-signal reviews never blocks `plan audit` (planr-goal, planr-loop).
+- Skills: single-quote `--files` values containing `$` (route files like `watch.$videoId.tsx`) so the shell does not expand them (planr-work).
+
 ## [1.1.16] - 2026-06-11
 
 Filter-aware picks and a breakdown contract, from the second manual Codex dogfood run (the guess-killer validation run).

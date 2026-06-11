@@ -223,8 +223,7 @@ fn mcp_contract_install_fixtures_and_cli_docs_do_not_drift() {
         "plugins/planr/.codex-plugin/plugin.json",
         "plugins/planr/.claude-plugin/plugin.json",
     ] {
-        let value: Value =
-            serde_json::from_slice(&fs::read(root.join(manifest)).unwrap()).unwrap();
+        let value: Value = serde_json::from_slice(&fs::read(root.join(manifest)).unwrap()).unwrap();
         assert_eq!(
             value["version"].as_str(),
             Some(env!("CARGO_PKG_VERSION")),
@@ -1907,6 +1906,80 @@ fn breakdown_accepts_repeated_flags_and_newlines_and_reports_chain_and_next() {
     assert_eq!(
         done["next"], "planr pick --work-type review --json",
         "done --review without --next must name the follow-up command: {done}"
+    );
+}
+
+#[test]
+fn done_on_never_picked_item_adopts_lease_and_review_mode_stays_attributed() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Adopt"])
+        .assert()
+        .success();
+    let item = create_test_item(
+        dir.path(),
+        &db,
+        "Upload flow",
+        "dogfood adoption regression",
+    );
+
+    // `done --review` on a ready item that was never picked: the second
+    // Codex dogfood hit the silent-skip variant of this — the target stayed
+    // `ready` and the review closed `unattributed` despite a worker id.
+    let output = planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "maker-1")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "done",
+            &item,
+            "--summary",
+            "implemented upload flow",
+            "--review",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let done: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        done["item"]["status"], "in_review",
+        "adopted item must transition to in_review: {done}"
+    );
+    assert_eq!(
+        done["item"]["worker_id"], "maker-1",
+        "adoption must record the worker lease: {done}"
+    );
+    let review_id = done["review"]["id"].as_str().unwrap().to_string();
+
+    let output = planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "maker-1")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "review",
+            "close",
+            &review_id,
+            "--verdict",
+            "complete",
+            "--close-target",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let closed: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        closed["review_mode"], "single_agent",
+        "same identity on both sides must record single_agent, never unattributed: {closed}"
     );
 }
 

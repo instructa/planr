@@ -84,6 +84,19 @@ impl App {
             .ok_or_else(|| anyhow!("plan not found: {id}"))
     }
 
+    /// Resolves the plan id behind an item's `plan_path`, so outputs can
+    /// suggest plan-scoped commands without the agent mapping path to id.
+    pub(crate) fn plan_id_for_path(&self, path: &str) -> Result<Option<String>> {
+        self.conn
+            .query_row(
+                "SELECT id FROM plans WHERE path = ?1 AND archived = 0 ORDER BY created_at DESC LIMIT 1",
+                params![path],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
     pub(crate) fn list_plans(&self, stage: Option<&str>) -> Result<Vec<Plan>> {
         let sql = if stage.is_some() {
             "SELECT id, project_id, stage, path, title, slug, parse_status, archived FROM plans WHERE archived = 0 AND stage = ?1 ORDER BY created_at DESC"

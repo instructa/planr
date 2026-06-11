@@ -50,6 +50,8 @@ planr context add "GOAL CONTRACT <plan-id>: DONE when every in-scope map item is
 
 One contract per plan scope. Any agent on any host can recover it with `planr context list` or `planr search "GOAL CONTRACT"`. Never weaken a stored contract mid-run; scope changes go through `$planr-plan` and the user. During the run, workers lease with `planr pick --plan <plan-id>` so the loop never picks items outside this contract, even when other plans share the board. The loop checks the contract with `planr plan audit <plan-id>`, which evaluates exactly these clauses with evidence and answers `holds: true/false`.
 
+"All reviews closed" audits review items that exist — it does not require a review gate on every item. An item closed with plain `done` (evidence still required) satisfies the contract without one; request reviews where they carry signal (implementation slices, user-facing work), not on trivial inspection or scaffold steps.
+
 ## Hand Off
 
 Print the starter command, then stop. Do not start execution yourself; ask whether to start now, refine the plan, or stop.

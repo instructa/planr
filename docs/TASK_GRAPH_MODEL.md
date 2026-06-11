@@ -126,7 +126,7 @@ planr review close <review-id> \
 
 The target item may close only when required review items are closed.
 
-Every `review close` records a derived `review_mode`: the closing reviewer identity is compared against the target item's lease holder and recorded as `single_agent` (same identity), `independent` (different identity), or `unattributed` (no recorded maker). The mode lands in the close response, review log, artifact, and event — independence is proven by recorded identity, not declared by a note.
+Every `review close` records a derived `review_mode`: the closing reviewer identity is compared against the target item's lease holder and recorded as `single_agent` (same identity), `independent` (different identity), or `unattributed` (no recorded maker). The mode lands in the close response, review log, artifact, and event — independence is proven by recorded identity, not declared by a note. `unattributed` should be rare: `done` adopts a never-picked ready item (the lease is written retroactively under the current worker), so every completion path records a maker. When it does appear, the close output explains that the target carried no lease.
 
 ## Evidence
 

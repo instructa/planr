@@ -736,6 +736,11 @@ impl App {
                 let mut human = "review closed".to_string();
                 if let Some(mode) = result["review_mode"].as_str() {
                     human.push_str(&format!(" ({mode})"));
+                    if mode == "unattributed" {
+                        human.push_str(
+                            " — the target has no recorded lease, so no maker identity could be compared; this happens when work was never picked or its lease was released",
+                        );
+                    }
                 }
                 if let Some(target_id) = result["closed_target"]["id"].as_str() {
                     human.push_str(&format!("; closed target {target_id}"));
