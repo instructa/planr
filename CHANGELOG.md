@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.1.14] - 2026-06-11
+
+Release engineering: deterministic version bumps, CI secret scanning, and npm as a real install channel.
+
 ### Added
 
 - `scripts/release.sh <x.y.z> "summary"`: the only supported release path. Syncs the version into `Cargo.toml`, `package.json`, and both plugin manifests, requires a committed changelog section, runs `cargo test`, `npm pack --dry-run`, and the local leak gate, then commits, tags, and pushes in one step.
@@ -217,7 +221,11 @@ Initial Planr product release.
 - Tag-driven release pipeline with multi-target builds (darwin/linux, arm64/x86_64) and Homebrew tap automation.
 - Skill workflow documentation for Codex, Claude Code, Cursor, and MCP-only clients.
 
-[Unreleased]: https://github.com/instructa/planr/compare/v1.1.10...HEAD
+[Unreleased]: https://github.com/instructa/planr/compare/v1.1.14...HEAD
+[1.1.14]: https://github.com/instructa/planr/compare/v1.1.13...v1.1.14
+[1.1.13]: https://github.com/instructa/planr/compare/v1.1.12...v1.1.13
+[1.1.12]: https://github.com/instructa/planr/compare/v1.1.11...v1.1.12
+[1.1.11]: https://github.com/instructa/planr/compare/v1.1.10...v1.1.11
 [1.1.10]: https://github.com/instructa/planr/compare/v1.1.9...v1.1.10
 [1.1.9]: https://github.com/instructa/planr/compare/v1.1.8...v1.1.9
 [1.1.8]: https://github.com/instructa/planr/compare/v1.1.7...v1.1.8
