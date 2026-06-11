@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.1.15] - 2026-06-11
+
+### Fixed
+
+- npm publish failed sigstore provenance validation because `package.json` had no `repository` field; npm requires `repository.url` to match the provenance source repository.
+
 ## [1.1.14] - 2026-06-11
 
 Release engineering: deterministic version bumps, CI secret scanning, and npm as a real install channel.
@@ -221,7 +227,8 @@ Initial Planr product release.
 - Tag-driven release pipeline with multi-target builds (darwin/linux, arm64/x86_64) and Homebrew tap automation.
 - Skill workflow documentation for Codex, Claude Code, Cursor, and MCP-only clients.
 
-[Unreleased]: https://github.com/instructa/planr/compare/v1.1.14...HEAD
+[Unreleased]: https://github.com/instructa/planr/compare/v1.1.15...HEAD
+[1.1.15]: https://github.com/instructa/planr/compare/v1.1.14...v1.1.15
 [1.1.14]: https://github.com/instructa/planr/compare/v1.1.13...v1.1.14
 [1.1.13]: https://github.com/instructa/planr/compare/v1.1.12...v1.1.13
 [1.1.12]: https://github.com/instructa/planr/compare/v1.1.11...v1.1.12

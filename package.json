@@ -3,6 +3,10 @@
   "version": "1.1.14",
   "description": "Local-first planning and execution coordination for coding agents.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/instructa/planr.git"
+  },
   "type": "module",
   "bin": {
     "planr": "npm/bin/planr.js"
