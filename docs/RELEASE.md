@@ -11,21 +11,34 @@ The v1 repository-owned public install order is:
 
 The npm wrapper is maintained for development and consumer E2E coverage. Do not present npm or npx as the primary user install path until native binary packages are published with the npm artifact.
 
+## Version Bump
+
+`scripts/release.sh` is the only supported release path. The version lives in one source (`Cargo.toml`) and four distribution manifests must carry it: `Cargo.toml`, `package.json`, `plugins/planr/.codex-plugin/plugin.json`, and `plugins/planr/.claude-plugin/plugin.json`. Manual tagging skips the manifest sync and ships stale plugin versions.
+
+```bash
+scripts/release.sh 1.2.0 "one-line release summary"
+```
+
+The script enforces, in order:
+
+1. branch is `main`, worktree is clean, `CHANGELOG.md` already has a committed `## [x.y.z]` section, and the tag does not exist;
+2. the version is written into all four manifests plus `Cargo.lock`;
+3. gates: `cargo test` (includes the manifest drift guard in `tests/e2e.rs`), `npm pack --dry-run`, and `scripts/security-local.sh` (betterleaks + trivy leak gate);
+4. one mechanical commit `release x.y.z: <summary>`, tag `vx.y.z`, and a single push of branch plus tag.
+
+Two independent gates back the script:
+
+- `cargo test` fails on every push when any manifest version drifts from `Cargo.toml`.
+- The release workflow's `Verify release versions are consistent` step refuses the tag when the tag, any manifest, or the `CHANGELOG.md` section disagree.
+
 ## Automated Release Pipeline
 
 Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`:
 
-1. `create-release` verifies the tag matches the `Cargo.toml` version and creates a draft GitHub Release.
+1. `create-release` verifies the tag against `Cargo.toml`, all distribution manifests, and the changelog section, then creates a draft GitHub Release.
 2. `build` compiles and packages `planr-<os>-<arch>.tar.gz` for `darwin-arm64`, `darwin-x86_64`, `linux-x86_64`, and `linux-arm64`, then uploads each asset to the draft release.
 3. `finalize` downloads all uploaded assets, writes one aggregated `SHA256SUMS` covering every tarball, uploads it, and publishes the release.
 4. `homebrew-tap` regenerates `Formula/planr.rb` with `scripts/generate-formula.sh` and pushes it to `instructa/homebrew-tap` (installed as `brew install instructa/tap/planr`).
-
-Tag flow:
-
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
 
 ## Changelog
 

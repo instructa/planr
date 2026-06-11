@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- `scripts/release.sh <x.y.z> "summary"`: the only supported release path. Syncs the version into `Cargo.toml`, `package.json`, and both plugin manifests, requires a committed changelog section, runs `cargo test`, `npm pack --dry-run`, and the local leak gate, then commits, tags, and pushes in one step.
+- Release workflow tag gate now verifies `package.json`, both plugin manifests, and the `CHANGELOG.md` section against the tag, not just `Cargo.toml`.
+- CI secret scanning in `security.yml`: TruffleHog (verified results, full history) and Trivy (secret + misconfig), both pinned by commit SHA.
+
+### Changed
+
+- `packageManager` pinned to pnpm 11 (current stable, integrity-pinned) with a `devEngines.packageManager >= 11.0.0` requirement.
+
 ## [1.1.13] - 2026-06-10
 
 Guess-killer pack from the first fully manual Codex dogfood run (YT clone): every place the agent had to guess now answers itself.

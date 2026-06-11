@@ -23,13 +23,27 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Verify tag matches Cargo.toml version
+      - name: Verify release versions are consistent
         env:
           TAG: ${{ github.ref_name }}
         run: |
           crate_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)"
           if [ "v$crate_version" != "$TAG" ]; then
             echo "tag $TAG does not match Cargo.toml version $crate_version" >&2
+            exit 1
+          fi
+          for manifest in \
+            package.json \
+            plugins/planr/.codex-plugin/plugin.json \
+            plugins/planr/.claude-plugin/plugin.json; do
+            manifest_version="$(jq -r .version "$manifest")"
+            if [ "$manifest_version" != "$crate_version" ]; then
+              echo "$manifest version $manifest_version does not match Cargo.toml version $crate_version; release with scripts/release.sh" >&2
+              exit 1
+            fi
+          done
+          if ! grep -q "^## \[$crate_version\]" CHANGELOG.md; then
+            echo "CHANGELOG.md has no '## [$crate_version]' section; release with scripts/release.sh" >&2
             exit 1
           fi
 
