@@ -7,9 +7,10 @@ The v1 repository-owned public install order is:
 1. GitHub Release curl installer.
 2. Manual GitHub Release asset download.
 3. Homebrew after the tap/formula is published.
-4. Cargo/source builds for maintainers and contributors.
+4. npm (`npm install -g planr`) with bundled platform binaries.
+5. Cargo/source builds for maintainers and contributors.
 
-The npm wrapper is maintained for development and consumer E2E coverage. Do not present npm or npx as the primary user install path until native binary packages are published with the npm artifact.
+Published npm versions bundle platform-native binaries; see `docs/NPM.md`.
 
 ## Version Bump
 
@@ -38,7 +39,8 @@ Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`:
 1. `create-release` verifies the tag against `Cargo.toml`, all distribution manifests, and the changelog section, then creates a draft GitHub Release.
 2. `build` compiles and packages `planr-<os>-<arch>.tar.gz` for `darwin-arm64`, `darwin-x86_64`, `linux-x86_64`, and `linux-arm64`, then uploads each asset to the draft release.
 3. `finalize` downloads all uploaded assets, writes one aggregated `SHA256SUMS` covering every tarball, uploads it, and publishes the release.
-4. `homebrew-tap` regenerates `Formula/planr.rb` with `scripts/generate-formula.sh` and pushes it to `instructa/homebrew-tap` (installed as `brew install instructa/tap/planr`).
+4. `npm-publish` downloads the release assets, verifies them against `SHA256SUMS`, bundles the four platform binaries into `npm/native/`, smoke-tests the wrapper, and publishes to npm via Trusted Publishing (OIDC). Runs only when the repository variable `NPM_PUBLISH_ENABLED` is `true`; requires the one-time Trusted Publisher setup described in `docs/NPM.md`.
+5. `homebrew-tap` regenerates `Formula/planr.rb` with `scripts/generate-formula.sh` and pushes it to `instructa/homebrew-tap` (installed as `brew install instructa/tap/planr`).
 
 ## Changelog
 
@@ -102,6 +104,8 @@ The package must include:
 - `plugins/`
 - `README.md`
 - `LICENSE.md`
+
+`npm/native/` platform binaries exist only in the `npm-publish` CI job; the local dry-run does not include them.
 
 ## Install Smoke
 

@@ -9,6 +9,7 @@
   },
   "files": [
     "npm/bin/planr.js",
+    "npm/native",
     "plugins",
     "README.md",
     "LICENSE.md",

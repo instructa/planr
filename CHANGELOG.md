@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `scripts/release.sh <x.y.z> "summary"`: the only supported release path. Syncs the version into `Cargo.toml`, `package.json`, and both plugin manifests, requires a committed changelog section, runs `cargo test`, `npm pack --dry-run`, and the local leak gate, then commits, tags, and pushes in one step.
 - Release workflow tag gate now verifies `package.json`, both plugin manifests, and the `CHANGELOG.md` section against the tag, not just `Cargo.toml`.
 - CI secret scanning in `security.yml`: TruffleHog (verified results, full history) and Trivy (secret + misconfig), both pinned by commit SHA.
+- npm is a real install channel: the release workflow's `npm-publish` job bundles all four platform binaries (checksum-verified against the release `SHA256SUMS`) into `npm/native/` and publishes via npm Trusted Publishing (OIDC, no token secret). Gated on the `NPM_PUBLISH_ENABLED` repository variable. The wrapper resolves `PLANR_NATIVE_BIN`, then the bundled platform binary, then local cargo builds; no postinstall, no install-time downloads.
 
 ### Changed
 
