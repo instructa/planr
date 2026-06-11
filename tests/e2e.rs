@@ -215,6 +215,23 @@ fn mcp_contract_install_fixtures_and_cli_docs_do_not_drift() {
         serde_json::from_slice(&fs::read(root.join("docs/fixtures/mcp-contract.json")).unwrap())
             .unwrap();
 
+    // Distribution version drift guard: the npm wrapper and both plugin
+    // manifests must carry the crate version, or plugin installs report a
+    // stale version even though the content is current.
+    for manifest in [
+        "package.json",
+        "plugins/planr/.codex-plugin/plugin.json",
+        "plugins/planr/.claude-plugin/plugin.json",
+    ] {
+        let value: Value =
+            serde_json::from_slice(&fs::read(root.join(manifest)).unwrap()).unwrap();
+        assert_eq!(
+            value["version"].as_str(),
+            Some(env!("CARGO_PKG_VERSION")),
+            "{manifest} version must match Cargo.toml"
+        );
+    }
+
     let mcp_input = [
         json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}).to_string(),
         json!({"jsonrpc":"2.0","id":2,"method":"resources/list"}).to_string(),
