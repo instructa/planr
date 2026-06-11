@@ -43,6 +43,20 @@ pub fn print_json(value: &Value) -> Result<()> {
     Ok(())
 }
 
+/// The breakdown title contract: repeated `--into` flags each carry one
+/// title, and any single value may pack several titles separated by
+/// newlines or commas. Both shapes parse identically so agents never have
+/// to guess the delimiter.
+pub fn breakdown_titles(values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .flat_map(|value| value.split(['\n', ',']))
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
 pub fn infer_error_code(message: &str) -> &'static str {
     if message.contains("not found") {
         "not_found"

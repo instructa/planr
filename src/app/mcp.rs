@@ -261,20 +261,19 @@ impl App {
             }
             "planr_item_breakdown" => {
                 let id = required_arg(&args, "id")?;
-                let into = required_arg(&args, "into")?;
-                let parent = self.get_item(id)?;
-                let mut created = Vec::new();
-                for title in into.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-                    created.push(self.create_item(
-                        Some(id),
-                        title,
-                        &format!("Sub-item for {}", parent.title),
-                        "generic",
-                        parent.plan_path.as_deref(),
-                    )?);
-                }
-                self.promote_ready()?;
-                Ok(mcp_json(json!({"items": created})))
+                let into = required_arg(&args, "into")?.to_string();
+                let titles = crate::util::breakdown_titles(&[into]);
+                let created = self.breakdown_item(id, &titles)?;
+                let links = created
+                    .windows(2)
+                    .map(|pair| json!({"from": pair[0].id, "to": pair[1].id, "kind": "blocks"}))
+                    .collect::<Vec<_>>();
+                Ok(mcp_json(json!({
+                    "items": created,
+                    "links": links,
+                    "item": self.get_item(id)?,
+                    "next": "planr pick",
+                })))
             }
             "planr_item_insert" => {
                 let title = required_arg(&args, "title")?.to_string();

@@ -135,7 +135,7 @@ parent gate
 Rules:
 
 - create a parent item for the change;
-- use `planr item breakdown <parent-id> --into "Implement, Verify"` to create child work under that parent;
+- use `planr item breakdown <parent-id> --into "Implement" --into "Verify"` (one `--into` per child; a single value may also pack newline- or comma-separated titles) to create chained child work under that parent — the output lists every child with id and status plus the next pick command;
 - request review on the implementation or test child after evidence exists;
 - if review finds issues, let Planr create fix and follow-up review work from the review verdict;
 - make later top-level work depend on the parent gate, not only the first child.
@@ -157,7 +157,7 @@ Readiness comes from graph links and item state, not Markdown checkboxes.
 Use:
 
 ```bash
-planr item breakdown <item-id> --into "Trace owner, Implement, Verify"
+planr item breakdown <item-id> --into "Trace owner" --into "Implement" --into "Verify"
 planr link remove <from-item> <to-item> --type blocks
 ```
 

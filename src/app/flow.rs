@@ -239,7 +239,14 @@ impl App {
             // maker and checker stay separate.
             Some(self.next_pick_value(review.as_ref().map(|r| r.id.as_str()), None, None)?)
         } else {
-            None
+            // Without --next, name the exact follow-up command so the
+            // settlement output still ends in an action, not a dead end.
+            let command = if review.is_some() {
+                "planr pick --work-type review --json"
+            } else {
+                "planr pick --json"
+            };
+            Some(json!(command))
         };
         let mut human = if let Some(review) = &review {
             format!("logged {item_id} and requested review {}", review.id)
@@ -247,9 +254,13 @@ impl App {
             format!("logged and closed {item_id}")
         };
         if let Some(next) = &next {
-            match next["item"]["id"].as_str() {
-                Some(next_id) => human.push_str(&format!("; picked {next_id}")),
-                None => human.push_str("; no ready item"),
+            if let Some(command) = next.as_str() {
+                human.push_str(&format!("; next: {command}"));
+            } else {
+                match next["item"]["id"].as_str() {
+                    Some(next_id) => human.push_str(&format!("; picked {next_id}")),
+                    None => human.push_str("; no ready item"),
+                }
             }
         }
         let progress = self.progress_value()?;

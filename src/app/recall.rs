@@ -32,21 +32,85 @@ impl App {
             let total = remaining["total"].as_i64().unwrap_or(0);
             let settled = remaining["settled"].as_i64().unwrap_or(0);
             let ready = remaining["counts"]["ready"].as_i64().unwrap_or(0);
-            let reason = if total == 0 {
-                "empty_map"
-            } else if settled == total {
-                "all_settled"
-            } else if ready == 0 {
-                "nothing_ready"
-            } else if plan.is_some() {
-                "no_ready_item_in_plan"
-            } else if work_type.is_some() {
-                "no_ready_item_of_work_type"
-            } else {
-                "ready_items_not_pickable"
-            };
-            Ok(json!({"item": null, "reason": reason, "remaining": remaining}))
+            if total == 0 || settled == total || ready == 0 {
+                let reason = if total == 0 {
+                    "empty_map"
+                } else if settled == total {
+                    "all_settled"
+                } else {
+                    "nothing_ready"
+                };
+                return Ok(json!({"item": null, "reason": reason, "remaining": remaining}));
+            }
+            // Ready work exists, so a pick filter excluded all of it. Name
+            // every exclusion and the exact repair command instead of leaving
+            // the "no item, but ready: 1" contradiction for the agent.
+            let (excluded, repair) = self.pick_exclusions(&filter, work_type, plan)?;
+            Ok(json!({
+                "item": null,
+                "reason": "ready_items_excluded_by_filter",
+                "excluded": excluded,
+                "repair": repair,
+                "remaining": remaining,
+            }))
         }
+    }
+
+    /// One entry per ready item the active filters rejected, plus the pick
+    /// commands that would lease that work.
+    fn pick_exclusions(
+        &self,
+        filter: &PickFilter,
+        work_type: Option<&str>,
+        plan: Option<&str>,
+    ) -> Result<(Vec<Value>, Vec<String>)> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, project_id, parent_item_id, title, description, status, work_type, priority, worker_id, plan_path
+             FROM items WHERE status = 'ready' ORDER BY priority DESC, created_at LIMIT 5",
+        )?;
+        let ready_items = collect_rows(stmt.query_map([], row_to_item)?)?;
+        let mut excluded = Vec::new();
+        let mut repair = Vec::new();
+        for item in ready_items {
+            let cause = if filter.exclude == Some(item.id.as_str()) {
+                "this worker just requested it (a maker never picks its own review)".to_string()
+            } else if let Some(required) = filter.work_type.filter(|wt| *wt != item.work_type) {
+                let without_work_type = match plan {
+                    Some(plan_id) => format!("planr pick --plan {plan_id} --json"),
+                    None => "planr pick --json".to_string(),
+                };
+                if !repair.contains(&without_work_type) {
+                    repair.push(without_work_type);
+                }
+                format!("work_type is `{}` but the pick requires `--work-type {required}`", item.work_type)
+            } else if filter
+                .plan_path
+                .is_some_and(|path| item.plan_path.as_deref() != Some(path))
+            {
+                let without_plan = match work_type {
+                    Some(wt) => format!("planr pick --work-type {wt} --json"),
+                    None => "planr pick --json".to_string(),
+                };
+                if !repair.contains(&without_plan) {
+                    repair.push(without_plan);
+                }
+                format!(
+                    "item is outside --plan {} (its plan path is {})",
+                    plan.unwrap_or_default(),
+                    item.plan_path.as_deref().unwrap_or("none")
+                )
+            } else {
+                continue;
+            };
+            excluded.push(json!({
+                "id": item.id,
+                "title": item.title,
+                "work_type": item.work_type,
+                "plan_path": item.plan_path,
+                "cause": cause,
+            }));
+        }
+        Ok((excluded, repair))
     }
 
     /// The flat pick work packet: each fact appears exactly once. Base is

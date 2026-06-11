@@ -1797,6 +1797,120 @@ fn child_item_ids(db: &std::path::Path, parent_id: &str) -> Vec<String> {
 }
 
 #[test]
+fn breakdown_accepts_repeated_flags_and_newlines_and_reports_chain_and_next() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Breakdown"])
+        .assert()
+        .success();
+    let parent = create_test_item(dir.path(), &db, "Coarse slice", "breakdown contract");
+
+    // The delimiter contract: repeated --into flags and newline-packed
+    // values parse identically, so agents never guess the separator (the
+    // Codex dogfood passed newlines and got one swallowed mega-title).
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "item",
+            "breakdown",
+            &parent,
+            "--into",
+            "Step A",
+            "--into",
+            "Step B\nStep C",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output).unwrap();
+    let items = value["items"].as_array().unwrap();
+    let titles = items
+        .iter()
+        .map(|item| item["title"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(titles, ["Step A", "Step B", "Step C"]);
+    assert_eq!(
+        items[0]["status"], "ready",
+        "first child must be ready: {value}"
+    );
+    assert_eq!(
+        items[1]["status"], "pending",
+        "chained children must wait on the chain: {value}"
+    );
+    assert_eq!(
+        value["links"].as_array().unwrap().len(),
+        2,
+        "breakdown must report the chain links: {value}"
+    );
+    assert_eq!(value["item"]["status"], "blocked", "parent parks as a gate");
+    assert_eq!(value["next"], "planr pick --json");
+
+    // The human output names every child and the next command instead of a
+    // bare count.
+    let human = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "item",
+            "breakdown",
+            &create_test_item(dir.path(), &db, "Second slice", "human output"),
+            "--into",
+            "Only child",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let human = String::from_utf8(human).unwrap();
+    assert!(human.contains("Only child"), "human output: {human}");
+    assert!(human.contains("next: planr pick"), "human output: {human}");
+
+    // Without --next, done still ends in an action: the response names the
+    // exact follow-up command.
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "pick"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let pick: Value = serde_json::from_slice(&output).unwrap();
+    let picked = pick["item"]["id"].as_str().unwrap().to_string();
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "done",
+            &picked,
+            "--summary",
+            "picked slice done",
+            "--review",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let done: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        done["next"], "planr pick --work-type review --json",
+        "done --review without --next must name the follow-up command: {done}"
+    );
+}
+
+#[test]
 fn parent_gate_rolls_up_and_auto_closes_when_children_settle() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
@@ -2345,10 +2459,29 @@ fn review_close_guard_reviewer_identity_and_role_aware_picks() {
         .clone();
     let null_pick: Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(null_pick["item"], Value::Null);
-    assert_eq!(null_pick["reason"], "no_ready_item_of_work_type");
+    assert_eq!(null_pick["reason"], "ready_items_excluded_by_filter");
     assert!(
         null_pick["remaining"]["counts"]["ready"].as_i64().unwrap() > 0,
         "null pick must carry the remaining snapshot: {null_pick}"
+    );
+    let excluded = null_pick["excluded"].as_array().unwrap();
+    assert!(
+        excluded.iter().any(|entry| {
+            entry["work_type"] == "review"
+                && entry["cause"]
+                    .as_str()
+                    .unwrap()
+                    .contains("--work-type code")
+        }),
+        "exclusions must name the work_type mismatch: {null_pick}"
+    );
+    assert!(
+        null_pick["repair"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|cmd| cmd == "planr pick --json"),
+        "filter exclusion must carry the exact repair command: {null_pick}"
     );
 
     // A checker asking for review work leases exactly the review item, and
@@ -2757,7 +2890,23 @@ fn plan_scoped_pick_never_leases_items_of_another_plan() {
         .clone();
     let null_pick: Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(null_pick["item"], Value::Null);
-    assert_eq!(null_pick["reason"], "no_ready_item_in_plan");
+    assert_eq!(null_pick["reason"], "ready_items_excluded_by_filter");
+    assert!(
+        null_pick["excluded"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|entry| entry["cause"].as_str().unwrap().contains("--plan")),
+        "plan-scope exclusions must name the plan filter: {null_pick}"
+    );
+    assert!(
+        null_pick["repair"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|cmd| cmd == "planr pick --json"),
+        "plan-scope exclusion must carry the unscoped repair command: {null_pick}"
+    );
 
     // An unknown plan id is an error, not a silent unscoped pick.
     planr()

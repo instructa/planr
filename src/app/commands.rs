@@ -362,34 +362,31 @@ impl App {
                 self.emit(json!({"item": item}), "item updated".to_string())
             }
             ItemCommand::Breakdown(args) => {
-                let parent = self.get_item(&args.id)?;
-                let titles: Vec<_> = args
-                    .into
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .collect();
-                let mut created = Vec::new();
-                let mut previous: Option<String> = None;
-                for title in titles {
-                    let child = self.create_item(
-                        Some(&parent.id),
-                        title,
-                        &format!("Sub-item for {}", parent.title),
-                        "generic",
-                        parent.plan_path.as_deref(),
-                    )?;
-                    if let Some(prev) = previous {
-                        self.add_link(&prev, &child.id, "blocks")?;
-                    }
-                    previous = Some(child.id.clone());
-                    created.push(child);
+                let titles = crate::util::breakdown_titles(&args.into);
+                let created = self.breakdown_item(&args.id, &titles)?;
+                let links = created
+                    .windows(2)
+                    .map(|pair| json!({"from": pair[0].id, "to": pair[1].id, "kind": "blocks"}))
+                    .collect::<Vec<_>>();
+                let mut message = format!(
+                    "created {} chained child item(s) under {}",
+                    created.len(),
+                    args.id
+                );
+                for item in &created {
+                    message.push_str(&format!("\n  {} [{}] {}", item.id, item.status, item.title));
                 }
-                self.conn.execute("UPDATE items SET status = 'blocked', updated_at = datetime('now') WHERE id = ?1", params![parent.id])?;
-                self.promote_ready()?;
+                message.push_str(
+                    "\nchildren run in the given order; the parent stays blocked as a gate until they settle\nnext: planr pick --json",
+                );
                 self.emit(
-                    json!({"items": created, "item": self.get_item(&parent.id)?}),
-                    format!("created {} child item(s)", created.len()),
+                    json!({
+                        "items": created,
+                        "links": links,
+                        "item": self.get_item(&args.id)?,
+                        "next": "planr pick --json",
+                    }),
+                    message,
                 )
             }
             ItemCommand::Insert(args) => self.item_insert(args),
@@ -536,10 +533,27 @@ impl App {
                         id,
                         pick["item"]["title"].as_str().unwrap_or_default()
                     ),
-                    None => format!(
-                        "no pickable item ({})",
-                        pick["reason"].as_str().unwrap_or("unknown")
-                    ),
+                    None => {
+                        let mut human = format!(
+                            "no pickable item ({})",
+                            pick["reason"].as_str().unwrap_or("unknown")
+                        );
+                        for entry in pick["excluded"].as_array().into_iter().flatten() {
+                            human.push_str(&format!(
+                                "\n  {} {}: {}",
+                                entry["id"].as_str().unwrap_or_default(),
+                                entry["title"].as_str().unwrap_or_default(),
+                                entry["cause"].as_str().unwrap_or_default()
+                            ));
+                        }
+                        for command in pick["repair"].as_array().into_iter().flatten() {
+                            human.push_str(&format!(
+                                "\n  repair: {}",
+                                command.as_str().unwrap_or_default()
+                            ));
+                        }
+                        human
+                    }
                 };
                 self.emit(pick, human)
             }

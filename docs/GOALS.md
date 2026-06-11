@@ -63,7 +63,7 @@ planr done <item-id> --summary "..." --cmd "..." --review --next
 planr review close <review-id> --verdict complete --reviewer <id> --close-target
 ```
 
-`--plan` keeps the lease inside the goal contract: when several plans share the board (a parallel feature, leftovers from an aborted prep run), a plan-scoped goal run never picks work outside its own plan. A pick that finds nothing in scope reports `reason: "no_ready_item_in_plan"` instead of silently widening.
+`--plan` keeps the lease inside the goal contract: when several plans share the board (a parallel feature, leftovers from an aborted prep run), a plan-scoped goal run never picks work outside its own plan. A pick that finds nothing in scope never widens silently: it reports `reason: "nothing_ready"` when nothing is ready at all, or `reason: "ready_items_excluded_by_filter"` with the excluded items, the cause per item, and the exact `repair` pick commands when ready work exists outside the filter.
 
 `done`/`close`/`review close` responses and the pick packet include a `remaining` snapshot (`counts` with explicit zeros for every status, `settled`, `total`), so the orchestrator evaluates the stop condition straight from the completion output — no extra `map status` round-trip. The same responses list what each settlement `unlocked`, so the loop sees its next work without re-reading the map. `--next` never hands a worker its own freshly created review, so maker and checker stay separate even in compact loops. The review verdict records `review_mode` (`single_agent` or `independent`) automatically from worker identity — no ceremony note needed.
 

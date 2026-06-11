@@ -48,11 +48,13 @@ Each iteration is one dispatch through the routing skill — never a hand-writte
 6. repeat             fix items are just the next ready items
 ```
 
-The short path per item is three commands: `planr pick --json` (one flat work packet; makers add `--work-type code`), `planr done <item-id> --summary ... --cmd ... --review [--next]`, and the reviewer's `planr --json pick --work-type review` followed by `planr review close <review-id> --verdict complete --reviewer <id> --close-target` — run exactly once. Parent gates roll up automatically. When the loop runs against one plan (every `/goal` run does), add `--plan <plan-id>` to every pick so the lease never leaves the goal contract, even when other plans share the board; an empty scope reports `reason: "no_ready_item_in_plan"`.
+The short path per item is three commands: `planr pick --json` (one flat work packet; makers add `--work-type code`), `planr done <item-id> --summary ... --cmd ... --review [--next]`, and the reviewer's `planr --json pick --work-type review` followed by `planr review close <review-id> --verdict complete --reviewer <id> --close-target` — run exactly once. Parent gates roll up automatically. When the loop runs against one plan (every `/goal` run does), add `--plan <plan-id>` to every pick so the lease never leaves the goal contract, even when other plans share the board. A null pick explains itself: when filters excluded ready work, `reason: "ready_items_excluded_by_filter"` names each excluded item, the cause (work_type or plan mismatch), and the exact `repair` pick command — run the repair instead of guessing.
 
-`map build` chains created items in plan order with `blocks` links automatically and prints the created items and links. In step 2, verify that chain against real execution-order dependencies and adjust with `planr link add` only where document order and execution order differ.
+`map build` chains created items in plan order with `blocks` links automatically and prints the created items and links. In step 2, verify that chain against real execution-order dependencies and adjust with `planr link add` only where document order and execution order differ. `item breakdown` works the same way: pass one `--into` per child title (or one value with newline-separated titles), and the output lists the chained children plus the next command.
 
-The loop never closes its own reviews when the host supports a second agent. Maker and checker stay separate.
+Request reviews where they carry signal: implementation slices and anything user-facing finish with `done --review`. Trivial inspection, baseline, or setup items close with plain `done` (evidence still required) — a review that can only confirm "the repo was empty" adds ceremony, not safety.
+
+The loop never closes its own reviews when the host supports a second agent. Maker and checker stay separate. One agent instance keeps one `PLANR_WORKER_ID` for the whole session — never export a second identity inside the same instance to make reviews look `independent`; an honest `single_agent` stamp beats a fake `independent` one.
 
 ## Skills Are The Prompts
 

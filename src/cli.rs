@@ -254,8 +254,10 @@ pub(crate) struct ItemUpdateArgs {
 #[derive(Args, Debug)]
 pub(crate) struct ItemBreakdownArgs {
     pub(crate) id: String,
-    #[arg(long)]
-    pub(crate) into: String,
+    /// Child title; repeat the flag per child, or pass one value with
+    /// newline- or comma-separated titles
+    #[arg(long, required = true)]
+    pub(crate) into: Vec<String>,
 }
 
 #[derive(Args, Debug)]

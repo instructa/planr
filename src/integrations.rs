@@ -185,10 +185,10 @@ pub fn mcp_tools() -> Vec<Value> {
         ),
         tool(
             "planr_item_breakdown",
-            "Break an item into child items",
+            "Break an item into chained child items (parent parks as a gate)",
             json!({
                 "id": prop("string", "Parent item id"),
-                "into": prop("string", "Comma-separated child titles")
+                "into": prop("string", "Child titles separated by newlines or commas")
             }),
             &["id", "into"],
         ),

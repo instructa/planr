@@ -6,8 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.1.16] - 2026-06-11
+
+Filter-aware picks and a breakdown contract, from the second manual Codex dogfood run (the guess-killer validation run).
+
+### Added
+
+- `item breakdown` has an explicit title contract: repeat `--into` once per child, or pass one value with newline- or comma-separated titles — both parse identically (CLI and MCP `planr_item_breakdown`). The output now lists every created child with id and status, the `blocks` chain links, the parked parent, and the next command, instead of a bare count. MCP breakdown now chains children and parks the parent exactly like the CLI (it previously created flat, unchained children).
+- A null pick caused by filters explains itself: when ready work exists but `--work-type`, `--plan`, or the own-review exclusion rejected all of it, `reason` is `ready_items_excluded_by_filter` and the response carries `excluded` (each ready item with its mismatch cause) and `repair` (the exact pick commands that would lease that work) — across CLI, MCP, and HTTP. Replaces the contradictory `no_ready_item_in_plan`/`no_ready_item_of_work_type` answers that reported `ready: 1` alongside "no item".
+- `done` without `--next` sets `next` to the exact follow-up command (`planr pick --work-type review --json` after a review request, `planr pick --json` after a close), so every settlement output ends in an action.
+
 ### Changed
 
+- Skills: one agent instance keeps one `PLANR_WORKER_ID` — never export a second identity inside the same instance to make a review look `independent`; an honest `single_agent` stamp beats a fake `independent` one (planr-review, planr-loop).
+- Skills: request reviews where they carry signal — implementation slices and user-facing work finish with `done --review`; trivial inspection/baseline items close with plain `done`, evidence still required (planr-loop).
 - Install docs list npm (`npm install -g planr`) as a package-manager path alongside Homebrew, and the Homebrew section no longer reads as pre-publication.
 
 ## [1.1.15] - 2026-06-11
@@ -231,7 +243,8 @@ Initial Planr product release.
 - Tag-driven release pipeline with multi-target builds (darwin/linux, arm64/x86_64) and Homebrew tap automation.
 - Skill workflow documentation for Codex, Claude Code, Cursor, and MCP-only clients.
 
-[Unreleased]: https://github.com/instructa/planr/compare/v1.1.15...HEAD
+[Unreleased]: https://github.com/instructa/planr/compare/v1.1.16...HEAD
+[1.1.16]: https://github.com/instructa/planr/compare/v1.1.15...v1.1.16
 [1.1.15]: https://github.com/instructa/planr/compare/v1.1.14...v1.1.15
 [1.1.14]: https://github.com/instructa/planr/compare/v1.1.13...v1.1.14
 [1.1.13]: https://github.com/instructa/planr/compare/v1.1.12...v1.1.13

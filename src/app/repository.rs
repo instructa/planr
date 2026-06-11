@@ -151,6 +151,40 @@ impl App {
         Ok(created)
     }
 
+    /// Splits a parent into chained children: each title becomes a child,
+    /// consecutive children are linked with `blocks` in the given order, and
+    /// the parent parks as a blocked gate until the children settle. Shared
+    /// by CLI and MCP so both surfaces produce the same graph shape.
+    pub(crate) fn breakdown_item(&self, parent_id: &str, titles: &[String]) -> Result<Vec<Item>> {
+        if titles.is_empty() {
+            bail!("breakdown requires at least one child title via --into");
+        }
+        let parent = self.get_item(parent_id)?;
+        let mut created = Vec::new();
+        let mut previous: Option<String> = None;
+        for title in titles {
+            let child = self.create_item(
+                Some(&parent.id),
+                title,
+                &format!("Sub-item for {}", parent.title),
+                "generic",
+                parent.plan_path.as_deref(),
+            )?;
+            if let Some(prev) = previous {
+                self.add_link(&prev, &child.id, "blocks")?;
+            }
+            previous = Some(child.id.clone());
+            created.push(child);
+        }
+        self.conn.execute(
+            "UPDATE items SET status = 'blocked', updated_at = datetime('now') WHERE id = ?1",
+            params![parent.id],
+        )?;
+        self.promote_ready()?;
+        // Re-fetch: chaining demotes later children to blocked after creation.
+        created.iter().map(|item| self.get_item(&item.id)).collect()
+    }
+
     pub(crate) fn create_item(
         &self,
         parent: Option<&str>,
