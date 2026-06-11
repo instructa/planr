@@ -39,8 +39,10 @@ planr context add "GOAL CONTRACT pl-csv-export: DONE when every in-scope map ite
 ### 2. Execute — the loop driver runs `$planr-loop`
 
 ```text
-/goal Use $planr-loop on plan pl-csv-export. The loop contract is stored in planr context (tag: goal-contract). Continue until the contract holds or the iteration budget is exhausted.
+/goal Use $planr-loop on plan pl-csv-export. The loop contract is stored in planr context (tag: goal-contract). Continue until the contract holds or the iteration budget is exhausted. You are operating autonomously: the user is not watching, so never end a turn on a plan, a question, or a promise — proceed until the contract holds or you are blocked on input only the user can provide.
 ```
+
+The autonomy clause matters on long runs: deep into a session, frontier models occasionally end a turn with a statement of intent instead of the corresponding action, or pause to ask permission they already have. Stating the operating mode up front prevents both.
 
 Each iteration follows the `$planr-loop` protocol:
 
@@ -100,7 +102,7 @@ $planr-goal <your goal>          # prep: plan, map, contract, starter command
 /goal Use $planr-loop on plan <plan-id>. The loop contract is stored in planr context (tag: goal-contract).
 ```
 
-The `/goal` PM dispatches `spawn the planr_worker agent for item <id>` and `spawn the planr_reviewer agent for item <id>` — the role files preload `$planr-work` and `$planr-review`, so dispatches stay one line. Codex Automations work the same way: set the automation prompt to the starter line.
+The `/goal` PM dispatches `spawn the planr_worker agent for item <id>` and `spawn the planr_reviewer agent for item <id>` — the role files preload `$planr-work` and `$planr-review`, so dispatches stay one line. Codex Automations work the same way: set the automation prompt to the starter line. The provisioned worker role pins a cheaper effort tier; see [Cost Tiering](#cost-tiering).
 
 ### Claude Code
 
@@ -111,7 +113,7 @@ Same shape via the plugin (`/plugin install planr@planr`), which registers the `
 /goal Use $planr-loop on plan <plan-id>. The loop contract is stored in planr context (tag: goal-contract).
 ```
 
-`/loop` works for fixed-cadence runs instead of goal-conditioned ones.
+`/loop` works for fixed-cadence runs instead of goal-conditioned ones. The registered worker subagent pins a cheaper model tier; see [Cost Tiering](#cost-tiering).
 
 ### Cursor and hosts without a loop primitive
 
@@ -127,6 +129,31 @@ Use $planr-loop on plan <plan-id>. The loop contract is stored in planr context 
 ### Plain MCP clients
 
 Any MCP-capable agent uses the same flow over `planr mcp`. Every session starts with map state, so the loop is resumable by construction.
+
+## Cost Tiering
+
+A goal run has three roles with different intelligence needs, so they should not all run on the same model tier:
+
+- **Driver** (the `/goal` session): decomposition, dispatch decisions, conflict resolution, final synthesis. Run it on the strongest model you have — this is never configured in Planr files, it is simply the model of the main session.
+- **Worker**: bounded implementation. `planr pick --json` is a complete handoff packet (one item, scope, evidence format, stop after review request), so the worker runs safely on a cheaper tier.
+- **Reviewer**: the truth gate. It inherits the driver's model on purpose — make workers cheap, not the verdict.
+
+Where each host configures the worker tier (the shipped role files carry these defaults):
+
+| Host | Driver | Worker | Configured in |
+| --- | --- | --- | --- |
+| Codex | session default (e.g. `gpt-5.5` at `high`) | `model = "gpt-5.5"`, `model_reasoning_effort = "medium"` | `.codex/agents/planr-worker.toml` |
+| Claude Code | session model (e.g. `fable` at `high` via `/model` + `/effort`) | `model: opus`, `effort: medium` | `planr-worker.md` frontmatter |
+| Cursor | chat model of the driving session | chosen per dispatch in the host's subagent tooling | no Planr files — pick a cheaper model when dispatching the worker task |
+
+The defaults use aliases and generic names so they track model generations; pin a full model id (e.g. `claude-opus-4-8`) only if you need determinism, and use `model: sonnet` as the budget alternative. The role files are user-owned copies — `planr project init` provisions them once and never overwrites local edits — so changing the tier is editing one line.
+
+Two traps to verify once per setup:
+
+- **Claude Code:** the `CLAUDE_CODE_SUBAGENT_MODEL` environment variable silently overrides every subagent's `model:` frontmatter. Make sure it is unset, then dispatch the worker on a trivial item and confirm the subagent's messages in the session log (`~/.claude/projects/<project>/*.jsonl`) carry the worker model, not the driver's.
+- **Codex:** some versions ignore custom agent files on spawn ([openai/codex#26868](https://github.com/openai/codex/issues/26868)) — the child then inherits the parent model. Spawn `planr_worker` on a trivial item and confirm the child metadata shows the pinned model and effort with a non-null `agent_path`.
+
+Both failure modes are silent (the run still works, just at driver prices), which is why the smoke test is worth the two minutes.
 
 ## Coming From Other Goal Tools
 
@@ -151,5 +178,6 @@ Using such tools for intake or visualization alongside Planr is fine — keep on
 - The maker never closes its own review; single-agent hosts record `review-mode` honestly.
 - Two iterations without map-state movement -> stop and report instead of grinding.
 - Destructive or out-of-repo side effects always go behind `planr approval request`.
+- Lessons that should outlive the iteration (a confirmed approach, a correction, a dead end) go into `planr context add "..." --tag lesson` — the next iteration or a fresh session recovers them with `planr context list --tag lesson`, not from chat history.
 
 See also: [Skills](SKILLS.md), [Operating Model](OPERATING_MODEL.md), [Task Graph Model](TASK_GRAPH_MODEL.md), [Codex](CODEX.md), [Claude Code](CLAUDE_CODE.md), [Cursor](CURSOR.md).

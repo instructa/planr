@@ -14,6 +14,61 @@ pub(crate) struct GraphEdge {
     kind: String,
 }
 
+impl App {
+    /// Board progress snapshot included in `done` and `close` responses so a
+    /// loop agent can evaluate its stop condition without an extra
+    /// `map status` call.
+    pub(crate) fn progress_value(&self) -> Result<Value> {
+        self.progress_value_scoped(None)
+    }
+
+    /// Same snapshot narrowed to one plan's items, so a plan-scoped
+    /// `map show --plan` reports the contract's progress, not the board's.
+    pub(crate) fn progress_value_scoped(&self, plan_path: Option<&str>) -> Result<Value> {
+        let sql = if plan_path.is_some() {
+            "SELECT status, COUNT(*) FROM items WHERE plan_path = ?1 GROUP BY status ORDER BY status"
+        } else {
+            "SELECT status, COUNT(*) FROM items GROUP BY status ORDER BY status"
+        };
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows: Vec<(String, i64)> = if let Some(path) = plan_path {
+            collect_rows(stmt.query_map(params![path], |row| Ok((row.get(0)?, row.get(1)?)))?)?
+        } else {
+            collect_rows(stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?)?
+        };
+        let total: i64 = rows.iter().map(|(_, n)| n).sum();
+        let settled: i64 = rows
+            .iter()
+            .filter(|(status, _)| {
+                matches!(status.as_str(), "closed" | "closed_partial" | "cancelled")
+            })
+            .map(|(_, n)| n)
+            .sum();
+        // Counts always carry the full status vocabulary, so consumers never
+        // have to treat a missing key as zero.
+        const STATUS_VOCABULARY: [&str; 10] = [
+            "pending",
+            "ready",
+            "picked",
+            "running",
+            "in_review",
+            "blocked",
+            "failed",
+            "cancelled",
+            "closed",
+            "closed_partial",
+        ];
+        let mut counts = serde_json::Map::new();
+        for status in STATUS_VOCABULARY {
+            counts.insert(status.to_string(), json!(0));
+        }
+        for (status, n) in rows {
+            counts.insert(status, json!(n));
+        }
+        Ok(json!({"counts": counts, "settled": settled, "total": total}))
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct CloseEffect {
     pub(crate) would_unlock: Vec<Item>,

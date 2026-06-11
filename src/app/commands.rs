@@ -2,8 +2,8 @@ use super::recovery::ItemRecoveryInput;
 use super::{App, ReviewAnnotationInput};
 use crate::cli::{
     ApprovalCommand, ClientArg, CloseArgs, ContextCommand, DoctorArgs, ImportArgs, InstallCommand,
-    ItemCommand, JsonOnlyArgs, LinkCommand, LogCommand, MapCommand, PickCommand, PlanCommand,
-    ProjectCommand, PromptCommand, ReviewCommand, SearchArgs,
+    ItemCommand, LinkCommand, LogCommand, MapCommand, PickCommand, PlanCommand, ProjectCommand,
+    PromptCommand, ReviewCommand, SearchArgs,
 };
 use crate::integrations::{agent_roles, install_snippet, mcp_json_config};
 use crate::planpack::{build_plan_body, product_plan_files, project_pack_files};
@@ -223,8 +223,11 @@ impl App {
     }
 
     pub(crate) fn map(&self, command: Option<MapCommand>) -> Result<()> {
-        match command.unwrap_or(MapCommand::Show(JsonOnlyArgs { json: false })) {
-            MapCommand::Show(_) => self.map_show(),
+        match command.unwrap_or(MapCommand::Show(crate::cli::MapShowArgs {
+            json: false,
+            plan: None,
+        })) {
+            MapCommand::Show(args) => self.map_show(args.plan.as_deref()),
             MapCommand::Build(args) => {
                 let plan = self.get_plan(&args.from)?;
                 let created = self.seed_items_from_plan(&plan)?;
@@ -791,7 +794,13 @@ impl App {
                 )
             }
             ContextCommand::List(args) => {
-                let values = self.list_contexts(args.item.as_deref())?;
+                let mut values = self.list_contexts(args.item.as_deref())?;
+                // Tags land in `kind` on write (`context add --tag`), so the
+                // read side filters the same field — symmetric recovery for
+                // e.g. `--tag goal-contract`.
+                if let Some(tag) = args.tag.as_deref() {
+                    values.retain(|context| context["kind"] == tag);
+                }
                 self.emit(
                     json!({"contexts": values}),
                     format!("{} note(s)", values.len()),

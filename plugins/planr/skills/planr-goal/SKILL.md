@@ -50,7 +50,7 @@ The contract must survive compaction, session loss, and host switches, so it liv
 planr context add "GOAL CONTRACT <plan-id>: DONE when every in-scope map item is closed with log evidence, all reviews closed with verdict complete, no open approvals in scope, and a live verification log exists for <oracle>. Iteration budget: 10." --tag goal-contract
 ```
 
-One contract per plan scope. Any agent on any host can recover it with `planr context list` or `planr search "GOAL CONTRACT"`. Never weaken a stored contract mid-run; scope changes go through `$planr-plan` and the user. During the run, workers lease with `planr pick --plan <plan-id>` so the loop never picks items outside this contract, even when other plans share the board. The loop checks the contract with `planr plan audit <plan-id>`, which evaluates exactly these clauses with evidence and answers `holds: true/false`.
+One contract per plan scope. Any agent on any host can recover it with `planr context list --tag goal-contract` or `planr search "GOAL CONTRACT"`. Never weaken a stored contract mid-run; scope changes go through `$planr-plan` and the user. During the run, workers lease with `planr pick --plan <plan-id>` so the loop never picks items outside this contract, even when other plans share the board. The loop checks the contract with `planr plan audit <plan-id>`, which evaluates exactly these clauses with evidence and answers `holds: true/false`.
 
 "All reviews closed" audits review items that exist — it does not require a review gate on every item. An item closed with plain `done` (evidence still required) satisfies the contract without one; request reviews where they carry signal (implementation slices, user-facing work), not on trivial inspection or scaffold steps.
 
@@ -61,13 +61,13 @@ Print the starter command, then stop. Do not start execution yourself; ask wheth
 With a native loop driver (Codex `/goal`, Claude Code `/goal` or `/loop`):
 
 ```text
-/goal Use $planr-loop on plan <plan-id>. The loop contract is stored in planr context (tag: goal-contract). Continue until the contract holds or the iteration budget is exhausted.
+/goal Use $planr-loop on plan <plan-id>. The loop contract is stored in planr context (tag: goal-contract). Continue until the contract holds or the iteration budget is exhausted. You are operating autonomously: the user is not watching, so never end a turn on a plan, a question, or a promise — proceed until the contract holds or you are blocked on input only the user can provide.
 ```
 
 Without one (Cursor, plain MCP clients, Codex without /goal):
 
 ```text
-Use $planr-loop on plan <plan-id>. The loop contract is stored in planr context (tag: goal-contract).
+Use $planr-loop on plan <plan-id>. The loop contract is stored in planr context (tag: goal-contract). You are operating autonomously: never end a turn on a plan, a question, or a promise — proceed until the contract holds or you are blocked on input only the user can provide.
 ```
 
 Re-dispatch the same line after any session ends. The map, logs, and stored contract make every iteration resumable from zero context — nothing about the goal lives only in chat.

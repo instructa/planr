@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.1.19] - 2026-06-11
+
+The symmetry pack, from the fifth Codex dogfood run: every flag an agent reasonably infers from an existing write-side or scope-side flag now exists on the read side.
+
+### Added
+
+- `context list --tag <tag>`: notes are recoverable by the tag they were stored with — `planr context list --tag goal-contract` fetches the goal contract directly instead of scanning all notes. Closes the write/read asymmetry with `context add --tag`.
+- `map show --plan <plan-id>`: the map narrowed to one plan's items, the links among them, and plan-scoped counts — plan-scoped goal runs on shared boards see their contract's slice. Unknown plan ids error instead of silently showing the whole board (same rule as `pick --plan`). Also on MCP `planr_map_show` (`plan`) and HTTP `GET .../map?plan=`.
+- `plan audit` with `holds: false` now carries `next`: the exact command for the first actionable gap — build the map, pick the ready review or work item (plan-scoped), resolve the blocking approval, inspect stalled leases, or log the missing verification. The last output that ended in a clause list instead of an action.
+
+### Changed
+
+- Skills and docs recover the goal contract with `planr context list --tag goal-contract` (planr-goal, planr-loop, GOALS).
+- Provisioned agent roles pin cost tiers: the worker and reviewer role files set a cheaper model/effort tier than the loop driver, since the pick packet bounds their scope. Documented in GOALS "Cost Tiering" (Codex TOMLs, Claude Code subagents).
+
 ## [1.1.18] - 2026-06-11
 
 Kills the last structural guess from the fourth Codex dogfood run: map granularity is now a checked contract, not something the agent discovers after `map build`.

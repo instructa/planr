@@ -5712,6 +5712,111 @@ fn plan_check_flags_unexpanded_scaffold_task_list_before_map_build() {
 }
 
 #[test]
+fn symmetry_pack_tag_filter_plan_scoped_map_and_audit_next_command() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    let db_arg = db.to_str().unwrap().to_string();
+    let run = |args: &[&str]| -> Value {
+        let output = planr()
+            .current_dir(dir.path())
+            .args(["--db", &db_arg, "--json"])
+            .args(args)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice(&output).unwrap()
+    };
+
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "project", "init", "Symmetry"])
+        .assert()
+        .success();
+    let value = run(&["plan", "new", "Symmetry app"]);
+    let product_id = value["plan"]["id"].as_str().unwrap().to_string();
+    let value = run(&["plan", "split", &product_id, "--slice", "MVP"]);
+    let build_id = value["plan"]["id"].as_str().unwrap().to_string();
+    let build_path = value["plan"]["path"].as_str().unwrap().to_string();
+    let text = fs::read_to_string(&build_path).unwrap();
+    let implement_line = text
+        .lines()
+        .find(|line| line.trim().starts_with("- [ ] Implement "))
+        .unwrap()
+        .to_string();
+    fs::write(
+        &build_path,
+        text.replace(&implement_line, "- [ ] First slice\n- [ ] Second slice"),
+    )
+    .unwrap();
+    run(&["map", "build", "--from", &build_id]);
+    run(&[
+        "item",
+        "create",
+        "Off-plan chore",
+        "--description",
+        "outside the contract",
+    ]);
+
+    // Write-side tags must be recoverable on the read side: the fifth
+    // dogfood agent inferred `context list --tag` and the CLI rejected it.
+    run(&[
+        "context",
+        "add",
+        &format!("GOAL CONTRACT {build_id}: DONE when settled."),
+        "--tag",
+        "goal-contract",
+    ]);
+    let contexts = run(&["context", "list", "--tag", "goal-contract"]);
+    assert_eq!(
+        contexts["contexts"].as_array().unwrap().len(),
+        1,
+        "tag filter must return exactly the contract note: {contexts}"
+    );
+    assert_eq!(
+        run(&["context", "list", "--tag", "nope"])["contexts"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+
+    // Plan scope on map show: the off-plan chore and its counts stay out.
+    let scoped = run(&["map", "show", "--plan", &build_id]);
+    assert_eq!(
+        scoped["items"].as_array().unwrap().len(),
+        2,
+        "plan scope must exclude off-plan items: {scoped}"
+    );
+    assert_eq!(scoped["total"], 2, "counts must be plan-scoped: {scoped}");
+    let unscoped = run(&["map", "show"]);
+    assert_eq!(unscoped["items"].as_array().unwrap().len(), 3);
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "--json",
+            "map",
+            "show",
+            "--plan",
+            "pln-missing",
+        ])
+        .assert()
+        .failure();
+
+    // An open audit verdict ends in the exact next command.
+    let audit = run(&["plan", "audit", &build_id]);
+    assert_eq!(audit["holds"], false);
+    assert_eq!(
+        audit["next"],
+        format!("planr pick --plan {build_id} --json"),
+        "open audit must name the next command: {audit}"
+    );
+}
+
+#[test]
 fn guess_killer_pack_auto_chain_audit_review_mode_unlocked_and_repair_errors() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");

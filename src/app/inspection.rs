@@ -370,7 +370,7 @@ impl App {
             "projects": self.list_projects()?,
             "plans": if include_plans { json!(self.list_plans(None)?) } else { Value::Null },
             "plan_files": if include_plans { json!(self.export_plan_files()?) } else { Value::Null },
-            "map": self.map_value()?,
+            "map": self.map_value(None)?,
             "logs": if include_logs { json!(self.list_logs(None)?) } else { Value::Null },
             "contexts": self.list_contexts(None)?,
             "artifacts": self.list_artifacts(None)?,

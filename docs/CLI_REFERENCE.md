@@ -13,7 +13,7 @@ planr plan check <plan-id>
 planr plan audit <plan-id>
 planr plan show <plan-id>
 planr plan archive <plan-id>
-planr map show
+planr map show [--plan <plan-id>]
 planr map build --from <plan-id>
 planr map lane --critical
 planr map pressure
@@ -54,6 +54,7 @@ planr review close <review-item-id> --verdict complete|not-complete|unclear [--c
 planr close [item-id] --summary "..." [--next]
 planr done [item-id] --summary "..." [--files a --files b] [--cmd "..."] [--tests "..."] [--review] [--next]
 planr context add "text" [--item <item-id>] [--tag discovery]
+planr context list [--item <item-id>] [--tag <tag>]
 planr search "query"
 planr doctor [--client codex|claude|cursor|all]
 planr install codex|claude|cursor [--dry-run]
@@ -79,7 +80,11 @@ With `--json`, responses follow one convention so agents never guess where data 
 
 `plan check` validates path, YAML frontmatter, and that required sections have content: build plans need `## Scope Decision`, `## Verification`, and `## Acceptance Criteria` filled; product plans need `## Problem`, `## Requirements`, and `## Success Criteria` filled in `PRODUCT_SPEC.md`. It also flags a task list that still contains only the scaffold placeholder (or no work specs at all) — `map build` would turn that into a single coarse item, so the fix names the granularity contract: one `### TASK-00n:` heading (or `- [ ]` line) per verifiable slice, typically 4-8, in execution order. Each warning is structured — `{"file", "section", "message", "fix"}` — and names the exact file to edit plus the re-run command, so a failed check is a repair instruction, not a riddle.
 
-`plan audit <plan-id>` is the one-call contract verdict for a plan's map scope. It evaluates four clauses with evidence: `items_settled` (open items listed), `reviews_complete` (open review items listed), `approvals_clear` (requested/denied approvals listed), and `verification_logged` (logs with `--kind verification` on scope items). The stored goal contract (`planr context --tag goal-contract` mentioning the plan id) is included; the verification clause is binding only when such a contract exists. `holds: true` means the contract is satisfied — loop agents use this as their stop condition instead of stitching the verdict together from `map status`, `log list`, and `approval list`. Also available as MCP `planr_plan_audit`.
+`plan audit <plan-id>` is the one-call contract verdict for a plan's map scope. It evaluates four clauses with evidence: `items_settled` (open items listed), `reviews_complete` (open review items listed), `approvals_clear` (requested/denied approvals listed), and `verification_logged` (logs with `--kind verification` on scope items). The stored goal contract (`planr context --tag goal-contract` mentioning the plan id) is included; the verification clause is binding only when such a contract exists. `holds: true` means the contract is satisfied — loop agents use this as their stop condition instead of stitching the verdict together from `map status`, `log list`, and `approval list`. When the contract is open, `next` carries the exact next command derived from the first actionable gap: build the map, pick the ready review or work item (plan-scoped), resolve the blocking approval, inspect stalled leases, or log the missing verification. Also available as MCP `planr_plan_audit`.
+
+`map show --plan <plan-id>` narrows the map to one plan's items and the links among them, with plan-scoped counts — plan-scoped goal runs on shared boards audit their slice, not the whole board. An unknown plan id is an error, never a silent unscoped view. Also available on MCP `planr_map_show` (`plan`) and HTTP `GET /v1/projects/{id}/map?plan=<plan-id>`.
+
+`context list --tag <tag>` filters notes by the tag they were stored with (`context add --tag`), so e.g. the goal contract is recoverable with `planr context list --tag goal-contract` instead of scanning all notes.
 
 `map build` chains the created items in plan order with `blocks` links — build plan steps are ordered, so the map inherits that order instead of leaving everything flat. The output lists every created item with its status, the created links, and the next command; adjust order with `planr link add` before picking if execution order differs from document order.
 

@@ -3,6 +3,13 @@
 name = "planr_worker"
 description = "Implements exactly one picked Planr map item to evidence-backed completion, then requests review and stops."
 
+# Cost tiering: the pick packet bounds the worker's scope, so it can run on a
+# lower effort tier than the driver session. Verify the pin took effect after
+# the first spawn (some Codex versions ignore custom agent files on spawn —
+# openai/codex#26868); see docs/GOALS.md "Cost Tiering" for the smoke test.
+model = "gpt-5.5"
+model_reasoning_effort = "medium"
+
 developer_instructions = """
 Use the planr-work skill exactly as written for the single item id you are given.
 Implement only that item. Log changed files and the real verification commands you ran.

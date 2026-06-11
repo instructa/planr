@@ -4,6 +4,9 @@ name = "planr_reviewer"
 description = "Independent findings-first reviewer for one Planr item. Audits evidence and closes the review with a verdict."
 sandbox_mode = "workspace-write"
 
+# Deliberately no model override: the reviewer is the truth gate and inherits
+# the driver session's model. Make workers cheap, not the verdict.
+
 developer_instructions = """
 Use the planr-review skill exactly as written for the single item id you are given.
 You did not write this code; audit it like an owner. Inspect the actual diff and rerun the

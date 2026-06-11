@@ -129,47 +129,6 @@ impl App {
         Ok(review)
     }
 
-    /// Board progress snapshot included in `done` and `close` responses so a
-    /// loop agent can evaluate its stop condition without an extra
-    /// `map status` call.
-    pub(crate) fn progress_value(&self) -> Result<Value> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT status, COUNT(*) FROM items GROUP BY status ORDER BY status")?;
-        let rows: Vec<(String, i64)> =
-            crate::util::collect_rows(stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?)?;
-        let total: i64 = rows.iter().map(|(_, n)| n).sum();
-        let settled: i64 = rows
-            .iter()
-            .filter(|(status, _)| {
-                matches!(status.as_str(), "closed" | "closed_partial" | "cancelled")
-            })
-            .map(|(_, n)| n)
-            .sum();
-        // Counts always carry the full status vocabulary, so consumers never
-        // have to treat a missing key as zero.
-        const STATUS_VOCABULARY: [&str; 10] = [
-            "pending",
-            "ready",
-            "picked",
-            "running",
-            "in_review",
-            "blocked",
-            "failed",
-            "cancelled",
-            "closed",
-            "closed_partial",
-        ];
-        let mut counts = serde_json::Map::new();
-        for status in STATUS_VOCABULARY {
-            counts.insert(status.to_string(), json!(0));
-        }
-        for (status, n) in rows {
-            counts.insert(status, json!(n));
-        }
-        Ok(json!({"counts": counts, "settled": settled, "total": total}))
-    }
-
     /// Completion-time context shared by `done` and `close`: what the
     /// settlement unlocked, the post condition to verify, and an evidence
     /// hint when downstream work exists but no commands/tests were logged.

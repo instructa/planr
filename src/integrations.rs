@@ -85,7 +85,12 @@ pub fn mcp_tools() -> Vec<Value> {
             json!({}),
             &[],
         ),
-        tool("planr_map_show", "Show Planr map", json!({}), &[]),
+        tool(
+            "planr_map_show",
+            "Show Planr map (optionally scoped to one plan)",
+            json!({"plan": prop("string", "Only show items and links of this plan id")}),
+            &[],
+        ),
         tool("planr_map_status", "Show richer map status", json!({}), &[]),
         tool(
             "planr_map_preview",

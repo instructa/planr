@@ -634,8 +634,8 @@ impl App {
             .collect()
     }
 
-    pub(crate) fn map_show(&self) -> Result<()> {
-        let value = self.map_value()?;
+    pub(crate) fn map_show(&self, plan: Option<&str>) -> Result<()> {
+        let value = self.map_value(plan)?;
         if self.json {
             return self.emit(value, String::new());
         }
@@ -643,9 +643,13 @@ impl App {
             .default_project()
             .map(|project| project.name)
             .unwrap_or_else(|_| "planr".to_string());
-        let items = self.all_items()?;
-        let edges = self
-            .all_links()?
+        // Render from the (possibly plan-scoped) value, not from a second
+        // unscoped fetch, so human and JSON output show the same slice.
+        let items: Vec<Item> = serde_json::from_value(value["items"].clone())?;
+        let edges = value["links"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
             .into_iter()
             .filter_map(|link| {
                 let kind = link.get("kind")?.as_str()?;
@@ -668,12 +672,30 @@ impl App {
         self.emit(value, human)
     }
 
-    pub(crate) fn map_value(&self) -> Result<Value> {
-        let items = self.all_items()?;
-        let links = self.all_links()?;
+    /// `plan` narrows the map to one plan's items and the links among them —
+    /// plan-scoped goal runs on shared boards see their contract's slice, not
+    /// the whole board. An unknown plan id is an error, never a silent
+    /// unscoped view (same rule as `pick --plan`).
+    pub(crate) fn map_value(&self, plan: Option<&str>) -> Result<Value> {
+        let plan_path = plan
+            .map(|plan_id| self.get_plan(plan_id))
+            .transpose()?
+            .map(|plan| plan.path);
+        let mut items = self.all_items()?;
+        let mut links = self.all_links()?;
+        if let Some(path) = plan_path.as_deref() {
+            items.retain(|item| item.plan_path.as_deref() == Some(path));
+            let ids: std::collections::HashSet<&str> =
+                items.iter().map(|item| item.id.as_str()).collect();
+            links.retain(|link| {
+                let from = link["from"].as_str().unwrap_or_default();
+                let to = link["to"].as_str().unwrap_or_default();
+                ids.contains(from) && ids.contains(to)
+            });
+        }
         // Same explicit-zero status vocabulary as the `remaining` snapshot in
         // pick/done/close responses: one counts shape across all surfaces.
-        let progress = self.progress_value()?;
+        let progress = self.progress_value_scoped(plan_path.as_deref())?;
         Ok(json!({
             "items": items,
             "links": links,

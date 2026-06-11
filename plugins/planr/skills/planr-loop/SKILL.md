@@ -31,7 +31,7 @@ Store the contract in Planr so it survives compaction, session loss, and host sw
 planr context add "GOAL CONTRACT <plan-id>: DONE when ... Iteration budget: 10." --tag goal-contract
 ```
 
-`$planr-goal` does this during prep; if the loop starts without a stored contract, store it in iteration 1 before picking. Every iteration re-reads the contract from Planr (`planr context list` or `planr search "GOAL CONTRACT"`), never from chat history. `done`, `close`, and `review close` responses and the pick packet include a `remaining` progress snapshot (`counts` with explicit zeros for every status, `settled`, `total`) plus the list of items each settlement `unlocked`, so the orchestrator can evaluate the stop condition from the completion output without an extra `map status` call.
+`$planr-goal` does this during prep; if the loop starts without a stored contract, store it in iteration 1 before picking. Every iteration re-reads the contract from Planr (`planr context list --tag goal-contract` or `planr search "GOAL CONTRACT"`), never from chat history. `done`, `close`, and `review close` responses and the pick packet include a `remaining` progress snapshot (`counts` with explicit zeros for every status, `settled`, `total`) plus the list of items each settlement `unlocked`, so the orchestrator can evaluate the stop condition from the completion output without an extra `map status` call.
 
 The stop condition itself is one command: `planr plan audit <plan-id> --json` evaluates the contract clause by clause (items settled, reviews complete, approvals clear, verification logged) with evidence and answers `holds: true/false`. Use it at the top of every iteration and as the final audit — never hand-assemble the verdict from separate calls.
 
@@ -58,10 +58,12 @@ The loop never closes its own reviews when the host supports a second agent. Mak
 
 ## Skills Are The Prompts
 
-When the host supports subagents, delegate with skill references plus an item id, nothing more:
+When the host supports subagents, the driver never implements: it dispatches, audits, and synthesizes. Driver tokens go into `plan audit`, dispatch decisions, and conflict resolution — implementation and review run in the subagent roles, which the host wiring can pin to a cheaper tier (see the role files and `docs/GOALS.md` "Cost Tiering"). Delegate with skill references plus an item id, nothing more:
 
 - Worker dispatch: `Use $planr-work on item <item-id>. Stop after requesting review.`
 - Checker dispatch: `Use $planr-review on item <item-id>. Close the review with a verdict.`
+
+A worker subagent may take several items sequentially instead of being respawned per item: `done --next` hands it the next ready work packet, keeps its context warm, and never returns its own freshly created review — maker/checker separation survives long-lived workers.
 
 Host wiring:
 

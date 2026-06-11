@@ -137,7 +137,14 @@ impl App {
                 )?;
                     serde_json::to_string(&json!({"project": self.get_project(&id)?}))?
                 }
-                ("GET", p) if p.ends_with("/map") => serde_json::to_string(&self.map_value()?)?,
+                ("GET", p) if p.ends_with("/map") => {
+                    let plan = query
+                        .split('&')
+                        .filter_map(|part| part.split_once('='))
+                        .find(|(key, _)| *key == "plan")
+                        .map(|(_, value)| crate::util::url_decode(value));
+                    serde_json::to_string(&self.map_value(plan.as_deref())?)?
+                }
                 ("GET", p) if p.ends_with("/map/status") => {
                     serde_json::to_string(&self.map_status_value()?)?
                 }
@@ -585,7 +592,7 @@ impl App {
                     self.promote_ready()?;
                     self.record_event("item_closed", Some(item_id), json!({"source": "http"}))?;
                     serde_json::to_string(
-                        &json!({"closed": item_id, "unlocked": self.unlocked_since(&ready_before)?, "map": self.map_value()?}),
+                        &json!({"closed": item_id, "unlocked": self.unlocked_since(&ready_before)?, "map": self.map_value(None)?}),
                     )?
                 }
                 ("POST", p) if p.ends_with("/reviews") => {

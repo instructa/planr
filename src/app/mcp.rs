@@ -96,7 +96,9 @@ impl App {
             .unwrap_or_else(|| json!({}));
         match name {
             "planr_project_show" => Ok(mcp_json(self.default_project()?)),
-            "planr_map_show" => Ok(mcp_json(self.map_value()?)),
+            "planr_map_show" => Ok(mcp_json(
+                self.map_value(args.get("plan").and_then(Value::as_str))?,
+            )),
             "planr_map_status" => Ok(mcp_json(self.map_status_value()?)),
             "planr_map_preview" => {
                 let item_id = required_arg(&args, "close")?;
@@ -720,7 +722,7 @@ impl App {
     pub(crate) fn mcp_resource_read(&self, params: Value) -> Result<Value> {
         let uri = params.get("uri").and_then(Value::as_str).unwrap_or("");
         let text = match uri {
-            "planr://project/map" => serde_json::to_string(&self.map_value()?)?,
+            "planr://project/map" => serde_json::to_string(&self.map_value(None)?)?,
             "planr://project/context" => serde_json::to_string(&self.list_contexts(None)?)?,
             u if u.starts_with("planr://item/") => {
                 serde_json::to_string(&self.get_item(u.trim_start_matches("planr://item/"))?)?

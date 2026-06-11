@@ -17,10 +17,20 @@ Codex `/goal` is the recommended orchestrator for autonomous Planr runs: `/goal`
 
 ```text
 $planr-goal <your goal>
-/goal Use $planr-loop on plan <plan-id>. The loop contract is stored in planr context (tag: goal-contract). Continue until the contract holds or the iteration budget is exhausted.
+/goal Use $planr-loop on plan <plan-id>. The loop contract is stored in planr context (tag: goal-contract). Continue until the contract holds or the iteration budget is exhausted. You are operating autonomously: the user is not watching, so never end a turn on a plan, a question, or a promise — proceed until the contract holds or you are blocked on input only the user can provide.
 ```
 
-The stop condition lives in Planr (`--tag goal-contract`), so a dead session resumes with the same starter line from zero chat context. Full workflow, recovery, and per-host variants: [Long-Running Goals](GOALS.md).
+The stop condition lives in Planr (`--tag goal-contract`), so a dead session resumes with the same starter line from zero chat context.
+
+Run the driver session on your strongest tier (e.g. `gpt-5.5` at `model_reasoning_effort = "high"` in `~/.codex/config.toml`). The provisioned worker role pins a cheaper tier; the reviewer deliberately inherits the session model:
+
+```toml
+# .codex/agents/planr-worker.toml
+model = "gpt-5.5"
+model_reasoning_effort = "medium"
+```
+
+Verify the pin once: some Codex versions ignore custom agent files on spawn ([openai/codex#26868](https://github.com/openai/codex/issues/26868)) and the child silently inherits the parent model. Spawn `planr_worker` on a trivial item and confirm the child metadata shows the pinned model and effort with a non-null `agent_path`. Full workflow, recovery, per-host variants, and the tiering rationale: [Long-Running Goals](GOALS.md).
 
 ## MCP
 

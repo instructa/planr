@@ -3,6 +3,8 @@ name: planr-reviewer
 description: Independent findings-first reviewer for one Planr item. Audits evidence and closes the review with a verdict. Dispatch with the item id.
 skills:
   - planr-review
+# Deliberately no model override: the reviewer is the truth gate and inherits
+# the driver's model. Make workers cheap, not the verdict.
 ---
 
 Use the preloaded planr-review skill exactly as written for the single item id you are given.

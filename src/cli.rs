@@ -145,9 +145,18 @@ pub(crate) struct MapArgs {
     pub(crate) command: Option<MapCommand>,
 }
 
+#[derive(Args, Debug)]
+pub(crate) struct MapShowArgs {
+    #[arg(long)]
+    pub(crate) json: bool,
+    /// Only show items and links belonging to this plan (plan id)
+    #[arg(long)]
+    pub(crate) plan: Option<String>,
+}
+
 #[derive(Subcommand, Debug)]
 pub(crate) enum MapCommand {
-    Show(JsonOnlyArgs),
+    Show(MapShowArgs),
     Build(MapBuildArgs),
     Lane(MapLaneArgs),
     Pressure,
@@ -615,6 +624,9 @@ pub(crate) struct ContextAddArgs {
 pub(crate) struct ContextListArgs {
     #[arg(long)]
     pub(crate) item: Option<String>,
+    /// Only list notes stored with this tag (e.g. `goal-contract`)
+    #[arg(long)]
+    pub(crate) tag: Option<String>,
 }
 
 #[derive(Args, Debug)]

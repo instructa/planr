@@ -98,11 +98,45 @@ impl App {
             clause["pass"].as_bool().unwrap_or(false)
                 || !clause["required"].as_bool().unwrap_or(true)
         });
+        // An open verdict ends in the exact next command, not a clause list
+        // the agent must translate into an action.
+        let next = if holds {
+            None
+        } else if scope.is_empty() {
+            Some(format!("planr map build --from {plan_id}"))
+        } else if open_reviews.iter().any(|item| item.status == "ready") {
+            Some(format!(
+                "planr pick --plan {plan_id} --work-type review --json"
+            ))
+        } else if open_items
+            .iter()
+            .any(|item| item.status == "ready" && item.work_type != "review")
+        {
+            Some(format!("planr pick --plan {plan_id} --json"))
+        } else if let Some(blocked) = approval_blocked.first() {
+            Some(format!(
+                "planr approval approve {} --by \"<approver>\" (or `deny`)",
+                blocked["id"].as_str().unwrap_or_default()
+            ))
+        } else if !open_items.is_empty() {
+            // Open work but nothing ready: someone holds a lease or a gate
+            // is stuck — inspect, then recover if leases are stale.
+            Some(
+                "planr map status (then `planr recover sweep --apply` if leases are stale)"
+                    .to_string(),
+            )
+        } else {
+            // Everything settled; only the verification clause is open.
+            Some(format!(
+                "planr log add --item <verifier-item-id> --kind verification --summary \"verified <flow>: <observed outcome>\" --cmd \"<exact command>\" (scope: plan {plan_id})"
+            ))
+        };
         Ok(json!({
             "plan": plan,
             "contract": contract,
             "clauses": clauses,
             "holds": holds,
+            "next": next,
             "remaining": self.progress_value()?,
         }))
     }
@@ -140,6 +174,9 @@ impl App {
             human.push_str("contract holds");
         } else {
             human.push_str("contract open");
+            if let Some(next) = value["next"].as_str() {
+                human.push_str(&format!("\nnext: {next}"));
+            }
         }
         human
     }
