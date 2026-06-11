@@ -27,9 +27,24 @@ Download installs verify `SHA256SUMS` from the same release location by default.
 
 ## Homebrew Tap
 
-Homebrew is the preferred day-to-day package-manager path after the tap is published. The expected command is `brew install instructa/tap/planr`.
+Homebrew is the preferred day-to-day package-manager path:
 
-Until the tap is published, use the GitHub Release installer or manual release asset download.
+```bash
+brew install instructa/tap/planr
+```
+
+The tap formula is regenerated automatically on every release.
+
+## npm
+
+Published npm versions bundle platform-native binaries (`darwin-arm64`, `darwin-x86_64`, `linux-x86_64`, `linux-arm64`), so no Rust toolchain is needed and nothing is downloaded at install time:
+
+```bash
+npm install -g planr
+planr --version
+```
+
+Details and publishing flow: [npm Package](NPM.md).
 
 ## Manual GitHub Release Install
 

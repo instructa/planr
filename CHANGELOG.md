@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- Install docs list npm (`npm install -g planr`) as a package-manager path alongside Homebrew, and the Homebrew section no longer reads as pre-publication.
+
 ## [1.1.15] - 2026-06-11
 
 ### Fixed

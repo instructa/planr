@@ -28,6 +28,12 @@ Three layers make that work: **Plans** (reviewable Markdown packages), the **Map
 brew install instructa/tap/planr
 ```
 
+Or via npm (ships platform-native binaries, no toolchain needed):
+
+```bash
+npm install -g planr
+```
+
 Or with the release installer:
 
 ```bash
