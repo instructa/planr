@@ -27,3 +27,4 @@ temp/
 # Local agent/runtime state
 .codex/
 .planr/
+docs/planr-spec.zip
