@@ -14,7 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
-- `packageManager` pinned to pnpm 11 (current stable, integrity-pinned) with a `devEngines.packageManager >= 11.0.0` requirement.
+- `packageManager` pinned to pnpm 11 (current stable, integrity-pinned). No `devEngines` block: npm enforces it and would refuse the `npm pack` release gate.
 
 ## [1.1.13] - 2026-06-10
 
