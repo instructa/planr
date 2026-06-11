@@ -514,7 +514,7 @@ checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
 name = "planr"
-version = "1.1.18"
+version = "1.1.19"
 dependencies = [
  "anyhow",
  "assert_cmd",
