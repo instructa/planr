@@ -125,6 +125,14 @@ impl App {
                 } else {
                     args.content.as_ref().map(|content| content.len() as i64)
                 };
+                // Without --mime, path artifacts get their type from the
+                // extension; only inline text content defaults to text/plain.
+                let mime = args.mime.as_deref().unwrap_or_else(|| {
+                    path_string
+                        .as_deref()
+                        .map(crate::util::mime_for_path)
+                        .unwrap_or("text/plain")
+                });
                 self.conn.execute(
                     "INSERT INTO artifacts(id, project_id, item_id, name, kind, path, content, mime_type, size_bytes, metadata, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, datetime('now'))",
                     params![
@@ -135,7 +143,7 @@ impl App {
                         args.kind.as_deref().unwrap_or("evidence"),
                         path_string,
                         args.content,
-                        args.mime.as_deref().unwrap_or("text/plain"),
+                        mime,
                         size_bytes,
                         json!({"storage": if args.path.is_some() { "path" } else { "inline" }}).to_string(),
                     ],

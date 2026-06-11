@@ -230,3 +230,30 @@ pub fn quote_fts(query: &str) -> String {
     let escaped = query.replace('"', "\"\"");
     format!("\"{escaped}\"")
 }
+
+/// Mime type inferred from a file extension, for artifacts stored by path
+/// without an explicit `--mime`. Screenshots and recordings are common
+/// evidence, so a PNG must never land as `text/plain` in the audit trail.
+pub fn mime_for_path(path: &str) -> &'static str {
+    let extension = Path::new(path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(str::to_ascii_lowercase);
+    match extension.as_deref() {
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("svg") => "image/svg+xml",
+        Some("pdf") => "application/pdf",
+        Some("json") => "application/json",
+        Some("html") | Some("htm") => "text/html",
+        Some("md") => "text/markdown",
+        Some("csv") => "text/csv",
+        Some("mp4") => "video/mp4",
+        Some("webm") => "video/webm",
+        Some("zip") => "application/zip",
+        Some("txt") | Some("log") => "text/plain",
+        _ => "application/octet-stream",
+    }
+}

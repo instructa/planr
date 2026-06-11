@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.1.18] - 2026-06-11
+
+Kills the last structural guess from the fourth Codex dogfood run: map granularity is now a checked contract, not something the agent discovers after `map build`.
+
+### Fixed
+
+- `artifact add` no longer stamps every path artifact as `text/plain`: without `--mime`, the type is inferred from the file extension (png, jpg, svg, pdf, json, md, html, mp4, …), so screenshots and recordings carry honest mime types in the audit trail — across CLI, MCP `planr_artifact_add`, and HTTP `POST /v1/artifacts`. Inline `--content` still defaults to `text/plain`.
+
+### Added
+
+- `plan check` flags an unexpanded scaffold task list: when the plan still carries only the placeholder task (or none at all), the structured warning names the file and the granularity contract — one `### TASK-00n:` heading (or `- [ ]` line) per verifiable slice, typically 4-8, in execution order. The coarse-map guess dies before `map build` instead of after it.
+- `map build`'s single-coarse-item hint now states the repair options with granularity guidance (expand the task list and rebuild, or break down per slice derived from the acceptance criteria) instead of a bare breakdown pointer.
+
+### Changed
+
+- Skills: goal prep expands the plan's task list before `map build` — one verifiable slice per task, derived from the acceptance criteria (planr-goal).
+- Skills: workers put the decisive output line into the `done` summary ("12 tests passed"), because reviewers see recorded command strings, not the maker's terminal (planr-work).
+- Skills: in single-agent hosts the review bar rises — gates only on the riskiest slices (core implementation, final live verification), the rest closes with plain `done` (planr-loop).
+
 ## [1.1.17] - 2026-06-11
 
 Attribution can never fall through a crack: fixes from the third manual Codex dogfood run, where `done --review` on a never-picked item left the target `ready` and the review `unattributed`.

@@ -204,6 +204,22 @@ pub fn plan_search_body(path: &Path) -> Result<String> {
     Ok(body)
 }
 
+/// Detects a task list that `map build` would turn into a single coarse
+/// item: either no work specs at all, or only the scaffold's placeholder
+/// ("Build first slice" in directory plans, "Implement <slice>" in build
+/// plans). Returns the reason, or None when the list is expanded. Lives
+/// here because the scaffold templates above define the placeholders.
+pub fn scaffold_placeholder_state(path: &Path) -> Result<Option<&'static str>> {
+    let specs = extract_work_specs(path)?;
+    Ok(match specs.as_slice() {
+        [] => Some("the task list has no work specs"),
+        [(title, _)] if title == "Build first slice" || title.starts_with("Implement ") => {
+            Some("the task list still contains only the scaffold placeholder")
+        }
+        _ => None,
+    })
+}
+
 pub fn extract_work_specs(path: &Path) -> Result<Vec<(String, String)>> {
     let mut specs = Vec::new();
     if path.is_dir() {

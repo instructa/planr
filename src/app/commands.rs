@@ -240,7 +240,7 @@ impl App {
                     .collect::<Vec<_>>();
                 let hint = match created.len() {
                     0 => "no new items created; this plan is already mapped",
-                    1 => "created a single coarse item; run `planr item breakdown <item-id> --into \"...\"` before picking",
+                    1 => "created a single coarse item; either expand the plan's task list (one `### TASK-00n:` per verifiable slice, typically 4-8) and re-run `map build`, or run `planr item breakdown <item-id> --into <slice>` once per slice — derive slices from the plan's acceptance criteria",
                     _ => "items are chained in plan order; adjust with `planr link add <from> <to> --type blocks` if execution order differs, then `planr pick --plan <plan-id>`",
                 };
                 let mut message = format!("created {} map item(s)", created.len());

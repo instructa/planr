@@ -121,6 +121,23 @@ impl App {
                 )),
             }
         }
+        // An unexpanded scaffold task list maps to a single coarse item and
+        // forces a breakdown guess later; catch it before `map build` does.
+        if let Some(message) =
+            crate::planpack::scaffold_placeholder_state(&path)?.filter(|_| path.exists())
+        {
+            let task_file = if path.is_dir() {
+                path.join("TASKS.md").display().to_string()
+            } else {
+                plan.path.clone()
+            };
+            warnings.push(warning(
+                &task_file,
+                Some("task list"),
+                format!("{message}; `map build` would create a single coarse item"),
+                format!("edit {task_file} and replace the placeholder with one `### TASK-00n: <slice>` heading (or `- [ ]` line) per verifiable slice — typically 4-8, in execution order — then re-run `planr plan check {plan_id}`"),
+            ));
+        }
         let plan = self.get_plan(plan_id)?;
         let ok = warnings.is_empty();
         Ok(json!({"plan": plan, "ok": ok, "warnings": warnings}))

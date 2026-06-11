@@ -34,6 +34,8 @@ planr map build --from <plan-id>          # idempotent: safe to re-run
 
 `plan refine` appends notes; the plan body is yours to edit. When `plan check` fails, each warning names the exact file and section — edit that file directly, fill the section with real content, and re-run the check. Scaffold sections (`## Scope Decision`, `## Verification`, `## Acceptance Criteria`) are filled by editing the plan markdown, not by more `refine` notes.
 
+Before `map build`, expand the plan's task list: the scaffold ships a single placeholder task, and mapping it produces one coarse item that forces the worker to guess the breakdown later. Replace the placeholder with one `### TASK-00n: <slice>` heading (or `- [ ]` line) per verifiable slice — typically 4-8, in execution order, each one closeable with its own evidence. Derive the slices from the acceptance criteria; `plan check` flags the unexpanded placeholder.
+
 `map build` creates one item per plan step and chains them in plan order with `blocks` links; the output lists the created items and links. Review that chain and adjust it only where execution order differs from document order:
 
 ```bash

@@ -3736,6 +3736,34 @@ fn artifacts_events_and_debug_bundle_are_persisted() {
     let artifact_id = artifact["artifact"]["id"].as_str().unwrap();
     assert_eq!(artifact["artifact"]["item_id"], item_id);
 
+    // Path artifacts without --mime infer the type from the extension; a
+    // screenshot must never land as text/plain in the audit trail.
+    std::fs::write(dir.path().join("proof.png"), b"png-bytes").unwrap();
+    let screenshot = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "artifact",
+            "add",
+            "screenshot",
+            "--item",
+            item_id,
+            "--path",
+            "proof.png",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let screenshot: Value = serde_json::from_slice(&screenshot).unwrap();
+    assert_eq!(
+        screenshot["artifact"]["mime_type"], "image/png",
+        "mime must be inferred from the path extension: {screenshot}"
+    );
+
     planr()
         .current_dir(dir.path())
         .args([
@@ -3831,7 +3859,7 @@ fn artifacts_events_and_debug_bundle_are_persisted() {
     let bundle: Value = serde_json::from_slice(&bundle).unwrap();
     assert_eq!(bundle["mode"], "preview");
     assert_eq!(bundle["privacy"]["source_file_content_included"], false);
-    assert_eq!(bundle["counts"]["artifacts"], 1);
+    assert_eq!(bundle["counts"]["artifacts"], 2);
 
     let mut mcp = planr();
     mcp.current_dir(dir.path())
@@ -5223,7 +5251,7 @@ fn rust_implementation_has_owned_module_boundaries() {
         ("src/app/recovery.rs", 450),
         ("src/app/review_workspace.rs", 500),
         ("src/app/surfaces.rs", 300),
-        ("src/app/inspection.rs", 500),
+        ("src/app/inspection.rs", 510),
         ("src/storage/schema.rs", 300),
         ("src/storage/rows.rs", 150),
     ] {
@@ -5354,7 +5382,8 @@ fn plan_split_with_colon_slice_stays_parseable_and_check_is_honest() {
         );
     }
 
-    // Fill the mandatory sections; plan check must pass afterwards.
+    // Fill the mandatory sections and expand the scaffold's placeholder
+    // task; plan check must pass afterwards.
     let text = fs::read_to_string(&build_path).unwrap();
     let filled = text
         .replace(
@@ -5369,6 +5398,15 @@ fn plan_split_with_colon_slice_stays_parseable_and_check_is_honest() {
             "## Acceptance Criteria\n",
             "## Acceptance Criteria\n\n- Habit can be added and checked in.\n",
         );
+    let implement_line = filled
+        .lines()
+        .find(|line| line.trim().starts_with("- [ ] Implement "))
+        .expect("scaffold must ship the placeholder task")
+        .to_string();
+    let filled = filled.replace(
+        &implement_line,
+        "- [ ] Add habit\n- [ ] Daily check-in\n- [ ] Streak display",
+    );
     fs::write(&build_path, filled).unwrap();
 
     planr()
@@ -5588,6 +5626,89 @@ fn follow_up_review_is_not_ready_while_fix_item_is_open() {
         .assert()
         .success();
     assert_eq!(item_status(&db, &item_id), "closed");
+}
+
+#[test]
+fn plan_check_flags_unexpanded_scaffold_task_list_before_map_build() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    let db_arg = db.to_str().unwrap().to_string();
+    let run = |args: &[&str]| -> Value {
+        let output = planr()
+            .current_dir(dir.path())
+            .args(["--db", &db_arg, "--json"])
+            .args(args)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice(&output).unwrap()
+    };
+
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "project", "init", "Coarse"])
+        .assert()
+        .success();
+    let value = run(&["plan", "new", "Coarse map app"]);
+    let product_id = value["plan"]["id"].as_str().unwrap().to_string();
+    let value = run(&["plan", "split", &product_id, "--slice", "MVP"]);
+    let build_id = value["plan"]["id"].as_str().unwrap().to_string();
+    let build_path = value["plan"]["path"].as_str().unwrap().to_string();
+
+    // Required sections filled, but the scaffold's single "- [ ] Implement
+    // MVP" placeholder is untouched: the third dogfood run mapped exactly
+    // this and got one coarse item plus a granularity guess.
+    let text = fs::read_to_string(&build_path).unwrap();
+    let filled = text
+        .replace("## Scope Decision\n", "## Scope Decision\n\nMVP only.\n")
+        .replace("## Verification\n", "## Verification\n\nRun the flow.\n")
+        .replace(
+            "## Acceptance Criteria\n",
+            "## Acceptance Criteria\n\n- Works end to end.\n",
+        );
+    fs::write(&build_path, &filled).unwrap();
+    let check = run(&["plan", "check", &build_id]);
+    assert_eq!(
+        check["ok"], false,
+        "placeholder must fail the check: {check}"
+    );
+    let warnings = check["warnings"].as_array().unwrap();
+    let task_warning = warnings
+        .iter()
+        .find(|warning| warning["section"] == "task list")
+        .unwrap_or_else(|| panic!("missing task list warning: {check}"));
+    assert!(
+        task_warning["message"]
+            .as_str()
+            .unwrap()
+            .contains("scaffold placeholder"),
+        "warning must name the placeholder: {task_warning}"
+    );
+    assert!(
+        task_warning["fix"]
+            .as_str()
+            .unwrap()
+            .contains("per verifiable slice"),
+        "fix must state the granularity contract: {task_warning}"
+    );
+
+    // Expanding the task list clears the warning and map build seeds one
+    // item per slice instead of a single coarse gate.
+    let expanded = filled.replace(
+        "- [ ] Implement MVP\n",
+        "- [ ] Add schema\n- [ ] Add endpoint\n- [ ] Add page\n",
+    );
+    fs::write(&build_path, expanded).unwrap();
+    let check = run(&["plan", "check", &build_id]);
+    assert_eq!(check["ok"], true, "expanded task list must pass: {check}");
+    let build = run(&["map", "build", "--from", &build_id]);
+    assert_eq!(
+        build["created"].as_array().unwrap().len(),
+        3,
+        "map build must seed one item per slice: {build}"
+    );
 }
 
 #[test]

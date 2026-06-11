@@ -675,6 +675,16 @@ impl App {
                     }
                     let id = short_id("art");
                     let content = body_json.get("content").and_then(Value::as_str);
+                    let mime = body_json
+                        .get("mime")
+                        .and_then(Value::as_str)
+                        .unwrap_or_else(|| {
+                            body_json
+                                .get("path")
+                                .and_then(Value::as_str)
+                                .map(crate::util::mime_for_path)
+                                .unwrap_or("text/plain")
+                        });
                     self.conn.execute(
                         "INSERT INTO artifacts(id, project_id, item_id, name, kind, path, content, mime_type, size_bytes, metadata, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, datetime('now'))",
                         params![
@@ -685,7 +695,7 @@ impl App {
                             body_json.get("kind").and_then(Value::as_str).unwrap_or("evidence"),
                             body_json.get("path").and_then(Value::as_str),
                             content,
-                            body_json.get("mime").and_then(Value::as_str).unwrap_or("text/plain"),
+                            mime,
                             content.map(|value| value.len() as i64),
                             json!({"source": "http"}).to_string(),
                         ],
