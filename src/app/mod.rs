@@ -21,6 +21,7 @@ mod repository;
 mod review;
 mod review_workspace;
 mod surfaces;
+#[rustfmt::skip]
 mod verify;
 
 pub(crate) use review::ReviewArtifactInput;
