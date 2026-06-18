@@ -21,6 +21,7 @@ mod repository;
 mod review;
 mod review_workspace;
 mod surfaces;
+#[allow(clippy::all)]
 #[allow(warnings)]
 #[rustfmt::skip]
 mod verify;
