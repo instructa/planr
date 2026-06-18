@@ -1,7 +1,7 @@
 use anyhow::Result;
 use rusqlite::{params, Connection};
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 pub fn ensure_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(
@@ -138,6 +138,43 @@ CREATE TABLE IF NOT EXISTS artifacts(
   metadata TEXT,
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS verification_points(
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  item_id TEXT,
+  plan_id TEXT,
+  source_type TEXT,
+  source_id TEXT,
+  kind TEXT NOT NULL DEFAULT 'custom',
+  text TEXT NOT NULL,
+  required INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL DEFAULT 'pending',
+  evidence_id TEXT,
+  metadata TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS verification_evidence(
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  item_id TEXT NOT NULL,
+  point_id TEXT,
+  run_id TEXT,
+  executor TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  command TEXT,
+  cwd TEXT,
+  exit_code INTEGER,
+  status TEXT NOT NULL,
+  stdout_summary TEXT,
+  stderr_summary TEXT,
+  assertions TEXT,
+  artifacts TEXT,
+  capability_state TEXT,
+  duration_ms INTEGER,
+  replay_of TEXT,
+  created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS events(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id TEXT,
@@ -154,6 +191,11 @@ CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
   body,
   path UNINDEXED
 );
+CREATE INDEX IF NOT EXISTS idx_verification_points_item ON verification_points(item_id);
+CREATE INDEX IF NOT EXISTS idx_verification_points_plan ON verification_points(plan_id);
+CREATE INDEX IF NOT EXISTS idx_verification_evidence_item ON verification_evidence(item_id);
+CREATE INDEX IF NOT EXISTS idx_verification_evidence_point ON verification_evidence(point_id);
+CREATE INDEX IF NOT EXISTS idx_verification_evidence_run ON verification_evidence(run_id);
 "#,
     )?;
     ensure_column(conn, "items", "last_heartbeat_at", "TEXT")?;
