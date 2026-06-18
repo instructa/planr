@@ -21,6 +21,7 @@ mod repository;
 mod review;
 mod review_workspace;
 mod surfaces;
+mod verify;
 
 pub(crate) use review::ReviewArtifactInput;
 
