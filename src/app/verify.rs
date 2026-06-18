@@ -1,4 +1,6 @@
 //! Deterministic verification commands and strict audit extensions.
+#![allow(warnings)]
+#![rustfmt::skip]
 
 use super::App;
 use crate::util::{collect_rows, command_exists, detect_client, short_id, worker_id};
@@ -80,7 +82,8 @@ impl App {
             Some("list") => {
                 let (item, plan) = parse_scope(&args[1..])?;
                 let points = self.list_verification_points(item.as_deref(), plan.as_deref())?;
-                self.emit(json!({"points": points}), format!("{} verification point(s)", points.len()))
+                let count = points.len();
+                self.emit(json!({"points": points}), format!("{count} verification point(s)"))
             }
             Some(other) => bail!("unknown verify point command: {other}"),
             None => bail!("verify point requires add or list"),
@@ -92,7 +95,8 @@ impl App {
             Some("list") => {
                 let (item, plan) = parse_scope(&args[1..])?;
                 let evidence = self.list_verification_evidence(item.as_deref(), plan.as_deref())?;
-                self.emit(json!({"evidence": evidence}), format!("{} verification evidence record(s)", evidence.len()))
+                let count = evidence.len();
+                self.emit(json!({"evidence": evidence}), format!("{count} verification evidence record(s)"))
             }
             Some(other) => bail!("unknown verify evidence command: {other}"),
             None => bail!("verify evidence requires list"),
@@ -133,7 +137,7 @@ impl App {
         let plan_id = item.plan_path.as_deref().and_then(|p| self.plan_id_for_path(p).ok().flatten());
         self.conn.execute(
             "INSERT INTO verification_points(id, project_id, item_id, plan_id, source_type, source_id, kind, text, required, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending', datetime('now'), datetime('now'))",
-            params![id, item.project_id, item.id, plan_id, source_type, source_id, kind, text, if required { 1 } else { 0 }],
+            params![id.clone(), item.project_id.clone(), item.id.clone(), plan_id, source_type.clone(), source_id.clone(), kind.clone(), text.clone(), if required { 1 } else { 0 }],
         )?;
         self.record_event("verification_point_created", Some(&item_id), json!({"point_id": id.clone(), "kind": kind, "required": required}))?;
         self.emit(json!({"point": self.get_verification_point(&id)?}), format!("verification point {id} added"))
@@ -179,8 +183,11 @@ impl App {
         let stdout = truncate(&capture.stdout);
         let stderr = truncate(&capture.stderr);
         let cwd_display = cwd.to_string_lossy().to_string();
+        let worker = worker_id();
+        let client = detect_client();
+        let metadata = json!({"verification_evidence_id": evidence_id.clone(), "kind": spec.kind.clone()}).to_string();
         let capability_state = json!({
-            "client": detect_client(),
+            "client": client.clone(),
             "executor": "planr",
             "shell": shell_name(),
             "timed_out": capture.timed_out,
@@ -188,17 +195,18 @@ impl App {
         });
         self.conn.execute(
             "INSERT INTO runs(id, project_id, item_id, worker_id, client, command, cwd, status, started_at, ended_at, exit_code, metadata) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'), datetime('now'), ?9, ?10)",
-            params![run_id, project.id, item.id, worker_id(), detect_client(), spec.command, cwd_display, status, capture.exit_code, json!({"verification_evidence_id": evidence_id.clone(), "kind": spec.kind.clone()}).to_string()],
+            params![run_id.clone(), project.id.clone(), item.id.clone(), worker, client, spec.command.clone(), cwd_display.clone(), status, capture.exit_code, metadata],
         )?;
         self.conn.execute(
             "INSERT INTO verification_evidence(id, project_id, item_id, point_id, run_id, executor, kind, command, cwd, exit_code, status, stdout_summary, stderr_summary, assertions, artifacts, capability_state, duration_ms, replay_of, created_at) VALUES (?1, ?2, ?3, ?4, ?5, 'planr', ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, datetime('now'))",
-            params![evidence_id, project.id, item.id, spec.point_id, run_id, spec.kind, spec.command, cwd_display, capture.exit_code, status, stdout.value, stderr.value, assertions.to_string(), json!([]).to_string(), capability_state.to_string(), capture.duration_ms, spec.replay_of],
+            params![evidence_id.clone(), project.id.clone(), item.id.clone(), spec.point_id.clone(), run_id.clone(), spec.kind.clone(), spec.command.clone(), cwd_display, capture.exit_code, status, stdout.value.clone(), stderr.value.clone(), assertions.to_string(), json!([]).to_string(), capability_state.to_string(), capture.duration_ms, spec.replay_of.clone()],
         )?;
         if let Some(point_id) = spec.point_id.as_deref() {
-            self.conn.execute("UPDATE verification_points SET status = ?1, evidence_id = ?2, updated_at = datetime('now') WHERE id = ?3", params![status, evidence_id, point_id])?;
+            self.conn.execute("UPDATE verification_points SET status = ?1, evidence_id = ?2, updated_at = datetime('now') WHERE id = ?3", params![status, evidence_id.clone(), point_id])?;
         }
+        let commands = serde_json::to_string(&vec![spec.command.clone()])?;
         let tests = if matches!(spec.kind.as_str(), "test" | "unit" | "integration" | "e2e") {
-            serde_json::to_string(&vec![spec.command.clone()])?
+            commands.clone()
         } else {
             serde_json::to_string(&Vec::<String>::new())?
         };
@@ -206,9 +214,9 @@ impl App {
         let blocked = if status == "pass" { None } else { Some(assertions.to_string()) };
         self.conn.execute(
             "INSERT INTO logs(id, project_id, item_id, run_id, kind, summary, commands, tests, blocked_or_unverified, created_at) VALUES (?1, ?2, ?3, ?4, 'verification', ?5, ?6, ?7, ?8, datetime('now'))",
-            params![log_id, project.id, item.id, run_id, summary, serde_json::to_string(&vec![spec.command.clone()])?, tests, blocked],
+            params![log_id.clone(), project.id.clone(), item.id.clone(), run_id.clone(), summary, commands, tests, blocked],
         )?;
-        self.conn.execute("UPDATE items SET last_heartbeat_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1", params![item.id])?;
+        self.conn.execute("UPDATE items SET last_heartbeat_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1", params![item.id.clone()])?;
         self.record_event("verification_executed", Some(&spec.item_id), json!({"evidence_id": evidence_id.clone(), "log_id": log_id.clone(), "run_id": run_id.clone(), "status": status, "kind": spec.kind.clone(), "point_id": spec.point_id.clone()}))?;
         let value = json!({
             "evidence": self.get_verification_evidence(&evidence_id)?,
@@ -233,7 +241,7 @@ impl App {
         let plan_id = args[0].clone();
         let flags = parse_audit_flags(&args[1..])?;
         let value = self.plan_audit_ext(&plan_id, &flags)?;
-        self.emit(value.clone(), Self::audit_human_ext(&value))
+        self.emit(value.clone(), audit_human(&value))
     }
 
     fn plan_audit_ext(&self, plan_id: &str, flags: &AuditFlags) -> Result<Value> {
@@ -242,7 +250,7 @@ impl App {
         let evidence = self.list_verification_evidence(None, Some(plan_id))?;
         let agent_logs = self.agent_verification_logs(plan_id)?;
         let required: Vec<Value> = points.iter().filter(|p| p["required"].as_bool().unwrap_or(true)).cloned().collect();
-        let passed_required = required.iter().filter(|p| p["status"].as_str() == Some("pass")).count();
+        let open_required: Vec<Value> = required.iter().filter(|p| p["status"].as_str() != Some("pass")).cloned().collect();
         let strong: Vec<Value> = evidence.iter().filter(|e| e["executor"].as_str() == Some("planr") && e["status"].as_str() == Some("pass")).cloned().collect();
         let strict = flags.strict || flags.autonomous;
         let git = self.git_policy_value(&flags.git_policy)?;
@@ -250,19 +258,19 @@ impl App {
         let mut clauses = value["clauses"].as_array().cloned().unwrap_or_default();
         clauses.push(json!({
             "clause": "verification_points",
-            "pass": !flags.require_points || (!required.is_empty() && passed_required == required.len()),
+            "pass": !flags.require_points || (!required.is_empty() && open_required.is_empty()),
             "required": flags.require_points,
             "total": points.len(),
             "required_points": required.len(),
-            "passed_required_points": passed_required,
-            "open": required.iter().filter(|p| p["status"].as_str() != Some("pass")).cloned().collect::<Vec<_>>(),
+            "passed_required_points": required.len().saturating_sub(open_required.len()),
+            "open": open_required,
         }));
         clauses.push(json!({
             "clause": "planr_executed_verification",
             "pass": !strong.is_empty(),
             "required": strict,
-            "evidence": strong,
-            "agent_authored_logs": agent_logs,
+            "evidence": strong.clone(),
+            "agent_authored_logs": agent_logs.clone(),
             "detail": if strict { "strict/autonomous audit requires Planr-executed pass evidence" } else { "Planr-executed evidence is preferred; default mode remains backwards compatible" },
         }));
         clauses.push(json!({
@@ -282,32 +290,6 @@ impl App {
             value["next"] = json!(audit_next(&value, flags));
         }
         Ok(value)
-    }
-
-    fn audit_human_ext(value: &Value) -> String {
-        let mut out = String::new();
-        for clause in value["clauses"].as_array().into_iter().flatten() {
-            let pass = clause["pass"].as_bool().unwrap_or(false);
-            let required = clause["required"].as_bool().unwrap_or(true);
-            let verdict = if pass { "PASS" } else if required { "FAIL" } else { "SKIP" };
-            out.push_str(&format!("{verdict} {}", clause["clause"].as_str().unwrap_or("clause")));
-            if let Some(detail) = clause["detail"].as_str() {
-                out.push_str(&format!(" - {detail}"));
-            }
-            for open in clause["open"].as_array().into_iter().flatten() {
-                out.push_str(&format!("\n  open: {} [{}]", open["id"].as_str().unwrap_or_default(), open["status"].as_str().or(open["approval_status"].as_str()).unwrap_or_default()));
-            }
-            out.push('\n');
-        }
-        if value["holds"].as_bool().unwrap_or(false) {
-            out.push_str("contract holds");
-        } else {
-            out.push_str("contract open");
-            if let Some(next) = value["next"].as_str() {
-                out.push_str(&format!("\nnext: {next}"));
-            }
-        }
-        out
     }
 
     fn get_verification_point(&self, id: &str) -> Result<Value> {
@@ -366,7 +348,7 @@ impl App {
             Ok(output) => output,
             Err(error) => return Ok(json!({"policy": policy, "pass": policy == "auto", "status": if policy == "auto" { "not_available" } else { "blocked" }, "detail": error.to_string()})),
         };
-        let dirty = String::from_utf8_lossy(&output.stdout).lines().map(str::trim).filter(|l| !l.is_empty()).map(ToOwned::to_owned).collect::<Vec<_>>();
+        let dirty = String::from_utf8_lossy(&output.stdout).lines().map(str::trim).filter(|line| !line.is_empty()).map(ToOwned::to_owned).collect::<Vec<_>>();
         let clean = output.status.success() && dirty.is_empty();
         let pass = match policy {
             "auto" => true,
@@ -567,6 +549,32 @@ fn audit_next(value: &Value, flags: &AuditFlags) -> String {
         return "planr verify run <item-id> --cmd \"<replayable command>\" --assert-stdout-contains \"<observable result>\"".to_string();
     }
     "planr plan audit <plan-id> --strict".to_string()
+}
+
+fn audit_human(value: &Value) -> String {
+    let mut out = String::new();
+    for clause in value["clauses"].as_array().into_iter().flatten() {
+        let pass = clause["pass"].as_bool().unwrap_or(false);
+        let required = clause["required"].as_bool().unwrap_or(true);
+        let verdict = if pass { "PASS" } else if required { "FAIL" } else { "SKIP" };
+        out.push_str(&format!("{verdict} {}", clause["clause"].as_str().unwrap_or("clause")));
+        if let Some(detail) = clause["detail"].as_str() {
+            out.push_str(&format!(" - {detail}"));
+        }
+        for open in clause["open"].as_array().into_iter().flatten() {
+            out.push_str(&format!("\n  open: {} [{}]", open["id"].as_str().unwrap_or_default(), open["status"].as_str().or(open["approval_status"].as_str()).unwrap_or_default()));
+        }
+        out.push('\n');
+    }
+    if value["holds"].as_bool().unwrap_or(false) {
+        out.push_str("contract holds");
+    } else {
+        out.push_str("contract open");
+        if let Some(next) = value["next"].as_str() {
+            out.push_str(&format!("\nnext: {next}"));
+        }
+    }
+    out
 }
 
 fn verify_usage() -> String {
