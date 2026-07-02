@@ -261,6 +261,30 @@ pub fn mcp_tools() -> Vec<Value> {
             &["parent_id", "into"],
         ),
         tool(
+            "planr_agents_list",
+            "Show the agent profile registry: profiles, routes, and validation warnings",
+            json!({}),
+            &[],
+        ),
+        tool(
+            "planr_item_route",
+            "Show an item's resolved advisory route and whether an override or policy won",
+            json!({"item_id": prop("string", "Item id")}),
+            &["item_id"],
+        ),
+        tool(
+            "planr_item_route_set",
+            "Pin an item to an agent profile from the registry (beats every policy route)",
+            json!({"item_id": prop("string", "Item id"), "profile": prop("string", "Profile id declared in .planr/agents.toml")}),
+            &["item_id", "profile"],
+        ),
+        tool(
+            "planr_item_route_clear",
+            "Remove an item's pinned profile so policy routing applies again",
+            json!({"item_id": prop("string", "Item id")}),
+            &["item_id"],
+        ),
+        tool(
             "planr_pick_item",
             "Atomically pick the next ready item",
             json!({"work_type": prop("string", "Only lease items of this work type (e.g. review for checkers, code for makers)"), "plan": prop("string", "Only lease items belonging to this plan (plan id), so plan-scoped goal runs stay inside their contract")}),

@@ -1,4 +1,7 @@
-//! CLI surface for the agent profile registry and per-item routing.
+//! CLI and MCP surface for the agent profile registry and per-item
+//! routing. The `*_value` functions own the JSON shapes; the CLI adds
+//! human rendering on top and MCP tools return the same values, so both
+//! surfaces stay contract-identical by construction.
 
 use super::App;
 use crate::agents::{
@@ -13,51 +16,10 @@ use serde_json::{Value, json};
 impl App {
     pub(crate) fn agents(&self, command: AgentsCommand) -> Result<()> {
         match command {
-            AgentsCommand::List(_) => match load_registry(&self.root) {
-                RegistryLoad::Missing => self.emit(
-                    json!({"registry": null, "reason": "missing", "path": REGISTRY_RELATIVE_PATH}),
-                    format!(
-                        "no agent registry; declare profiles and routes in {REGISTRY_RELATIVE_PATH} to get routing recommendations in pick packets"
-                    ),
-                ),
-                RegistryLoad::Degraded { error } => self.emit(
-                    json!({"registry": null, "reason": "degraded", "path": REGISTRY_RELATIVE_PATH, "error": error}),
-                    format!("agent registry unusable: {error}"),
-                ),
-                RegistryLoad::Loaded(registry) => {
-                    let warnings = validation_warnings(&registry);
-                    let mut human = format!(
-                        "{} profile(s), {} route(s), default route: {}",
-                        registry.profiles.len(),
-                        registry.routes.len(),
-                        registry
-                            .route_default
-                            .as_ref()
-                            .map_or("none", |default| default.profile.as_str())
-                    );
-                    for (id, profile) in &registry.profiles {
-                        human.push_str(&format!(
-                            "\n  {id}: {} {}{}{}",
-                            profile.client,
-                            profile.model,
-                            profile
-                                .effort
-                                .as_deref()
-                                .map(|effort| format!(" effort={effort}"))
-                                .unwrap_or_default(),
-                            profile
-                                .cost_tier
-                                .as_deref()
-                                .map(|tier| format!(" tier={tier}"))
-                                .unwrap_or_default(),
-                        ));
-                    }
-                    for warning in &warnings {
-                        human.push_str(&format!("\n  warning: {warning}"));
-                    }
-                    self.emit(json!({"registry": registry, "warnings": warnings}), human)
-                }
-            },
+            AgentsCommand::List(_) => {
+                let (value, human) = self.agents_list_value()?;
+                self.emit(value, human)
+            }
             AgentsCommand::Check => match load_registry(&self.root) {
                 RegistryLoad::Missing => self.emit(
                     json!({"ok": true, "reason": "missing", "warnings": []}),
@@ -86,6 +48,57 @@ impl App {
         }
     }
 
+    /// The registry listing shared by `planr agents list` and the
+    /// `planr_agents_list` MCP tool: resolved registry (or the
+    /// missing/degraded reason) plus validation warnings.
+    pub(crate) fn agents_list_value(&self) -> Result<(Value, String)> {
+        Ok(match load_registry(&self.root) {
+            RegistryLoad::Missing => (
+                json!({"registry": null, "reason": "missing", "path": REGISTRY_RELATIVE_PATH}),
+                format!(
+                    "no agent registry; declare profiles and routes in {REGISTRY_RELATIVE_PATH} to get routing recommendations in pick packets"
+                ),
+            ),
+            RegistryLoad::Degraded { error } => (
+                json!({"registry": null, "reason": "degraded", "path": REGISTRY_RELATIVE_PATH, "error": error}),
+                format!("agent registry unusable: {error}"),
+            ),
+            RegistryLoad::Loaded(registry) => {
+                let warnings = validation_warnings(&registry);
+                let mut human = format!(
+                    "{} profile(s), {} route(s), default route: {}",
+                    registry.profiles.len(),
+                    registry.routes.len(),
+                    registry
+                        .route_default
+                        .as_ref()
+                        .map_or("none", |default| default.profile.as_str())
+                );
+                for (id, profile) in &registry.profiles {
+                    human.push_str(&format!(
+                        "\n  {id}: {} {}{}{}",
+                        profile.client,
+                        profile.model,
+                        profile
+                            .effort
+                            .as_deref()
+                            .map(|effort| format!(" effort={effort}"))
+                            .unwrap_or_default(),
+                        profile
+                            .cost_tier
+                            .as_deref()
+                            .map(|tier| format!(" tier={tier}"))
+                            .unwrap_or_default(),
+                    ));
+                }
+                for warning in &warnings {
+                    human.push_str(&format!("\n  warning: {warning}"));
+                }
+                (json!({"registry": registry, "warnings": warnings}), human)
+            }
+        })
+    }
+
     /// The advisory routing block for a pick packet, or None when no
     /// registry exists, it is degraded, or nothing resolves — the packet
     /// simply omits `routing` in all of those cases.
@@ -98,16 +111,17 @@ impl App {
     }
 
     pub(crate) fn item_route(&self, args: ItemRouteArgs) -> Result<()> {
-        if let Some(profile) = &args.set {
-            return self.item_route_set(&args.id, profile);
-        }
-        if args.clear {
-            return self.item_route_clear(&args.id);
-        }
-        self.item_route_show(&args.id)
+        let (value, human) = if let Some(profile) = &args.set {
+            self.item_route_set_value(&args.id, profile)?
+        } else if args.clear {
+            self.item_route_clear_value(&args.id)?
+        } else {
+            self.item_route_show_value(&args.id)?
+        };
+        self.emit(value, human)
     }
 
-    fn item_route_show(&self, item_id: &str) -> Result<()> {
+    pub(crate) fn item_route_show_value(&self, item_id: &str) -> Result<(Value, String)> {
         let facts = self.item_route_facts(item_id)?;
         let override_id = facts.route_override.clone();
         match load_registry(&self.root) {
@@ -116,19 +130,19 @@ impl App {
                     Some(profile) => format!(
                         "override pinned to `{profile}` but no registry at {REGISTRY_RELATIVE_PATH}; declare the profile there to activate routing"
                     ),
-                    None => format!(
-                        "no route: no override and no registry at {REGISTRY_RELATIVE_PATH}"
-                    ),
+                    None => {
+                        format!("no route: no override and no registry at {REGISTRY_RELATIVE_PATH}")
+                    }
                 };
-                self.emit(
+                Ok((
                     json!({"item": item_id, "override": override_id, "registry": "missing", "routing": null, "source": null}),
                     human,
-                )
+                ))
             }
-            RegistryLoad::Degraded { error } => self.emit(
+            RegistryLoad::Degraded { error } => Ok((
                 json!({"item": item_id, "override": override_id, "registry": "degraded", "error": error, "routing": null, "source": null}),
                 format!("no route: agent registry unusable: {error}"),
-            ),
+            )),
             RegistryLoad::Loaded(registry) => {
                 let routing = resolve_route(&facts.as_routing_facts(), &registry);
                 let source = routing.as_ref().map(|routing| {
@@ -175,7 +189,7 @@ impl App {
                             .unwrap_or_default(),
                     ),
                 };
-                self.emit(
+                Ok((
                     json!({
                         "item": item_id,
                         "override": override_id,
@@ -185,12 +199,16 @@ impl App {
                         "hint": dangling_hint,
                     }),
                     human,
-                )
+                ))
             }
         }
     }
 
-    fn item_route_set(&self, item_id: &str, profile: &str) -> Result<()> {
+    pub(crate) fn item_route_set_value(
+        &self,
+        item_id: &str,
+        profile: &str,
+    ) -> Result<(Value, String)> {
         self.get_item(item_id)?;
         let previous = self.item_route_override(item_id)?;
         // Offline edits stay possible: only a *loaded* registry can veto
@@ -235,7 +253,7 @@ impl App {
                 .map(|warning| format!("\n  warning: {warning}"))
                 .unwrap_or_default(),
         );
-        self.emit(
+        Ok((
             json!({
                 "item": item_id,
                 "override": profile,
@@ -244,17 +262,17 @@ impl App {
                 "routing": routing,
             }),
             human,
-        )
+        ))
     }
 
-    fn item_route_clear(&self, item_id: &str) -> Result<()> {
+    pub(crate) fn item_route_clear_value(&self, item_id: &str) -> Result<(Value, String)> {
         self.get_item(item_id)?;
         let previous = self.item_route_override(item_id)?;
         if previous.is_none() {
-            return self.emit(
+            return Ok((
                 json!({"item": item_id, "cleared": false, "override": null}),
                 format!("{item_id} has no route override; nothing to clear"),
-            );
+            ));
         }
         self.conn.execute(
             "UPDATE items SET route_override = NULL, updated_at = datetime('now') WHERE id = ?1",
@@ -266,7 +284,7 @@ impl App {
             json!({"previous": previous}),
         )?;
         let routing = self.routing_value_for_item(item_id)?;
-        self.emit(
+        Ok((
             json!({
                 "item": item_id,
                 "cleared": true,
@@ -274,7 +292,7 @@ impl App {
                 "routing": routing,
             }),
             format!("cleared route override on {item_id}; policy routing applies"),
-        )
+        ))
     }
 
     /// Owned routing inputs for one item, resolved from the graph: the

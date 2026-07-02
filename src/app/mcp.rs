@@ -96,6 +96,22 @@ impl App {
             .unwrap_or_else(|| json!({}));
         match name {
             "planr_project_show" => Ok(mcp_json(self.default_project()?)),
+            "planr_agents_list" => Ok(mcp_json(self.agents_list_value()?.0)),
+            "planr_item_route" => Ok(mcp_json(
+                self.item_route_show_value(required_arg(&args, "item_id")?)?
+                    .0,
+            )),
+            "planr_item_route_set" => Ok(mcp_json(
+                self.item_route_set_value(
+                    required_arg(&args, "item_id")?,
+                    required_arg(&args, "profile")?,
+                )?
+                .0,
+            )),
+            "planr_item_route_clear" => Ok(mcp_json(
+                self.item_route_clear_value(required_arg(&args, "item_id")?)?
+                    .0,
+            )),
             "planr_map_show" => Ok(mcp_json(
                 self.map_value(args.get("plan").and_then(Value::as_str))?,
             )),

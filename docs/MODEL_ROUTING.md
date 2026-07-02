@@ -101,7 +101,7 @@ Tier the roles, not just the models: workers run safely on cheaper tiers because
 
 ## Current Scope
 
-Shipped today: the registry, `planr agents list|check`, the `routing` block in `planr pick --json`, and per-item overrides (`planr item route [--set|--clear]`).
+Shipped today: the registry, `planr agents list|check`, the `routing` block in `planr pick --json`, per-item overrides (`planr item route [--set|--clear]`), and the matching MCP tools (`planr_agents_list`, `planr_item_route`, `planr_item_route_set`, `planr_item_route_clear`) with identical JSON shapes.
 
 Planned next (see the product plan under `.planr/plans/`): rendering host role files (Codex TOML, Claude/Cursor agent frontmatter) from the registry, declared-vs-actual profile auditing on runs in `planr trace item`, and an `agents init` scaffold.
 

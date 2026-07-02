@@ -715,6 +715,344 @@ fallbacks = ["driver"]
 }
 
 #[test]
+fn route_overrides_pin_items_and_survive_registry_drift() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Overrides"])
+        .assert()
+        .success();
+    let registry_path = dir.path().join(".planr/agents.toml");
+    fs::write(
+        &registry_path,
+        r#"
+[profiles.implementer]
+client = "codex"
+model = "gpt-5.5"
+
+[profiles.driver]
+client = "cursor"
+model = "fable-5"
+effort = "high"
+
+[[routes]]
+match = { work_type = "code" }
+profile = "implementer"
+"#,
+    )
+    .unwrap();
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "item",
+            "create",
+            "Gnarly refactor",
+            "--description",
+            "Needs the premium tier",
+            "--work-type",
+            "code",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let created: Value = serde_json::from_slice(&output).unwrap();
+    let item_id = created["item"]["id"].as_str().unwrap().to_string();
+
+    // Without an override the policy route wins.
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "item",
+            "route",
+            &item_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let shown: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(shown["source"], "policy");
+    assert_eq!(shown["routing"]["profile"], "implementer");
+    assert!(shown["override"].is_null());
+
+    // Pinning an unknown profile fails and names the known ones.
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "item",
+            "route",
+            &item_id,
+            "--set",
+            "ghost",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "known profiles: driver, implementer",
+        ));
+
+    // A valid pin beats the policy route, in item route and in the pick packet.
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "item",
+            "route",
+            &item_id,
+            "--set",
+            "driver",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let pinned: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(pinned["override"], "driver");
+    assert!(pinned["warning"].is_null());
+    assert_eq!(pinned["routing"]["matched_selector"], "override");
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "pick"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let picked: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(picked["item"]["id"], item_id);
+    assert_eq!(picked["routing"]["profile"], "driver");
+    assert_eq!(picked["routing"]["matched_selector"], "override");
+
+    // A pin whose profile later leaves the registry is never an error:
+    // policy routing takes over and the show output carries a repair hint.
+    fs::write(
+        &registry_path,
+        r#"
+[profiles.implementer]
+client = "codex"
+model = "gpt-5.5"
+
+[[routes]]
+match = { work_type = "code" }
+profile = "implementer"
+"#,
+    )
+    .unwrap();
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "item",
+            "route",
+            &item_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let dangling: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(dangling["override"], "driver");
+    assert_eq!(dangling["source"], "policy");
+    assert_eq!(dangling["routing"]["profile"], "implementer");
+    assert!(
+        dangling["hint"]
+            .as_str()
+            .unwrap()
+            .contains("not in .planr/agents.toml")
+    );
+
+    // Clearing restores policy routing; both mutations left graph events.
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "item",
+            "route",
+            &item_id,
+            "--clear",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let cleared: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(cleared["cleared"], true);
+    assert_eq!(cleared["previous"], "driver");
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "event",
+            "list",
+            "--item",
+            &item_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let events = serde_json::from_slice::<Value>(&output).unwrap();
+    let event_types = events["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|event| event["event_type"].as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    assert!(event_types.contains(&"route_overridden".to_string()));
+    assert!(event_types.contains(&"route_override_cleared".to_string()));
+
+    // Missing registry: --set warns but stores, so offline edits work.
+    fs::remove_file(&registry_path).unwrap();
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "item",
+            "route",
+            &item_id,
+            "--set",
+            "driver",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let offline: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(offline["override"], "driver");
+    assert!(offline["warning"].as_str().unwrap().contains("no registry"));
+}
+
+#[test]
+fn mcp_route_tools_reuse_cli_json_shapes() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "McpRoute"])
+        .assert()
+        .success();
+    fs::write(
+        dir.path().join(".planr/agents.toml"),
+        r#"
+[profiles.driver]
+client = "cursor"
+model = "fable-5"
+
+[[routes]]
+match = { work_type = "code" }
+profile = "driver"
+"#,
+    )
+    .unwrap();
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "item",
+            "create",
+            "Routed work",
+            "--description",
+            "mcp",
+            "--work-type",
+            "code",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let created: Value = serde_json::from_slice(&output).unwrap();
+    let item_id = created["item"]["id"].as_str().unwrap().to_string();
+
+    let input = [
+        json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"planr_agents_list","arguments":{}}}).to_string(),
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"planr_item_route","arguments":{"item_id":item_id}}}).to_string(),
+        json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"planr_item_route_set","arguments":{"item_id":item_id,"profile":"driver"}}}).to_string(),
+        // Unknown profile: a tool-result error, not a dead server.
+        json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"planr_item_route_set","arguments":{"item_id":item_id,"profile":"ghost"}}}).to_string(),
+        json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"planr_item_route_clear","arguments":{"item_id":item_id}}}).to_string(),
+    ]
+    .join("\n")
+        + "\n";
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "mcp"])
+        .write_stdin(input)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let responses = String::from_utf8(output)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(responses.len(), 5, "unexpected responses: {responses:?}");
+    let tool_payload = |index: usize| -> Value {
+        serde_json::from_str(
+            responses[index]["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap()
+    };
+
+    let listed = tool_payload(0);
+    assert_eq!(listed["registry"]["profiles"]["driver"]["model"], "fable-5");
+    assert_eq!(listed["warnings"].as_array().unwrap().len(), 0);
+
+    let shown = tool_payload(1);
+    assert_eq!(shown["source"], "policy");
+    assert_eq!(shown["routing"]["profile"], "driver");
+
+    let pinned = tool_payload(2);
+    assert_eq!(pinned["override"], "driver");
+    assert_eq!(pinned["routing"]["matched_selector"], "override");
+
+    assert_eq!(responses[3]["result"]["isError"], true);
+    assert!(
+        responses[3]["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("ghost")
+    );
+
+    let cleared = tool_payload(4);
+    assert_eq!(cleared["cleared"], true);
+    assert_eq!(cleared["previous"], "driver");
+}
+
+#[test]
 fn concurrent_picks_do_not_duplicate_one_item() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
