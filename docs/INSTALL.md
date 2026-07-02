@@ -72,7 +72,7 @@ planr prompt cli --client codex
 planr prompt http
 ```
 
-`planr install claude` writes a project `.mcp.json`; `planr install cursor` writes `.cursor/mcp.json`; `planr install codex` writes a project MCP snippet. All install commands also provision the `planr-worker` and `planr-reviewer` subagent role files (`.codex/agents/`, `.claude/agents/`) without overwriting existing edits; `planr project init --client <client|all>` does the same at init time. Dry-runs print the exact config and scope notes first.
+`planr install claude` writes a project `.mcp.json`; `planr install cursor` writes `.cursor/mcp.json` plus the Planr skills under `.cursor/skills/` and prints a one-click user-level MCP deeplink; `planr install codex` writes a project MCP snippet. All install commands also provision the `planr-worker` and `planr-reviewer` subagent role files (`.codex/agents/`, `.claude/agents/`, `.cursor/agents/`) without overwriting existing edits; `planr project init --client <client|all>` does the same at init time. Dry-runs print the exact config and scope notes first.
 
 Runtime surfaces:
 

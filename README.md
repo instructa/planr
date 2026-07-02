@@ -82,12 +82,13 @@ Restart Claude Code afterwards. Skills are namespaced (`/planr:planr`, `/planr:p
 <details>
 <summary><strong>Cursor</strong></summary>
 
-Pending marketplace review. Until the plugin is listed, wire Planr in via MCP and the CLI prompt:
+One command installs everything the plugin would carry:
 
 ```bash
-planr install cursor        # writes .cursor/mcp.json
-planr prompt cli --client cursor
+planr install cursor        # writes .cursor/mcp.json, .cursor/agents/, and .cursor/skills/
 ```
+
+The dry-run also prints a one-click `cursor://` deeplink for user-level MCP install. Marketplace listing is pending review. Multitasking with Cursor subagents: [Cursor guide](docs/CURSOR.md).
 
 </details>
 

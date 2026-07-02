@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+Cursor becomes a first-class client: one command installs everything the plugin would carry, and the docs cover Cursor's native multitasking (subagents, parallel dispatch, worktrees).
+
+### Added
+
+- `planr install cursor` is now the one-command Cursor setup: besides `.cursor/mcp.json` it provisions the `planr-worker` and `planr-reviewer` subagents (`.cursor/agents/*.md`, Cursor frontmatter with `model: inherit` cost-tier note) and copies all ten Planr skills to `.cursor/skills/`, so `/planr`, `/planr-loop`, `/planr-worker`, and `/planr-reviewer` work without waiting on the marketplace listing. Existing files are never overwritten.
+- One-click user-level MCP install: `planr install cursor --dry-run` (and the non-dry output) prints a `cursor://anysphere.cursor-deeplink/mcp/install` link. The embedded config is `planr mcp` without `--db`, so each workspace resolves its own `.planr` database — safe at user scope.
+- `planr project init --client all` now provisions Cursor subagent roles alongside Codex and Claude Code; `--client cursor` provisions them for Cursor alone.
+- The Cursor plugin manifest registers both subagents and its version is guarded by the release script and the version drift test (it had drifted to 1.1.12).
+- `docs/CURSOR.md` documents multitasking with Cursor's built-in features: maker/checker subagent dispatch, parallel and background subagents over pick leases, cloud agent caveats, and the shared-absolute-`--db` rule for parallel agents in git worktrees.
+
+### Changed
+
+- Shared surface mutations (approval request/approve/deny, context create, log add, artifact add, item close) now live once in `src/app/application.rs`; CLI, MCP, and HTTP call the same helpers, so MCP evidence logs now record runs and refresh the pick heartbeat exactly like CLI logs.
+- Item status, work type, link kind, and approval status are typed enums in `src/model.rs`; invalid vocabulary is rejected at the boundary instead of stored as strings (`link remove --type` now errors on unknown kinds).
+- Toolchain: edition 2024 and MSRV 1.85 (was 1.80), with an explicit clippy lint policy in `Cargo.toml`.
+
 ## [1.1.19] - 2026-06-11
 
 The symmetry pack, from the fifth Codex dogfood run: every flag an agent reasonably infers from an existing write-side or scope-side flag now exists on the read side.

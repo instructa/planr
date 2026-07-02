@@ -222,6 +222,7 @@ fn mcp_contract_install_fixtures_and_cli_docs_do_not_drift() {
         "package.json",
         "plugins/planr/.codex-plugin/plugin.json",
         "plugins/planr/.claude-plugin/plugin.json",
+        ".cursor-plugin/plugin.json",
     ] {
         let value: Value = serde_json::from_slice(&fs::read(root.join(manifest)).unwrap()).unwrap();
         assert_eq!(
@@ -379,6 +380,21 @@ fn mcp_contract_install_fixtures_and_cli_docs_do_not_drift() {
     );
     assert!(dir.path().join(".mcp.json").exists());
     assert!(dir.path().join(".cursor/mcp.json").exists());
+    // `planr install cursor` is the one-command Cursor setup: MCP config plus
+    // subagent roles plus the full skill set, matching the plugin experience.
+    for provisioned in [
+        ".cursor/agents/planr-worker.md",
+        ".cursor/agents/planr-reviewer.md",
+        ".cursor/skills/planr/SKILL.md",
+        ".cursor/skills/planr-loop/SKILL.md",
+        ".cursor/skills/planr-work/SKILL.md",
+        ".cursor/skills/planr-review/SKILL.md",
+    ] {
+        assert!(
+            dir.path().join(provisioned).exists(),
+            "install cursor should write {provisioned}"
+        );
+    }
 
     let prompt_cli = planr()
         .current_dir(dir.path())
@@ -5132,7 +5148,20 @@ fn planr_native_skills_are_packaged_and_cli_first() {
                 .exists(),
             "missing plugin agent {agent}"
         );
+        // Cursor-format subagent roles ship next to the Codex TOMLs and are
+        // registered by the root .cursor-plugin manifest.
+        assert!(
+            root.join("plugins/planr/skills/planr-loop/agents")
+                .join(format!("{agent}.md"))
+                .exists(),
+            "missing cursor plugin agent {agent}"
+        );
     }
+    let cursor_manifest = fs::read_to_string(root.join(".cursor-plugin/plugin.json")).unwrap();
+    assert!(
+        cursor_manifest.contains("planr-loop/agents/planr-worker.md"),
+        "Cursor plugin manifest must register the worker subagent"
+    );
 }
 
 #[test]
@@ -5158,6 +5187,8 @@ fn project_init_and_install_provision_loop_agent_roles() {
         ".codex/agents/planr-reviewer.toml",
         ".claude/agents/planr-worker.md",
         ".claude/agents/planr-reviewer.md",
+        ".cursor/agents/planr-worker.md",
+        ".cursor/agents/planr-reviewer.md",
     ] {
         assert!(
             dir.path().join(role).exists(),
@@ -5288,7 +5319,7 @@ fn rust_implementation_has_owned_module_boundaries() {
         ("src/storage/rows.rs", 150),
         ("src/model.rs", 400),
         ("src/planpack.rs", 320),
-        ("src/integrations.rs", 450),
+        ("src/integrations.rs", 500),
     ] {
         let line_count = fs::read_to_string(root.join(file)).unwrap().lines().count();
         assert!(

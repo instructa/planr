@@ -23,7 +23,7 @@ Claude Code:
 
 Skills are namespaced in Claude Code: `/planr:planr`, `/planr:planr-loop`. The plugin also registers the `planr-worker` and `planr-reviewer` subagents from the plugin's `agents/` directory.
 
-Cursor: pending marketplace review; until listed, use MCP plus the CLI prompt (below).
+Cursor: pending marketplace review; `planr install cursor` provides the identical component set today — it writes the skills to `.cursor/skills/`, the subagents to `.cursor/agents/`, and the MCP config in one command (see below and [Cursor](CURSOR.md)).
 
 opencode: no plugin yet; use `planr mcp` as an MCP server (below). A JS plugin wrapping the CLI as custom tools is a possible follow-up.
 
@@ -164,11 +164,11 @@ Rules that hold in both journeys:
 The CLI provisions the role files automatically — no manual copying:
 
 ```bash
-planr project init "My Product" --client all   # writes .codex/agents/*.toml and .claude/agents/*.md
-planr install codex                            # provisions roles for an existing project
+planr project init "My Product" --client all   # writes .codex/agents/*.toml, .claude/agents/*.md, and .cursor/agents/*.md
+planr install codex                            # provisions roles for an existing project (same for claude and cursor)
 ```
 
-Codex needs these project-scoped files because its plugin system carries skills only; the Claude Code plugin registers the same roles automatically, so the provisioned `.claude/agents/` copies only matter for standalone (non-plugin) installs. Existing role files are never overwritten.
+Codex needs these project-scoped files because its plugin system carries skills only; the Claude Code and Cursor plugins register the same roles automatically, so the provisioned `.claude/agents/` and `.cursor/agents/` copies only matter for standalone (non-plugin) installs. Existing role files are never overwritten.
 
 Dispatches stay one line: `Use $planr-work on item <id>` and `Use $planr-review on item <id>`. The map and logs are the loop memory, so any iteration can resume from zero context.
 
@@ -228,16 +228,14 @@ planr prompt cli --client claude
 
 ## Install For Cursor
 
-Cursor should use Planr through MCP plus the CLI prompt:
+One command wires everything — MCP, the skills, and the subagent roles:
 
 ```bash
 planr project init "Example Product" --client cursor
-planr install cursor --dry-run
-planr prompt mcp --client cursor
-planr prompt cli --client cursor
+planr install cursor
 ```
 
-`planr install cursor` writes `.cursor/mcp.json` when not run as a dry-run. Use `planr serve --port 7526` and `planr prompt http --client cursor` if a Cursor workflow should inspect the local HTTP/review workspace.
+`planr install cursor` writes `.cursor/mcp.json`, copies the ten skills to `.cursor/skills/`, provisions `.cursor/agents/planr-worker.md` and `planr-reviewer.md`, and prints a one-click deeplink for user-level MCP install. Invoke skills with `/planr` or `/planr-loop` in Agent chat, and dispatch subagents with `/planr-worker` and `/planr-reviewer`. Use `planr serve --port 7526` and `planr prompt http --client cursor` if a Cursor workflow should inspect the local HTTP/review workspace. Subagent multitasking and worktree guidance: [Cursor](CURSOR.md).
 
 ## MCP-Only Clients
 

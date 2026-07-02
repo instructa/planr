@@ -5,7 +5,9 @@ use crate::cli::{
     ItemCommand, LinkCommand, LogCommand, MapCommand, PickCommand, PlanCommand, ProjectCommand,
     PromptCommand, ReviewCommand, SearchArgs,
 };
-use crate::integrations::{agent_roles, install_snippet, mcp_json_config};
+use crate::integrations::{
+    agent_roles, cursor_deeplink, cursor_skills, install_snippet, mcp_json_config,
+};
 use crate::model::LinkKind;
 use crate::planpack::{build_plan_body, product_plan_files, project_pack_files};
 use crate::util::{
@@ -53,7 +55,7 @@ impl App {
                 )?;
                 let client = args.client.map(|c| format!("{c:?}").to_lowercase());
                 let clients: Vec<&str> = match client.as_deref() {
-                    Some("all") => vec!["codex", "claude"],
+                    Some("all") => vec!["codex", "claude", "cursor"],
                     Some(name) => vec![name],
                     None => Vec::new(),
                 };
@@ -881,9 +883,24 @@ impl App {
             "cursor" => {
                 let path = self.root.join(".cursor/mcp.json");
                 write_if_missing(&path, &mcp_json_config(&self.db_path), true)?;
+                let mut skill_paths = Vec::new();
+                for (relative, content) in cursor_skills() {
+                    let skill_path = self.root.join(relative);
+                    write_if_missing(&skill_path, content, false)?;
+                    skill_paths.push(skill_path);
+                }
+                let deeplink = cursor_deeplink();
                 self.emit(
-                    json!({"client": client, "path": path}),
-                    "cursor integration written".to_string(),
+                    json!({
+                        "client": client,
+                        "path": path,
+                        "agents": agent_paths,
+                        "skills": skill_paths,
+                        "deeplink": deeplink
+                    }),
+                    format!(
+                        "cursor integration written (mcp config, subagent roles, skills)\none-click user-level MCP install: {deeplink}"
+                    ),
                 )
             }
             _ => bail!("unknown client: {client}"),

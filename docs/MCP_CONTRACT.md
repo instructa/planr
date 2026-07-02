@@ -63,8 +63,8 @@ HTTP mirrors the same rule: `GET /v1/reviews/:id/artifact` is read-only; `POST /
 
 `planr install <client> --dry-run` prints project-scoped configuration for Codex, Claude Code, and Cursor. Non-dry install writes only repository-local files:
 
-- Codex: `.planr/integrations/codex-mcp.toml`
-- Claude Code: `.mcp.json`
-- Cursor: `.cursor/mcp.json`
+- Codex: `.planr/integrations/codex-mcp.toml` plus `.codex/agents/` roles
+- Claude Code: `.mcp.json` plus `.claude/agents/` roles
+- Cursor: `.cursor/mcp.json` plus `.cursor/agents/` roles and `.cursor/skills/` skill copies
 
-Planr does not edit global client configuration without a separate explicit operator action.
+The Cursor dry-run additionally prints a `cursor://anysphere.cursor-deeplink/mcp/install` link whose embedded config (`planr mcp`, no `--db`) is safe at user scope because each workspace resolves its own database. Planr does not edit global client configuration without a separate explicit operator action; the deeplink requires the operator to click it and confirm inside Cursor.

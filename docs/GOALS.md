@@ -115,16 +115,26 @@ Same shape via the plugin (`/plugin install planr@planr`), which registers the `
 
 `/loop` works for fixed-cadence runs instead of goal-conditioned ones. The registered worker subagent pins a cheaper model tier; see [Cost Tiering](#cost-tiering).
 
-### Cursor and hosts without a loop primitive
+### Cursor
 
-Identical protocol; the human (or a background agent) is the re-dispatcher:
+No `/goal` primitive, but full subagent support. Install once:
+
+```bash
+planr install cursor   # writes .cursor/mcp.json, .cursor/agents/planr-worker.md + planr-reviewer.md, and the skills
+```
+
+Then run the identical protocol with the human (or an automation) as the re-dispatcher:
 
 ```text
 Use $planr-goal: <your goal>
 Use $planr-loop on plan <plan-id>. The loop contract is stored in planr context (tag: goal-contract).
 ```
 
-`$planr-loop` iterates within the session under its own budget. If the session ends before the contract holds, dispatch the same line again — recovery is identical to the `/goal` case.
+`$planr-loop` iterates within the session under its own budget, dispatching `/planr-worker` and `/planr-reviewer` per item — the provisioned subagents preload the work and review protocols, so dispatches stay one line. If the session ends before the contract holds, dispatch the same line again — recovery is identical to the `/goal` case. Parallelism, background subagents, and worktree caveats: [Cursor](CURSOR.md).
+
+### Hosts without a loop primitive
+
+Identical protocol; the human (or a background agent) is the re-dispatcher, and worker/reviewer run as separate sequential dispatches when the host has no subagents.
 
 ### Plain MCP clients
 
@@ -144,7 +154,7 @@ Where each host configures the worker tier (the shipped role files carry these d
 | --- | --- | --- | --- |
 | Codex | session default (e.g. `gpt-5.5` at `high`) | `model = "gpt-5.5"`, `model_reasoning_effort = "medium"` | `.codex/agents/planr-worker.toml` |
 | Claude Code | session model (e.g. `fable` at `high` via `/model` + `/effort`) | `model: opus`, `effort: medium` | `planr-worker.md` frontmatter |
-| Cursor | chat model of the driving session | chosen per dispatch in the host's subagent tooling | no Planr files — pick a cheaper model when dispatching the worker task |
+| Cursor | chat model of the driving session | `model: inherit` by default; pin a cheaper Cursor model id | `.cursor/agents/planr-worker.md` frontmatter |
 
 The defaults use aliases and generic names so they track model generations; pin a full model id (e.g. `claude-opus-4-8`) only if you need determinism, and use `model: sonnet` as the budget alternative. The role files are user-owned copies — `planr project init` provisions them once and never overwrites local edits — so changing the tier is editing one line.
 

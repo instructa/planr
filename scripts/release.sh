@@ -54,6 +54,7 @@ replace Cargo.toml "s/^version = \".*\"/version = \"$version\"/"
 replace package.json "s/\"version\": \".*\"/\"version\": \"$version\"/"
 replace plugins/planr/.codex-plugin/plugin.json "s/\"version\": \".*\"/\"version\": \"$version\"/"
 replace plugins/planr/.claude-plugin/plugin.json "s/\"version\": \".*\"/\"version\": \"$version\"/"
+replace .cursor-plugin/plugin.json "s/\"version\": \".*\"/\"version\": \"$version\"/"
 
 # Gates. cargo test includes the drift guard that asserts every manifest
 # carries the crate version; the leak gate mirrors CI secret scanning.
@@ -64,7 +65,8 @@ scripts/security-local.sh
 
 git add Cargo.toml Cargo.lock package.json \
   plugins/planr/.codex-plugin/plugin.json \
-  plugins/planr/.claude-plugin/plugin.json
+  plugins/planr/.claude-plugin/plugin.json \
+  .cursor-plugin/plugin.json
 git commit -m "release $version: $summary"
 git tag "v$version"
 git push origin HEAD "v$version"

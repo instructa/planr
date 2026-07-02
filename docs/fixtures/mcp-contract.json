@@ -74,7 +74,8 @@
     "cursor": [
       ".cursor/mcp.json",
       "\"mcpServers\"",
-      "\"planr\""
+      "\"planr\"",
+      "cursor://anysphere.cursor-deeplink/mcp/install?name=planr&config="
     ]
   },
   "cli_reference_commands": [
