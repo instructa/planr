@@ -225,6 +225,98 @@ fn looks_secret_like(text: &str) -> bool {
         .any(|pattern| text.contains(pattern))
 }
 
+/// The facts about a map item that routing may select on. The caller
+/// resolves `plan_id` from the item's plan path; core stays free of
+/// storage and host concerns.
+#[derive(Debug, Default)]
+pub struct RoutingFacts<'a> {
+    pub work_type: &'a str,
+    pub plan_id: Option<&'a str>,
+}
+
+/// An advisory routing recommendation: the strongest claim Planr makes
+/// is "dispatch this profile, fall back in this order". Hosts remain the
+/// dispatch authority.
+#[derive(Debug, Clone, Serialize)]
+pub struct Routing<'a> {
+    pub profile: &'a str,
+    pub client: &'a str,
+    pub model: &'a str,
+    pub effort: Option<&'a str>,
+    pub cost_tier: Option<&'a str>,
+    /// Known-profile fallback ids in declared order; unknown ids are
+    /// skipped rather than surfaced to dispatchers.
+    pub fallbacks: Vec<&'a str>,
+    /// Which selector won: `work_type=<v>`, `plan=<v>`, or `default`.
+    pub matched_selector: String,
+}
+
+/// Resolves an item to a profile recommendation. Precedence is
+/// work_type > plan > default; a route on a double selector keeps its
+/// `work_type` meaning (the stricter documented behavior). A route whose
+/// entire chain references unknown profiles is skipped so a typo never
+/// swallows lower-precedence routes. Returns None when nothing resolves.
+pub fn resolve_route<'a>(
+    facts: &RoutingFacts<'_>,
+    registry: &'a AgentRegistry,
+) -> Option<Routing<'a>> {
+    let work_type_route = registry.routes.iter().find_map(|route| {
+        let selector = route.selector.work_type.as_deref()?;
+        (selector == facts.work_type).then_some((
+            format!("work_type={selector}"),
+            route.profile.as_str(),
+            &route.fallbacks,
+        ))
+    });
+    let plan_route = registry.routes.iter().find_map(|route| {
+        if route.selector.work_type.is_some() {
+            return None;
+        }
+        let selector = route.selector.plan.as_deref()?;
+        (Some(selector) == facts.plan_id).then_some((
+            format!("plan={selector}"),
+            route.profile.as_str(),
+            &route.fallbacks,
+        ))
+    });
+    let default_route = registry.route_default.as_ref().map(|default| {
+        (
+            "default".to_string(),
+            default.profile.as_str(),
+            &default.fallbacks,
+        )
+    });
+    [work_type_route, plan_route, default_route]
+        .into_iter()
+        .flatten()
+        .find_map(|(matched_selector, profile, fallbacks)| {
+            routing_for_chain(registry, matched_selector, profile, fallbacks)
+        })
+}
+
+/// Builds the routing from the first known profile in the chain; the
+/// remaining known ids become the fallback list.
+fn routing_for_chain<'a>(
+    registry: &'a AgentRegistry,
+    matched_selector: String,
+    profile: &str,
+    fallbacks: &[String],
+) -> Option<Routing<'a>> {
+    let mut known = std::iter::once(profile)
+        .chain(fallbacks.iter().map(String::as_str))
+        .filter_map(|id| registry.profiles.get_key_value(id));
+    let (primary_id, primary) = known.next()?;
+    Some(Routing {
+        profile: primary_id,
+        client: &primary.client,
+        model: &primary.model,
+        effort: primary.effort.as_deref(),
+        cost_tier: primary.cost_tier.as_deref(),
+        fallbacks: known.map(|(id, _)| id.as_str()).collect(),
+        matched_selector,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -398,6 +490,179 @@ profile = "cheap"
             warnings.iter().any(|w| w.contains("secret-like")),
             "{warnings:?}"
         );
+    }
+
+    fn registry(text: &str) -> AgentRegistry {
+        match parse_registry(text) {
+            RegistryLoad::Loaded(registry) => registry,
+            other => panic!("expected loaded registry, got {other:?}"),
+        }
+    }
+
+    const ROUTING: &str = r#"
+[profiles.implementer]
+client = "codex"
+model = "gpt-5.5"
+effort = "medium"
+cost_tier = "standard"
+
+[profiles.driver]
+client = "cursor"
+model = "fable-5"
+effort = "high"
+cost_tier = "premium"
+
+[profiles.browser]
+client = "cursor"
+model = "composer-2.5"
+cost_tier = "budget"
+
+[[routes]]
+match = { work_type = "code" }
+profile = "implementer"
+fallbacks = ["driver"]
+
+[[routes]]
+match = { work_type = "review" }
+profile = "driver"
+
+[[routes]]
+match = { plan = "pln-web" }
+profile = "browser"
+
+[route_default]
+profile = "implementer"
+fallbacks = ["driver"]
+"#;
+
+    fn facts<'a>(work_type: &'a str, plan_id: Option<&'a str>) -> RoutingFacts<'a> {
+        RoutingFacts { work_type, plan_id }
+    }
+
+    #[test]
+    fn resolves_work_type_route_with_fallbacks() {
+        let registry = registry(ROUTING);
+        let routing = resolve_route(&facts("code", None), &registry).unwrap();
+        assert_eq!(routing.profile, "implementer");
+        assert_eq!(routing.client, "codex");
+        assert_eq!(routing.model, "gpt-5.5");
+        assert_eq!(routing.effort, Some("medium"));
+        assert_eq!(routing.cost_tier, Some("standard"));
+        assert_eq!(routing.fallbacks, ["driver"]);
+        assert_eq!(routing.matched_selector, "work_type=code");
+    }
+
+    #[test]
+    fn work_type_route_beats_plan_route() {
+        let registry = registry(ROUTING);
+        let routing = resolve_route(&facts("review", Some("pln-web")), &registry).unwrap();
+        assert_eq!(routing.profile, "driver");
+        assert_eq!(routing.matched_selector, "work_type=review");
+    }
+
+    #[test]
+    fn plan_route_beats_default() {
+        let registry = registry(ROUTING);
+        let routing = resolve_route(&facts("docs", Some("pln-web")), &registry).unwrap();
+        assert_eq!(routing.profile, "browser");
+        assert_eq!(routing.matched_selector, "plan=pln-web");
+    }
+
+    #[test]
+    fn default_route_catches_unmatched_items() {
+        let registry = registry(ROUTING);
+        let routing = resolve_route(&facts("docs", None), &registry).unwrap();
+        assert_eq!(routing.profile, "implementer");
+        assert_eq!(routing.fallbacks, ["driver"]);
+        assert_eq!(routing.matched_selector, "default");
+    }
+
+    #[test]
+    fn no_routes_and_no_default_resolves_none() {
+        let registry = registry("[profiles.a]\nclient = \"codex\"\nmodel = \"gpt-5.5\"\n");
+        assert!(resolve_route(&facts("code", None), &registry).is_none());
+    }
+
+    #[test]
+    fn unknown_primary_promotes_first_known_fallback() {
+        let text = r#"
+[profiles.driver]
+client = "cursor"
+model = "fable-5"
+
+[[routes]]
+match = { work_type = "code" }
+profile = "ghost"
+fallbacks = ["phantom", "driver"]
+"#;
+        let registry = registry(text);
+        let routing = resolve_route(&facts("code", None), &registry).unwrap();
+        assert_eq!(routing.profile, "driver");
+        assert!(routing.fallbacks.is_empty());
+        assert_eq!(routing.matched_selector, "work_type=code");
+    }
+
+    #[test]
+    fn fully_unknown_chain_falls_through_to_next_precedence() {
+        let text = r#"
+[profiles.driver]
+client = "cursor"
+model = "fable-5"
+
+[[routes]]
+match = { work_type = "code" }
+profile = "ghost"
+
+[route_default]
+profile = "driver"
+"#;
+        let registry = registry(text);
+        let routing = resolve_route(&facts("code", None), &registry).unwrap();
+        assert_eq!(routing.profile, "driver");
+        assert_eq!(routing.matched_selector, "default");
+    }
+
+    #[test]
+    fn first_declared_route_wins_within_a_level() {
+        let text = r#"
+[profiles.a]
+client = "codex"
+model = "gpt-5.5"
+
+[profiles.b]
+client = "cursor"
+model = "fable-5"
+
+[[routes]]
+match = { work_type = "code" }
+profile = "a"
+
+[[routes]]
+match = { work_type = "code" }
+profile = "b"
+"#;
+        let registry = registry(text);
+        let routing = resolve_route(&facts("code", None), &registry).unwrap();
+        assert_eq!(routing.profile, "a");
+    }
+
+    #[test]
+    fn double_selector_route_matches_on_work_type_only() {
+        let text = r#"
+[profiles.a]
+client = "codex"
+model = "gpt-5.5"
+
+[[routes]]
+match = { work_type = "code", plan = "pln-x" }
+profile = "a"
+"#;
+        let registry = registry(text);
+        // Matches on work_type even for a different plan.
+        let routing = resolve_route(&facts("code", Some("pln-other")), &registry).unwrap();
+        assert_eq!(routing.matched_selector, "work_type=code");
+        // Never matches as a plan selector.
+        assert!(resolve_route(&facts("docs", Some("pln-x")), &registry).is_none());
     }
 
     #[test]
