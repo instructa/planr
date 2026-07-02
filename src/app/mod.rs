@@ -4,6 +4,7 @@ use rusqlite::Connection;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
+mod agents;
 mod application;
 mod audit;
 mod commands;
@@ -90,6 +91,7 @@ pub(crate) struct ReviewAnnotationInput<'a> {
 impl App {
     pub(crate) fn dispatch(&self, command: Command) -> Result<()> {
         match command {
+            Command::Agents(args) => self.agents(args.command),
             Command::Project(args) => self.project(args.command),
             Command::Plan(args) => self.plan(args.command),
             Command::Map(args) => self.map(args.command),

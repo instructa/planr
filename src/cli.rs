@@ -20,6 +20,9 @@ pub(crate) struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum Command {
+    /// Inspect the agent profile registry (.planr/agents.toml) that
+    /// drives advisory model routing in pick packets.
+    Agents(AgentsArgs),
     Project(ProjectArgs),
     Plan(PlanArgs),
     Map(MapArgs),
@@ -49,6 +52,20 @@ pub(crate) enum Command {
     Recover(RecoverArgs),
     Export(ExportArgs),
     Import(ImportArgs),
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct AgentsArgs {
+    #[command(subcommand)]
+    pub(crate) command: AgentsCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum AgentsCommand {
+    /// Show resolved profiles, routes, and validation warnings.
+    List(JsonOnlyArgs),
+    /// Validate the registry; exits non-zero only on parse failure.
+    Check,
 }
 
 #[derive(Args, Debug)]

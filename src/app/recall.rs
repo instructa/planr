@@ -148,6 +148,11 @@ impl App {
             "would_remain_blocked": close_effect.would_remain_blocked,
         });
         packet["possible_file_conflicts"] = json!(self.possible_file_conflicts(item_id)?);
+        // Advisory model routing from .planr/agents.toml; the dispatching
+        // host stays the authority. Omitted when nothing resolves.
+        if let Some(routing) = self.routing_value_for_item(item_id)? {
+            packet["routing"] = routing;
+        }
         packet["privacy"] = json!({
             "source_file_content_included": false,
             "prompt_or_response_content_included": false,

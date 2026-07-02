@@ -552,6 +552,181 @@ fn pick_returns_ranked_privacy_safe_recall_context() {
 }
 
 #[test]
+fn agent_registry_routes_picks_and_degrades_without_blocking() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Routing"])
+        .assert()
+        .success();
+
+    // No registry: agents list reports missing, exit zero.
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "agents", "list"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let listed: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(listed["reason"], "missing");
+    assert!(listed["registry"].is_null());
+
+    let registry_path = dir.path().join(".planr/agents.toml");
+    fs::write(
+        &registry_path,
+        r#"
+[profiles.implementer]
+client = "codex"
+model = "gpt-5.5"
+effort = "medium"
+cost_tier = "standard"
+
+[profiles.driver]
+client = "cursor"
+model = "fable-5"
+effort = "high"
+cost_tier = "premium"
+
+[[routes]]
+match = { work_type = "code" }
+profile = "implementer"
+fallbacks = ["driver"]
+"#,
+    )
+    .unwrap();
+
+    // Valid registry: check passes with no warnings.
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "agents", "check"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let checked: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(checked["ok"], true);
+    assert_eq!(checked["warnings"].as_array().unwrap().len(), 0);
+
+    // agents list shows resolved profiles and routes.
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "agents", "list"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let listed: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        listed["registry"]["profiles"]["implementer"]["model"],
+        "gpt-5.5"
+    );
+    assert_eq!(listed["registry"]["routes"][0]["profile"], "implementer");
+
+    // A code item picks up the routing recommendation in its pick packet.
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "item",
+            "create",
+            "Implement routing feature",
+            "--description",
+            "Wire routing into pick",
+            "--work-type",
+            "code",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let created: Value = serde_json::from_slice(&output).unwrap();
+    let item_id = created["item"]["id"].as_str().unwrap().to_string();
+
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "pick"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let picked: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(picked["item"]["id"], item_id);
+    assert_eq!(picked["routing"]["profile"], "implementer");
+    assert_eq!(picked["routing"]["client"], "codex");
+    assert_eq!(picked["routing"]["model"], "gpt-5.5");
+    assert_eq!(picked["routing"]["effort"], "medium");
+    assert_eq!(picked["routing"]["cost_tier"], "standard");
+    assert_eq!(picked["routing"]["fallbacks"], json!(["driver"]));
+    assert_eq!(picked["routing"]["matched_selector"], "work_type=code");
+
+    // Malformed registry: check exits non-zero, but picking degrades to
+    // no routing block instead of failing.
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "pick",
+            "release",
+            &item_id,
+        ])
+        .assert()
+        .success();
+    fs::write(&registry_path, "profiles = [broken").unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "agents", "check"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("parse failed"));
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "pick"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let picked: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(picked["item"]["id"], item_id);
+    assert!(picked.get("routing").is_none());
+
+    // Deleting the registry restores pre-feature behavior entirely.
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "pick",
+            "release",
+            &item_id,
+        ])
+        .assert()
+        .success();
+    fs::remove_file(&registry_path).unwrap();
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "pick"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let picked: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(picked["item"]["id"], item_id);
+    assert!(picked.get("routing").is_none());
+}
+
+#[test]
 fn concurrent_picks_do_not_duplicate_one_item() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
