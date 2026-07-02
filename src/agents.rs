@@ -1,0 +1,413 @@
+//! Agent profile registry: `.planr/agents.toml` declares named agent
+//! profiles (host client + model + effort + cost tier) and advisory routes
+//! from work selectors to profiles. Planr never calls model providers;
+//! this module only parses configuration so other layers can recommend a
+//! profile per item. A missing registry means "no routing", and a
+//! malformed one degrades with a diagnostic instead of failing commands.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+pub const REGISTRY_RELATIVE_PATH: &str = ".planr/agents.toml";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentProfile {
+    /// Host client that dispatches this profile: codex, claude-code,
+    /// cursor, or generic-mcp. Free-form so new hosts need no release.
+    pub client: String,
+    /// Model alias or full id, passed through verbatim — Planr does not
+    /// validate ids against provider catalogs.
+    pub model: String,
+    #[serde(default)]
+    pub effort: Option<String>,
+    /// premium | standard | budget (advisory vocabulary, not enforced).
+    #[serde(default)]
+    pub cost_tier: Option<String>,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RouteSelector {
+    #[serde(default)]
+    pub work_type: Option<String>,
+    /// Plan id (e.g. `pln-1234abcd`) the item belongs to.
+    #[serde(default)]
+    pub plan: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Route {
+    #[serde(rename = "match")]
+    pub selector: RouteSelector,
+    pub profile: String,
+    #[serde(default)]
+    pub fallbacks: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DefaultRoute {
+    pub profile: String,
+    #[serde(default)]
+    pub fallbacks: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentRegistry {
+    #[serde(default)]
+    pub profiles: BTreeMap<String, AgentProfile>,
+    #[serde(default)]
+    pub routes: Vec<Route>,
+    #[serde(default)]
+    pub route_default: Option<DefaultRoute>,
+}
+
+#[derive(Debug)]
+pub enum RegistryLoad {
+    /// No `.planr/agents.toml`: routing is simply absent, never an error.
+    Missing,
+    /// The file exists but cannot be used; `error` carries the TOML
+    /// parser's line/column context. Callers must keep working.
+    Degraded { error: String },
+    Loaded(AgentRegistry),
+}
+
+pub fn registry_path(root: &Path) -> PathBuf {
+    root.join(REGISTRY_RELATIVE_PATH)
+}
+
+pub fn load_registry(root: &Path) -> RegistryLoad {
+    let text = match std::fs::read_to_string(registry_path(root)) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return RegistryLoad::Missing,
+        Err(err) => {
+            return RegistryLoad::Degraded {
+                error: err.to_string(),
+            };
+        }
+    };
+    parse_registry(&text)
+}
+
+pub fn parse_registry(text: &str) -> RegistryLoad {
+    match toml::from_str::<AgentRegistry>(text) {
+        Ok(registry) => RegistryLoad::Loaded(registry),
+        Err(err) => RegistryLoad::Degraded {
+            error: err.to_string(),
+        },
+    }
+}
+
+/// Non-fatal problems a parseable registry can still have. Warnings never
+/// block parsing, picking, or resolution — `agents check` surfaces them.
+pub fn validation_warnings(registry: &AgentRegistry) -> Vec<String> {
+    let mut warnings = Vec::new();
+    for (route_label, profile, fallbacks) in route_targets(registry) {
+        for referenced in std::iter::once(profile).chain(fallbacks.iter().map(String::as_str)) {
+            if !registry.profiles.contains_key(referenced) {
+                warnings.push(format!(
+                    "{route_label} references unknown profile `{referenced}`"
+                ));
+            }
+        }
+    }
+    for (index, route) in registry.routes.iter().enumerate() {
+        let label = route_label(index);
+        match (&route.selector.work_type, &route.selector.plan) {
+            (None, None) => warnings.push(format!(
+                "{label} has an empty match; set `work_type` or `plan` or it will never route"
+            )),
+            (Some(_), Some(_)) => warnings.push(format!(
+                "{label} sets both `work_type` and `plan`; only one selector per route is supported and `work_type` wins"
+            )),
+            _ => {}
+        }
+        if route.selector.work_type.as_deref() == Some("review")
+            && first_known_tier(registry, &route.profile, &route.fallbacks) == Some("budget")
+        {
+            warnings.push(format!(
+                "{label} routes review work to a budget-tier profile; verdicts should stay on the strongest tier"
+            ));
+        }
+    }
+    let mut seen: BTreeMap<String, usize> = BTreeMap::new();
+    for (index, route) in registry.routes.iter().enumerate() {
+        let Some(key) = selector_key(&route.selector) else {
+            continue;
+        };
+        if let Some(first) = seen.get(&key) {
+            warnings.push(format!(
+                "{} duplicates the selector of {}; the first route wins",
+                route_label(index),
+                route_label(*first)
+            ));
+        } else {
+            seen.insert(key, index);
+        }
+    }
+    for (id, profile) in &registry.profiles {
+        for field in profile_strings(profile) {
+            if looks_secret_like(field) {
+                warnings.push(format!(
+                    "profile `{id}` contains a secret-like value; the registry must hold configuration only, never credentials"
+                ));
+                break;
+            }
+        }
+    }
+    warnings
+}
+
+fn route_targets(registry: &AgentRegistry) -> Vec<(String, &str, &Vec<String>)> {
+    let mut targets: Vec<(String, &str, &Vec<String>)> = registry
+        .routes
+        .iter()
+        .enumerate()
+        .map(|(index, route)| (route_label(index), route.profile.as_str(), &route.fallbacks))
+        .collect();
+    if let Some(default) = &registry.route_default {
+        targets.push((
+            "[route_default]".to_string(),
+            default.profile.as_str(),
+            &default.fallbacks,
+        ));
+    }
+    targets
+}
+
+fn route_label(index: usize) -> String {
+    format!("[[routes]] #{}", index + 1)
+}
+
+fn selector_key(selector: &RouteSelector) -> Option<String> {
+    match (&selector.work_type, &selector.plan) {
+        (Some(work_type), _) => Some(format!("work_type={work_type}")),
+        (None, Some(plan)) => Some(format!("plan={plan}")),
+        (None, None) => None,
+    }
+}
+
+fn first_known_tier<'a>(
+    registry: &'a AgentRegistry,
+    profile: &str,
+    fallbacks: &[String],
+) -> Option<&'a str> {
+    std::iter::once(profile)
+        .chain(fallbacks.iter().map(String::as_str))
+        .find_map(|id| registry.profiles.get(id))
+        .and_then(|profile| profile.cost_tier.as_deref())
+}
+
+fn profile_strings(profile: &AgentProfile) -> impl Iterator<Item = &str> {
+    [
+        Some(profile.client.as_str()),
+        Some(profile.model.as_str()),
+        profile.effort.as_deref(),
+        profile.cost_tier.as_deref(),
+        profile.notes.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .chain(profile.capabilities.iter().map(String::as_str))
+}
+
+fn looks_secret_like(text: &str) -> bool {
+    ["sk-", "ghp_", "BEGIN PRIVATE KEY", "AKIA"]
+        .iter()
+        .any(|pattern| text.contains(pattern))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const VALID: &str = r#"
+[profiles.codex-implementer]
+client = "codex"
+model = "gpt-5.5"
+effort = "medium"
+cost_tier = "standard"
+capabilities = ["code", "steerable"]
+notes = "Primary implementation model."
+
+[profiles.cursor-fable-driver]
+client = "cursor"
+model = "fable-5"
+effort = "high"
+cost_tier = "premium"
+
+[[routes]]
+match = { work_type = "code" }
+profile = "codex-implementer"
+fallbacks = ["cursor-fable-driver"]
+
+[route_default]
+profile = "codex-implementer"
+"#;
+
+    #[test]
+    fn parses_profiles_routes_and_default() {
+        let RegistryLoad::Loaded(registry) = parse_registry(VALID) else {
+            panic!("expected loaded registry");
+        };
+        assert_eq!(registry.profiles.len(), 2);
+        let implementer = &registry.profiles["codex-implementer"];
+        assert_eq!(implementer.client, "codex");
+        assert_eq!(implementer.model, "gpt-5.5");
+        assert_eq!(implementer.effort.as_deref(), Some("medium"));
+        assert_eq!(implementer.cost_tier.as_deref(), Some("standard"));
+        assert_eq!(implementer.capabilities, ["code", "steerable"]);
+        assert_eq!(registry.routes.len(), 1);
+        assert_eq!(
+            registry.routes[0].selector.work_type.as_deref(),
+            Some("code")
+        );
+        assert_eq!(registry.routes[0].fallbacks, ["cursor-fable-driver"]);
+        assert_eq!(
+            registry.route_default.as_ref().map(|d| d.profile.as_str()),
+            Some("codex-implementer")
+        );
+        assert!(validation_warnings(&registry).is_empty());
+    }
+
+    #[test]
+    fn missing_file_is_missing_not_error() {
+        let dir = std::env::temp_dir().join("planr-agents-missing-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(matches!(load_registry(&dir), RegistryLoad::Missing));
+    }
+
+    #[test]
+    fn malformed_toml_degrades_with_line_context() {
+        let RegistryLoad::Degraded { error } = parse_registry("profiles = [broken") else {
+            panic!("expected degraded registry");
+        };
+        assert!(error.contains("line 1"), "no line context in: {error}");
+    }
+
+    #[test]
+    fn unknown_field_degrades_with_typo_context() {
+        let text = "[profiles.a]\nclient = \"codex\"\nmodel = \"gpt-5.5\"\nefort = \"high\"\n";
+        let RegistryLoad::Degraded { error } = parse_registry(text) else {
+            panic!("expected degraded registry");
+        };
+        assert!(error.contains("efort"), "typo not named in: {error}");
+    }
+
+    #[test]
+    fn missing_required_profile_field_degrades() {
+        let text = "[profiles.a]\nclient = \"codex\"\n";
+        let RegistryLoad::Degraded { error } = parse_registry(text) else {
+            panic!("expected degraded registry");
+        };
+        assert!(error.contains("model"), "missing field not named: {error}");
+    }
+
+    #[test]
+    fn warns_on_unknown_profile_references() {
+        let text = r#"
+[profiles.a]
+client = "codex"
+model = "gpt-5.5"
+
+[[routes]]
+match = { work_type = "code" }
+profile = "ghost"
+fallbacks = ["a", "phantom"]
+
+[route_default]
+profile = "spirit"
+"#;
+        let RegistryLoad::Loaded(registry) = parse_registry(text) else {
+            panic!("expected loaded registry");
+        };
+        let warnings = validation_warnings(&registry);
+        assert_eq!(warnings.len(), 3, "{warnings:?}");
+        assert!(warnings[0].contains("`ghost`"));
+        assert!(warnings[1].contains("`phantom`"));
+        assert!(warnings[2].contains("`spirit`"));
+    }
+
+    #[test]
+    fn warns_on_empty_and_double_selectors_and_duplicates() {
+        let text = r#"
+[profiles.a]
+client = "codex"
+model = "gpt-5.5"
+
+[[routes]]
+match = {}
+profile = "a"
+
+[[routes]]
+match = { work_type = "code", plan = "pln-1" }
+profile = "a"
+
+[[routes]]
+match = { work_type = "code" }
+profile = "a"
+"#;
+        let RegistryLoad::Loaded(registry) = parse_registry(text) else {
+            panic!("expected loaded registry");
+        };
+        let warnings = validation_warnings(&registry);
+        assert!(warnings.iter().any(|w| w.contains("empty match")));
+        assert!(warnings.iter().any(|w| w.contains("both `work_type` and `plan`")));
+        assert!(warnings.iter().any(|w| w.contains("duplicates the selector")));
+    }
+
+    #[test]
+    fn warns_when_review_routes_to_budget_tier() {
+        let text = r#"
+[profiles.cheap]
+client = "cursor"
+model = "composer-2.5"
+cost_tier = "budget"
+
+[[routes]]
+match = { work_type = "review" }
+profile = "cheap"
+"#;
+        let RegistryLoad::Loaded(registry) = parse_registry(text) else {
+            panic!("expected loaded registry");
+        };
+        let warnings = validation_warnings(&registry);
+        assert!(
+            warnings.iter().any(|w| w.contains("budget-tier")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn warns_on_secret_like_profile_values() {
+        let text = "[profiles.a]\nclient = \"codex\"\nmodel = \"gpt-5.5\"\nnotes = \"key sk-abc123\"\n";
+        let RegistryLoad::Loaded(registry) = parse_registry(text) else {
+            panic!("expected loaded registry");
+        };
+        let warnings = validation_warnings(&registry);
+        assert!(
+            warnings.iter().any(|w| w.contains("secret-like")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn empty_registry_parses_with_no_warnings() {
+        let RegistryLoad::Loaded(registry) = parse_registry("") else {
+            panic!("expected loaded registry");
+        };
+        assert!(registry.profiles.is_empty());
+        assert!(registry.routes.is_empty());
+        assert!(registry.route_default.is_none());
+        assert!(validation_warnings(&registry).is_empty());
+    }
+}

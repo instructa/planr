@@ -7,6 +7,7 @@ use std::env;
 use storage::{default_db_path, ensure_schema, open_db};
 use util::{infer_error_code, print_json};
 
+mod agents;
 mod app;
 mod cli;
 mod integrations;
