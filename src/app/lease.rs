@@ -3,9 +3,9 @@
 
 use super::App;
 use crate::util::{collect_rows, short_id, worker_id};
-use anyhow::{bail, Result};
-use rusqlite::{params, OptionalExtension};
-use serde_json::{json, Value};
+use anyhow::{Result, bail};
+use rusqlite::{OptionalExtension, params};
+use serde_json::{Value, json};
 
 /// Lease filter for the single pick query. All pick surfaces (CLI, MCP,
 /// HTTP, `done --next`) narrow the same query through this one contract.

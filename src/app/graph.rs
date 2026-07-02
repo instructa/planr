@@ -2,9 +2,9 @@ use super::App;
 use crate::model::Item;
 use crate::storage::row_to_item;
 use crate::util::collect_rows;
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use rusqlite::params;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 #[derive(Clone, Debug)]

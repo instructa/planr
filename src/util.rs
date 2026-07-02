@@ -1,7 +1,7 @@
 use crate::model::{Item, Project};
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use rusqlite::Connection;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use slug::slugify;
 use std::{env, fs, path::Path};
 use time::OffsetDateTime;

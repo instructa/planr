@@ -1,7 +1,7 @@
 use super::App;
 use crate::cli::{ArtifactCommand, DebugCommand, EventCommand, ScrubArgs, TraceCommand};
 use crate::util::short_id;
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use rusqlite::params;
 use serde_json::json;
 use std::fs;

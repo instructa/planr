@@ -1,8 +1,8 @@
 use super::App;
 use crate::cli::RecoverCommand;
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use rusqlite::params;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
 pub(crate) struct ItemRecoveryInput<'a> {

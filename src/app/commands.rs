@@ -6,14 +6,15 @@ use crate::cli::{
     PromptCommand, ReviewCommand, SearchArgs,
 };
 use crate::integrations::{agent_roles, install_snippet, mcp_json_config};
+use crate::model::LinkKind;
 use crate::planpack::{build_plan_body, product_plan_files, project_pack_files};
 use crate::util::{
     append_line, command_exists, format_item, format_project, now_string, print_json, short_id,
     worker_id, write_if_missing,
 };
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use rusqlite::params;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use slug::slugify;
 use std::fs;
 use std::io::{self, Read};
@@ -243,8 +244,12 @@ impl App {
                     .collect::<Vec<_>>();
                 let hint = match created.len() {
                     0 => "no new items created; this plan is already mapped",
-                    1 => "created a single coarse item; either expand the plan's task list (one `### TASK-00n:` per verifiable slice, typically 4-8) and re-run `map build`, or run `planr item breakdown <item-id> --into <slice>` once per slice — derive slices from the plan's acceptance criteria",
-                    _ => "items are chained in plan order; adjust with `planr link add <from> <to> --type blocks` if execution order differs, then `planr pick --plan <plan-id>`",
+                    1 => {
+                        "created a single coarse item; either expand the plan's task list (one `### TASK-00n:` per verifiable slice, typically 4-8) and re-run `map build`, or run `planr item breakdown <item-id> --into <slice>` once per slice — derive slices from the plan's acceptance criteria"
+                    }
+                    _ => {
+                        "items are chained in plan order; adjust with `planr link add <from> <to> --type blocks` if execution order differs, then `planr pick --plan <plan-id>`"
+                    }
                 };
                 let mut message = format!("created {} map item(s)", created.len());
                 for item in &created {
@@ -425,9 +430,10 @@ impl App {
             }
             LinkCommand::Remove(args) => {
                 let changed = if let Some(kind) = args.r#type {
+                    let kind = LinkKind::try_from(kind.as_str())?;
                     self.conn.execute(
                         "DELETE FROM links WHERE from_item = ?1 AND to_item = ?2 AND kind = ?3",
-                        params![args.from_item, args.to_item, kind],
+                        params![args.from_item, args.to_item, kind.as_str()],
                     )?
                 } else {
                     self.conn.execute(
@@ -566,14 +572,15 @@ impl App {
     pub(crate) fn log(&self, command: LogCommand) -> Result<()> {
         match command {
             LogCommand::Add(args) => {
-                let id = self.add_log_entry(
-                    &args.item,
-                    &args.kind,
-                    &args.summary,
-                    &args.files,
-                    &args.cmd,
-                    &args.tests,
-                )?;
+                let id = self.add_log_entry(super::LogInput {
+                    item_id: &args.item,
+                    kind: &args.kind,
+                    summary: &args.summary,
+                    files: &args.files,
+                    commands: &args.cmd,
+                    tests: &args.tests,
+                    source: None,
+                })?;
                 self.emit(
                     json!({"log": self.get_log(&id)?}),
                     format!("created log {id}"),
@@ -592,39 +599,18 @@ impl App {
 
     pub(crate) fn approval(&self, command: ApprovalCommand) -> Result<()> {
         match command {
-            ApprovalCommand::Request(args) => {
-                let item = self.get_item(&args.item_id)?;
-                self.conn.execute(
-                    "UPDATE items SET approval_status = 'requested', approval_requested_at = datetime('now'), approval_comment = ?1, approved_by = NULL, updated_at = datetime('now') WHERE id = ?2",
-                    params![args.reason, item.id],
-                )?;
-                self.emit(
-                    json!({"item": self.get_item(&item.id)?, "approval": self.item_approval(&item.id)?}),
-                    "approval requested".to_string(),
-                )
-            }
-            ApprovalCommand::Approve(args) => {
-                let item = self.get_item(&args.item_id)?;
-                self.conn.execute(
-                    "UPDATE items SET approval_status = 'approved', approved_by = ?1, approval_comment = ?2, updated_at = datetime('now') WHERE id = ?3",
-                    params![args.by, args.comment, item.id],
-                )?;
-                self.emit(
-                    json!({"item": self.get_item(&item.id)?, "approval": self.item_approval(&item.id)?}),
-                    "approval recorded".to_string(),
-                )
-            }
-            ApprovalCommand::Deny(args) => {
-                let item = self.get_item(&args.item_id)?;
-                self.conn.execute(
-                    "UPDATE items SET approval_status = 'denied', approved_by = ?1, approval_comment = ?2, updated_at = datetime('now') WHERE id = ?3",
-                    params![args.by, args.comment, item.id],
-                )?;
-                self.emit(
-                    json!({"item": self.get_item(&item.id)?, "approval": self.item_approval(&item.id)?}),
-                    "approval denied".to_string(),
-                )
-            }
+            ApprovalCommand::Request(args) => self.emit(
+                self.request_approval_value(&args.item_id, args.reason.as_deref())?,
+                "approval requested".to_string(),
+            ),
+            ApprovalCommand::Approve(args) => self.emit(
+                self.approve_value(&args.item_id, &args.by, args.comment.as_deref())?,
+                "approval recorded".to_string(),
+            ),
+            ApprovalCommand::Deny(args) => self.emit(
+                self.deny_value(&args.item_id, &args.by, args.comment.as_deref())?,
+                "approval denied".to_string(),
+            ),
             ApprovalCommand::List(args) => {
                 let approvals = self.list_approvals(args.open)?;
                 self.emit(
@@ -777,21 +763,15 @@ impl App {
     pub(crate) fn context(&self, command: ContextCommand) -> Result<()> {
         match command {
             ContextCommand::Add(args) => {
-                let id = short_id("ctx");
-                self.conn.execute(
-                    "INSERT INTO contexts(id, project_id, item_id, worker_id, kind, content, tags, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'))",
-                    params![id, self.default_project()?.id, args.item, worker_id(), args.tag, args.text, "[]"],
-                )?;
-                self.index_search("context", &id, &args.tag, &args.text, None)?;
-                self.record_event(
-                    "context_created",
+                let context = self.add_context_value(
                     args.item.as_deref(),
-                    json!({"context_id": id.clone(), "tag": args.tag}),
+                    &args.tag,
+                    &args.text,
+                    json!([]),
+                    None,
                 )?;
-                self.emit(
-                    json!({"context": self.get_context(&id)?}),
-                    format!("added note {id}"),
-                )
+                let id = context["id"].as_str().unwrap_or_default();
+                self.emit(json!({"context": context}), format!("added note {id}"))
             }
             ContextCommand::List(args) => {
                 let mut values = self.list_contexts(args.item.as_deref())?;

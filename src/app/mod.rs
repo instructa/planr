@@ -1,9 +1,10 @@
 use crate::cli::Command;
 use anyhow::Result;
 use rusqlite::Connection;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::PathBuf;
 
+mod application;
 mod audit;
 mod commands;
 mod flow;
@@ -22,6 +23,7 @@ mod review;
 mod review_workspace;
 mod surfaces;
 
+pub(crate) use flow::LogInput;
 pub(crate) use review::ReviewArtifactInput;
 
 pub(crate) struct App {
@@ -29,6 +31,17 @@ pub(crate) struct App {
     pub(crate) root: PathBuf,
     pub(crate) db_path: PathBuf,
     pub(crate) json: bool,
+}
+
+impl App {
+    pub(crate) fn new(conn: Connection, root: PathBuf, db_path: PathBuf, json: bool) -> Self {
+        Self {
+            conn,
+            root,
+            db_path,
+            json,
+        }
+    }
 }
 
 fn artifact_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {

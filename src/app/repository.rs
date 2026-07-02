@@ -1,13 +1,20 @@
-use super::{artifact_row, event_row, App};
+use super::App;
 use crate::cli::{ItemAmendArgs, ItemInsertArgs, ItemReplanArgs};
-use crate::model::{Item, Plan, Project};
-use crate::planpack::{extract_work_specs, hash_path, parse_plan_metadata, plan_search_body};
-use crate::storage::{row_to_item, row_to_log, row_to_plan, row_to_project};
+use crate::model::Item;
+use crate::model::LinkKind;
+use crate::storage::row_to_item;
 use crate::util::{collect_rows, item_id, print_json, short_id, worker_id};
-use anyhow::{anyhow, bail, Result};
-use rusqlite::{params, OptionalExtension};
-use serde_json::{json, Value};
-use std::path::Path;
+use anyhow::{Result, bail};
+use rusqlite::{OptionalExtension, params};
+use serde_json::{Value, json};
+
+mod context;
+mod evidence;
+mod item;
+mod link;
+mod plan;
+mod project;
+mod search;
 
 impl App {
     pub(crate) fn emit(&self, value: Value, human: String) -> Result<()> {
@@ -17,151 +24,6 @@ impl App {
             println!("{human}");
             Ok(())
         }
-    }
-
-    pub(crate) fn default_project(&self) -> Result<Project> {
-        self.conn
-            .query_row(
-                "SELECT id, name, root_path, description, status FROM projects WHERE status = 'active' ORDER BY created_at DESC LIMIT 1",
-                [],
-                row_to_project,
-            )
-            .optional()?
-            .ok_or_else(|| anyhow!("no project found; run planr project init"))
-    }
-
-    pub(crate) fn get_project(&self, id: &str) -> Result<Project> {
-        self.conn
-            .query_row(
-                "SELECT id, name, root_path, description, status FROM projects WHERE id = ?1",
-                params![id],
-                row_to_project,
-            )
-            .optional()?
-            .ok_or_else(|| anyhow!("project not found: {id}"))
-    }
-
-    pub(crate) fn list_projects(&self) -> Result<Vec<Project>> {
-        let mut stmt = self.conn.prepare("SELECT id, name, root_path, description, status FROM projects ORDER BY created_at DESC")?;
-        let rows = stmt.query_map([], row_to_project)?;
-        collect_rows(rows)
-    }
-
-    pub(crate) fn upsert_plan(
-        &self,
-        project_id: &str,
-        stage: &str,
-        path: &Path,
-        title: &str,
-        slug: &str,
-        manifest: Value,
-    ) -> Result<Plan> {
-        let id = short_id("pln");
-        let hash = hash_path(path)?;
-        let (frontmatter, parse_status) = parse_plan_metadata(path);
-        self.conn.execute(
-            "INSERT INTO plans(id, project_id, stage, path, title, slug, package_manifest, frontmatter, parse_status, content_hash, archived, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0, datetime('now'), datetime('now'))",
-            params![id, project_id, stage, path.to_string_lossy(), title, slug, manifest.to_string(), frontmatter.to_string(), parse_status, hash],
-        )?;
-        self.index_search(
-            "plan",
-            &id,
-            title,
-            &plan_search_body(path)?,
-            Some(&path.to_string_lossy()),
-        )?;
-        self.get_plan(&id)
-    }
-
-    pub(crate) fn get_plan(&self, id: &str) -> Result<Plan> {
-        self.conn
-            .query_row(
-                "SELECT id, project_id, stage, path, title, slug, parse_status, archived FROM plans WHERE id = ?1",
-                params![id],
-                row_to_plan,
-            )
-            .optional()?
-            .ok_or_else(|| anyhow!("plan not found: {id}"))
-    }
-
-    /// Resolves the plan id behind an item's `plan_path`, so outputs can
-    /// suggest plan-scoped commands without the agent mapping path to id.
-    pub(crate) fn plan_id_for_path(&self, path: &str) -> Result<Option<String>> {
-        self.conn
-            .query_row(
-                "SELECT id FROM plans WHERE path = ?1 AND archived = 0 ORDER BY created_at DESC LIMIT 1",
-                params![path],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(Into::into)
-    }
-
-    pub(crate) fn list_plans(&self, stage: Option<&str>) -> Result<Vec<Plan>> {
-        let sql = if stage.is_some() {
-            "SELECT id, project_id, stage, path, title, slug, parse_status, archived FROM plans WHERE archived = 0 AND stage = ?1 ORDER BY created_at DESC"
-        } else {
-            "SELECT id, project_id, stage, path, title, slug, parse_status, archived FROM plans WHERE archived = 0 ORDER BY created_at DESC"
-        };
-        let mut stmt = self.conn.prepare(sql)?;
-        let rows = if let Some(stage) = stage {
-            stmt.query_map(params![stage], row_to_plan)?
-        } else {
-            stmt.query_map([], row_to_plan)?
-        };
-        collect_rows(rows)
-    }
-
-    pub(crate) fn rehash_plan(&self, id: &str) -> Result<()> {
-        let plan = self.get_plan(id)?;
-        let path = Path::new(&plan.path);
-        let hash = hash_path(path)?;
-        let (frontmatter, parse_status) = parse_plan_metadata(path);
-        self.conn.execute(
-            "UPDATE plans SET content_hash = ?1, frontmatter = ?2, parse_status = ?3, updated_at = datetime('now') WHERE id = ?4",
-            params![hash, frontmatter.to_string(), parse_status, id],
-        )?;
-        Ok(())
-    }
-
-    /// Idempotent: re-running `map build` on the same plan skips work specs
-    /// that already exist as live items linked to that plan instead of
-    /// duplicating the graph.
-    pub(crate) fn seed_items_from_plan(&self, plan: &Plan) -> Result<Vec<Item>> {
-        let mut specs = extract_work_specs(Path::new(&plan.path))?;
-        if specs.is_empty() {
-            specs.push((
-                format!("Implement {}", plan.title),
-                format!("Execute build plan {}", plan.id),
-            ));
-        }
-        let mut created = Vec::new();
-        for (title, description) in specs {
-            let already_seeded: i64 = self.conn.query_row(
-                "SELECT COUNT(*) FROM source_links sl JOIN items i ON i.id = sl.item_id
-                 WHERE sl.source_type = 'plan' AND sl.source_id = ?1
-                 AND sl.relationship = 'implements' AND i.title = ?2
-                 AND i.status != 'cancelled'",
-                params![plan.id, title],
-                |row| row.get(0),
-            )?;
-            if already_seeded > 0 {
-                continue;
-            }
-            let item = self.create_item(None, &title, &description, "code", Some(&plan.path))?;
-            self.conn.execute(
-                "INSERT INTO source_links(source_type, source_id, item_id, section_id, relationship) VALUES ('plan', ?1, ?2, NULL, 'implements')",
-                params![plan.id, item.id],
-            )?;
-            created.push(item);
-        }
-        // Build plans are ordered steps, so the map inherits that order:
-        // consecutive new items are chained with `blocks` links instead of
-        // leaving the agent to infer execution order from titles.
-        for pair in created.windows(2) {
-            self.add_link(&pair[0].id, &pair[1].id, "blocks")?;
-        }
-        Ok(created)
     }
 
     /// Splits a parent into chained children: each title becomes a child,
@@ -196,78 +58,6 @@ impl App {
         self.promote_ready()?;
         // Re-fetch: chaining demotes later children to blocked after creation.
         created.iter().map(|item| self.get_item(&item.id)).collect()
-    }
-
-    pub(crate) fn create_item(
-        &self,
-        parent: Option<&str>,
-        title: &str,
-        description: &str,
-        work_type: &str,
-        plan_path: Option<&str>,
-    ) -> Result<Item> {
-        let project = self.default_project()?;
-        let id = item_id(title);
-        self.conn.execute(
-            "INSERT INTO items(id, project_id, parent_item_id, title, description, status, work_type, priority, plan_path, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6, 0, ?7, datetime('now'), datetime('now'))",
-            params![id, project.id, parent, title, description, work_type, plan_path],
-        )?;
-        self.index_search("item", &id, title, description, plan_path)?;
-        self.promote_ready()?;
-        let item = self.get_item(&id)?;
-        self.record_event(
-            "item_created",
-            Some(&id),
-            json!({"title": title, "work_type": work_type, "status": item.status}),
-        )?;
-        Ok(item)
-    }
-
-    pub(crate) fn get_item(&self, id: &str) -> Result<Item> {
-        self.conn
-            .query_row(
-                "SELECT id, project_id, parent_item_id, title, description, status, work_type, priority, worker_id, plan_path FROM items WHERE id = ?1",
-                params![id],
-                row_to_item,
-            )
-            .optional()?
-            .ok_or_else(|| anyhow!("item not found: {id}"))
-    }
-
-    pub(crate) fn list_items_by_type(
-        &self,
-        work_type: &str,
-        not_status: Option<&str>,
-    ) -> Result<Vec<Item>> {
-        let sql = if not_status.is_some() {
-            "SELECT id, project_id, parent_item_id, title, description, status, work_type, priority, worker_id, plan_path FROM items WHERE work_type = ?1 AND status != ?2 ORDER BY created_at"
-        } else {
-            "SELECT id, project_id, parent_item_id, title, description, status, work_type, priority, worker_id, plan_path FROM items WHERE work_type = ?1 ORDER BY created_at"
-        };
-        let mut stmt = self.conn.prepare(sql)?;
-        let rows = if let Some(status) = not_status {
-            stmt.query_map(params![work_type, status], row_to_item)?
-        } else {
-            stmt.query_map(params![work_type], row_to_item)?
-        };
-        collect_rows(rows)
-    }
-
-    pub(crate) fn add_link(&self, from: &str, to: &str, kind: &str) -> Result<()> {
-        self.conn.execute(
-            "INSERT OR IGNORE INTO links(from_item, to_item, kind, condition) VALUES (?1, ?2, ?3, 'all')",
-            params![from, to, kind],
-        )?;
-        // The link owner also owns the readiness consequence: a target that is
-        // now blocked must not stay 'ready' (e.g. follow-up reviews created
-        // before their blocking fix item link exists).
-        self.demote_if_blocked(to)?;
-        self.record_event(
-            "link_added",
-            Some(to),
-            json!({"from": from, "to": to, "kind": kind}),
-        )?;
-        Ok(())
     }
 
     pub(crate) fn item_insert(&self, args: ItemInsertArgs) -> Result<()> {
@@ -524,8 +314,7 @@ impl App {
                      AND COALESCE(approval_status, '') NOT IN ('requested','denied')
                      RETURNING id, status",
                 )?;
-                let rows = collect_rows(stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?)?;
-                rows
+                collect_rows(stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?)?
             };
             for (item_id, status) in &auto_closed {
                 let log_id = short_id("log");
@@ -653,7 +442,8 @@ impl App {
             .into_iter()
             .filter_map(|link| {
                 let kind = link.get("kind")?.as_str()?;
-                if kind != "blocks" && kind != "hands_to" {
+                let kind = LinkKind::try_from(kind).ok()?;
+                if !kind.blocks_readiness() {
                     return None;
                 }
                 Some(super::render::RenderEdge {
@@ -883,116 +673,5 @@ impl App {
 
     pub(crate) fn would_unlock_items(&self, item_id: &str) -> Result<Vec<Item>> {
         Ok(self.close_effect(item_id)?.would_unlock)
-    }
-
-    pub(crate) fn all_links(&self) -> Result<Vec<Value>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT from_item, to_item, kind FROM links ORDER BY id")?;
-        let rows = stmt.query_map([], |row| {
-            Ok(json!({"from": row.get::<_, String>(0)?, "to": row.get::<_, String>(1)?, "kind": row.get::<_, String>(2)?}))
-        })?;
-        collect_rows(rows)
-    }
-
-    pub(crate) fn get_log(&self, id: &str) -> Result<Value> {
-        self.conn.query_row("SELECT id, item_id, kind, summary, files, commands, tests, review_findings, created_at FROM logs WHERE id = ?1", params![id], row_to_log).optional()?.ok_or_else(|| anyhow!("log not found: {id}"))
-    }
-
-    pub(crate) fn list_logs(&self, item: Option<&str>) -> Result<Vec<Value>> {
-        let sql = if item.is_some() {
-            "SELECT id, item_id, kind, summary, files, commands, tests, review_findings, created_at FROM logs WHERE item_id = ?1 ORDER BY created_at DESC"
-        } else {
-            "SELECT id, item_id, kind, summary, files, commands, tests, review_findings, created_at FROM logs ORDER BY created_at DESC"
-        };
-        let mut stmt = self.conn.prepare(sql)?;
-        let rows = if let Some(item) = item {
-            stmt.query_map(params![item], row_to_log)?
-        } else {
-            stmt.query_map([], row_to_log)?
-        };
-        collect_rows(rows)
-    }
-
-    pub(crate) fn get_artifact(&self, id: &str) -> Result<Value> {
-        self.conn
-            .query_row(
-                "SELECT id, project_id, item_id, name, kind, path, content, mime_type, size_bytes, metadata, created_at FROM artifacts WHERE id = ?1",
-                params![id],
-                artifact_row,
-            )
-            .optional()?
-            .ok_or_else(|| anyhow!("artifact not found: {id}"))
-    }
-
-    pub(crate) fn latest_review_artifact(&self, review_id: &str) -> Result<Value> {
-        self.get_item(review_id)?;
-        self.conn
-            .query_row(
-                "SELECT id, project_id, item_id, name, kind, path, content, mime_type, size_bytes, metadata, created_at FROM artifacts WHERE item_id = ?1 AND kind = 'review' ORDER BY created_at DESC, id DESC LIMIT 1",
-                params![review_id],
-                artifact_row,
-            )
-            .optional()?
-            .ok_or_else(|| anyhow!("review artifact not found: {review_id}"))
-    }
-
-    pub(crate) fn list_artifacts(&self, item: Option<&str>) -> Result<Vec<Value>> {
-        let sql = if item.is_some() {
-            "SELECT id, project_id, item_id, name, kind, path, content, mime_type, size_bytes, metadata, created_at FROM artifacts WHERE item_id = ?1 ORDER BY created_at DESC LIMIT 100"
-        } else {
-            "SELECT id, project_id, item_id, name, kind, path, content, mime_type, size_bytes, metadata, created_at FROM artifacts ORDER BY created_at DESC LIMIT 100"
-        };
-        let mut stmt = self.conn.prepare(sql)?;
-        let rows = if let Some(item) = item {
-            stmt.query_map(params![item], artifact_row)?
-        } else {
-            stmt.query_map([], artifact_row)?
-        };
-        collect_rows(rows)
-    }
-
-    pub(crate) fn record_event(
-        &self,
-        event_type: &str,
-        item_id: Option<&str>,
-        payload: Value,
-    ) -> Result<()> {
-        let project_id = self.default_project().ok().map(|project| project.id);
-        self.conn.execute(
-            "INSERT INTO events(project_id, item_id, worker_id, event_type, payload, timestamp) VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))",
-            params![
-                project_id.as_deref(),
-                item_id,
-                worker_id(),
-                event_type,
-                payload.to_string(),
-            ],
-        )?;
-        Ok(())
-    }
-
-    pub(crate) fn list_events(&self, item: Option<&str>, limit: usize) -> Result<Vec<Value>> {
-        let limit = limit.clamp(1, 500) as i64;
-        let sql = if item.is_some() {
-            "SELECT id, project_id, item_id, worker_id, event_type, payload, timestamp FROM events WHERE item_id = ?1 ORDER BY id DESC LIMIT ?2"
-        } else {
-            "SELECT id, project_id, item_id, worker_id, event_type, payload, timestamp FROM events ORDER BY id DESC LIMIT ?1"
-        };
-        let mut stmt = self.conn.prepare(sql)?;
-        let rows = if let Some(item) = item {
-            stmt.query_map(params![item, limit], event_row)?
-        } else {
-            stmt.query_map(params![limit], event_row)?
-        };
-        collect_rows(rows)
-    }
-
-    pub(crate) fn events_after(&self, after_id: i64) -> Result<Vec<Value>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, project_id, item_id, worker_id, event_type, payload, timestamp FROM events WHERE id > ?1 ORDER BY id LIMIT 500",
-        )?;
-        let rows = stmt.query_map(params![after_id], event_row)?;
-        collect_rows(rows)
     }
 }

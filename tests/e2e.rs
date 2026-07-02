@@ -1,7 +1,7 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
 use rusqlite::Connection;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -372,10 +372,11 @@ fn mcp_contract_install_fixtures_and_cli_docs_do_not_drift() {
             .assert()
             .success();
     }
-    assert!(dir
-        .path()
-        .join(".planr/integrations/codex-mcp.toml")
-        .exists());
+    assert!(
+        dir.path()
+            .join(".planr/integrations/codex-mcp.toml")
+            .exists()
+    );
     assert!(dir.path().join(".mcp.json").exists());
     assert!(dir.path().join(".cursor/mcp.json").exists());
 
@@ -397,10 +398,12 @@ fn mcp_contract_install_fixtures_and_cli_docs_do_not_drift() {
         .clone();
     let prompt_cli: Value = serde_json::from_slice(&prompt_cli).unwrap();
     assert_eq!(prompt_cli["global_config_edited"], false);
-    assert!(prompt_cli["prompt"]
-        .as_str()
-        .unwrap()
-        .contains("planr map preview"));
+    assert!(
+        prompt_cli["prompt"]
+            .as_str()
+            .unwrap()
+            .contains("planr map preview")
+    );
 
     let prompt_mcp = planr()
         .current_dir(dir.path())
@@ -411,10 +414,12 @@ fn mcp_contract_install_fixtures_and_cli_docs_do_not_drift() {
         .stdout
         .clone();
     let prompt_mcp: Value = serde_json::from_slice(&prompt_mcp).unwrap();
-    assert!(prompt_mcp["prompt"]
-        .as_str()
-        .unwrap()
-        .contains("\"mcpServers\""));
+    assert!(
+        prompt_mcp["prompt"]
+            .as_str()
+            .unwrap()
+            .contains("\"mcpServers\"")
+    );
 
     let prompt_http = planr()
         .current_dir(dir.path())
@@ -516,14 +521,18 @@ fn pick_returns_ranked_privacy_safe_recall_context() {
     assert_eq!(picked["item"]["id"], item_id);
     let relevant = picked["relevant_contexts"].as_array().unwrap();
     assert_eq!(relevant.len(), 1);
-    assert!(relevant[0]["content"]
-        .as_str()
-        .unwrap()
-        .contains("session cache"));
+    assert!(
+        relevant[0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("session cache")
+    );
     assert_eq!(picked["privacy"]["source_file_content_included"], false);
-    assert!(!serde_json::to_string(&picked)
-        .unwrap()
-        .contains("sk-test-should-not-appear"));
+    assert!(
+        !serde_json::to_string(&picked)
+            .unwrap()
+            .contains("sk-test-should-not-appear")
+    );
 }
 
 #[test]
@@ -658,10 +667,12 @@ fn runtime_control_and_approval_gates_are_enforced() {
     )
     .unwrap();
     assert_eq!(mcp_response["result"]["isError"], true);
-    assert!(mcp_response["result"]["content"][0]["text"]
-        .as_str()
-        .unwrap()
-        .contains("invalid_transition"));
+    assert!(
+        mcp_response["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("invalid_transition")
+    );
 
     let output = planr()
         .current_dir(dir.path())
@@ -1603,10 +1614,12 @@ fn mcp_server_survives_failing_tool_calls_and_answers_errors() {
 
     assert_eq!(responses[0]["id"], 1);
     assert_eq!(responses[0]["result"]["isError"], true);
-    assert!(responses[0]["result"]["content"][0]["text"]
-        .as_str()
-        .unwrap()
-        .contains("not_found"));
+    assert!(
+        responses[0]["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("not_found")
+    );
 
     assert_eq!(responses[1]["id"], 2);
     assert_eq!(responses[1]["result"]["isError"], true);
@@ -1787,12 +1800,10 @@ fn child_item_ids(db: &std::path::Path, parent_id: &str) -> Vec<String> {
     let mut stmt = conn
         .prepare("SELECT id FROM items WHERE parent_item_id = ?1 ORDER BY created_at")
         .unwrap();
-    let ids = stmt
-        .query_map([parent_id], |row| row.get::<_, String>(0))
+    stmt.query_map([parent_id], |row| row.get::<_, String>(0))
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
-        .unwrap();
-    ids
+        .unwrap()
 }
 
 #[test]
@@ -3351,15 +3362,21 @@ fn graph_adaptation_primitives_preview_rewire_and_replan() {
         .clone();
     let map: Value = serde_json::from_slice(&output).unwrap();
     let links = map["links"].as_array().unwrap();
-    assert!(links
-        .iter()
-        .any(|link| link["from"] == first_id && link["to"] == middle_id));
-    assert!(links
-        .iter()
-        .any(|link| link["from"] == middle_id && link["to"] == second_id));
-    assert!(!links
-        .iter()
-        .any(|link| link["from"] == first_id && link["to"] == second_id));
+    assert!(
+        links
+            .iter()
+            .any(|link| link["from"] == first_id && link["to"] == middle_id)
+    );
+    assert!(
+        links
+            .iter()
+            .any(|link| link["from"] == middle_id && link["to"] == second_id)
+    );
+    assert!(
+        !links
+            .iter()
+            .any(|link| link["from"] == first_id && link["to"] == second_id)
+    );
 
     planr()
         .current_dir(dir.path())
@@ -4162,12 +4179,10 @@ fn scrub_confirm_redacts_stored_secret_values() {
         let mut stmt = conn
             .prepare("SELECT content FROM contexts ORDER BY created_at")
             .unwrap();
-        let rows = stmt
-            .query_map([], |row| row.get::<_, String>(0))
+        stmt.query_map([], |row| row.get::<_, String>(0))
             .unwrap()
             .collect::<rusqlite::Result<Vec<_>>>()
-            .unwrap();
-        rows
+            .unwrap()
     };
     assert!(
         contents.iter().any(|c| c.contains("[REDACTED]")),
@@ -4516,10 +4531,12 @@ fn local_review_workspace_serves_browser_ui_and_drives_review_chain() {
     let annotations = annotated_workspace["reviews"][0]["annotations"]
         .as_array()
         .unwrap();
-    assert!(annotations.iter().any(|entry| entry["content"]
-        .as_str()
-        .unwrap()
-        .contains("Workspace annotation")));
+    assert!(annotations.iter().any(|entry| {
+        entry["content"]
+            .as_str()
+            .unwrap()
+            .contains("Workspace annotation")
+    }));
 
     let feedback = http_json(&http_request(
         port,
@@ -4657,10 +4674,12 @@ fn review_evidence_scopes_git_dirty_files_and_pr_context() {
         .clone();
     let clean: Value = serde_json::from_slice(&clean).unwrap();
     assert_eq!(clean["evidence"]["git"]["available"], true);
-    assert!(clean["evidence"]["git"]["changed_files"]
-        .as_array()
-        .unwrap()
-        .is_empty());
+    assert!(
+        clean["evidence"]["git"]["changed_files"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 
     fs::write(
         dir.path().join("src/owned.rs"),
@@ -4691,25 +4710,31 @@ fn review_evidence_scopes_git_dirty_files_and_pr_context() {
         .stdout
         .clone();
     let dirty: Value = serde_json::from_slice(&dirty).unwrap();
-    assert!(dirty["evidence"]["git"]["scoped_files"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|value| value == "src/owned.rs"));
-    assert!(dirty["evidence"]["git"]["unrelated_dirty_files"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|value| value == "src/unrelated.rs"));
+    assert!(
+        dirty["evidence"]["git"]["scoped_files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "src/owned.rs")
+    );
+    assert!(
+        dirty["evidence"]["git"]["unrelated_dirty_files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "src/unrelated.rs")
+    );
     assert_eq!(
         dirty["evidence"]["dirty_worktree_safety"]["source_content_included"],
         false
     );
-    assert!(dirty["evidence"]["provenance"]["pr_urls"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|value| value == "https://github.com/instructa/planr/pull/1"));
+    assert!(
+        dirty["evidence"]["provenance"]["pr_urls"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "https://github.com/instructa/planr/pull/1")
+    );
 
     let review = planr()
         .current_dir(dir.path())
@@ -4975,14 +5000,16 @@ fn template_export_import_preserves_graph_context_and_review_artifacts() {
         .stdout
         .clone();
     let contexts: Value = serde_json::from_slice(&contexts).unwrap();
-    assert!(contexts["contexts"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|context| context["content"]
-            .as_str()
+    assert!(
+        contexts["contexts"]
+            .as_array()
             .unwrap()
-            .contains("Template review annotation context")));
+            .iter()
+            .any(|context| context["content"]
+                .as_str()
+                .unwrap()
+                .contains("Template review annotation context"))
+    );
     assert!(target.path().join(".planr/reviews").exists());
 }
 
@@ -5196,6 +5223,10 @@ fn rust_implementation_has_owned_module_boundaries() {
         "src/app/review_workspace.rs",
         "src/app/surfaces.rs",
         "src/app/inspection.rs",
+        "src/app/application.rs",
+        "src/app/repository/item.rs",
+        "src/app/repository/plan.rs",
+        "src/app/repository/evidence.rs",
         "src/model.rs",
         "src/storage/mod.rs",
         "src/storage/schema.rs",
@@ -5209,7 +5240,7 @@ fn rust_implementation_has_owned_module_boundaries() {
             "missing architecture module {file}"
         );
     }
-    for removed_hub in ["src/app.rs", "src/storage.rs"] {
+    for removed_hub in ["src/app.rs", "src/storage.rs", "src/domain", "crates"] {
         assert!(
             !root.join(removed_hub).exists(),
             "{removed_hub} should not return as a monolithic ownership hub"
@@ -5252,8 +5283,12 @@ fn rust_implementation_has_owned_module_boundaries() {
         ("src/app/review_workspace.rs", 500),
         ("src/app/surfaces.rs", 300),
         ("src/app/inspection.rs", 510),
+        ("src/app/application.rs", 200),
         ("src/storage/schema.rs", 300),
         ("src/storage/rows.rs", 150),
+        ("src/model.rs", 400),
+        ("src/planpack.rs", 320),
+        ("src/integrations.rs", 450),
     ] {
         let line_count = fs::read_to_string(root.join(file)).unwrap().lines().count();
         assert!(
@@ -5281,12 +5316,12 @@ fn rust_implementation_has_owned_module_boundaries() {
         "src/app/review_workspace.rs",
         "src/app/surfaces.rs",
         "src/app/inspection.rs",
+        "src/app/application.rs",
         "src/storage/mod.rs",
         "src/storage/schema.rs",
         "src/storage/rows.rs",
         "src/planpack.rs",
         "src/integrations.rs",
-        "single crate",
     ] {
         assert!(
             docs.contains(owner),
@@ -6021,7 +6056,9 @@ fn guess_killer_pack_auto_chain_audit_review_mode_unlocked_and_repair_errors() {
         &[
             "context",
             "add",
-            &format!("GOAL CONTRACT {build_id}: DONE when all items closed and live verification logged."),
+            &format!(
+                "GOAL CONTRACT {build_id}: DONE when all items closed and live verification logged."
+            ),
             "--tag",
             "goal-contract",
         ],
@@ -6031,10 +6068,12 @@ fn guess_killer_pack_auto_chain_audit_review_mode_unlocked_and_repair_errors() {
         audit["holds"], false,
         "a stored contract makes the verification clause binding: {audit}"
     );
-    assert!(audit["contract"]["content"]
-        .as_str()
-        .unwrap()
-        .contains(&build_id));
+    assert!(
+        audit["contract"]["content"]
+            .as_str()
+            .unwrap()
+            .contains(&build_id)
+    );
     run(
         "maker-1",
         &[

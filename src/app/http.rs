@@ -1,9 +1,11 @@
-use super::{recovery::ItemRecoveryInput, App, ReviewAnnotationInput};
+use super::{
+    App, LogInput, ReviewAnnotationInput, application::ArtifactInput, recovery::ItemRecoveryInput,
+};
 use crate::cli::ServeArgs;
-use crate::util::{infer_error_code, item_id, path_item_id, short_id, worker_id};
-use anyhow::{anyhow, bail, Result};
+use crate::util::{infer_error_code, item_id, path_item_id, short_id};
+use anyhow::{Result, anyhow, bail};
 use rusqlite::params;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::io::{self, BufRead, Read, Write};
 use std::net::{TcpListener, TcpStream};
 
@@ -29,12 +31,7 @@ impl App {
             let json = self.json;
             std::thread::spawn(move || {
                 let app = match crate::storage::open_db(&db_path) {
-                    Ok(conn) => App {
-                        conn,
-                        root,
-                        db_path,
-                        json,
-                    },
+                    Ok(conn) => App::new(conn, root, db_path, json),
                     Err(error) => {
                         eprintln!("planr serve: database open error: {error:#}");
                         return;
@@ -297,20 +294,15 @@ impl App {
                     ) {
                         bail!("cannot amend item {} from status {}", item.id, item.status);
                     }
-                    let id = short_id("ctx");
                     let note = body_json.get("note").and_then(Value::as_str).unwrap_or("");
                     let tag = body_json
                         .get("tag")
                         .and_then(Value::as_str)
                         .unwrap_or("amendment");
-                    self.conn.execute(
-                    "INSERT INTO contexts(id, project_id, item_id, worker_id, kind, content, tags, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'))",
-                    params![id, self.default_project()?.id, item.id, worker_id(), tag, note, json!(["amend"]).to_string()],
-                )?;
-                    self.index_search("context", &id, tag, note, None)?;
-                    serde_json::to_string(
-                        &json!({"item": item, "context": self.get_context(&id)?}),
-                    )?
+                    serde_json::to_string(&json!({
+                        "item": item,
+                        "context": self.add_context_value(Some(item_id), tag, note, json!(["amend"]), Some("http"))?
+                    }))?
                 }
                 ("POST", p) if p.ends_with("/replan") => {
                     let parent_id = path_item_id(p)
@@ -434,13 +426,10 @@ impl App {
                 ("POST", p) if p.ends_with("/approval/request") => {
                     let item_id = path_item_id(p)
                         .ok_or_else(|| anyhow!("missing item id in approval request route"))?;
-                    self.conn.execute(
-                    "UPDATE items SET approval_status = 'requested', approval_requested_at = datetime('now'), approval_comment = ?1, approved_by = NULL, updated_at = datetime('now') WHERE id = ?2",
-                    params![body_json.get("reason").and_then(Value::as_str), item_id],
-                )?;
-                    serde_json::to_string(
-                        &json!({"item": self.get_item(item_id)?, "approval": self.item_approval(item_id)?}),
-                    )?
+                    serde_json::to_string(&self.request_approval_value(
+                        item_id,
+                        body_json.get("reason").and_then(Value::as_str),
+                    )?)?
                 }
                 ("POST", p) if p.ends_with("/approval/approve") => {
                     let item_id = path_item_id(p)
@@ -449,13 +438,11 @@ impl App {
                         .get("by")
                         .and_then(Value::as_str)
                         .unwrap_or("human");
-                    self.conn.execute(
-                    "UPDATE items SET approval_status = 'approved', approved_by = ?1, approval_comment = ?2, updated_at = datetime('now') WHERE id = ?3",
-                    params![by, body_json.get("comment").and_then(Value::as_str), item_id],
-                )?;
-                    serde_json::to_string(
-                        &json!({"item": self.get_item(item_id)?, "approval": self.item_approval(item_id)?}),
-                    )?
+                    serde_json::to_string(&self.approve_value(
+                        item_id,
+                        by,
+                        body_json.get("comment").and_then(Value::as_str),
+                    )?)?
                 }
                 ("POST", p) if p.ends_with("/approval/deny") => {
                     let item_id = path_item_id(p)
@@ -464,13 +451,11 @@ impl App {
                         .get("by")
                         .and_then(Value::as_str)
                         .unwrap_or("human");
-                    self.conn.execute(
-                    "UPDATE items SET approval_status = 'denied', approved_by = ?1, approval_comment = ?2, updated_at = datetime('now') WHERE id = ?3",
-                    params![by, body_json.get("comment").and_then(Value::as_str), item_id],
-                )?;
-                    serde_json::to_string(
-                        &json!({"item": self.get_item(item_id)?, "approval": self.item_approval(item_id)?}),
-                    )?
+                    serde_json::to_string(&self.deny_value(
+                        item_id,
+                        by,
+                        body_json.get("comment").and_then(Value::as_str),
+                    )?)?
                 }
                 ("GET", "/v1/approvals") => {
                     let open = query
@@ -487,48 +472,22 @@ impl App {
                 ("POST", p) if p.ends_with("/log") => {
                     let item_id =
                         path_item_id(p).ok_or_else(|| anyhow!("missing item id in log route"))?;
-                    let id = short_id("log");
                     let summary = body_json
                         .get("summary")
                         .and_then(Value::as_str)
                         .unwrap_or("HTTP log");
-                    let commands = body_json
-                        .get("commands")
-                        .cloned()
-                        .unwrap_or_else(|| json!([]));
-                    let run_id = commands
-                        .as_array()
-                        .filter(|a| !a.is_empty())
-                        .map(|values| {
-                            let commands = values
-                                .iter()
-                                .filter_map(Value::as_str)
-                                .map(ToOwned::to_owned)
-                                .collect::<Vec<_>>();
-                            self.record_run(item_id, &commands, "closed")
-                        })
-                        .transpose()?;
-                    self.conn.execute(
-                    "INSERT INTO logs(id, project_id, item_id, run_id, kind, summary, files, commands, tests, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, datetime('now'))",
-                    params![
-                        id,
-                        self.default_project()?.id,
+                    let files = json_string_array(&body_json, "files");
+                    let commands = json_string_array(&body_json, "commands");
+                    let tests = json_string_array(&body_json, "tests");
+                    serde_json::to_string(&json!({"log": self.add_log_value(LogInput {
                         item_id,
-                        run_id,
-                        body_json.get("kind").and_then(Value::as_str).unwrap_or("completion"),
+                        kind: body_json.get("kind").and_then(Value::as_str).unwrap_or("completion"),
                         summary,
-                        serde_json::to_string(body_json.get("files").unwrap_or(&json!([])))?,
-                        serde_json::to_string(&commands)?,
-                        serde_json::to_string(body_json.get("tests").unwrap_or(&json!([])))?,
-                    ],
-                )?;
-                    self.index_search("log", &id, summary, summary, None)?;
-                    self.record_event(
-                        "log_created",
-                        Some(item_id),
-                        json!({"log_id": id.clone(), "kind": body_json.get("kind").and_then(Value::as_str).unwrap_or("completion"), "source": "http"}),
-                    )?;
-                    serde_json::to_string(&json!({"log": self.get_log(&id)?}))?
+                        files: &files,
+                        commands: &commands,
+                        tests: &tests,
+                        source: Some("http"),
+                    })?}))?
                 }
                 ("POST", p) if p.starts_with("/v1/reviews/") && p.ends_with("/close") => {
                     let review_id = p
@@ -585,15 +544,9 @@ impl App {
                 ("POST", p) if p.ends_with("/close") => {
                     let item_id =
                         path_item_id(p).ok_or_else(|| anyhow!("missing item id in close route"))?;
-                    let ready_before = self.ready_item_ids()?;
-                    self.promote_ready()?;
-                    self.ensure_can_close(item_id)?;
-                    self.conn.execute("UPDATE items SET status = 'closed', completed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1", params![item_id])?;
-                    self.promote_ready()?;
-                    self.record_event("item_closed", Some(item_id), json!({"source": "http"}))?;
-                    serde_json::to_string(
-                        &json!({"closed": item_id, "unlocked": self.unlocked_since(&ready_before)?, "map": self.map_value(None)?}),
-                    )?
+                    let mut value = self.close_item_value(item_id, "closed from http")?;
+                    value["map"] = self.map_value(None)?;
+                    serde_json::to_string(&value)?
                 }
                 ("POST", p) if p.ends_with("/reviews") => {
                     let item_id = path_item_id(p)
@@ -650,7 +603,6 @@ impl App {
                     )?)?
                 }
                 ("POST", "/v1/contexts") => {
-                    let id = short_id("ctx");
                     let content = body_json
                         .get("content")
                         .and_then(Value::as_str)
@@ -659,17 +611,13 @@ impl App {
                         .get("kind")
                         .and_then(Value::as_str)
                         .unwrap_or("discovery");
-                    self.conn.execute(
-                    "INSERT INTO contexts(id, project_id, item_id, worker_id, kind, content, tags, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, '[]', datetime('now'))",
-                    params![id, self.default_project()?.id, body_json.get("item").and_then(Value::as_str), worker_id(), kind, content],
-                )?;
-                    self.index_search("context", &id, kind, content, None)?;
-                    self.record_event(
-                        "context_created",
+                    serde_json::to_string(&json!({"context": self.add_context_value(
                         body_json.get("item").and_then(Value::as_str),
-                        json!({"context_id": id.clone(), "kind": kind, "source": "http"}),
-                    )?;
-                    serde_json::to_string(&json!({"context": self.get_context(&id)?}))?
+                        kind,
+                        content,
+                        json!([]),
+                        Some("http"),
+                    )?}))?
                 }
                 ("POST", "/v1/artifacts") => {
                     let name = body_json
@@ -677,10 +625,6 @@ impl App {
                         .and_then(Value::as_str)
                         .unwrap_or("artifact");
                     let item = body_json.get("item").and_then(Value::as_str);
-                    if let Some(item_id) = item {
-                        self.get_item(item_id)?;
-                    }
-                    let id = short_id("art");
                     let content = body_json.get("content").and_then(Value::as_str);
                     let mime = body_json
                         .get("mime")
@@ -692,27 +636,17 @@ impl App {
                                 .map(crate::util::mime_for_path)
                                 .unwrap_or("text/plain")
                         });
-                    self.conn.execute(
-                        "INSERT INTO artifacts(id, project_id, item_id, name, kind, path, content, mime_type, size_bytes, metadata, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, datetime('now'))",
-                        params![
-                            id,
-                            self.default_project()?.id,
-                            item,
-                            name,
-                            body_json.get("kind").and_then(Value::as_str).unwrap_or("evidence"),
-                            body_json.get("path").and_then(Value::as_str),
-                            content,
-                            mime,
-                            content.map(|value| value.len() as i64),
-                            json!({"source": "http"}).to_string(),
-                        ],
-                    )?;
-                    self.record_event(
-                        "artifact_created",
-                        item,
-                        json!({"artifact_id": id.clone(), "name": name}),
-                    )?;
-                    serde_json::to_string(&json!({"artifact": self.get_artifact(&id)?}))?
+                    serde_json::to_string(
+                        &json!({"artifact": self.add_artifact_value(ArtifactInput {
+                        item_id: item,
+                        name,
+                        kind: body_json.get("kind").and_then(Value::as_str).unwrap_or("evidence"),
+                        path: body_json.get("path").and_then(Value::as_str),
+                        content,
+                        mime_type: mime,
+                        metadata: json!({"source": "http"}),
+                    })?}),
+                    )?
                 }
                 ("GET", "/v1/artifacts") => serde_json::to_string(&json!({
                     "artifacts": self.list_artifacts(None)?
@@ -843,4 +777,18 @@ fn write_sse_event(stream: &mut TcpStream, event: &Value) -> Result<i64> {
         serde_json::to_string(event)?
     )?;
     Ok(id)
+}
+
+fn json_string_array(value: &Value, name: &str) -> Vec<String> {
+    value
+        .get(name)
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
 }

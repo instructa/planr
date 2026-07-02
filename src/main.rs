@@ -36,11 +36,6 @@ fn run() -> Result<()> {
     let db_path = cli.db.clone().unwrap_or_else(|| default_db_path(&root));
     let conn = open_db(&db_path)?;
     ensure_schema(&conn)?;
-    let app = App {
-        conn,
-        root,
-        db_path,
-        json: cli.json,
-    };
+    let app = App::new(conn, root, db_path, cli.json);
     app.dispatch(cli.command)
 }
