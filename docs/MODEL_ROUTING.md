@@ -76,7 +76,19 @@ A driver session dispatches the right worker from the packet alone — and when 
 - `[[routes]]` — `match` selects work (`work_type = "code"` or `plan = "pln-1234abcd"`), `profile` names the primary, `fallbacks` the ordered alternatives.
 - `[route_default]` — catches everything no route matched.
 
-Resolution precedence per item: **`work_type` route > `plan` route > default**. Within a level, the first declared route wins. If a chain's primary profile id is unknown, the first known fallback is promoted; a chain with no known profiles falls through to the next precedence level, so a typo never swallows lower routes. `matched_selector` in the output tells you which rule fired.
+Resolution precedence per item: **per-item override > `work_type` route > `plan` route > default**. Within a level, the first declared route wins. If a chain's primary profile id is unknown, the first known fallback is promoted; a chain with no known profiles falls through to the next precedence level, so a typo never swallows lower routes. `matched_selector` in the output tells you which rule fired (`override`, `work_type=<v>`, `plan=<v>`, or `default`).
+
+## Per-Item Overrides
+
+When one item needs a different setting than its policy route — a gnarly refactor that deserves the premium tier, a bulk doc pass that can run on budget — pin it:
+
+```bash
+planr item route <item-id>                    # resolved route + source: override or policy
+planr item route <item-id> --set fable-driver # pin; validates the profile id, emits route_overridden
+planr item route <item-id> --clear            # unpin; policy applies again, emits route_override_cleared
+```
+
+The pin beats every policy route and shows up in the pick packet with `"matched_selector": "override"`. Overrides are repair-friendly: `--set` rejects a profile id the registry does not declare (when the registry is missing or malformed it warns and stores anyway, so offline edits stay possible), and a pin whose profile is later deleted from the registry is never an error — policy routing takes over and `item route` prints a repair hint. Both mutations are recorded as graph events, so `planr event list --item <id>` shows who re-routed what, when.
 
 Tier the roles, not just the models: workers run safely on cheaper tiers because the pick packet bounds their scope, while review verdicts should stay on the strongest tier — `agents check` warns when review work routes to a `budget` profile. Background: [Cost Tiering](GOALS.md#cost-tiering).
 
@@ -89,8 +101,8 @@ Tier the roles, not just the models: workers run safely on cheaper tiers because
 
 ## Current Scope
 
-Shipped today: the registry, `planr agents list|check`, and the `routing` block in `planr pick --json`.
+Shipped today: the registry, `planr agents list|check`, the `routing` block in `planr pick --json`, and per-item overrides (`planr item route [--set|--clear]`).
 
-Planned next (see the product plan under `.planr/plans/`): per-item overrides (`planr item route --set`), rendering host role files (Codex TOML, Claude/Cursor agent frontmatter) from the registry, declared-vs-actual profile auditing on runs in `planr trace item`, and an `agents init` scaffold.
+Planned next (see the product plan under `.planr/plans/`): rendering host role files (Codex TOML, Claude/Cursor agent frontmatter) from the registry, declared-vs-actual profile auditing on runs in `planr trace item`, and an `agents init` scaffold.
 
 Until host-file rendering lands, keep pinning worker tiers in the provisioned role files as documented in [Cost Tiering](GOALS.md#cost-tiering) — the registry is the source of truth for routing decisions, the role files still carry the host-native pins.

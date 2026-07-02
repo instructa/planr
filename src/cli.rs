@@ -243,6 +243,9 @@ pub(crate) enum ItemCommand {
     Amend(ItemAmendArgs),
     Replan(ItemReplanArgs),
     Cancel(ItemCancelArgs),
+    /// Show or pin the item's advisory model route. Without flags,
+    /// prints the resolved route and whether an override or policy won.
+    Route(ItemRouteArgs),
 }
 
 #[derive(Args, Debug)]
@@ -319,6 +322,18 @@ pub(crate) struct ItemReplanArgs {
     pub(crate) preview: bool,
     #[arg(long)]
     pub(crate) confirm: bool,
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct ItemRouteArgs {
+    pub(crate) id: String,
+    /// Pin the item to this profile id from .planr/agents.toml; the pin
+    /// beats every policy route until cleared.
+    #[arg(long, value_name = "PROFILE", conflicts_with = "clear")]
+    pub(crate) set: Option<String>,
+    /// Remove the pinned profile so policy routing applies again.
+    #[arg(long)]
+    pub(crate) clear: bool,
 }
 
 #[derive(Args, Debug)]

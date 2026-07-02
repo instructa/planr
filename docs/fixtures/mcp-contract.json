@@ -90,6 +90,7 @@
     "planr recover sweep",
     "planr agents list",
     "planr agents check",
+    "planr item route",
     "planr serve --port"
   ]
 }

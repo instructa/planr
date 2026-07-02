@@ -400,6 +400,7 @@ impl App {
                 )
             }
             ItemCommand::Insert(args) => self.item_insert(args),
+            ItemCommand::Route(args) => self.item_route(args),
             ItemCommand::Amend(args) => self.item_amend(args),
             ItemCommand::Replan(args) => self.item_replan(args),
             ItemCommand::Cancel(args) => {
