@@ -6,10 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-Cursor becomes a first-class client: one command installs everything the plugin would carry, and the docs cover Cursor's native multitasking (subagents, parallel dispatch, worktrees).
+Two threads: per-task model routing becomes a declared contract instead of prose, and Cursor becomes a first-class client — one command installs everything the plugin would carry, and the docs cover Cursor's native multitasking (subagents, parallel dispatch, worktrees).
 
 ### Added
 
+- Agent profile registry: `.planr/agents.toml` declares named profiles (host client, model, effort, cost tier, capabilities) and advisory routes from work selectors to profiles with fallback chains — "code goes to codex/gpt-5.5 xhigh, falls back to cursor/fable-5; review stays on the driver tier" is one declared file instead of hand-maintained prose in three host dialects. Planr never dispatches models; hosts stay the authority.
+- `planr pick --json` now carries a `routing` block (profile, client, model, effort, cost tier, fallbacks, matched selector) resolved per item with precedence `work_type` > `plan` > default route, so a driver dispatches the right worker model from the pick packet alone — including the fallback order when the primary hits a rate limit. Omitted entirely when no registry resolves; deleting the registry restores pre-feature packets byte-identically.
+- `planr agents list` and `planr agents check`: registry inspection with advisory warnings (unknown profile references, empty or duplicate selectors, review work routed to a budget tier, secret-like values). `check` exits non-zero only on parse failure — a missing registry is a state, not an error, and a malformed one degrades picking to no-routing instead of blocking it.
 - `planr install cursor` is now the one-command Cursor setup: besides `.cursor/mcp.json` it provisions the `planr-worker` and `planr-reviewer` subagents (`.cursor/agents/*.md`, Cursor frontmatter with `model: inherit` cost-tier note) and copies all ten Planr skills to `.cursor/skills/`, so `/planr`, `/planr-loop`, `/planr-worker`, and `/planr-reviewer` work without waiting on the marketplace listing. Existing files are never overwritten.
 - One-click user-level MCP install: `planr install cursor --dry-run` (and the non-dry output) prints a `cursor://anysphere.cursor-deeplink/mcp/install` link. The embedded config is `planr mcp` without `--db`, so each workspace resolves its own `.planr` database — safe at user scope.
 - `planr install <client> --no-mcp`: plugin-style install for skills-and-agents-only setups. Writes the subagent roles (and, for Cursor, the skills) with no MCP config; the skills are CLI-first, so the full workflow runs through the `planr` binary without MCP. `--no-mcp --dry-run` lists the files that would be written.
