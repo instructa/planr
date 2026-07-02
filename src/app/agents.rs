@@ -99,9 +99,11 @@ impl App {
             .map(|path| self.plan_id_for_path(path))
             .transpose()?
             .flatten();
+        let route_override = self.item_route_override(item_id)?;
         let facts = RoutingFacts {
             work_type: item.work_type.as_str(),
             plan_id: plan_id.as_deref(),
+            route_override: route_override.as_deref(),
         };
         Ok(resolve_route(&facts, &registry).map(|routing| json!(routing)))
     }

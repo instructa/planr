@@ -43,6 +43,21 @@ impl App {
             .ok_or_else(|| anyhow!("item not found: {id}"))
     }
 
+    /// The item's pinned routing profile id, if any. Lives outside the
+    /// `Item` model because only routing reads it; every other item
+    /// consumer stays untouched by the column.
+    pub(crate) fn item_route_override(&self, id: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT route_override FROM items WHERE id = ?1",
+                params![id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten())
+    }
+
     pub(crate) fn list_items_by_type(
         &self,
         work_type: &str,

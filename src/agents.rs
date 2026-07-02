@@ -76,7 +76,9 @@ pub enum RegistryLoad {
     Missing,
     /// The file exists but cannot be used; `error` carries the TOML
     /// parser's line/column context. Callers must keep working.
-    Degraded { error: String },
+    Degraded {
+        error: String,
+    },
     Loaded(AgentRegistry),
 }
 
@@ -232,6 +234,10 @@ fn looks_secret_like(text: &str) -> bool {
 pub struct RoutingFacts<'a> {
     pub work_type: &'a str,
     pub plan_id: Option<&'a str>,
+    /// Per-item pinned profile id (`items.route_override`). When it names
+    /// a known profile it beats every policy route; an unknown id falls
+    /// through to policy so a stale pin never silences routing.
+    pub route_override: Option<&'a str>,
 }
 
 /// An advisory routing recommendation: the strongest claim Planr makes
@@ -247,19 +253,28 @@ pub struct Routing<'a> {
     /// Known-profile fallback ids in declared order; unknown ids are
     /// skipped rather than surfaced to dispatchers.
     pub fallbacks: Vec<&'a str>,
-    /// Which selector won: `work_type=<v>`, `plan=<v>`, or `default`.
+    /// Which selector won: `override`, `work_type=<v>`, `plan=<v>`, or
+    /// `default`.
     pub matched_selector: String,
 }
 
 /// Resolves an item to a profile recommendation. Precedence is
-/// work_type > plan > default; a route on a double selector keeps its
-/// `work_type` meaning (the stricter documented behavior). A route whose
-/// entire chain references unknown profiles is skipped so a typo never
-/// swallows lower-precedence routes. Returns None when nothing resolves.
+/// override > work_type > plan > default; a route on a double selector
+/// keeps its `work_type` meaning (the stricter documented behavior). A
+/// route whose entire chain references unknown profiles is skipped so a
+/// typo never swallows lower-precedence routes — the same rule makes an
+/// override naming a deleted profile fall through to policy. Returns
+/// None when nothing resolves.
 pub fn resolve_route<'a>(
     facts: &RoutingFacts<'_>,
     registry: &'a AgentRegistry,
 ) -> Option<Routing<'a>> {
+    if let Some(override_id) = facts.route_override {
+        if let Some(routing) = routing_for_chain(registry, "override".to_string(), override_id, &[])
+        {
+            return Some(routing);
+        }
+    }
     let work_type_route = registry.routes.iter().find_map(|route| {
         let selector = route.selector.work_type.as_deref()?;
         (selector == facts.work_type).then_some((
@@ -453,8 +468,16 @@ profile = "a"
         };
         let warnings = validation_warnings(&registry);
         assert!(warnings.iter().any(|w| w.contains("empty match")));
-        assert!(warnings.iter().any(|w| w.contains("both `work_type` and `plan`")));
-        assert!(warnings.iter().any(|w| w.contains("duplicates the selector")));
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("both `work_type` and `plan`"))
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("duplicates the selector"))
+        );
     }
 
     #[test]
@@ -481,7 +504,8 @@ profile = "cheap"
 
     #[test]
     fn warns_on_secret_like_profile_values() {
-        let text = "[profiles.a]\nclient = \"codex\"\nmodel = \"gpt-5.5\"\nnotes = \"key sk-abc123\"\n";
+        let text =
+            "[profiles.a]\nclient = \"codex\"\nmodel = \"gpt-5.5\"\nnotes = \"key sk-abc123\"\n";
         let RegistryLoad::Loaded(registry) = parse_registry(text) else {
             panic!("expected loaded registry");
         };
@@ -536,7 +560,19 @@ fallbacks = ["driver"]
 "#;
 
     fn facts<'a>(work_type: &'a str, plan_id: Option<&'a str>) -> RoutingFacts<'a> {
-        RoutingFacts { work_type, plan_id }
+        RoutingFacts {
+            work_type,
+            plan_id,
+            route_override: None,
+        }
+    }
+
+    fn facts_with_override<'a>(work_type: &'a str, route_override: &'a str) -> RoutingFacts<'a> {
+        RoutingFacts {
+            work_type,
+            plan_id: None,
+            route_override: Some(route_override),
+        }
     }
 
     #[test]
@@ -663,6 +699,31 @@ profile = "a"
         assert_eq!(routing.matched_selector, "work_type=code");
         // Never matches as a plan selector.
         assert!(resolve_route(&facts("docs", Some("pln-x")), &registry).is_none());
+    }
+
+    #[test]
+    fn override_beats_work_type_route() {
+        let registry = registry(ROUTING);
+        let routing = resolve_route(&facts_with_override("code", "driver"), &registry).unwrap();
+        assert_eq!(routing.profile, "driver");
+        assert_eq!(routing.client, "cursor");
+        assert_eq!(routing.model, "fable-5");
+        assert!(routing.fallbacks.is_empty());
+        assert_eq!(routing.matched_selector, "override");
+    }
+
+    #[test]
+    fn unknown_override_falls_through_to_policy() {
+        let registry = registry(ROUTING);
+        let routing = resolve_route(&facts_with_override("code", "deleted"), &registry).unwrap();
+        assert_eq!(routing.profile, "implementer");
+        assert_eq!(routing.matched_selector, "work_type=code");
+    }
+
+    #[test]
+    fn override_with_no_matching_profile_and_no_routes_resolves_nothing() {
+        let registry = registry("[profiles.a]\nclient = \"codex\"\nmodel = \"gpt-5.5\"\n");
+        assert!(resolve_route(&facts_with_override("code", "ghost"), &registry).is_none());
     }
 
     #[test]

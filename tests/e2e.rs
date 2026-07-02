@@ -672,13 +672,7 @@ fallbacks = ["driver"]
     // no routing block instead of failing.
     planr()
         .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "pick",
-            "release",
-            &item_id,
-        ])
+        .args(["--db", db.to_str().unwrap(), "pick", "release", &item_id])
         .assert()
         .success();
     fs::write(&registry_path, "profiles = [broken").unwrap();
@@ -703,13 +697,7 @@ fallbacks = ["driver"]
     // Deleting the registry restores pre-feature behavior entirely.
     planr()
         .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "pick",
-            "release",
-            &item_id,
-        ])
+        .args(["--db", db.to_str().unwrap(), "pick", "release", &item_id])
         .assert()
         .success();
     fs::remove_file(&registry_path).unwrap();

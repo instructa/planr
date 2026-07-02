@@ -181,6 +181,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
     ensure_column(conn, "items", "approval_requested_at", "TEXT")?;
     ensure_column(conn, "items", "approved_by", "TEXT")?;
     ensure_column(conn, "items", "approval_comment", "TEXT")?;
+    ensure_column(conn, "items", "route_override", "TEXT")?;
     conn.execute(
         "INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', ?1)",
         params![SCHEMA_VERSION],
