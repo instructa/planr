@@ -657,6 +657,9 @@ pub(crate) enum InstallCommand {
 pub(crate) struct InstallClientArgs {
     #[arg(long)]
     pub(crate) dry_run: bool,
+    /// Plugin-style install: write subagent roles and skills only, no MCP config.
+    #[arg(long)]
+    pub(crate) no_mcp: bool,
 }
 
 #[derive(Args, Debug)]

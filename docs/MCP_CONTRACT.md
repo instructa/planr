@@ -68,3 +68,5 @@ HTTP mirrors the same rule: `GET /v1/reviews/:id/artifact` is read-only; `POST /
 - Cursor: `.cursor/mcp.json` plus `.cursor/agents/` roles and `.cursor/skills/` skill copies
 
 The Cursor dry-run additionally prints a `cursor://anysphere.cursor-deeplink/mcp/install` link whose embedded config (`planr mcp`, no `--db`) is safe at user scope because each workspace resolves its own database. Planr does not edit global client configuration without a separate explicit operator action; the deeplink requires the operator to click it and confirm inside Cursor.
+
+`planr install <client> --no-mcp` is the plugin-style variant: it writes the subagent roles (and, for Cursor, the skills) but no MCP configuration at all, for setups that use skills and agents over the CLI only.

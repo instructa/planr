@@ -5201,6 +5201,90 @@ fn project_init_and_install_provision_loop_agent_roles() {
         "provisioned codex worker role should define the planr_worker agent"
     );
 
+    // Plugin-style install: --no-mcp writes subagent roles and skills but no
+    // MCP config, for setups that use skills and agents without MCP.
+    let no_mcp = tempdir().unwrap();
+    let no_mcp_db = no_mcp.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(no_mcp.path())
+        .args([
+            "--db",
+            no_mcp_db.to_str().unwrap(),
+            "project",
+            "init",
+            "NoMcp",
+        ])
+        .assert()
+        .success();
+    planr()
+        .current_dir(no_mcp.path())
+        .args([
+            "--db",
+            no_mcp_db.to_str().unwrap(),
+            "install",
+            "cursor",
+            "--no-mcp",
+        ])
+        .assert()
+        .success();
+    for provisioned in [
+        ".cursor/agents/planr-worker.md",
+        ".cursor/agents/planr-reviewer.md",
+        ".cursor/skills/planr/SKILL.md",
+        ".cursor/skills/planr-work/SKILL.md",
+    ] {
+        assert!(
+            no_mcp.path().join(provisioned).exists(),
+            "install cursor --no-mcp should write {provisioned}"
+        );
+    }
+    assert!(
+        !no_mcp.path().join(".cursor/mcp.json").exists(),
+        "install cursor --no-mcp must not write MCP config"
+    );
+    planr()
+        .current_dir(no_mcp.path())
+        .args([
+            "--db",
+            no_mcp_db.to_str().unwrap(),
+            "install",
+            "claude",
+            "--no-mcp",
+        ])
+        .assert()
+        .success();
+    assert!(
+        no_mcp
+            .path()
+            .join(".claude/agents/planr-worker.md")
+            .exists(),
+        "install claude --no-mcp should write subagent roles"
+    );
+    assert!(
+        !no_mcp.path().join(".mcp.json").exists(),
+        "install claude --no-mcp must not write MCP config"
+    );
+    let dry = planr()
+        .current_dir(no_mcp.path())
+        .args([
+            "--db",
+            no_mcp_db.to_str().unwrap(),
+            "install",
+            "cursor",
+            "--no-mcp",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let dry = String::from_utf8(dry).unwrap();
+    assert!(
+        dry.contains(".cursor/skills/planr/SKILL.md") && !dry.contains("mcpServers"),
+        "--no-mcp dry-run should list plugin files, not MCP config"
+    );
+
     // `planr install codex` provisions the same roles for projects initialized
     // without a client, and never overwrites user-edited role files.
     let dir2 = tempdir().unwrap();

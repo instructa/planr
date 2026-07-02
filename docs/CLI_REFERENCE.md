@@ -57,7 +57,7 @@ planr context add "text" [--item <item-id>] [--tag discovery]
 planr context list [--item <item-id>] [--tag <tag>]
 planr search "query"
 planr doctor [--client codex|claude|cursor|all]
-planr install codex|claude|cursor [--dry-run]
+planr install codex|claude|cursor [--dry-run] [--no-mcp]
 planr prompt cli|mcp|http [--client codex|claude|cursor|all]
 planr mcp
 planr serve --port 7526

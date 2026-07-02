@@ -847,14 +847,27 @@ impl App {
     }
 
     pub(crate) fn install(&self, command: InstallCommand) -> Result<()> {
-        let (client, dry_run) = match command {
-            InstallCommand::Codex(args) => ("codex", args.dry_run),
-            InstallCommand::Claude(args) => ("claude", args.dry_run),
-            InstallCommand::Cursor(args) => ("cursor", args.dry_run),
+        let (client, args) = match command {
+            InstallCommand::Codex(args) => ("codex", args),
+            InstallCommand::Claude(args) => ("claude", args),
+            InstallCommand::Cursor(args) => ("cursor", args),
         };
-        let snippet = install_snippet(client, &self.db_path);
-        if dry_run {
-            println!("{snippet}");
+        if args.dry_run {
+            if args.no_mcp {
+                println!(
+                    "# Plugin-style install for {client}: subagent roles and skills only, no MCP config."
+                );
+                for (relative, _) in agent_roles(client) {
+                    println!("{relative}");
+                }
+                if client == "cursor" {
+                    for (relative, _) in cursor_skills() {
+                        println!("{relative}");
+                    }
+                }
+            } else {
+                println!("{}", install_snippet(client, &self.db_path));
+            }
             return Ok(());
         }
         let mut agent_paths = Vec::new();
@@ -863,47 +876,56 @@ impl App {
             write_if_missing(&path, content, false)?;
             agent_paths.push(path);
         }
-        match client {
-            "codex" => {
-                let path = self.root.join(".planr/integrations/codex-mcp.toml");
-                write_if_missing(&path, &snippet, true)?;
-                self.emit(
-                    json!({"client": client, "path": path, "agents": agent_paths}),
-                    "codex integration written".to_string(),
-                )
+        let mcp_path = if args.no_mcp {
+            None
+        } else {
+            let (relative, content) = match client {
+                "codex" => (
+                    ".planr/integrations/codex-mcp.toml",
+                    install_snippet(client, &self.db_path),
+                ),
+                "claude" => (".mcp.json", mcp_json_config(&self.db_path)),
+                "cursor" => (".cursor/mcp.json", mcp_json_config(&self.db_path)),
+                _ => bail!("unknown client: {client}"),
+            };
+            let path = self.root.join(relative);
+            write_if_missing(&path, &content, true)?;
+            Some(path)
+        };
+        if client == "cursor" {
+            let mut skill_paths = Vec::new();
+            for (relative, content) in cursor_skills() {
+                let skill_path = self.root.join(relative);
+                write_if_missing(&skill_path, content, false)?;
+                skill_paths.push(skill_path);
             }
-            "claude" => {
-                let path = self.root.join(".mcp.json");
-                write_if_missing(&path, &mcp_json_config(&self.db_path), true)?;
-                self.emit(
-                    json!({"client": client, "path": path, "agents": agent_paths}),
-                    "claude integration written".to_string(),
-                )
-            }
-            "cursor" => {
-                let path = self.root.join(".cursor/mcp.json");
-                write_if_missing(&path, &mcp_json_config(&self.db_path), true)?;
-                let mut skill_paths = Vec::new();
-                for (relative, content) in cursor_skills() {
-                    let skill_path = self.root.join(relative);
-                    write_if_missing(&skill_path, content, false)?;
-                    skill_paths.push(skill_path);
-                }
+            let mut payload = json!({
+                "client": client,
+                "path": mcp_path,
+                "agents": agent_paths,
+                "skills": skill_paths,
+            });
+            let human = if args.no_mcp {
+                "cursor integration written plugin-style (subagent roles, skills; no MCP config)"
+                    .to_string()
+            } else {
                 let deeplink = cursor_deeplink();
-                self.emit(
-                    json!({
-                        "client": client,
-                        "path": path,
-                        "agents": agent_paths,
-                        "skills": skill_paths,
-                        "deeplink": deeplink
-                    }),
-                    format!(
-                        "cursor integration written (mcp config, subagent roles, skills)\none-click user-level MCP install: {deeplink}"
-                    ),
+                payload["deeplink"] = json!(deeplink);
+                format!(
+                    "cursor integration written (mcp config, subagent roles, skills)\none-click user-level MCP install: {deeplink}"
                 )
-            }
-            _ => bail!("unknown client: {client}"),
+            };
+            self.emit(payload, human)
+        } else {
+            let human = if args.no_mcp {
+                format!("{client} subagent roles written (no MCP config)")
+            } else {
+                format!("{client} integration written")
+            };
+            self.emit(
+                json!({"client": client, "path": mcp_path, "agents": agent_paths}),
+                human,
+            )
         }
     }
 

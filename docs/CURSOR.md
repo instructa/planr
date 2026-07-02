@@ -17,6 +17,16 @@ This writes only repository-local files (never global Cursor config):
 
 Re-running the command refreshes `.cursor/mcp.json` but never overwrites edited agent or skill files. `planr project init "My Product" --client cursor` (or `--client all`) provisions the same subagent roles at init time. Verify with `planr doctor --client cursor`.
 
+## Skills And Agents Only (No MCP)
+
+The skills are CLI-first — they drive the `planr` binary directly through the terminal — so MCP is optional. For a plugin-style install that writes only the subagents and skills:
+
+```bash
+planr install cursor --no-mcp
+```
+
+This writes `.cursor/agents/` and `.cursor/skills/` and nothing else: no `.cursor/mcp.json`, no deeplink. Everything below (subagent dispatch, parallel work, goal loops) works identically in this mode because the skills call `planr pick`, `planr done`, `planr review ...` as shell commands. `--no-mcp --dry-run` lists the files that would be written. The flag works for `claude` and `codex` too (roles only; their skills ship via each host's plugin system).
+
 ## One-Click MCP Install
 
 For user-level setup (all projects, no repo files), the dry-run prints a Cursor deeplink:

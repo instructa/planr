@@ -235,7 +235,7 @@ planr project init "Example Product" --client cursor
 planr install cursor
 ```
 
-`planr install cursor` writes `.cursor/mcp.json`, copies the ten skills to `.cursor/skills/`, provisions `.cursor/agents/planr-worker.md` and `planr-reviewer.md`, and prints a one-click deeplink for user-level MCP install. Invoke skills with `/planr` or `/planr-loop` in Agent chat, and dispatch subagents with `/planr-worker` and `/planr-reviewer`. Use `planr serve --port 7526` and `planr prompt http --client cursor` if a Cursor workflow should inspect the local HTTP/review workspace. Subagent multitasking and worktree guidance: [Cursor](CURSOR.md).
+`planr install cursor` writes `.cursor/mcp.json`, copies the ten skills to `.cursor/skills/`, provisions `.cursor/agents/planr-worker.md` and `planr-reviewer.md`, and prints a one-click deeplink for user-level MCP install. Prefer skills and agents without MCP? `planr install cursor --no-mcp` writes only the subagents and skills — the skills are CLI-first, so the whole workflow runs through the `planr` binary. Invoke skills with `/planr` or `/planr-loop` in Agent chat, and dispatch subagents with `/planr-worker` and `/planr-reviewer`. Use `planr serve --port 7526` and `planr prompt http --client cursor` if a Cursor workflow should inspect the local HTTP/review workspace. Subagent multitasking and worktree guidance: [Cursor](CURSOR.md).
 
 ## MCP-Only Clients
 
