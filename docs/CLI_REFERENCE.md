@@ -56,6 +56,8 @@ planr done [item-id] --summary "..." [--files a --files b] [--cmd "..."] [--test
 planr context add "text" [--item <item-id>] [--tag discovery]
 planr context list [--item <item-id>] [--tag <tag>]
 planr search "query"
+planr agents list [--json]
+planr agents check
 planr doctor [--client codex|claude|cursor|all]
 planr install codex|claude|cursor [--dry-run] [--no-mcp]
 planr prompt cli|mcp|http [--client codex|claude|cursor|all]
@@ -119,6 +121,8 @@ With `--json`, responses follow one convention so agents never guess where data 
 `pick --json` returns one flat work packet in which every fact appears exactly once: `item`, `links`, `logs`, `runtime`, `recovery`, `conditions`, `approval`, recall context (`contexts`, `relevant_contexts`, `upstream_handoffs`, `review_history`, `source_links`, `possible_file_conflicts`), `close_effect`, `privacy`, `deeper_reads`, and `remaining`. Worker identity lives in `item.worker_id` and `runtime.worker_id`. Empty collections and inactive gates are omitted — a missing key means "empty". No separate `trace item` call is needed. Evidence written via `log add` or `done` by the pick owner refreshes the runtime heartbeat automatically. The same packet shape is returned by MCP `planr_pick_item`, HTTP `POST /v1/pick`, and `done --next`.
 
 `pick --work-type <type>` restricts the lease to one work type, so checker agents pick only `review` items and makers only work items. `pick --plan <plan-id>` restricts the lease to one plan's items, so plan-scoped goal runs never pick work outside their contract even when other plans share the board; an unknown plan id is an error, never a silent unscoped pick. Both filters are available on MCP `planr_pick_item` and HTTP `POST /v1/pick` (`work_type`, `plan`). A null pick is never blind: `{"item": null}` carries a `reason` (`empty_map`, `all_settled`, `nothing_ready`, `ready_items_excluded_by_filter`) and the `remaining` snapshot. When ready work exists but the active filters rejected all of it, `excluded` lists each ready item with the cause (`work_type` mismatch, outside the `--plan` scope, or just requested by this worker) and `repair` carries the exact pick commands that would lease that work — across CLI, MCP, and HTTP. On a review item, `close_effect` previews the full `--close-target` cascade: it lists the work that closing the review (and with it the reviewed item) would unlock.
+
+`agents list` and `agents check` inspect the agent profile registry (`.planr/agents.toml`): named profiles (host client, model, effort, cost tier) and advisory routes from work selectors to profiles. When a registry resolves for a picked item, the pick packet carries a `routing` block — profile, client, model, effort, cost tier, fallback chain, and the matched selector — resolved with precedence `work_type` > `plan` > default route. Routing is advisory: Planr never dispatches models, a missing registry just omits the block, a malformed one degrades picking to no-routing (only `agents check` fails, with the parser's line context), and validation warnings (unknown profile references, duplicate selectors, review work on a budget tier, secret-like values) never affect exit codes. Full guide: [Model Routing](MODEL_ROUTING.md).
 
 `artifact add` infers the mime type from the file extension when `--path` is given without `--mime` (PNG screenshots land as `image/png`, not `text/plain`); inline `--content` defaults to `text/plain`. The same inference applies on MCP `planr_artifact_add` and HTTP `POST /v1/artifacts`.
 

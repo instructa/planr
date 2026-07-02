@@ -88,6 +88,8 @@
     "planr review evidence",
     "planr review close",
     "planr recover sweep",
+    "planr agents list",
+    "planr agents check",
     "planr serve --port"
   ]
 }

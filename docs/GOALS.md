@@ -158,6 +158,8 @@ Where each host configures the worker tier (the shipped role files carry these d
 
 The defaults use aliases and generic names so they track model generations; pin a full model id (e.g. `claude-opus-4-8`) only if you need determinism, and use `model: sonnet` as the budget alternative. The role files are user-owned copies — `planr project init` provisions them once and never overwrites local edits — so changing the tier is editing one line.
 
+To declare the tiering itself — which model handles which work type, with fallbacks for rate limits — use the agent profile registry (`.planr/agents.toml`): the routing recommendation then travels inside every `planr pick --json` packet, so the driver dispatches the right tier without consulting this table mid-run. See [Model Routing](MODEL_ROUTING.md). The role files above still carry the host-native pins; the registry is the declared source of truth for the routing decision.
+
 Two traps to verify once per setup:
 
 - **Claude Code:** the `CLAUDE_CODE_SUBAGENT_MODEL` environment variable silently overrides every subagent's `model:` frontmatter. Make sure it is unset, then dispatch the worker on a trivial item and confirm the subagent's messages in the session log (`~/.claude/projects/<project>/*.jsonl`) carry the worker model, not the driver's.
