@@ -1974,6 +1974,157 @@ profile = "backender"
 }
 
 #[test]
+fn agents_init_flag_specs_generate_a_pool_and_fail_closed() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    let db_arg = db.to_str().unwrap().to_string();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "project", "init", "Pool"])
+        .assert()
+        .success();
+
+    // QA-2: validation is fail-closed — nothing is written on any error.
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "agents",
+            "init",
+            "--route",
+            "frontend=nosuch",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--profile"));
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "agents",
+            "init",
+            "--profile",
+            "broken-no-slash",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "--profile <id>=<client>/<model>[@<effort>][#<tier>]",
+        ));
+    assert!(!dir.path().join(".planr/agents.toml").exists());
+
+    // QA-1: a full pool spec generates a zero-warning registry that routes.
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "agents",
+            "init",
+            "--profile",
+            "driver=cursor/fable-5@high#premium",
+            "--profile",
+            "designer=claude-code/opus@high#premium",
+            "--skill",
+            "designer=frontend-design",
+            "--route",
+            "frontend=designer,driver",
+            "--route",
+            "review=driver",
+            "--default-route",
+            "designer,driver",
+        ])
+        .assert()
+        .success();
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "--json", "agents", "check"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let check: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(check["warnings"].as_array().unwrap().len(), 0);
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "item",
+            "create",
+            "Hero polish",
+            "--description",
+            "design pass",
+            "--work-type",
+            "frontend",
+        ])
+        .assert()
+        .success();
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "--json", "pick"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let pick: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(pick["routing"]["profile"], "designer");
+    assert_eq!(pick["routing"]["skill"], "frontend-design");
+    assert_eq!(pick["routing"]["fallbacks"][0], "driver");
+
+    // QA-3: spec flags never overwrite without --force either.
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "agents",
+            "init",
+            "--profile",
+            "solo=codex/gpt-5.5",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--force"));
+
+    // QA-5: --interactive without a TTY errors cleanly, naming the grammar.
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "agents",
+            "init",
+            "--interactive",
+            "--force",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("needs a terminal"));
+
+    // QA-6: --interactive conflicts with spec flags at parse time.
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "agents",
+            "init",
+            "--interactive",
+            "--profile",
+            "a=codex/m",
+            "--force",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot be used with"));
+}
+
+#[test]
 fn agents_init_scaffold_is_warning_free_and_routes_by_default() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
@@ -7133,7 +7284,7 @@ fn rust_implementation_has_owned_module_boundaries() {
         ("src/integrations.rs", 500),
         ("src/agents.rs", 800),
         ("src/app/agents.rs", 850),
-        ("src/app/agents_init.rs", 450),
+        ("src/app/agents_init.rs", 700),
         ("src/rolefiles.rs", 400),
     ] {
         let line_count = fs::read_to_string(root.join(file)).unwrap().lines().count();

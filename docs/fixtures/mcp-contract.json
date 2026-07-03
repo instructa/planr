@@ -87,6 +87,7 @@
     "planr prompt cli|mcp|http",
     "planr prompt routing",
     "planr agents init",
+    "planr agents init --profile|--skill|--route|--default-route|--interactive",
     "planr mcp",
     "planr review annotate",
     "planr review ingest",

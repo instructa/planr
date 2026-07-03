@@ -75,6 +75,24 @@ pub(crate) struct AgentsInitArgs {
     /// Overwrite an existing .planr/agents.toml.
     #[arg(long)]
     pub(crate) force: bool,
+    /// Declare a profile: <id>=<client>/<model>[@<effort>][#<tier>]. Repeatable.
+    #[arg(long = "profile", value_name = "SPEC")]
+    pub(crate) profiles: Vec<String>,
+    /// Pair a declared profile with a skill: <profile>=<skill>. Repeatable.
+    #[arg(long = "skill", value_name = "SPEC")]
+    pub(crate) skills: Vec<String>,
+    /// Route a work type: <work_type>=<profile>[,<fallback>...]. Repeatable.
+    #[arg(long = "route", value_name = "SPEC")]
+    pub(crate) routes: Vec<String>,
+    /// Default route: <profile>[,<fallback>...].
+    #[arg(long = "default-route", value_name = "SPEC")]
+    pub(crate) default_route: Option<String>,
+    /// Build the registry through guided prompts (requires a terminal).
+    #[arg(
+        long,
+        conflicts_with_all = ["profiles", "skills", "routes", "default_route"]
+    )]
+    pub(crate) interactive: bool,
 }
 
 #[derive(Args, Debug)]
