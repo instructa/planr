@@ -58,7 +58,7 @@ The loop never closes its own reviews when the host supports a second agent. Mak
 
 ## Skills Are The Prompts
 
-When the host supports subagents, the driver never implements: it dispatches, audits, and synthesizes. Driver tokens go into `plan audit`, dispatch decisions, and conflict resolution — implementation and review run in the subagent roles, which the host wiring can pin to a cheaper tier (see the role files and `docs/GOALS.md` "Cost Tiering"). Delegate with skill references plus an item id, nothing more:
+When the host supports subagents, the driver never implements: it dispatches, audits, and synthesizes. Driver tokens go into `plan audit`, dispatch decisions, and conflict resolution — implementation and review run in the subagent roles, which the host wiring can pin to a cheaper tier (see the role files and `docs/GOALS.md` "Cost Tiering"). When the pick packet carries a `routing` block, dispatch on it: run the worker on the named profile's client and model, and move down the `fallbacks` chain when the primary hits a rate limit or is unavailable — the chain is ordered, so no mid-run registry edits. Workers report the profile they actually ran on (`done --profile <id>` or `PLANR_PROFILE`), so a host that silently overrode the pin shows up in `planr trace item` instead of staying invisible. Delegate with skill references plus an item id, nothing more:
 
 - Worker dispatch: `Use $planr-work on item <item-id>. Stop after requesting review.`
 - Checker dispatch: `Use $planr-review on item <item-id>. Close the review with a verdict.`

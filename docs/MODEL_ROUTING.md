@@ -8,7 +8,13 @@ Routing is **advisory by design**: Planr never calls model providers and never b
 
 ## Quick Start
 
-Create `.planr/agents.toml` in your repo:
+One command writes a working starter registry — the cost-tiering defaults with a premium driver, a standard implementer, and a budget helper, commented so the tiers explain themselves:
+
+```bash
+planr agents init          # writes .planr/agents.toml; never overwrites without --force
+```
+
+Or declare `.planr/agents.toml` by hand:
 
 ```toml
 [profiles.fable-driver]
@@ -124,8 +130,20 @@ Everything here is advisory (ADR-001): mismatches never fail logging, reviews, o
 - **Warnings** (unknown profile references, empty or duplicate selectors, budget-tier review routes, secret-like values) never block anything; `agents check` lists them and still exits zero.
 - Never put credentials in the registry — it holds configuration strings only, and secret-like values are flagged.
 
-## Current Scope
+## Host Matrix
 
-Shipped today: the registry, `planr agents list|check`, the `routing` block in `planr pick --json`, per-item overrides (`planr item route [--set|--clear]`), the matching MCP tools (`planr_agents_list`, `planr_item_route`, `planr_item_route_set`, `planr_item_route_clear`) with identical JSON shapes, registry-rendered role files on `planr install` (with `--force` re-render), `planr prompt routing`, run-profile auditing (`--profile`/`PLANR_PROFILE`, `route_mismatch_observed` events, the `trace item` routing section), `doctor` registry diagnostics with drift detection, and registry packaging in export/import.
+Where each host reads its model configuration from, and what silently defeats a pin there (state of July 2026):
 
-Planned next (see the product plan under `.planr/plans/`): an `agents init` scaffold and the final docs pass.
+| Host | Native mechanism | Rendered by `planr install`? | Silent overrides / traps |
+| --- | --- | --- | --- |
+| Cursor | `.cursor/agents/*.md` frontmatter `model: <id>` (default `inherit`) | yes (`cursor`) | Team-admin model policy, plan availability, and Max-Mode-only models override without error; legacy request-based plans force Composer for subagents |
+| Claude Code | `planr-worker.md`/`planr-reviewer.md` frontmatter `model:` + `effort:` | yes (`claude`) | `CLAUDE_CODE_SUBAGENT_MODEL` clamps frontmatter and per-invocation models with no signal ([#57718](https://github.com/anthropics/claude-code/issues/57718)); since v2.1.196 `inherit` behaves as unset; org `availableModels` allowlists fall back silently |
+| Codex CLI | `.codex/agents/*.toml` with `model` + `model_reasoning_effort` | yes (`codex`) | `fork_turns = "all"` intentionally drops the child's `agent_type`/`model` — use `fork_turns = "none"` or a partial fork; the role registry loads at session start ([#26408](https://github.com/openai/codex/issues/26408)), so re-renders need a restart |
+| opencode | `opencode.json` `agent.<name>.model = "provider/model-id"` or `.opencode/agents/*.md` frontmatter | no — use the `planr prompt routing` process snippet | Subagent inherits the primary model when unset; malformed `provider/model-id` strings (quoting, trailing newline) raise `ProviderModelNotFoundError` ([#5623](https://github.com/sst/opencode/issues/5623)) |
+| Pi | none by design — process-level dispatch (`pi --provider --model --thinking`) or the `pi-subagents` extension (`.pi/agents/*.md`) | no — use the `planr prompt routing` process snippet | Extension model-scope enforcement against `enabledModels` is opt-in; without it, pins are best-effort |
+
+For the hosts without rendered role files, `planr prompt routing` prints ready process-dispatch snippets pre-filled from the registry. Whatever the host does, the [run audit](#run-audit) catches silent overrides after the fact.
+
+## Command Summary
+
+The registry surface end to end: `planr agents init [--force]` scaffolds, `planr agents list|check` inspect and validate, `planr pick --json` carries the `routing` block, `planr item route [--set|--clear]` pins per item, the MCP tools (`planr_agents_list`, `planr_item_route`, `planr_item_route_set`, `planr_item_route_clear`) return identical JSON shapes, `planr install <client> [--force]` renders host role files from the registry, `planr prompt routing` prints the driver dispatch block, `planr log add`/`done --profile` (or `PLANR_PROFILE`) feed the run audit, `planr trace item` and `planr doctor` surface mismatches and drift, and `planr export`/`import` carry the registry preview-first.
