@@ -86,6 +86,7 @@
     "planr install codex|claude|cursor",
     "planr prompt cli|mcp|http",
     "planr prompt routing",
+    "planr agents init",
     "planr mcp",
     "planr review annotate",
     "planr review ingest",

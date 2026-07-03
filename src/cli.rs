@@ -66,6 +66,15 @@ pub(crate) enum AgentsCommand {
     List(JsonOnlyArgs),
     /// Validate the registry; exits non-zero only on parse failure.
     Check,
+    /// Write a commented starter registry with cost-tiering defaults.
+    Init(AgentsInitArgs),
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct AgentsInitArgs {
+    /// Overwrite an existing .planr/agents.toml.
+    #[arg(long)]
+    pub(crate) force: bool,
 }
 
 #[derive(Args, Debug)]

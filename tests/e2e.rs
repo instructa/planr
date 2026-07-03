@@ -1825,6 +1825,97 @@ profile = "coder"
 }
 
 #[test]
+fn agents_init_scaffold_is_warning_free_and_routes_by_default() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Scaffold"])
+        .assert()
+        .success();
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "agents", "init"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let created: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(created["path"], ".planr/agents.toml");
+    assert_eq!(created["next"][0], "planr agents check");
+
+    // The scaffold must parse with zero warnings.
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "agents", "check"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let check: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(check["ok"], true);
+    assert_eq!(check["warnings"].as_array().unwrap().len(), 0);
+
+    // A seeded code item picks up the scaffold's implementer route.
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "item",
+            "create",
+            "Scaffolded work",
+            "--description",
+            "Routes via the starter registry",
+            "--work-type",
+            "code",
+        ])
+        .assert()
+        .success();
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "pick"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let pick: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(pick["routing"]["profile"], "implementer");
+    assert_eq!(pick["routing"]["model"], "gpt-5.5");
+    assert_eq!(pick["routing"]["fallbacks"][0], "driver");
+    assert_eq!(pick["routing"]["matched_selector"], "work_type=code");
+
+    // A second init refuses politely and leaves the file untouched...
+    let scaffold = fs::read_to_string(dir.path().join(".planr/agents.toml")).unwrap();
+    let custom = scaffold.replace("gpt-5.5", "gpt-6");
+    fs::write(dir.path().join(".planr/agents.toml"), &custom).unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "agents", "init"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--force"));
+    assert_eq!(
+        fs::read_to_string(dir.path().join(".planr/agents.toml")).unwrap(),
+        custom
+    );
+
+    // ...and --force restores the scaffold.
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "agents", "init", "--force"])
+        .assert()
+        .success();
+    assert_eq!(
+        fs::read_to_string(dir.path().join(".planr/agents.toml")).unwrap(),
+        scaffold
+    );
+}
+
+#[test]
 fn prompt_routing_names_routes_fallbacks_and_host_traps() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
