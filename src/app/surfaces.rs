@@ -21,6 +21,11 @@ impl App {
             "conditions": self.item_conditions(item_id)?,
             "approval": self.item_approval(item_id)?,
         });
+        // Only present when a route is declared or a run recorded a
+        // profile, so opted-out projects keep their exact trace shape.
+        if let Some(routing) = self.trace_routing_value(item_id)? {
+            value["routing"] = routing;
+        }
         if value["item"]["work_type"] == "review" {
             if let Some(target) = self.review_target(item_id)? {
                 value["target"] = json!({
@@ -63,6 +68,31 @@ impl App {
             }
         }
         render_logs(&mut out, "log", &trace["logs"]);
+        // Advisory styling only: mismatches inform, they never alarm.
+        if let Some(routing) = trace.get("routing") {
+            match routing["declared"]["profile"].as_str() {
+                Some(declared) => out.push_str(&format!(
+                    "\n  routing declared: {declared} ({})",
+                    routing["declared"]["matched_selector"]
+                        .as_str()
+                        .unwrap_or("policy"),
+                )),
+                None => out.push_str("\n  routing declared: none (no route resolves)"),
+            }
+            for run in routing["runs"].as_array().into_iter().flatten() {
+                out.push_str(&format!(
+                    "\n  run {} [{}] profile {}{}",
+                    run["id"].as_str().unwrap_or_default(),
+                    run["client"].as_str().unwrap_or_default(),
+                    run["profile"].as_str().unwrap_or("-"),
+                    if run["mismatch"] == serde_json::json!(true) {
+                        " (differs from declared route; advisory)"
+                    } else {
+                        ""
+                    },
+                ));
+            }
+        }
         if let Some(target) = trace.get("target") {
             out.push_str(&format!(
                 "\n  target {} [{}]",

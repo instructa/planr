@@ -58,6 +58,24 @@ impl App {
             .flatten())
     }
 
+    /// Runs recorded for an item, oldest first. Read by the trace routing
+    /// section; runs were write-only before declared-vs-actual auditing.
+    pub(crate) fn item_runs(&self, item_id: &str) -> Result<Vec<serde_json::Value>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, client, profile, status, started_at FROM runs WHERE item_id = ?1 ORDER BY started_at, id",
+        )?;
+        let rows = stmt.query_map(params![item_id], |row| {
+            Ok(json!({
+                "id": row.get::<_, String>(0)?,
+                "client": row.get::<_, String>(1)?,
+                "profile": row.get::<_, Option<String>>(2)?,
+                "status": row.get::<_, String>(3)?,
+                "started_at": row.get::<_, Option<String>>(4)?,
+            }))
+        })?;
+        collect_rows(rows)
+    }
+
     pub(crate) fn list_items_by_type(
         &self,
         work_type: &str,

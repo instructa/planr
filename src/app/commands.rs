@@ -819,11 +819,13 @@ impl App {
                 })
             })
             .collect();
+        let registry = self.registry_doctor_value()?;
         let data = json!({
             "db": self.db_path,
             "db_status": if self.db_path.exists() { "pass" } else { "warning" },
             "project": self.default_project().ok(),
             "clients": checks,
+            "registry": registry,
             "mcp": {"command": "planr mcp"}
         });
         if self.json {
@@ -841,6 +843,32 @@ impl App {
                     check["status"].as_str().unwrap_or("warning"),
                     check["install"].as_str().unwrap_or("")
                 );
+            }
+            let registry = &data["registry"];
+            match registry["status"].as_str().unwrap_or("absent") {
+                "ok" => {
+                    println!(
+                        "registry: ok ({} profile(s), {} route(s), {} warning(s))",
+                        registry["profiles"],
+                        registry["routes"],
+                        registry["warnings"].as_array().map_or(0, Vec::len),
+                    );
+                    for warning in registry["warnings"].as_array().into_iter().flatten() {
+                        println!("  warning: {}", warning.as_str().unwrap_or_default());
+                    }
+                    if let Some(hint) = registry["drift_hint"].as_str() {
+                        println!("  warning: {hint}");
+                    }
+                }
+                "degraded" => println!(
+                    "registry: degraded ({})\n  hint: {}",
+                    registry["error"].as_str().unwrap_or_default(),
+                    registry["hint"].as_str().unwrap_or_default(),
+                ),
+                _ => println!(
+                    "registry: absent ({})",
+                    registry["hint"].as_str().unwrap_or_default()
+                ),
             }
             println!("mcp: planr mcp");
             Ok(())

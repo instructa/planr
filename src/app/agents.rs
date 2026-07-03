@@ -9,7 +9,9 @@ use crate::agents::{
     resolve_route, validation_warnings,
 };
 use crate::cli::{AgentsCommand, ClientArg, ItemRouteArgs};
-use crate::rolefiles::{agent_roles, render_claude_role, render_codex_role, render_cursor_role};
+use crate::rolefiles::{
+    GENERATED_FROM_HEADER, agent_roles, render_claude_role, render_codex_role, render_cursor_role,
+};
 use anyhow::{Result, bail};
 use rusqlite::params;
 use serde_json::{Value, json};
@@ -143,6 +145,106 @@ impl App {
             )?;
         }
         Ok(())
+    }
+
+    /// The `routing` section of `trace item`: the declared route next to
+    /// every recorded run's actual client/profile with a mismatch marker.
+    /// Returns None when there is nothing to say (no declared route and
+    /// no profiled runs), keeping traces byte-identical to the
+    /// pre-routing output for projects that never opted in.
+    pub(crate) fn trace_routing_value(&self, item_id: &str) -> Result<Option<Value>> {
+        let declared = self.routing_value_for_item(item_id)?;
+        let runs = self.item_runs(item_id)?;
+        let any_profiled = runs.iter().any(|run| run["profile"].is_string());
+        if declared.is_none() && !any_profiled {
+            return Ok(None);
+        }
+        let declared_profile = declared
+            .as_ref()
+            .and_then(|routing| routing["profile"].as_str())
+            .map(ToOwned::to_owned);
+        let runs: Vec<Value> = runs
+            .into_iter()
+            .map(|mut run| {
+                // Advisory marker: only comparable when both sides exist.
+                run["mismatch"] = match (declared_profile.as_deref(), run["profile"].as_str()) {
+                    (Some(declared), Some(actual)) => json!(declared != actual),
+                    _ => Value::Null,
+                };
+                run
+            })
+            .collect();
+        let mismatches = runs
+            .iter()
+            .filter(|run| run["mismatch"] == json!(true))
+            .count();
+        Ok(Some(json!({
+            "declared": declared,
+            "runs": runs,
+            "mismatches": mismatches,
+        })))
+    }
+
+    /// The `doctor` registry block. Never fails the command: absent is
+    /// informational, a parse failure is a warning with the parser's line
+    /// context, and a loaded registry reports counts, validation
+    /// warnings, and drift of rendered role files (a file whose
+    /// generated-from header no longer matches what the current registry
+    /// would render). Files without the header are the user's and are
+    /// reported as `manual`, never flagged.
+    pub(crate) fn registry_doctor_value(&self) -> Result<Value> {
+        let registry = match load_registry(&self.root) {
+            RegistryLoad::Missing => {
+                return Ok(json!({
+                    "path": REGISTRY_RELATIVE_PATH,
+                    "status": "absent",
+                    "hint": "no agent registry; create .planr/agents.toml to declare model routing (docs/MODEL_ROUTING.md)",
+                }));
+            }
+            RegistryLoad::Degraded { error } => {
+                return Ok(json!({
+                    "path": REGISTRY_RELATIVE_PATH,
+                    "status": "degraded",
+                    "error": error,
+                    "hint": "fix the file with `planr agents check`; routing is disabled until it parses",
+                }));
+            }
+            RegistryLoad::Loaded(registry) => registry,
+        };
+        let mut artifacts = Vec::new();
+        for client in ["codex", "claude", "cursor"] {
+            for (relative, expected) in self.agent_role_contents(client) {
+                let Ok(actual) = std::fs::read_to_string(self.root.join(relative)) else {
+                    continue;
+                };
+                let state = if !actual.contains(GENERATED_FROM_HEADER) {
+                    "manual"
+                } else if actual == expected {
+                    "current"
+                } else {
+                    "drifted"
+                };
+                artifacts.push(json!({"path": relative, "state": state}));
+            }
+        }
+        let drifted: Vec<&str> = artifacts
+            .iter()
+            .filter(|artifact| artifact["state"] == "drifted")
+            .filter_map(|artifact| artifact["path"].as_str())
+            .collect();
+        Ok(json!({
+            "path": REGISTRY_RELATIVE_PATH,
+            "status": "ok",
+            "profiles": registry.profiles.len(),
+            "routes": registry.routes.len(),
+            "default_route": registry.route_default.is_some(),
+            "warnings": validation_warnings(&registry),
+            "artifacts": artifacts,
+            "drift_hint": (!drifted.is_empty()).then(|| format!(
+                "rendered role file(s) out of date with the registry: {}; re-render with `planr install <client> --force`",
+                drifted.join(", ")
+            )),
+        }))
     }
 
     pub(crate) fn item_route(&self, args: ItemRouteArgs) -> Result<()> {

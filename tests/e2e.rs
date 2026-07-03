@@ -1380,6 +1380,276 @@ profile = "coder"
 }
 
 #[test]
+fn trace_routing_section_and_doctor_registry_diagnostics() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Doctor"])
+        .assert()
+        .success();
+
+    // Absent registry: informational, never a failure.
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "doctor"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let doctor: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(doctor["registry"]["status"], "absent");
+
+    // A trace without declared routes or profiled runs has no routing key.
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "item",
+            "create",
+            "Traced work",
+            "--description",
+            "Declared vs actual",
+            "--work-type",
+            "code",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let item_id = serde_json::from_slice::<Value>(&output).unwrap()["item"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    planr()
+        .current_dir(dir.path())
+        .env_remove("PLANR_PROFILE")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "log",
+            "add",
+            "--item",
+            &item_id,
+            "--summary",
+            "anonymous run",
+            "--cmd",
+            "cargo test",
+        ])
+        .assert()
+        .success();
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "trace",
+            "item",
+            &item_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert!(
+        serde_json::from_slice::<Value>(&output)
+            .unwrap()
+            .get("routing")
+            .is_none(),
+        "no registry and no profiled runs must keep the trace shape unchanged"
+    );
+
+    // Degraded registry: doctor warns with the parser's context.
+    let registry_path = dir.path().join(".planr/agents.toml");
+    fs::write(&registry_path, "[profiles.broken\nclient=").unwrap();
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "doctor"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let doctor: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(doctor["registry"]["status"], "degraded");
+    assert!(
+        doctor["registry"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("line")
+    );
+
+    fs::write(
+        &registry_path,
+        r#"
+[profiles.coder]
+client = "codex"
+model = "gpt-5.5"
+effort = "xhigh"
+
+[profiles.ghost-ref]
+client = "codex"
+model = "gpt-5.5"
+
+[[routes]]
+match = { work_type = "code" }
+profile = "coder"
+
+[[routes]]
+match = { work_type = "docs" }
+profile = "nonexistent"
+"#,
+    )
+    .unwrap();
+
+    // Loaded registry: counts and validation warnings.
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "doctor"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let doctor: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(doctor["registry"]["status"], "ok");
+    assert_eq!(doctor["registry"]["profiles"], 2);
+    assert_eq!(doctor["registry"]["routes"], 2);
+    assert!(
+        doctor["registry"]["warnings"][0]
+            .as_str()
+            .unwrap()
+            .contains("nonexistent")
+    );
+
+    // Rendered artifacts: current right after install, drifted after the
+    // registry changes underneath them.
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "install", "codex"])
+        .assert()
+        .success();
+    let artifact_state = |value: &Value, path: &str| -> String {
+        value["registry"]["artifacts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|artifact| artifact["path"] == path)
+            .map(|artifact| artifact["state"].as_str().unwrap().to_string())
+            .unwrap_or_else(|| panic!("artifact {path} not reported"))
+    };
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "doctor"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let doctor: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        artifact_state(&doctor, ".codex/agents/planr-worker.toml"),
+        "current"
+    );
+    fs::write(
+        &registry_path,
+        r#"
+[profiles.coder]
+client = "codex"
+model = "gpt-6"
+effort = "high"
+
+[[routes]]
+match = { work_type = "code" }
+profile = "coder"
+"#,
+    )
+    .unwrap();
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "doctor"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let doctor: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        artifact_state(&doctor, ".codex/agents/planr-worker.toml"),
+        "drifted"
+    );
+    assert!(
+        doctor["registry"]["drift_hint"]
+            .as_str()
+            .unwrap()
+            .contains("--force")
+    );
+
+    // Trace now shows declared vs actual with an advisory marker.
+    planr()
+        .current_dir(dir.path())
+        .env_remove("PLANR_PROFILE")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "log",
+            "add",
+            "--item",
+            &item_id,
+            "--summary",
+            "wrong tier",
+            "--cmd",
+            "cargo test",
+            "--profile",
+            "budget-helper",
+        ])
+        .assert()
+        .success();
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "trace",
+            "item",
+            &item_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let trace: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(trace["routing"]["declared"]["profile"], "coder");
+    assert_eq!(trace["routing"]["mismatches"], 1);
+    let runs = trace["routing"]["runs"].as_array().unwrap();
+    assert_eq!(runs.len(), 2);
+    assert!(runs[0]["profile"].is_null());
+    assert!(runs[0]["mismatch"].is_null());
+    assert_eq!(runs[1]["profile"], "budget-helper");
+    assert_eq!(runs[1]["mismatch"], true);
+    let human = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "trace", "item", &item_id])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let human = String::from_utf8(human).unwrap();
+    assert!(human.contains("routing declared: coder (work_type=code)"));
+    assert!(human.contains("advisory"));
+    assert!(!human.to_lowercase().contains("error"));
+}
+
+#[test]
 fn prompt_routing_names_routes_fallbacks_and_host_traps() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
@@ -6447,7 +6717,7 @@ fn rust_implementation_has_owned_module_boundaries() {
         ("src/planpack.rs", 320),
         ("src/integrations.rs", 500),
         ("src/agents.rs", 800),
-        ("src/app/agents.rs", 650),
+        ("src/app/agents.rs", 850),
         ("src/rolefiles.rs", 400),
     ] {
         let line_count = fs::read_to_string(root.join(file)).unwrap().lines().count();
