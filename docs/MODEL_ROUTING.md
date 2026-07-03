@@ -92,17 +92,30 @@ The pin beats every policy route and shows up in the pick packet with `"matched_
 
 Tier the roles, not just the models: workers run safely on cheaper tiers because the pick packet bounds their scope, while review verdicts should stay on the strongest tier — `agents check` warns when review work routes to a `budget` profile. Background: [Cost Tiering](GOALS.md#cost-tiering).
 
+## Host-Native Rendering
+
+Routes only matter if the host actually dispatches the declared model, so `planr install codex|claude|cursor` closes the gap: when a registry is present, the provisioned subagent role files are rendered with pins taken from it instead of the shipped static defaults. The `work_type=code` route pins the worker role, the `work_type=review` route pins the reviewer role, and each render uses the host's exact vocabulary — Codex TOML gets `model` and `model_reasoning_effort` (with `developer_instructions` always present, since Codex silently ignores a role file without it), Claude frontmatter gets `model:` and `effort:`, Cursor frontmatter gets `model:` only.
+
+Two safety rules keep this predictable:
+
+- **Client matching**: a role file only pins profiles whose `client` matches the install target, scanning the route's fallback chain for the first match. A review route pointing at a Cursor profile never writes a Cursor model id into a Codex TOML — that role keeps its static default instead.
+- **Provision-once**: existing files are never overwritten. After editing the registry, re-render explicitly with `planr install <client> --force`. Rendered files start with a `# generated from .planr/agents.toml` header so you (and future audit tooling) can tell them from hand-maintained ones.
+
+Without a registry, installs write the static role files byte-identically to previous releases.
+
+## Prompt Routing
+
+`planr prompt routing [--client codex|claude|cursor|all]` prints a paste-ready block for the driver session: the prioritization table (every route, profile, and fallback in precedence order), per-host dispatch guidance including the traps that silently defeat pins (Codex requires `fork_turns: "none"` and a session restart after re-rendering; the `CLAUDE_CODE_SUBAGENT_MODEL` env var preempts Claude frontmatter; Cursor plan mode, admin policy, and Max Mode override silently), and process-dispatch snippets (`codex exec`, `pi`, `opencode run`) for hosts without role files, pre-filled from the `work_type=code` route. `--json` carries the same content structured.
+
 ## Failure Behavior
 
 - **No registry file**: nothing changes. Pick packets simply have no `routing` key.
-- **Malformed registry**: `planr agents check` fails with the parser's line context; everything else (`pick`, `map`, `install`) keeps working with routing omitted.
+- **Malformed registry**: `planr agents check` fails with the parser's line context; everything else (`pick`, `map`, `install`) keeps working with routing omitted — installs fall back to the static role files.
 - **Warnings** (unknown profile references, empty or duplicate selectors, budget-tier review routes, secret-like values) never block anything; `agents check` lists them and still exits zero.
 - Never put credentials in the registry — it holds configuration strings only, and secret-like values are flagged.
 
 ## Current Scope
 
-Shipped today: the registry, `planr agents list|check`, the `routing` block in `planr pick --json`, per-item overrides (`planr item route [--set|--clear]`), and the matching MCP tools (`planr_agents_list`, `planr_item_route`, `planr_item_route_set`, `planr_item_route_clear`) with identical JSON shapes.
+Shipped today: the registry, `planr agents list|check`, the `routing` block in `planr pick --json`, per-item overrides (`planr item route [--set|--clear]`), the matching MCP tools (`planr_agents_list`, `planr_item_route`, `planr_item_route_set`, `planr_item_route_clear`) with identical JSON shapes, registry-rendered role files on `planr install` (with `--force` re-render), and `planr prompt routing`.
 
-Planned next (see the product plan under `.planr/plans/`): rendering host role files (Codex TOML, Claude/Cursor agent frontmatter) from the registry, declared-vs-actual profile auditing on runs in `planr trace item`, and an `agents init` scaffold.
-
-Until host-file rendering lands, keep pinning worker tiers in the provisioned role files as documented in [Cost Tiering](GOALS.md#cost-tiering) — the registry is the source of truth for routing decisions, the role files still carry the host-native pins.
+Planned next (see the product plan under `.planr/plans/`): declared-vs-actual profile auditing on runs in `planr trace item`, `doctor` registry diagnostics, registry packaging in export/import, and an `agents init` scaffold.

@@ -709,6 +709,8 @@ pub(crate) enum PromptCommand {
     Cli(PromptPrintArgs),
     Mcp(PromptPrintArgs),
     Http(PromptPrintArgs),
+    /// Model-prioritization block from the registry plus host dispatch traps.
+    Routing(PromptPrintArgs),
 }
 
 #[derive(Args, Debug)]

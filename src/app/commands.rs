@@ -934,6 +934,7 @@ impl App {
             PromptCommand::Cli(args) => ("cli", args.client),
             PromptCommand::Mcp(args) => ("mcp", args.client),
             PromptCommand::Http(args) => ("http", args.client),
+            PromptCommand::Routing(args) => return self.prompt_routing(args.client),
         };
         let client = client
             .map(|value| format!("{value:?}").to_lowercase())

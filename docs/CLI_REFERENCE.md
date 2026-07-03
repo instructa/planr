@@ -62,6 +62,7 @@ planr agents check
 planr doctor [--client codex|claude|cursor|all]
 planr install codex|claude|cursor [--dry-run] [--no-mcp] [--force]
 planr prompt cli|mcp|http [--client codex|claude|cursor|all]
+planr prompt routing [--client codex|claude|cursor|all]
 planr mcp
 planr serve --port 7526
 planr import <file> [--preview] [--confirm]
@@ -133,6 +134,6 @@ With `--json`, responses follow one convention so agents never guess where data 
 
 `serve` exposes the local review workspace at `/review` and its JSON projection at `/v1/review-workspace`.
 
-`prompt` prints ready-to-use agent instructions without editing global config. Use `prompt cli` for shell agents, `prompt mcp` for MCP setup text, and `prompt http` for localhost automation/review workspace usage.
+`prompt` prints ready-to-use agent instructions without editing global config. Use `prompt cli` for shell agents, `prompt mcp` for MCP setup text, and `prompt http` for localhost automation/review workspace usage. `prompt routing` emits a paste-ready model-prioritization block for the driver session: the route table from `.planr/agents.toml` (every route, profile, and fallback), per-host dispatch guidance with the known traps (Codex `fork_turns: "none"` and session-restart requirement, the Claude `CLAUDE_CODE_SUBAGENT_MODEL` env preemption, Cursor's silent plan/policy/Max-Mode overrides), and process-dispatch snippets (`codex exec`, `pi`, `opencode run`) for hosts without role files; `--json` carries the same content structured, and a missing or unreadable registry still prints the host guidance with a pointer instead of failing.
 
 `export` writes a reusable Planr JSON package with package requirements metadata, graph state, contexts, optional logs, optional plan file snapshots, and review artifact snapshots. `import` previews JSON packages by default and mutates only with `--confirm`.

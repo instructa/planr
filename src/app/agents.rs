@@ -8,7 +8,7 @@ use crate::agents::{
     AgentRegistry, REGISTRY_RELATIVE_PATH, RegistryLoad, RoutingFacts, load_registry,
     resolve_route, validation_warnings,
 };
-use crate::cli::{AgentsCommand, ItemRouteArgs};
+use crate::cli::{AgentsCommand, ClientArg, ItemRouteArgs};
 use crate::rolefiles::{agent_roles, render_claude_role, render_codex_role, render_cursor_role};
 use anyhow::{Result, bail};
 use rusqlite::params;
@@ -323,6 +323,156 @@ impl App {
             .collect()
     }
 
+    /// `planr prompt routing [--client ...]`: a paste-ready markdown block
+    /// for the driver session — the route prioritization table from the
+    /// registry, per-host dispatch guidance with the known traps (Codex
+    /// fork_turns + session restart, Claude env preemption, Cursor silent
+    /// overrides), and process-dispatch snippets for hosts without role
+    /// files. Advisory output only: a missing or degraded registry still
+    /// prints the host guidance with a pointer instead of failing.
+    pub(crate) fn prompt_routing(&self, client: Option<ClientArg>) -> Result<()> {
+        let client = client
+            .map(|value| format!("{value:?}").to_lowercase())
+            .unwrap_or_else(|| "all".to_string());
+        let load = load_registry(&self.root);
+        let (registry_status, registry) = match &load {
+            RegistryLoad::Loaded(registry) => ("ok", Some(registry)),
+            RegistryLoad::Missing => ("missing", None),
+            RegistryLoad::Degraded { .. } => ("degraded", None),
+        };
+        let mut routes = Vec::new();
+        let mut warnings = Vec::new();
+        if let Some(registry) = registry {
+            warnings = validation_warnings(registry);
+            for route in &registry.routes {
+                let selector = match (&route.selector.work_type, &route.selector.plan) {
+                    (Some(work_type), _) => format!("work_type={work_type}"),
+                    (None, Some(plan)) => format!("plan={plan}"),
+                    (None, None) => "(empty match)".to_string(),
+                };
+                routes.push(route_table_row(
+                    registry,
+                    selector,
+                    &route.profile,
+                    &route.fallbacks,
+                ));
+            }
+            if let Some(default) = &registry.route_default {
+                routes.push(route_table_row(
+                    registry,
+                    "default".to_string(),
+                    &default.profile,
+                    &default.fallbacks,
+                ));
+            }
+        }
+        // The work_type=code route makes the snippets concrete; hosts
+        // without one get neutral placeholders.
+        let example = registry.and_then(|registry| {
+            resolve_route(
+                &RoutingFacts {
+                    work_type: "code",
+                    plan_id: None,
+                    route_override: None,
+                },
+                registry,
+            )
+        });
+        let example_model = example
+            .as_ref()
+            .map_or("<model>", |routing| routing.model)
+            .to_string();
+        let example_effort = example
+            .as_ref()
+            .and_then(|routing| routing.effort)
+            .unwrap_or("<effort>")
+            .to_string();
+        let process_dispatch = vec![
+            format!(
+                "codex exec --model {example_model} -c model_reasoning_effort=\"{example_effort}\" \"<task>\""
+            ),
+            format!(
+                "pi --provider <provider> --model {example_model} --thinking {example_effort} -p \"<task>\""
+            ),
+            format!(
+                "opencode run --model \"<provider>/{example_model}\" \"<task>\"  # quote the provider/model pair"
+            ),
+        ];
+
+        let mut prompt = String::from("## Model routing\n\n");
+        match registry_status {
+            "ok" if routes.is_empty() => prompt.push_str(
+                "The registry declares no routes; add `[[routes]]` entries to .planr/agents.toml (see docs/MODEL_ROUTING.md).\n",
+            ),
+            "ok" => {
+                prompt.push_str("Dispatch priority from .planr/agents.toml (first match wins; per-item `planr item route` pins beat all of it):\n\n");
+                prompt.push_str("| match | profile | client | model | effort | tier | fallbacks |\n");
+                prompt.push_str("|---|---|---|---|---|---|---|\n");
+                for row in &routes {
+                    prompt.push_str(&format!(
+                        "| {} | {} | {} | {} | {} | {} | {} |\n",
+                        row["match"].as_str().unwrap_or("-"),
+                        row["profile"].as_str().unwrap_or("-"),
+                        row["client"].as_str().unwrap_or("unknown profile"),
+                        row["model"].as_str().unwrap_or("-"),
+                        row["effort"].as_str().unwrap_or("-"),
+                        row["cost_tier"].as_str().unwrap_or("-"),
+                        row["fallbacks"]
+                            .as_array()
+                            .filter(|list| !list.is_empty())
+                            .map(|list| list
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .collect::<Vec<_>>()
+                                .join(", "))
+                            .unwrap_or_else(|| "-".to_string()),
+                    ));
+                }
+            }
+            "missing" => prompt.push_str(
+                "No .planr/agents.toml registry: routing is unset. Create one to declare profiles and routes (see docs/MODEL_ROUTING.md).\n",
+            ),
+            _ => prompt.push_str(
+                "The .planr/agents.toml registry is unreadable; fix it with `planr agents check` before trusting any pins.\n",
+            ),
+        }
+        for warning in &warnings {
+            prompt.push_str(&format!("\nwarning: {warning}"));
+        }
+        if !warnings.is_empty() {
+            prompt.push('\n');
+        }
+        let mut hosts = serde_json::Map::new();
+        for (host, title, lines) in host_dispatch_sections() {
+            if client != "all" && client != host {
+                continue;
+            }
+            prompt.push_str(&format!("\n### {title}\n"));
+            for line in lines {
+                prompt.push_str(&format!("- {line}\n"));
+            }
+            hosts.insert(host.to_string(), json!(lines));
+        }
+        prompt.push_str("\n### Hosts without role files (process dispatch)\n");
+        for line in &process_dispatch {
+            prompt.push_str(&format!("- `{line}`\n"));
+        }
+        self.emit(
+            json!({
+                "mode": "routing",
+                "client": client,
+                "registry": registry_status,
+                "routes": routes,
+                "warnings": warnings,
+                "hosts": hosts,
+                "process_dispatch": process_dispatch,
+                "prompt": prompt,
+                "global_config_edited": false
+            }),
+            prompt.clone(),
+        )
+    }
+
     /// Owned routing inputs for one item, resolved from the graph: the
     /// item's work type, its plan id (via plan path), and any pin.
     fn item_route_facts(&self, item_id: &str) -> Result<ItemRouteInputs> {
@@ -375,6 +525,62 @@ fn render_role(
         "cursor" => render_cursor_role(static_content, profile_id, profile),
         _ => None,
     }
+}
+
+/// One prioritization-table row. Unknown profiles keep their declared id
+/// with null details so the table still names every route, matching the
+/// `agents check` warnings instead of hiding the typo.
+fn route_table_row(
+    registry: &AgentRegistry,
+    selector: String,
+    profile_id: &str,
+    fallbacks: &[String],
+) -> Value {
+    let profile = registry.profiles.get(profile_id);
+    json!({
+        "match": selector,
+        "profile": profile_id,
+        "client": profile.map(|profile| profile.client.clone()),
+        "model": profile.map(|profile| profile.model.clone()),
+        "effort": profile.and_then(|profile| profile.effort.clone()),
+        "cost_tier": profile.and_then(|profile| profile.cost_tier.clone()),
+        "fallbacks": fallbacks,
+    })
+}
+
+/// Host-native dispatch guidance with the traps from the July 2026
+/// research (context ctx-bfa610fd): each pin has a host-side mechanism
+/// that can silently defeat it, and the driver prompt must name them.
+fn host_dispatch_sections() -> [(&'static str, &'static str, [&'static str; 3]); 3] {
+    [
+        (
+            "codex",
+            "Codex",
+            [
+                "Dispatch through the rendered role files (`.codex/agents/planr-worker.toml`, `planr-reviewer.toml`); re-render after registry edits with `planr install codex --force`.",
+                "Subagent dispatch must use `fork_turns: \"none\"` — a full-history fork (`fork_turns = \"all\"`) intentionally drops `agent_type` and `model`, silently unpinning the role.",
+                "Codex loads the agent role registry at session start; restart the session after re-rendering or the old pins stay live.",
+            ],
+        ),
+        (
+            "claude",
+            "Claude Code",
+            [
+                "Dispatch the `planr-worker` subagent; the pin lives in `.claude/agents/planr-worker.md` frontmatter (`model:`, `effort:`).",
+                "The `CLAUDE_CODE_SUBAGENT_MODEL` env var preempts every frontmatter pin (since v2.1.196 `inherit` means unset) — check it before trusting a pin.",
+                "An org model allowlist falls back silently; smoke-test the child run's actual model once (docs/GOALS.md Cost Tiering).",
+            ],
+        ),
+        (
+            "cursor",
+            "Cursor",
+            [
+                "Dispatch the `planr-worker` subagent; the pin lives in `.cursor/agents/planr-worker.md` frontmatter (`model:` only, no effort field).",
+                "Plan mode, admin model policy, and Max Mode can override the pin silently; confirm the dispatched model in the child run metadata.",
+                "Re-render pins after registry edits with `planr install cursor --force`.",
+            ],
+        ),
+    ]
 }
 
 /// Install targets vs registry `client` vocabulary: the install command

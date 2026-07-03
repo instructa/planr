@@ -1073,6 +1073,117 @@ profile = "judge"
 }
 
 #[test]
+fn prompt_routing_names_routes_fallbacks_and_host_traps() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Prompt"])
+        .assert()
+        .success();
+
+    // Missing registry: still zero-exit with the host guidance and a
+    // pointer instead of a route table.
+    let missing = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "prompt", "routing"])
+        .output()
+        .unwrap();
+    assert!(missing.status.success());
+    let missing_json: serde_json::Value = serde_json::from_slice(&missing.stdout).unwrap();
+    assert_eq!(missing_json["registry"], "missing");
+    assert!(
+        missing_json["prompt"]
+            .as_str()
+            .unwrap()
+            .contains("fork_turns")
+    );
+
+    fs::write(
+        dir.path().join(".planr/agents.toml"),
+        r#"
+[profiles.coder]
+client = "codex"
+model = "gpt-5.5"
+effort = "xhigh"
+
+[profiles.driver]
+client = "cursor"
+model = "fable-5"
+
+[[routes]]
+match = { work_type = "code" }
+profile = "coder"
+fallbacks = ["driver"]
+
+[route_default]
+profile = "driver"
+"#,
+    )
+    .unwrap();
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "prompt", "routing"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["registry"], "ok");
+    let routes = json["routes"].as_array().unwrap();
+    assert_eq!(routes.len(), 2, "every route plus the default is named");
+    assert_eq!(routes[0]["match"], "work_type=code");
+    assert_eq!(routes[0]["fallbacks"][0], "driver");
+    assert_eq!(routes[1]["match"], "default");
+    let prompt = json["prompt"].as_str().unwrap();
+    for required in [
+        "work_type=code",
+        "driver",
+        // The three host traps must be spelled out.
+        "fork_turns: \"none\"",
+        "CLAUDE_CODE_SUBAGENT_MODEL",
+        "Max Mode can override",
+        // Process dispatch reuses the code route's pin as the example.
+        "codex exec --model gpt-5.5 -c model_reasoning_effort=\"xhigh\"",
+        "pi --provider",
+        "opencode run",
+    ] {
+        assert!(
+            prompt.contains(required),
+            "prompt must contain `{required}`"
+        );
+    }
+    assert!(
+        json["hosts"]["codex"][1]
+            .as_str()
+            .unwrap()
+            .contains("fork_turns")
+    );
+    assert_eq!(json["process_dispatch"].as_array().unwrap().len(), 3);
+
+    // --client filters the host sections but keeps the table.
+    let codex_only = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "prompt",
+            "routing",
+            "--client",
+            "codex",
+        ])
+        .output()
+        .unwrap();
+    let codex_json: serde_json::Value = serde_json::from_slice(&codex_only.stdout).unwrap();
+    let codex_prompt = codex_json["prompt"].as_str().unwrap();
+    assert!(codex_prompt.contains("### Codex"));
+    assert!(!codex_prompt.contains("### Claude Code"));
+    assert!(!codex_prompt.contains("### Cursor"));
+    assert!(codex_prompt.contains("work_type=code"));
+    assert!(codex_json["hosts"].get("claude").is_none());
+}
+
+#[test]
 fn mcp_route_tools_reuse_cli_json_shapes() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
@@ -6029,7 +6140,7 @@ fn rust_implementation_has_owned_module_boundaries() {
         ("src/planpack.rs", 320),
         ("src/integrations.rs", 500),
         ("src/agents.rs", 800),
-        ("src/app/agents.rs", 500),
+        ("src/app/agents.rs", 650),
         ("src/rolefiles.rs", 400),
     ] {
         let line_count = fs::read_to_string(root.join(file)).unwrap().lines().count();

@@ -85,6 +85,7 @@
   "cli_reference_commands": [
     "planr install codex|claude|cursor",
     "planr prompt cli|mcp|http",
+    "planr prompt routing",
     "planr mcp",
     "planr review annotate",
     "planr review ingest",
