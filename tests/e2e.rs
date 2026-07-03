@@ -1825,6 +1825,155 @@ profile = "coder"
 }
 
 #[test]
+fn skill_pairing_travels_through_pick_route_list_and_prompt() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Pool"])
+        .assert()
+        .success();
+    fs::create_dir_all(dir.path().join(".planr")).unwrap();
+    fs::write(
+        dir.path().join(".planr/agents.toml"),
+        r#"[profiles.designer]
+client = "claude-code"
+model = "opus"
+effort = "high"
+cost_tier = "premium"
+skill = "frontend-design"
+
+[profiles.backender]
+client = "codex"
+model = "gpt-5.5"
+
+[[routes]]
+match = { work_type = "frontend" }
+profile = "designer"
+fallbacks = ["backender"]
+
+[[routes]]
+match = { work_type = "backend" }
+profile = "backender"
+"#,
+    )
+    .unwrap();
+
+    // Use-case work types are free-form: the frontend item routes to the
+    // designer profile and the pick packet carries the paired skill.
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "item",
+            "create",
+            "Polish hero section",
+            "--description",
+            "design pass",
+            "--work-type",
+            "frontend",
+        ])
+        .assert()
+        .success();
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "pick"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let pick: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(pick["routing"]["profile"], "designer");
+    assert_eq!(pick["routing"]["skill"], "frontend-design");
+    assert_eq!(pick["routing"]["matched_selector"], "work_type=frontend");
+    let item_id = pick["item"]["id"].as_str().unwrap().to_string();
+
+    // item route and agents list surface the pairing too.
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "item",
+            "route",
+            &item_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let route: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(route["routing"]["skill"], "frontend-design");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "agents", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("skill=frontend-design"));
+
+    // prompt routing names the paired skill and the dispatch rule.
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "prompt", "routing"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let prompt = String::from_utf8(output).unwrap();
+    assert!(prompt.contains("| work_type=frontend | designer | claude-code | opus | high | premium | frontend-design | backender |"));
+    assert!(prompt.contains("dispatch the worker with that skill"));
+
+    // Profiles without a skill omit the key entirely: no-skill registries
+    // keep byte-identical routing blocks.
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "item",
+            "create",
+            "API endpoint",
+            "--description",
+            "backend pass",
+            "--work-type",
+            "backend",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let created: Value = serde_json::from_slice(&output).unwrap();
+    let backend_id = created["item"]["id"].as_str().unwrap().to_string();
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "item",
+            "route",
+            &backend_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let route: Value = serde_json::from_slice(&output).unwrap();
+    assert!(
+        !route["routing"].as_object().unwrap().contains_key("skill"),
+        "no-skill profile must omit the key, got {route}"
+    );
+}
+
+#[test]
 fn agents_init_scaffold_is_warning_free_and_routes_by_default() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
@@ -6984,6 +7133,7 @@ fn rust_implementation_has_owned_module_boundaries() {
         ("src/integrations.rs", 500),
         ("src/agents.rs", 800),
         ("src/app/agents.rs", 850),
+        ("src/app/agents_init.rs", 450),
         ("src/rolefiles.rs", 400),
     ] {
         let line_count = fs::read_to_string(root.join(file)).unwrap().lines().count();
@@ -7018,6 +7168,7 @@ fn rust_implementation_has_owned_module_boundaries() {
         "src/storage/rows.rs",
         "src/planpack.rs",
         "src/integrations.rs",
+        "src/app/agents_init.rs",
     ] {
         assert!(
             docs.contains(owner),

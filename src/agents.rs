@@ -27,6 +27,11 @@ pub struct AgentProfile {
     pub cost_tier: Option<String>,
     #[serde(default)]
     pub capabilities: Vec<String>,
+    /// Skill this profile pairs with (e.g. `planr-work`,
+    /// `frontend-design`): dispatch the profile *with* this skill.
+    /// Passthrough vocabulary — never validated against installed skills.
+    #[serde(default)]
+    pub skill: Option<String>,
     #[serde(default)]
     pub notes: Option<String>,
 }
@@ -250,6 +255,10 @@ pub struct Routing<'a> {
     pub model: &'a str,
     pub effort: Option<&'a str>,
     pub cost_tier: Option<&'a str>,
+    /// Paired skill from the profile; omitted from serialized routing
+    /// blocks when absent so no-skill registries stay byte-identical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill: Option<&'a str>,
     /// Known-profile fallback ids in declared order; unknown ids are
     /// skipped rather than surfaced to dispatchers.
     pub fallbacks: Vec<&'a str>,
@@ -327,6 +336,7 @@ fn routing_for_chain<'a>(
         model: &primary.model,
         effort: primary.effort.as_deref(),
         cost_tier: primary.cost_tier.as_deref(),
+        skill: primary.skill.as_deref(),
         fallbacks: known.map(|(id, _)| id.as_str()).collect(),
         matched_selector,
     })
@@ -611,6 +621,24 @@ fallbacks = ["driver"]
         assert_eq!(routing.profile, "implementer");
         assert_eq!(routing.fallbacks, ["driver"]);
         assert_eq!(routing.matched_selector, "default");
+    }
+
+    #[test]
+    fn skill_pairs_through_resolution_and_skips_serialization_when_absent() {
+        let pool = registry(
+            "[profiles.designer]\nclient = \"claude-code\"\nmodel = \"opus\"\nskill = \"frontend-design\"\n\n[[routes]]\nmatch = { work_type = \"frontend\" }\nprofile = \"designer\"\n",
+        );
+        let routing = resolve_route(&facts("frontend", None), &pool).unwrap();
+        assert_eq!(routing.skill, Some("frontend-design"));
+        let serialized = serde_json::to_value(&routing).unwrap();
+        assert_eq!(serialized["skill"], "frontend-design");
+
+        // No-skill profiles omit the key entirely (byte-identical blocks).
+        let plain = registry(ROUTING);
+        let routing = resolve_route(&facts("code", None), &plain).unwrap();
+        assert_eq!(routing.skill, None);
+        let serialized = serde_json::to_value(&routing).unwrap();
+        assert!(!serialized.as_object().unwrap().contains_key("skill"));
     }
 
     #[test]

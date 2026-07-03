@@ -130,6 +130,42 @@ Everything here is advisory (ADR-001): mismatches never fail logging, reviews, o
 - **Warnings** (unknown profile references, empty or duplicate selectors, budget-tier review routes, secret-like values) never block anything; `agents check` lists them and still exits zero.
 - Never put credentials in the registry — it holds configuration strings only, and secret-like values are flagged.
 
+## Use-Case Pools
+
+Work types are free-form, and that makes them the use-case dimension: beyond the built-in vocabulary (`code`, `fix`, `review`, `docs`, ...), any string you pass to `--work-type` routes. Combined with per-profile skill pairing, the registry becomes a small agent pool — each use case names who runs it, on what model, with which skill:
+
+```toml
+[profiles.designer]
+client = "claude-code"
+model = "opus"
+effort = "high"
+cost_tier = "premium"
+skill = "frontend-design"     # dispatch this profile *with* this skill
+
+[profiles.backender]
+client = "codex"
+model = "gpt-5.5"
+effort = "xhigh"
+cost_tier = "standard"
+skill = "planr-work"
+
+[[routes]]
+match = { work_type = "frontend" }
+profile = "designer"
+fallbacks = ["driver"]
+
+[[routes]]
+match = { work_type = "design" }
+profile = "designer"
+
+[[routes]]
+match = { work_type = "backend" }
+profile = "backender"
+fallbacks = ["driver"]
+```
+
+Create items with the use-case work type (`planr item create ... --work-type frontend`), and the pick packet carries the full pairing — `"profile": "designer"`, `"model": "opus"`, `"skill": "frontend-design"` — so the driver dispatches profile and skill together (`Use $frontend-design on item <id>` on the profile's client/model). Workers pull their slice of the pool with `planr pick --work-type frontend`. `skill` is passthrough vocabulary like model ids: Planr never validates it against installed skills, and profiles without one omit the key entirely. A profile that needs different skills for different use cases is simply two profiles.
+
 ## Host Matrix
 
 Where each host reads its model configuration from, and what silently defeats a pin there (state of July 2026):

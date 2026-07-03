@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 use std::path::PathBuf;
 
 mod agents;
+mod agents_init;
 mod application;
 mod audit;
 mod commands;

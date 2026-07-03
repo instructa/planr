@@ -217,6 +217,7 @@ mod tests {
             effort: effort.map(ToOwned::to_owned),
             cost_tier: Some("standard".to_string()),
             capabilities: Vec::new(),
+            skill: None,
             notes: None,
         }
     }
