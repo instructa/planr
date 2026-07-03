@@ -6,6 +6,8 @@ The pattern this makes declarative: strongest model plans and judges, a cheap fa
 
 Routing is **advisory by design**: Planr never calls model providers and never blocks a pick because a profile is unavailable. Your host (Codex, Claude Code, Cursor, any MCP client) stays the dispatch authority.
 
+Want the whole flow on a concrete project first? [Worked Example: Routing a Small Web App](EXAMPLE_WEBAPP.md) walks a frontend/backend todo app from pool declaration to the audit trail, with real outputs.
+
 ## Quick Start
 
 One command writes a working starter registry — the cost-tiering defaults with a premium driver, a standard implementer, and a budget helper, commented so the tiers explain themselves:
