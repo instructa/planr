@@ -62,7 +62,7 @@ impl App {
     /// section; runs were write-only before declared-vs-actual auditing.
     pub(crate) fn item_runs(&self, item_id: &str) -> Result<Vec<serde_json::Value>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, client, profile, status, started_at FROM runs WHERE item_id = ?1 ORDER BY started_at, id",
+            "SELECT id, client, profile, status, started_at FROM runs WHERE item_id = ?1 ORDER BY started_at, rowid",
         )?;
         let rows = stmt.query_map(params![item_id], |row| {
             Ok(json!({

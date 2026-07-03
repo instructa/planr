@@ -1,4 +1,5 @@
 use super::App;
+use crate::agents::{REGISTRY_RELATIVE_PATH, registry_path};
 use crate::cli::{ExportArgs, ImportArgs};
 use anyhow::{Result, anyhow};
 use rusqlite::params;
@@ -69,8 +70,34 @@ impl App {
                 "review_artifacts": artifacts.len(),
             },
             "would_skip": conflicts,
+            // Explicit change entry: registries carry routing policy, so
+            // the preview names the file and the exact action.
+            "agent_registry": self.registry_import_plan(data),
             "requires_confirm": true,
         }))
+    }
+
+    /// What importing the packaged registry would do at this destination:
+    /// `create` when no registry exists, `identical` when the local file
+    /// already matches, `conflict` when it differs — a conflict is never
+    /// resolved silently, the local file must be removed first. Null when
+    /// the package carries no registry (older packages included).
+    fn registry_import_plan(&self, data: &Value) -> Value {
+        let Some(content) = packaged_registry(data) else {
+            return Value::Null;
+        };
+        let action = match fs::read_to_string(registry_path(&self.root)) {
+            Err(_) => "create",
+            Ok(existing) if existing == content => "identical",
+            Ok(_) => "conflict",
+        };
+        json!({
+            "path": REGISTRY_RELATIVE_PATH,
+            "action": action,
+            "hint": (action == "conflict").then_some(
+                "a different .planr/agents.toml already exists; it is never overwritten — remove it and re-import to accept the packaged registry"
+            ),
+        })
     }
 
     fn import_package_apply(&self, data: &Value) -> Result<Value> {
@@ -147,6 +174,17 @@ impl App {
             imported_review_artifacts +=
                 self.import_review_artifact_package(&project.id, package)?;
         }
+        let agent_registry = self.registry_import_plan(data);
+        if agent_registry["action"] == "create" {
+            let path = registry_path(&self.root);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(
+                &path,
+                packaged_registry(data).expect("action=create implies packaged content"),
+            )?;
+        }
         self.promote_ready()?;
         Ok(json!({
             "items": imported_items,
@@ -154,6 +192,7 @@ impl App {
             "contexts": imported_contexts,
             "logs": imported_logs,
             "review_artifacts": imported_review_artifacts,
+            "agent_registry": agent_registry,
         }))
     }
 
@@ -188,6 +227,12 @@ impl App {
             )
             .map_err(Into::into)
     }
+}
+
+/// The registry snapshot carried by a package, if any. Optional so
+/// pre-registry packages import unchanged.
+fn packaged_registry(data: &Value) -> Option<&str> {
+    data.get("agent_registry")?.get("content")?.as_str()
 }
 
 fn package_template(data: &Value) -> Result<&Value> {

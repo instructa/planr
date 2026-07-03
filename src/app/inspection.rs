@@ -1,4 +1,5 @@
 use super::App;
+use crate::agents::{REGISTRY_RELATIVE_PATH, registry_path};
 use crate::planpack::{
     BUILD_PLAN_REQUIRED_SECTIONS, PRODUCT_PLAN_REQUIRED_SECTIONS, parse_plan_metadata,
     unfilled_required_sections,
@@ -353,6 +354,13 @@ impl App {
             "contexts": self.list_contexts(None)?,
             "artifacts": self.list_artifacts(None)?,
             "review_artifacts": json!(self.export_review_artifacts()?),
+            // Raw file snapshot: routing declarations travel with the
+            // package; a malformed registry exports as-is and `agents
+            // check` diagnoses it on the other side.
+            "agent_registry": fs::read_to_string(registry_path(&self.root)).ok().map_or(
+                Value::Null,
+                |content| json!({"path": REGISTRY_RELATIVE_PATH, "content": content}),
+            ),
             "events": self.list_events(None, 500)?,
         }))
     }

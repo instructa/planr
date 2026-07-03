@@ -1650,6 +1650,181 @@ profile = "coder"
 }
 
 #[test]
+fn package_round_trips_agent_registry_without_silent_overwrite() {
+    let source = tempdir().unwrap();
+    let source_db = source.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(source.path())
+        .args([
+            "--db",
+            source_db.to_str().unwrap(),
+            "project",
+            "init",
+            "Source",
+        ])
+        .assert()
+        .success();
+    let registry_toml = r#"
+[profiles.coder]
+client = "codex"
+model = "gpt-5.5"
+
+[[routes]]
+match = { work_type = "code" }
+profile = "coder"
+"#;
+    fs::write(source.path().join(".planr/agents.toml"), registry_toml).unwrap();
+    let package_path = source.path().join("package.json");
+    planr()
+        .current_dir(source.path())
+        .args([
+            "--db",
+            source_db.to_str().unwrap(),
+            "export",
+            "--out",
+            package_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let package: Value = serde_json::from_slice(&fs::read(&package_path).unwrap()).unwrap();
+    assert_eq!(package["agent_registry"]["path"], ".planr/agents.toml");
+    assert_eq!(package["agent_registry"]["content"], registry_toml);
+
+    // Fresh destination: preview names the registry, confirm writes it,
+    // and `agents check` passes there.
+    let dest = tempdir().unwrap();
+    let dest_db = dest.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dest.path())
+        .args(["--db", dest_db.to_str().unwrap(), "project", "init", "Dest"])
+        .assert()
+        .success();
+    let output = planr()
+        .current_dir(dest.path())
+        .args([
+            "--db",
+            dest_db.to_str().unwrap(),
+            "--json",
+            "import",
+            package_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let preview: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(preview["mode"], "preview");
+    assert_eq!(preview["report"]["agent_registry"]["action"], "create");
+    assert!(
+        !dest.path().join(".planr/agents.toml").exists(),
+        "preview must not write anything"
+    );
+    let output = planr()
+        .current_dir(dest.path())
+        .args([
+            "--db",
+            dest_db.to_str().unwrap(),
+            "--json",
+            "import",
+            package_path.to_str().unwrap(),
+            "--confirm",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let applied: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(applied["imported"]["agent_registry"]["action"], "create");
+    assert_eq!(
+        fs::read_to_string(dest.path().join(".planr/agents.toml")).unwrap(),
+        registry_toml
+    );
+    planr()
+        .current_dir(dest.path())
+        .args(["--db", dest_db.to_str().unwrap(), "agents", "check"])
+        .assert()
+        .success();
+
+    // Re-import over the identical registry: reported, nothing to do.
+    let output = planr()
+        .current_dir(dest.path())
+        .args([
+            "--db",
+            dest_db.to_str().unwrap(),
+            "--json",
+            "import",
+            package_path.to_str().unwrap(),
+            "--confirm",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let applied: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(applied["imported"]["agent_registry"]["action"], "identical");
+
+    // A differing local registry is never silently overwritten.
+    let local_registry = "[profiles.local]\nclient = \"cursor\"\nmodel = \"fable-5\"\n";
+    fs::write(dest.path().join(".planr/agents.toml"), local_registry).unwrap();
+    let output = planr()
+        .current_dir(dest.path())
+        .args([
+            "--db",
+            dest_db.to_str().unwrap(),
+            "--json",
+            "import",
+            package_path.to_str().unwrap(),
+            "--confirm",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let applied: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(applied["imported"]["agent_registry"]["action"], "conflict");
+    assert!(
+        applied["imported"]["agent_registry"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("never overwritten")
+    );
+    assert_eq!(
+        fs::read_to_string(dest.path().join(".planr/agents.toml")).unwrap(),
+        local_registry
+    );
+
+    // Packages without a registry (pre-registry exports) import unchanged.
+    let mut stripped: Value = serde_json::from_slice(&fs::read(&package_path).unwrap()).unwrap();
+    stripped.as_object_mut().unwrap().remove("agent_registry");
+    let stripped_path = source.path().join("stripped.json");
+    fs::write(
+        &stripped_path,
+        serde_json::to_vec_pretty(&stripped).unwrap(),
+    )
+    .unwrap();
+    let output = planr()
+        .current_dir(dest.path())
+        .args([
+            "--db",
+            dest_db.to_str().unwrap(),
+            "--json",
+            "import",
+            stripped_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let preview: Value = serde_json::from_slice(&output).unwrap();
+    assert!(preview["report"]["agent_registry"].is_null());
+}
+
+#[test]
 fn prompt_routing_names_routes_fallbacks_and_host_traps() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");

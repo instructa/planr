@@ -107,6 +107,16 @@ Without a registry, installs write the static role files byte-identically to pre
 
 `planr prompt routing [--client codex|claude|cursor|all]` prints a paste-ready block for the driver session: the prioritization table (every route, profile, and fallback in precedence order), per-host dispatch guidance including the traps that silently defeat pins (Codex requires `fork_turns: "none"` and a session restart after re-rendering; the `CLAUDE_CODE_SUBAGENT_MODEL` env var preempts Claude frontmatter; Cursor plan mode, admin policy, and Max Mode override silently), and process-dispatch snippets (`codex exec`, `pi`, `opencode run`) for hosts without role files, pre-filled from the `work_type=code` route. `--json` carries the same content structured.
 
+## Run Audit
+
+Every host has a silent override path — the `CLAUDE_CODE_SUBAGENT_MODEL` env var, Cursor plan/admin/Max-Mode policy, Codex full-history forks, org allowlists — so a pin alone is not proof. The audit loop closes this: workers report the profile they actually ran on via `planr log add`/`planr done --profile <id>` (or the `PLANR_PROFILE` env var, which rendered role files can export), the profile lands on the recorded run, and when it differs from the item's declared route Planr emits an advisory `route_mismatch_observed` event with the declared and actual ids.
+
+- `planr trace item <id>` shows the declared route next to every run's actual client/profile with a `mismatch` marker.
+- `planr doctor` reports the registry state (absent, degraded with parse context, loaded with counts and warnings) and flags rendered role files that drifted from the current registry (`planr install <client> --force` re-renders).
+- `planr export`/`import` carry the registry with the package, preview-first; an existing registry at the destination is never silently overwritten.
+
+Everything here is advisory (ADR-001): mismatches never fail logging, reviews, or closes. No profile reported, no run recorded, or no registry means no comparison and no event.
+
 ## Failure Behavior
 
 - **No registry file**: nothing changes. Pick packets simply have no `routing` key.
@@ -116,6 +126,6 @@ Without a registry, installs write the static role files byte-identically to pre
 
 ## Current Scope
 
-Shipped today: the registry, `planr agents list|check`, the `routing` block in `planr pick --json`, per-item overrides (`planr item route [--set|--clear]`), the matching MCP tools (`planr_agents_list`, `planr_item_route`, `planr_item_route_set`, `planr_item_route_clear`) with identical JSON shapes, registry-rendered role files on `planr install` (with `--force` re-render), and `planr prompt routing`.
+Shipped today: the registry, `planr agents list|check`, the `routing` block in `planr pick --json`, per-item overrides (`planr item route [--set|--clear]`), the matching MCP tools (`planr_agents_list`, `planr_item_route`, `planr_item_route_set`, `planr_item_route_clear`) with identical JSON shapes, registry-rendered role files on `planr install` (with `--force` re-render), `planr prompt routing`, run-profile auditing (`--profile`/`PLANR_PROFILE`, `route_mismatch_observed` events, the `trace item` routing section), `doctor` registry diagnostics with drift detection, and registry packaging in export/import.
 
-Planned next (see the product plan under `.planr/plans/`): declared-vs-actual profile auditing on runs in `planr trace item`, `doctor` registry diagnostics, registry packaging in export/import, and an `agents init` scaffold.
+Planned next (see the product plan under `.planr/plans/`): an `agents init` scaffold and the final docs pass.
