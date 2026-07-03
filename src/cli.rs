@@ -504,6 +504,10 @@ pub(crate) struct LogAddArgs {
     /// (live-verify evidence; `plan audit` checks for it).
     #[arg(long, default_value = "completion")]
     pub(crate) kind: String,
+    /// Registry profile this run actually executed on (fallback:
+    /// PLANR_PROFILE env). Mismatches with the declared route are advisory.
+    #[arg(long)]
+    pub(crate) profile: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -539,6 +543,10 @@ pub(crate) struct DoneArgs {
     /// Pick the next ready item after finishing this step.
     #[arg(long)]
     pub(crate) next: bool,
+    /// Registry profile this run actually executed on (fallback:
+    /// PLANR_PROFILE env). Mismatches with the declared route are advisory.
+    #[arg(long)]
+    pub(crate) profile: Option<String>,
 }
 
 #[derive(Args, Debug)]

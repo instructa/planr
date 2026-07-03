@@ -487,6 +487,7 @@ impl App {
                         commands: &commands,
                         tests: &tests,
                         source: Some("http"),
+                        profile: body_json.get("profile").and_then(Value::as_str),
                     })?}))?
                 }
                 ("POST", p) if p.starts_with("/v1/reviews/") && p.ends_with("/close") => {

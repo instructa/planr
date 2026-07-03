@@ -318,7 +318,7 @@ pub fn mcp_tools() -> Vec<Value> {
         tool(
             "planr_log_add",
             "Add evidence log to an item",
-            json!({"item": prop("string", "Item id"), "summary": prop("string", "What was done"), "kind": prop("string", "Log kind (default completion)"), "files": string_array("Changed file paths"), "commands": string_array("Commands run"), "tests": string_array("Tests run with results")}),
+            json!({"item": prop("string", "Item id"), "summary": prop("string", "What was done"), "kind": prop("string", "Log kind (default completion)"), "files": string_array("Changed file paths"), "commands": string_array("Commands run"), "tests": string_array("Tests run with results"), "profile": prop("string", "Registry profile the run actually executed on (advisory mismatch check)")}),
             &["item", "summary"],
         ),
         tool(

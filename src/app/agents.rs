@@ -111,6 +111,40 @@ impl App {
         Ok(resolve_route(&facts.as_routing_facts(), &registry).map(|routing| json!(routing)))
     }
 
+    /// Advisory declared-vs-actual check at evidence time: every host has
+    /// a silent override path (env preemption, plan/admin policy, org
+    /// allowlists, full-history forks), so the recorded profile is the
+    /// only trustworthy signal. A mismatch emits exactly one
+    /// `route_mismatch_observed` event — it never blocks logging, review,
+    /// or closure. No declared route (no registry, nothing resolves)
+    /// means no comparison and no event.
+    pub(crate) fn observe_route_compliance(
+        &self,
+        item_id: &str,
+        run_id: &str,
+        actual_profile: &str,
+    ) -> Result<()> {
+        let Some(routing) = self.routing_value_for_item(item_id)? else {
+            return Ok(());
+        };
+        let Some(declared) = routing["profile"].as_str() else {
+            return Ok(());
+        };
+        if declared != actual_profile {
+            self.record_event(
+                "route_mismatch_observed",
+                Some(item_id),
+                json!({
+                    "declared_profile": declared,
+                    "actual_profile": actual_profile,
+                    "run_id": run_id,
+                    "matched_selector": routing["matched_selector"],
+                }),
+            )?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn item_route(&self, args: ItemRouteArgs) -> Result<()> {
         let (value, human) = if let Some(profile) = &args.set {
             self.item_route_set_value(&args.id, profile)?

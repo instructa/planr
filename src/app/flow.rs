@@ -6,6 +6,23 @@ use anyhow::{Result, anyhow, bail};
 use rusqlite::params;
 use serde_json::{Value, json};
 
+/// The profile a run actually executed on: explicit input wins, then the
+/// `PLANR_PROFILE` environment variable (role files rendered from the
+/// registry can export it), else none — and none means no comparison and
+/// no event, never a guess.
+fn effective_profile(explicit: Option<&str>) -> Option<String> {
+    explicit
+        .map(str::trim)
+        .filter(|profile| !profile.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            std::env::var("PLANR_PROFILE")
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        })
+}
+
 pub(crate) struct LogInput<'a> {
     pub(crate) item_id: &'a str,
     pub(crate) kind: &'a str,
@@ -14,6 +31,9 @@ pub(crate) struct LogInput<'a> {
     pub(crate) commands: &'a [String],
     pub(crate) tests: &'a [String],
     pub(crate) source: Option<&'a str>,
+    /// Registry profile the work actually executed on, when the worker
+    /// knows it (`--profile` flag; `PLANR_PROFILE` env is the fallback).
+    pub(crate) profile: Option<&'a str>,
 }
 
 /// Owner of the compound work flow: evidence logging, the close transition,
@@ -25,11 +45,15 @@ impl App {
     /// so agents do not need a separate `pick heartbeat` call.
     pub(crate) fn add_log_entry(&self, input: LogInput<'_>) -> Result<String> {
         let id = short_id("log");
+        let profile = effective_profile(input.profile);
         let run_id = if input.commands.is_empty() && input.tests.is_empty() {
             None
         } else {
-            Some(self.record_run(input.item_id, input.commands, "closed")?)
+            Some(self.record_run(input.item_id, input.commands, "closed", profile.as_deref())?)
         };
+        if let (Some(run_id), Some(actual_profile)) = (run_id.as_deref(), profile.as_deref()) {
+            self.observe_route_compliance(input.item_id, run_id, actual_profile)?;
+        }
         self.conn.execute(
             "INSERT INTO logs(id, project_id, item_id, run_id, kind, summary, files, commands, tests, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, datetime('now'))",
             params![
@@ -84,6 +108,7 @@ impl App {
                 commands: &[],
                 tests: &[],
                 source: None,
+                profile: None,
             })?)
         } else {
             None
@@ -211,6 +236,7 @@ impl App {
             commands: &args.cmd,
             tests: &args.tests,
             source: None,
+            profile: args.profile.as_deref(),
         })?;
         let review = if args.review {
             Some(self.request_review_for(&item_id)?)

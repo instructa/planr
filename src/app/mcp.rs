@@ -621,6 +621,7 @@ impl App {
                     commands: &commands,
                     tests: &tests,
                     source: Some("mcp"),
+                    profile: args.get("profile").and_then(Value::as_str),
                 })?})))
             }
             "planr_review_close" => {

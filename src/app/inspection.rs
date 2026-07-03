@@ -407,16 +407,18 @@ impl App {
         item_id: &str,
         commands: &[String],
         status: &str,
+        profile: Option<&str>,
     ) -> Result<String> {
         let id = short_id("run");
         self.conn.execute(
-            "INSERT INTO runs(id, project_id, item_id, worker_id, client, command, cwd, status, started_at, ended_at, metadata) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'), datetime('now'), ?9)",
+            "INSERT INTO runs(id, project_id, item_id, worker_id, client, profile, command, cwd, status, started_at, ended_at, metadata) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, datetime('now'), datetime('now'), ?10)",
             params![
                 id,
                 self.default_project()?.id,
                 item_id,
                 worker_id(),
                 detect_client(),
+                profile,
                 commands.join(" && "),
                 self.root.to_string_lossy(),
                 status,

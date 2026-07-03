@@ -582,6 +582,7 @@ impl App {
                     commands: &args.cmd,
                     tests: &args.tests,
                     source: None,
+                    profile: args.profile.as_deref(),
                 })?;
                 self.emit(
                     json!({"log": self.get_log(&id)?}),
