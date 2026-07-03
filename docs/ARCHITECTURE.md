@@ -39,7 +39,10 @@ Planr V1 is a single Rust binary with explicit module ownership. The crate stays
 - `src/storage/schema.rs`: SQLite schema boundary. Owns DDL, additive schema upgrade helpers, and schema version recording.
 - `src/storage/rows.rs`: SQLite row mapping boundary. Owns row-to-DTO and row-to-JSON mapping functions.
 - `src/planpack.rs`: Markdown package generation and parsing. Owns project context templates, product/build plan templates, plan metadata parsing, hashes, search body extraction, and task extraction.
+- `src/agents.rs`: agent profile registry core. Owns `.planr/agents.toml` parsing, registry validation warnings, and the pure advisory `resolve_route` precedence logic (override > work_type > plan > default); no storage or host concerns.
+- `src/app/agents.rs`: routing application boundary. Owns the `agents` and `item route` command handlers, the shared `*_value` JSON shapes reused by MCP, per-item route facts assembly, and registry-aware role content selection for installs.
 - `src/integrations.rs`: agent-client integration descriptor boundary. Owns Codex, Claude Code, Cursor, MCP install metadata, MCP tool schemas, MCP resources, and MCP text response wrapping.
+- `src/rolefiles.rs`: host role file boundary. Owns the shipped static subagent role files and Cursor skills payloads, plus the pure renderers that re-pin role files from registry profiles (Codex TOML with strict field names, Claude/Cursor markdown frontmatter) under the generated-from header.
 - `src/util.rs`: small CLI-boundary utilities. Owns ids, timestamps, path helpers, output formatting, and safe file writes.
 
 ## Boundary Rules

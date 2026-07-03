@@ -950,6 +950,129 @@ profile = "implementer"
 }
 
 #[test]
+fn install_renders_roles_from_registry_and_respects_provision_once() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Render"])
+        .assert()
+        .success();
+    fs::write(
+        dir.path().join(".planr/agents.toml"),
+        r#"
+[profiles.coder]
+client = "codex"
+model = "gpt-5.5"
+effort = "xhigh"
+
+[profiles.judge]
+client = "cursor"
+model = "fable-5"
+effort = "high"
+
+[[routes]]
+match = { work_type = "code" }
+profile = "coder"
+
+[[routes]]
+match = { work_type = "review" }
+profile = "judge"
+"#,
+    )
+    .unwrap();
+
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "install", "codex"])
+        .assert()
+        .success();
+    let worker_path = dir.path().join(".codex/agents/planr-worker.toml");
+    let worker = fs::read_to_string(&worker_path).unwrap();
+    assert!(worker.contains("# generated from .planr/agents.toml"));
+    let parsed: toml::Value = toml::from_str(&worker).unwrap();
+    assert_eq!(parsed["model"].as_str(), Some("gpt-5.5"));
+    assert_eq!(parsed["model_reasoning_effort"].as_str(), Some("xhigh"));
+    assert!(
+        !parsed["developer_instructions"]
+            .as_str()
+            .unwrap()
+            .is_empty()
+    );
+    // The review route points at a Cursor profile: a Codex role file must
+    // not pin a model Codex cannot dispatch, so the reviewer stays static.
+    let reviewer =
+        fs::read_to_string(dir.path().join(".codex/agents/planr-reviewer.toml")).unwrap();
+    assert!(!reviewer.contains("generated from"));
+    assert!(!reviewer.contains("fable-5"));
+
+    // The same review route does pin the Cursor reviewer role.
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "install", "cursor"])
+        .assert()
+        .success();
+    let cursor_reviewer =
+        fs::read_to_string(dir.path().join(".cursor/agents/planr-reviewer.md")).unwrap();
+    assert!(cursor_reviewer.contains("model: fable-5"));
+    assert!(cursor_reviewer.contains("# profile: judge"));
+    let cursor_worker =
+        fs::read_to_string(dir.path().join(".cursor/agents/planr-worker.md")).unwrap();
+    assert!(
+        cursor_worker.contains("model: inherit"),
+        "code route targets a Codex profile, so the Cursor worker keeps its static default"
+    );
+
+    // Provision-once: hand edits survive a re-install without --force and
+    // are re-rendered with it.
+    fs::write(&worker_path, "# hand edited\n").unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "install", "codex"])
+        .assert()
+        .success();
+    assert_eq!(fs::read_to_string(&worker_path).unwrap(), "# hand edited\n");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "install", "codex", "--force"])
+        .assert()
+        .success();
+    assert_eq!(fs::read_to_string(&worker_path).unwrap(), worker);
+
+    // Without a registry the install output is byte-identical to the
+    // shipped static role files.
+    let fresh = tempdir().unwrap();
+    let fresh_db = fresh.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(fresh.path())
+        .args([
+            "--db",
+            fresh_db.to_str().unwrap(),
+            "project",
+            "init",
+            "Static",
+        ])
+        .assert()
+        .success();
+    planr()
+        .current_dir(fresh.path())
+        .args(["--db", fresh_db.to_str().unwrap(), "install", "codex"])
+        .assert()
+        .success();
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    assert_eq!(
+        fs::read_to_string(fresh.path().join(".codex/agents/planr-worker.toml")).unwrap(),
+        fs::read_to_string(repo.join("plugins/planr/skills/planr-loop/agents/planr-worker.toml"))
+            .unwrap()
+    );
+    assert_eq!(
+        fs::read_to_string(fresh.path().join(".codex/agents/planr-reviewer.toml")).unwrap(),
+        fs::read_to_string(repo.join("plugins/planr/skills/planr-loop/agents/planr-reviewer.toml"))
+            .unwrap()
+    );
+}
+
+#[test]
 fn mcp_route_tools_reuse_cli_json_shapes() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
@@ -5905,6 +6028,9 @@ fn rust_implementation_has_owned_module_boundaries() {
         ("src/model.rs", 400),
         ("src/planpack.rs", 320),
         ("src/integrations.rs", 500),
+        ("src/agents.rs", 800),
+        ("src/app/agents.rs", 500),
+        ("src/rolefiles.rs", 400),
     ] {
         let line_count = fs::read_to_string(root.join(file)).unwrap().lines().count();
         assert!(

@@ -13,6 +13,7 @@ mod cli;
 mod integrations;
 mod model;
 mod planpack;
+mod rolefiles;
 mod storage;
 mod util;
 

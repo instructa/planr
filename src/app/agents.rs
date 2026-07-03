@@ -5,10 +5,11 @@
 
 use super::App;
 use crate::agents::{
-    REGISTRY_RELATIVE_PATH, RegistryLoad, RoutingFacts, load_registry, resolve_route,
-    validation_warnings,
+    AgentRegistry, REGISTRY_RELATIVE_PATH, RegistryLoad, RoutingFacts, load_registry,
+    resolve_route, validation_warnings,
 };
 use crate::cli::{AgentsCommand, ItemRouteArgs};
+use crate::rolefiles::{agent_roles, render_claude_role, render_codex_role, render_cursor_role};
 use anyhow::{Result, bail};
 use rusqlite::params;
 use serde_json::{Value, json};
@@ -295,6 +296,33 @@ impl App {
         ))
     }
 
+    /// Role file contents for `planr install <client>`: when the registry
+    /// loads and a role's route resolves to a profile whose `client`
+    /// matches the install target, the static role text is re-rendered
+    /// with that profile's model pin; in every other case (no registry,
+    /// degraded registry, no route, no client-matching profile in the
+    /// chain, unrenderable content) the shipped static text is used
+    /// byte-identically. Worker roles follow the `work_type=code` route,
+    /// reviewer roles the `work_type=review` route.
+    pub(crate) fn agent_role_contents(&self, client: &str) -> Vec<(&'static str, String)> {
+        let registry = match load_registry(&self.root) {
+            RegistryLoad::Loaded(registry) => Some(registry),
+            _ => None,
+        };
+        agent_roles(client)
+            .iter()
+            .map(|(relative, static_content)| {
+                let rendered = registry
+                    .as_ref()
+                    .and_then(|registry| render_role(client, relative, static_content, registry));
+                (
+                    *relative,
+                    rendered.unwrap_or_else(|| (*static_content).to_string()),
+                )
+            })
+            .collect()
+    }
+
     /// Owned routing inputs for one item, resolved from the graph: the
     /// item's work type, its plan id (via plan path), and any pin.
     fn item_route_facts(&self, item_id: &str) -> Result<ItemRouteInputs> {
@@ -311,6 +339,50 @@ impl App {
             plan_id,
             route_override,
         })
+    }
+}
+
+fn render_role(
+    client: &str,
+    relative: &str,
+    static_content: &str,
+    registry: &AgentRegistry,
+) -> Option<String> {
+    let work_type = if relative.contains("worker") {
+        "code"
+    } else {
+        "review"
+    };
+    let facts = RoutingFacts {
+        work_type,
+        plan_id: None,
+        route_override: None,
+    };
+    let routing = resolve_route(&facts, registry)?;
+    // A role file can only pin models its own host dispatches, so scan
+    // the resolved chain for the first profile whose client matches the
+    // install target — e.g. a review route pointing at a Cursor profile
+    // must not write `fable-5` into a Codex TOML.
+    let (profile_id, profile) = std::iter::once(routing.profile)
+        .chain(routing.fallbacks.iter().copied())
+        .find_map(|id| {
+            let profile = registry.profiles.get(id)?;
+            client_matches(client, &profile.client).then_some((id, profile))
+        })?;
+    match client {
+        "codex" => render_codex_role(static_content, profile_id, profile),
+        "claude" => render_claude_role(static_content, profile_id, profile),
+        "cursor" => render_cursor_role(static_content, profile_id, profile),
+        _ => None,
+    }
+}
+
+/// Install targets vs registry `client` vocabulary: the install command
+/// says `claude`, the registry documents `claude-code`.
+fn client_matches(install_target: &str, profile_client: &str) -> bool {
+    match install_target {
+        "claude" => matches!(profile_client, "claude" | "claude-code"),
+        other => profile_client == other,
     }
 }
 

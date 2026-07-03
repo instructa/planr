@@ -5,11 +5,10 @@ use crate::cli::{
     ItemCommand, LinkCommand, LogCommand, MapCommand, PickCommand, PlanCommand, ProjectCommand,
     PromptCommand, ReviewCommand, SearchArgs,
 };
-use crate::integrations::{
-    agent_roles, cursor_deeplink, cursor_skills, install_snippet, mcp_json_config,
-};
+use crate::integrations::{cursor_deeplink, install_snippet, mcp_json_config};
 use crate::model::LinkKind;
 use crate::planpack::{build_plan_body, product_plan_files, project_pack_files};
+use crate::rolefiles::{agent_roles, cursor_skills};
 use crate::util::{
     append_line, command_exists, format_item, format_project, now_string, print_json, short_id,
     worker_id, write_if_missing,
@@ -872,9 +871,9 @@ impl App {
             return Ok(());
         }
         let mut agent_paths = Vec::new();
-        for (relative, content) in agent_roles(client) {
+        for (relative, content) in self.agent_role_contents(client) {
             let path = self.root.join(relative);
-            write_if_missing(&path, content, false)?;
+            write_if_missing(&path, &content, args.force)?;
             agent_paths.push(path);
         }
         let mcp_path = if args.no_mcp {
@@ -897,7 +896,7 @@ impl App {
             let mut skill_paths = Vec::new();
             for (relative, content) in cursor_skills() {
                 let skill_path = self.root.join(relative);
-                write_if_missing(&skill_path, content, false)?;
+                write_if_missing(&skill_path, content, args.force)?;
                 skill_paths.push(skill_path);
             }
             let mut payload = json!({

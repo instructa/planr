@@ -692,6 +692,10 @@ pub(crate) struct InstallClientArgs {
     /// Plugin-style install: write subagent roles and skills only, no MCP config.
     #[arg(long)]
     pub(crate) no_mcp: bool,
+    /// Overwrite existing role and skill files, e.g. to re-render roles
+    /// after editing .planr/agents.toml. Never touches hand edits without it.
+    #[arg(long)]
+    pub(crate) force: bool,
 }
 
 #[derive(Args, Debug)]
