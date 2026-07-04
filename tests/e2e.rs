@@ -1963,6 +1963,25 @@ profile = "backender"
     assert_eq!(route["routing"]["profile"], "backender");
     assert_eq!(route["routing"]["matched_selector"], "work_type=backend");
 
+    // The retag is auditable: item update records an item_updated event
+    // (a routing-relevant mutation was previously invisible in the log).
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "event", "list"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let events: Value = serde_json::from_slice(&output).unwrap();
+    let update_event = events["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["event_type"] == "item_updated")
+        .expect("item update must record an event");
+    assert_eq!(update_event["payload"]["changed"]["work_type"], "backend");
+
     // Profiles without a skill omit the key entirely: no-skill registries
     // keep byte-identical routing blocks.
     let output = planr()

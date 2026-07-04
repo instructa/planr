@@ -363,20 +363,30 @@ impl App {
                 self.emit(json!({"item": item, "logs": logs}), format_item(&item))
             }
             ItemCommand::Update(args) => {
+                let mut changed = serde_json::Map::new();
                 if let Some(title) = args.title {
                     self.conn.execute(
                         "UPDATE items SET title = ?1, updated_at = datetime('now') WHERE id = ?2",
                         params![title, args.id],
                     )?;
+                    changed.insert("title".into(), json!(title));
                 }
                 if let Some(description) = args.description {
                     self.conn.execute("UPDATE items SET description = ?1, updated_at = datetime('now') WHERE id = ?2", params![description, args.id])?;
+                    changed.insert("description".into(), json!(description));
                 }
                 if let Some(work_type) = args.work_type {
+                    let work_type = crate::model::WorkType::from(work_type);
                     self.conn.execute(
                         "UPDATE items SET work_type = ?1, updated_at = datetime('now') WHERE id = ?2",
-                        params![crate::model::WorkType::from(work_type).as_str(), args.id],
+                        params![work_type.as_str(), args.id],
                     )?;
+                    changed.insert("work_type".into(), json!(work_type.as_str()));
+                }
+                // Every mutation must land in the audit trail: a retag
+                // that changes routing was previously invisible.
+                if !changed.is_empty() {
+                    self.record_event("item_updated", Some(&args.id), json!({"changed": changed}))?;
                 }
                 let item = self.get_item(&args.id)?;
                 self.emit(json!({"item": item}), "item updated".to_string())

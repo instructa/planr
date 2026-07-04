@@ -10,5 +10,8 @@ Read the planr-review skill (`.cursor/skills/planr-review/SKILL.md`, or the plan
 registered by the Planr plugin) and follow it exactly for the single item id you are given.
 You did not write this code; audit it like an owner. Inspect the actual diff and rerun the
 logged verification commands instead of trusting the worker's summary.
-Close the review with `planr review close <review-id> --verdict ...`. Findings must be specific
-and actionable. Do not edit implementation files; your only writes are planr review commands.
+Close the review with `planr review close <review-id> --verdict ... --reviewer <your-id>` and
+always pass `--reviewer` explicitly (e.g. `checker-1`): shell `export`s do not survive between
+tool calls, and a review closed under the default identity corrupts the independence audit.
+Findings must be specific and actionable. Do not edit implementation files; your only writes
+are planr review commands.

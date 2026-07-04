@@ -38,6 +38,8 @@ Two threads: per-task model routing becomes a declared contract instead of prose
 - Links no longer fail silently on unknown item ids: `link add`, `item create --after`, and every other link write now error with the offending id instead of writing nothing (previously a truncated id was ignored without signal — also a dogfood find).
 - `item create --after <bad-id>` is atomic: the id is validated before the item persists, so the error leaves nothing behind and a retry cannot duplicate the item (dogfood find from testing the loud-link fix).
 - The `item cancel` refusal names the repair path (`--preview` first, then `--confirm`) and the item id instead of a bare "refusing to cancel".
+- `item update` now records an `item_updated` graph event with the changed fields — a work-type retag changes routing, and the audit log previously had no trace of it (found during a loop-run acceptance audit).
+- The provisioned reviewer role files instruct passing `--reviewer <id>` explicitly on `review close`: shell exports do not survive between subagent tool calls, and a review closed under the default identity can stamp `independent` on luck alone.
 
 ### Changed
 
