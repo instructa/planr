@@ -305,6 +305,10 @@ pub(crate) struct ItemUpdateArgs {
     pub(crate) title: Option<String>,
     #[arg(long)]
     pub(crate) description: Option<String>,
+    /// Retag the item's work type (free-form, e.g. a registry route's
+    /// use case like `frontend`); model routing re-resolves on next pick.
+    #[arg(long)]
+    pub(crate) work_type: Option<String>,
 }
 
 #[derive(Args, Debug)]

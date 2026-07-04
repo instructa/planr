@@ -26,6 +26,7 @@ planr item breakdown <item-id> --into "A" --into "B" [--into "C"]
 planr item insert "title" --description "..." --after <item-id> [--before <item-id>] [--preview|--confirm]
 planr item amend <item-id> --note "..." [--tag amendment]
 planr item replan <parent-id> --into "A, B, C" [--preview|--confirm]
+planr item update <item-id> [--title "..."] [--description "..."] [--work-type <type>]
 planr item route <item-id> [--set <profile>|--clear]
 planr link add <from-item> <to-item> --type blocks
 planr pick

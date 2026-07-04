@@ -118,6 +118,8 @@ planr map lane --critical
 
 Do not pick from a freshly built map that has zero links unless the items are genuinely independent.
 
+When `planr agents list --json` shows routes with use-case `work_type` selectors (e.g. `frontend`, `backend`), retag freshly built items to match their work (`planr item update <id> --work-type frontend`) so pick packets carry the declared profile, model, and paired skill. This is the agent's job — never the user's; items matching no route keep `code` and fall to the default route.
+
 ## Parent Gate Pattern
 
 Model material changes as parent gates. The parent is the completion gate; linked children do the work.

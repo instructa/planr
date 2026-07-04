@@ -367,6 +367,12 @@ impl App {
                 if let Some(description) = args.description {
                     self.conn.execute("UPDATE items SET description = ?1, updated_at = datetime('now') WHERE id = ?2", params![description, args.id])?;
                 }
+                if let Some(work_type) = args.work_type {
+                    self.conn.execute(
+                        "UPDATE items SET work_type = ?1, updated_at = datetime('now') WHERE id = ?2",
+                        params![crate::model::WorkType::from(work_type).as_str(), args.id],
+                    )?;
+                }
                 let item = self.get_item(&args.id)?;
                 self.emit(json!({"item": item}), "item updated".to_string())
             }

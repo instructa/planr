@@ -166,7 +166,7 @@ profile = "backender"
 fallbacks = ["driver"]
 ```
 
-Create items with the use-case work type (`planr item create ... --work-type frontend`), and the pick packet carries the full pairing — `"profile": "designer"`, `"model": "opus"`, `"skill": "frontend-design"` — so the driver dispatches profile and skill together (`Use $frontend-design on item <id>` on the profile's client/model). Workers pull their slice of the pool with `planr pick --work-type frontend`. `skill` is passthrough vocabulary like model ids: Planr never validates it against installed skills, and profiles without one omit the key entirely. A profile that needs different skills for different use cases is simply two profiles.
+Create items with the use-case work type (`planr item create ... --work-type frontend`) — or retag existing ones with `planr item update <id> --work-type frontend`, which is how planning agents tag `map build` output against the declared routes (the planning skills read `agents list` and do this without user involvement) — and the pick packet carries the full pairing — `"profile": "designer"`, `"model": "opus"`, `"skill": "frontend-design"` — so the driver dispatches profile and skill together (`Use $frontend-design on item <id>` on the profile's client/model). Workers pull their slice of the pool with `planr pick --work-type frontend`. `skill` is passthrough vocabulary like model ids: Planr never validates it against installed skills, and profiles without one omit the key entirely. A profile that needs different skills for different use cases is simply two profiles.
 
 ## Host Matrix
 

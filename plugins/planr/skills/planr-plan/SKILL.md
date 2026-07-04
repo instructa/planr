@@ -51,6 +51,18 @@ A build plan must include:
 - verification;
 - acceptance criteria.
 
+## Route-Aware Tagging
+
+Before `map build`, check whether the project declares model routing: `planr agents list --json`. If routes exist, their `work_type` selectors are the project's use-case vocabulary (e.g. `frontend`, `backend`, `design`) — and tagging is your job, not the user's; never ask a human to name work types. `map build` seeds every item as `code`, so after building the map, retag each item whose work matches a declared route:
+
+```bash
+planr agents list --json          # route selectors = the use-case vocabulary
+planr map build --from <build-plan-id>
+planr item update <item-id> --work-type frontend   # per item that matches a route
+```
+
+Match by the item's actual work (UI/components/styling -> a `frontend` route, API/server/storage -> `backend`, and so on). Items matching no route keep `code` — the default route covers them. The payoff: every pick packet then carries the right profile, model, and paired skill for its use case, so dispatch needs no human routing knowledge.
+
 ## Done
 
 Planning is complete only when `planr plan check <plan-id>` passes and the next command is clear: split further, build map, or ask the user for a blocking decision.

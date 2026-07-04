@@ -1928,6 +1928,41 @@ profile = "backender"
     assert!(prompt.contains("| work_type=frontend | designer | claude-code | opus | high | premium | frontend-design | backender |"));
     assert!(prompt.contains("dispatch the worker with that skill"));
 
+    // Retagging via item update re-resolves routing on the next pick:
+    // planning agents tag map-build output against the declared routes
+    // without user involvement.
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "item",
+            "update",
+            &item_id,
+            "--work-type",
+            "backend",
+        ])
+        .assert()
+        .success();
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "item",
+            "route",
+            &item_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let route: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(route["routing"]["profile"], "backender");
+    assert_eq!(route["routing"]["matched_selector"], "work_type=backend");
+
     // Profiles without a skill omit the key entirely: no-skill registries
     // keep byte-identical routing blocks.
     let output = planr()
