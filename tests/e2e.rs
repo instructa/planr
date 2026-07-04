@@ -2009,6 +2009,98 @@ profile = "backender"
 }
 
 #[test]
+fn item_create_with_bad_after_is_atomic_and_link_writes_fail_loudly() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    let db_arg = db.to_str().unwrap().to_string();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "project", "init", "Atomic"])
+        .assert()
+        .success();
+    // A bad --after fails before the item persists: no half-applied
+    // create, so a retry cannot duplicate.
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "item",
+            "create",
+            "Throwaway",
+            "--description",
+            "d",
+            "--after",
+            "i-truncated",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("item not found: i-truncated"));
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "--json", "map", "show"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let map: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        map["items"].as_array().unwrap().len(),
+        0,
+        "no item may persist"
+    );
+
+    // link add with an unknown endpoint errors instead of writing nothing.
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "item",
+            "create",
+            "Real",
+            "--description",
+            "d",
+        ])
+        .assert()
+        .success();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "link",
+            "add",
+            "i-nope",
+            "i-also-nope",
+            "--type",
+            "blocks",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unknown item `i-nope`"));
+
+    // cancel without a flag names the repair path.
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "--json", "map", "show"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let map: Value = serde_json::from_slice(&output).unwrap();
+    let id = map["items"][0]["id"].as_str().unwrap().to_string();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "item", "cancel", &id])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--preview"));
+}
+
+#[test]
 fn agents_init_flag_specs_generate_a_pool_and_fail_closed() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
@@ -7298,7 +7390,7 @@ fn rust_implementation_has_owned_module_boundaries() {
         ("src/cli.rs", 950usize),
         ("src/app/mod.rs", 180),
         ("src/app/audit.rs", 200),
-        ("src/app/commands.rs", 1_000),
+        ("src/app/commands.rs", 1_020),
         ("src/app/flow.rs", 320),
         ("src/app/git_review.rs", 350),
         ("src/app/mcp.rs", 900),

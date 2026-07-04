@@ -319,6 +319,11 @@ impl App {
     pub(crate) fn item(&self, command: ItemCommand) -> Result<()> {
         match command {
             ItemCommand::Create(args) => {
+                // A bad --after must fail before the create persists,
+                // or a retry after the error would duplicate the item.
+                if let Some(after) = args.after.as_deref() {
+                    self.get_item(after)?;
+                }
                 let item = self.create_item(
                     None,
                     &args.title,
@@ -414,7 +419,10 @@ impl App {
                     return self.emit(json!({"would_cancel": item}), "preview only".to_string());
                 }
                 if !args.confirm {
-                    bail!("refusing to cancel without --confirm or --preview");
+                    bail!(
+                        "refusing to cancel without a flag; run `planr item cancel {} --preview` to see the impact, then re-run with --confirm",
+                        args.id
+                    );
                 }
                 self.conn.execute("UPDATE items SET status = 'cancelled', updated_at = datetime('now') WHERE id = ?1", params![args.id])?;
                 self.promote_ready()?;
