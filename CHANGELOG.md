@@ -32,6 +32,11 @@ Two threads: per-task model routing becomes a declared contract instead of prose
 - The Cursor plugin manifest registers both subagents and its version is guarded by the release script and the version drift test (it had drifted to 1.1.12).
 - `docs/CURSOR.md` documents multitasking with Cursor's built-in features: maker/checker subagent dispatch, parallel and background subagents over pick leases, cloud agent caveats, and the shared-absolute-`--db` rule for parallel agents in git worktrees.
 
+### Fixed
+
+- `item create --work-type` is no longer a hidden flag: it is the way items opt into use-case routing, so it now appears in `--help` with the routing context (found while dogfooding the routing walkthrough).
+- Links no longer fail silently on unknown item ids: `link add`, `item create --after`, and every other link write now error with the offending id instead of writing nothing (previously a truncated id was ignored without signal — also a dogfood find).
+
 ### Changed
 
 - Route-aware tagging without user involvement: `planr item update` gains `--work-type`, and the planning skills (planr-plan, planr-task-graph, planr-goal) now instruct agents to read the registry's route selectors (`agents list --json`) after `map build` and retag items to the matching use case (`frontend`, `backend`, ...) themselves — a human never has to know work types exist for routing to bind.

@@ -294,7 +294,10 @@ pub(crate) struct ItemCreateArgs {
     pub(crate) pre: Option<String>,
     #[arg(long)]
     pub(crate) post: Option<String>,
-    #[arg(long, hide = true)]
+    /// Work type (free-form): built-in vocabulary like code/fix/review,
+    /// or a registry route's use case (frontend, backend, ...) so model
+    /// routing binds. Defaults to generic.
+    #[arg(long)]
     pub(crate) work_type: Option<String>,
 }
 

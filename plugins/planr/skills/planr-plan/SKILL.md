@@ -67,4 +67,6 @@ Match by the item's actual work (UI/components/styling -> a `frontend` route, AP
 
 Planning is complete only when `planr plan check <plan-id>` passes and the next command is clear: split further, build map, or ask the user for a blocking decision.
 
+When the map is built, linked, and tagged, end by naming the execution handoff explicitly — the user should never have to guess the next prompt: `Use $planr-loop on plan <build-plan-id>. Stop condition: all items closed with evidence, reviews complete, live verification logged.` (On hosts with a /goal primitive, `$planr-goal` wraps the same loop for long-running autonomous runs.)
+
 `plan check` rejects empty scaffolds: build plans must have content in `## Scope Decision`, `## Verification`, and `## Acceptance Criteria`; product plans must have content in `## Problem`, `## Requirements`, and `## Success Criteria` of `PRODUCT_SPEC.md`. Write those sections before checking — do not pad them to satisfy the gate.

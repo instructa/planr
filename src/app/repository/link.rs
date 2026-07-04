@@ -8,6 +8,19 @@ use serde_json::{Value, json};
 impl App {
     pub(crate) fn add_link(&self, from: &str, to: &str, kind: &str) -> Result<()> {
         let kind = LinkKind::try_from(kind)?;
+        // Unknown endpoints must error loudly: a truncated id in
+        // `--after` or `link add` would otherwise write a dangling link
+        // (or nothing) with no signal.
+        for id in [from, to] {
+            let exists: i64 = self.conn.query_row(
+                "SELECT COUNT(*) FROM items WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )?;
+            if exists == 0 {
+                anyhow::bail!("unknown item `{id}`; use the full item id (see `planr map show`)");
+            }
+        }
         self.conn.execute(
             "INSERT OR IGNORE INTO links(from_item, to_item, kind, condition) VALUES (?1, ?2, ?3, 'all')",
             params![from, to, kind.as_str()],
