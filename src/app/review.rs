@@ -227,7 +227,11 @@ impl App {
         // `independent` must be earned, not lucked into: it requires an
         // explicitly set reviewer identity (--reviewer or PLANR_WORKER_ID).
         // An anonymous fallback identity that merely differs from the
-        // maker's string proves nothing, so it stamps single_agent.
+        // maker's string proves nothing, so it stamps single_agent — and
+        // a blank `--reviewer ""` is not an identity either.
+        let reviewer = reviewer
+            .map(str::trim)
+            .filter(|reviewer| !reviewer.is_empty());
         let explicit_identity = reviewer.is_some() || crate::util::explicit_worker_id().is_some();
         let reviewer = reviewer
             .map(ToOwned::to_owned)

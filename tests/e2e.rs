@@ -21,6 +21,7 @@ fn planr() -> Command {
         "CLAUDECODE",
         "CURSOR_AGENT",
         "CURSOR_INVOKED_AS",
+        "PLANR_PROFILE",
     ] {
         cmd.env_remove(var);
     }
@@ -2237,6 +2238,26 @@ fn agents_init_flag_specs_generate_a_pool_and_fail_closed() {
     assert_eq!(pick["routing"]["profile"], "designer");
     assert_eq!(pick["routing"]["skill"], "frontend-design");
     assert_eq!(pick["routing"]["fallbacks"][0], "driver");
+
+    // A hand-written registry with render-unsafe values (quoted TOML keys
+    // parse fine but would corrupt rendered role files) keeps installs on
+    // the static role files instead of writing broken artifacts.
+    fs::write(
+        dir.path().join(".planr/agents.toml"),
+        "[profiles.\"evil\nid\"]\nclient = \"codex\"\nmodel = \"gpt-5.5\"\n\n[[routes]]\nmatch = { work_type = \"code\" }\nprofile = \"evil\nid\"\n",
+    )
+    .unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "install", "codex", "--no-mcp", "--force"])
+        .assert()
+        .success();
+    let worker = fs::read_to_string(dir.path().join(".codex/agents/planr-worker.toml")).unwrap();
+    assert!(
+        !worker.contains("generated from"),
+        "render-unsafe profile must fall back to the static role: {worker}"
+    );
+    toml::from_str::<toml::Value>(&worker).expect("role file must stay parseable TOML");
 
     // QA-3: spec flags never overwrite without --force either.
     planr()
@@ -4766,6 +4787,62 @@ fn independent_review_stamp_requires_explicit_reviewer_identity() {
     assert_eq!(
         closed["review_mode"], "single_agent",
         "anonymous reviewer must not stamp independent: {closed}"
+    );
+
+    // A blank --reviewer is not an identity: it must stamp single_agent
+    // exactly like the anonymous fallback (GPT-5.5 review finding).
+    let item = create_test_item(dir.path(), &db, "Slice C", "stamp check");
+    planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "maker-1")
+        .args(["--db", db.to_str().unwrap(), "pick"])
+        .assert()
+        .success();
+    let output = planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "maker-1")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "done",
+            &item,
+            "--summary",
+            "built",
+            "--review",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let done: Value = serde_json::from_slice(&output).unwrap();
+    let blank_review = done["review"]["id"].as_str().unwrap().to_string();
+    let output = planr()
+        .current_dir(dir.path())
+        .env_remove("PLANR_WORKER_ID")
+        .env_remove("PLANR_SESSION_ID")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "review",
+            "close",
+            &blank_review,
+            "--verdict",
+            "complete",
+            "--reviewer",
+            "   ",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let closed: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        closed["review_mode"], "single_agent",
+        "blank --reviewer must not stamp independent: {closed}"
     );
 
     // Explicit --reviewer earns the independent stamp as before.
@@ -7704,7 +7781,7 @@ fn rust_implementation_has_owned_module_boundaries() {
         ("src/integrations.rs", 500),
         ("src/agents.rs", 800),
         ("src/app/agents.rs", 850),
-        ("src/app/agents_init.rs", 700),
+        ("src/app/agents_init.rs", 800),
         ("src/rolefiles.rs", 400),
     ] {
         let line_count = fs::read_to_string(root.join(file)).unwrap().lines().count();

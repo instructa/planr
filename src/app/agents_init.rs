@@ -117,6 +117,33 @@ fallbacks = ["driver"]
 /// `<id>=<client>/<model>[@<effort>][#<tier>]`. `#` and `@` are stripped
 /// right-to-left before the single client/model split, so a model id may
 /// itself contain `/` (opencode's `provider/model-id` vocabulary).
+/// Ids become bare TOML keys (`[profiles.<id>]`) and route selectors,
+/// so they are restricted to bare-key-safe characters; values only need
+/// to stay single-line (toml_str escapes quotes and backslashes, but a
+/// TOML basic string cannot hold control characters).
+fn check_spec_id(label: &str, value: &str) -> Result<()> {
+    if value.is_empty()
+        || !value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        bail!(
+            "{label} `{value}` must contain only letters, digits, `-`, or `_` (it becomes a TOML key)"
+        );
+    }
+    Ok(())
+}
+
+fn check_spec_value(label: &str, value: &str) -> Result<()> {
+    if value.chars().any(char::is_control) {
+        bail!(
+            "{label} `{}` must not contain control characters",
+            value.escape_debug()
+        );
+    }
+    Ok(())
+}
+
 fn parse_profile_spec(spec: &str) -> Result<ProfileSpec> {
     let Some((id, rest)) = spec.split_once('=') else {
         bail!("malformed profile spec `{spec}`; expected {PROFILE_GRAMMAR}");
@@ -144,6 +171,17 @@ fn parse_profile_spec(spec: &str) -> Result<ProfileSpec> {
             bail!("profile spec `{spec}` has an empty {label}; expected {PROFILE_GRAMMAR}");
         }
     }
+    check_spec_id("profile id", id.trim())?;
+    for (label, value) in [
+        ("client", Some(client)),
+        ("model", Some(model)),
+        ("effort", effort),
+        ("tier", cost_tier),
+    ] {
+        if let Some(value) = value {
+            check_spec_value(label, value.trim())?;
+        }
+    }
     Ok(ProfileSpec {
         id: id.trim().to_string(),
         client: client.trim().to_string(),
@@ -168,6 +206,7 @@ fn parse_route_spec(spec: &str) -> Result<RouteSpec> {
     if work_type.trim().is_empty() || profile.is_empty() {
         bail!("malformed route spec `{spec}`; expected {ROUTE_GRAMMAR}");
     }
+    check_spec_id("route work_type", work_type.trim())?;
     Ok(RouteSpec {
         work_type: work_type.trim().to_string(),
         profile,
@@ -201,6 +240,7 @@ fn compile_specs(args: &AgentsInitArgs) -> Result<InitSpec> {
         if profile_id.is_empty() || skill.is_empty() {
             bail!("malformed skill spec `{pairing}`; expected {SKILL_GRAMMAR}");
         }
+        check_spec_value("skill", skill)?;
         let Some(profile) = spec
             .profiles
             .iter_mut()
@@ -467,6 +507,15 @@ impl App {
         } else {
             ("scaffold", REGISTRY_SCAFFOLD.to_string(), None)
         };
+        // Defense in depth for generated content: never write a registry
+        // that does not parse, whatever the builder inputs were.
+        if let crate::agents::RegistryLoad::Degraded { error } =
+            crate::agents::parse_registry(&content)
+        {
+            bail!(
+                "generated registry does not parse ({error}); this is a planr bug — please report it"
+            );
+        }
         write_if_missing(&path, &content, args.force)?;
         self.record_event(
             "agents_registry_initialized",
@@ -597,6 +646,38 @@ mod tests {
             registry.route_default.as_ref().unwrap().fallbacks,
             ["driver"]
         );
+    }
+
+    #[test]
+    fn unsafe_ids_and_values_fail_closed_before_any_write() {
+        // Dotted/space ids would become nested or invalid TOML table keys;
+        // control characters would break TOML basic strings (GPT-5.5
+        // review finding).
+        for (args, needle) in [
+            (
+                args(&["team.alpha=codex/m"], &[], &[], None),
+                "must contain only letters",
+            ),
+            (
+                args(&["bad id=codex/m"], &[], &[], None),
+                "must contain only letters",
+            ),
+            (
+                args(&["a=codex/m\nnewline"], &[], &[], None),
+                "control characters",
+            ),
+            (
+                args(&["a=codex/m"], &[], &["front end=a"], None),
+                "must contain only letters",
+            ),
+            (
+                args(&["a=codex/m"], &["a=skill\nname"], &[], None),
+                "control characters",
+            ),
+        ] {
+            let error = compile_specs(&args).unwrap_err().to_string();
+            assert!(error.contains(needle), "expected `{needle}` in `{error}`");
+        }
     }
 
     #[test]

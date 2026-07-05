@@ -173,14 +173,17 @@ pub fn worker_id() -> String {
 /// collapse into the same fallback string, so an `independent` stamp is
 /// only trustworthy for explicit identities.
 pub fn explicit_worker_id() -> Option<String> {
-    env::var("PLANR_WORKER_ID")
-        .ok()
-        .or_else(|| env::var("PLANR_SESSION_ID").ok())
-        .or_else(|| {
-            env::var("CODEX_SESSION_ID")
-                .ok()
-                .map(|id| format!("codex:{id}"))
-        })
+    // Blank values are not identities: an empty PLANR_WORKER_ID must
+    // neither count as explicit nor mask a set PLANR_SESSION_ID.
+    let non_blank = |var: &str| {
+        env::var(var)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    };
+    non_blank("PLANR_WORKER_ID")
+        .or_else(|| non_blank("PLANR_SESSION_ID"))
+        .or_else(|| non_blank("CODEX_SESSION_ID").map(|id| format!("codex:{id}")))
 }
 
 /// The host this process observably runs under, in registry client

@@ -709,6 +709,19 @@ fn render_role(
             let profile = registry.profiles.get(id)?;
             client_matches(client, &profile.client).then_some((id, profile))
         })?;
+    // A hand-written registry can carry values that would break the
+    // rendered artifact (TOML keys are quotable, so newlines or a `"""`
+    // sequence parse fine but escape the rendered developer_instructions
+    // block or markdown frontmatter). Such profiles keep the static
+    // role file instead of producing a corrupt render.
+    let render_unsafe =
+        |value: &str| value.chars().any(char::is_control) || value.contains("\"\"\"");
+    if render_unsafe(profile_id)
+        || render_unsafe(&profile.model)
+        || profile.effort.as_deref().is_some_and(render_unsafe)
+    {
+        return None;
+    }
     // Bake the audit report into the worker's own definition so profile
     // reporting never depends on worker memory; reviewer roles carry
     // their explicit --reviewer instruction in the static body already.
