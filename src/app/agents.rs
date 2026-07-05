@@ -667,10 +667,19 @@ fn render_role(
             let profile = registry.profiles.get(id)?;
             client_matches(client, &profile.client).then_some((id, profile))
         })?;
+    // Bake the audit report into the worker's own definition so profile
+    // reporting never depends on worker memory; reviewer roles carry
+    // their explicit --reviewer instruction in the static body already.
+    let evidence_note = (work_type == "code").then(|| {
+        format!(
+            "Report the profile this role runs on: pass `--profile {profile_id}` on every `planr done` and `planr log add`."
+        )
+    });
+    let evidence_note = evidence_note.as_deref();
     match client {
-        "codex" => render_codex_role(static_content, profile_id, profile),
-        "claude" => render_claude_role(static_content, profile_id, profile),
-        "cursor" => render_cursor_role(static_content, profile_id, profile),
+        "codex" => render_codex_role(static_content, profile_id, profile, evidence_note),
+        "claude" => render_claude_role(static_content, profile_id, profile, evidence_note),
+        "cursor" => render_cursor_role(static_content, profile_id, profile, evidence_note),
         _ => None,
     }
 }

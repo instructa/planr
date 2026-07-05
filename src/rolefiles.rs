@@ -88,6 +88,7 @@ pub fn render_codex_role(
     static_content: &str,
     profile_id: &str,
     profile: &AgentProfile,
+    evidence_note: Option<&str>,
 ) -> Option<String> {
     let parsed: toml::Value = toml::from_str(static_content).ok()?;
     let table = parsed.as_table()?;
@@ -96,6 +97,11 @@ pub fn render_codex_role(
     let developer_instructions = table.get("developer_instructions")?.as_str()?;
     if developer_instructions.contains("\"\"\"") || !developer_instructions.ends_with('\n') {
         return None;
+    }
+    let mut developer_instructions = developer_instructions.to_string();
+    if let Some(note) = evidence_note {
+        developer_instructions.push_str(note);
+        developer_instructions.push('\n');
     }
     let mut out = format!(
         "# {GENERATED_FROM_HEADER}\n# profile: {profile_id}\nname = {}\ndescription = {}\nmodel = {}\n",
@@ -143,12 +149,14 @@ pub fn render_claude_role(
     static_content: &str,
     profile_id: &str,
     profile: &AgentProfile,
+    evidence_note: Option<&str>,
 ) -> Option<String> {
     render_markdown_role(
         static_content,
         profile_id,
         &profile.model,
         profile.effort.as_deref(),
+        evidence_note,
     )
 }
 
@@ -159,8 +167,15 @@ pub fn render_cursor_role(
     static_content: &str,
     profile_id: &str,
     profile: &AgentProfile,
+    evidence_note: Option<&str>,
 ) -> Option<String> {
-    render_markdown_role(static_content, profile_id, &profile.model, None)
+    render_markdown_role(
+        static_content,
+        profile_id,
+        &profile.model,
+        None,
+        evidence_note,
+    )
 }
 
 /// Shared markdown renderer: keeps the static frontmatter fields and body
@@ -171,6 +186,7 @@ fn render_markdown_role(
     profile_id: &str,
     model: &str,
     effort: Option<&str>,
+    evidence_note: Option<&str>,
 ) -> Option<String> {
     let rest = static_content.strip_prefix("---\n")?;
     let (frontmatter, body) = rest.split_once("\n---\n")?;
@@ -194,6 +210,13 @@ fn render_markdown_role(
     }
     out.push_str("---\n");
     out.push_str(body);
+    if let Some(note) = evidence_note {
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str(note);
+        out.push('\n');
+    }
     Some(out)
 }
 
@@ -235,6 +258,7 @@ mod tests {
             static_content,
             "gpt55-coder",
             &profile("gpt-5.5", Some("xhigh")),
+            Some("Report with `--profile gpt55-coder`."),
         )
         .unwrap();
         assert!(rendered.starts_with(&format!(
@@ -244,13 +268,20 @@ mod tests {
         assert_eq!(parsed["model"].as_str(), Some("gpt-5.5"));
         assert_eq!(parsed["model_reasoning_effort"].as_str(), Some("xhigh"));
         let static_parsed: toml::Value = toml::from_str(static_content).unwrap();
-        for field in ["name", "description", "developer_instructions"] {
+        for field in ["name", "description"] {
             assert_eq!(
                 parsed[field].as_str(),
                 static_parsed[field].as_str(),
                 "field {field} drifted from the static role"
             );
         }
+        // The evidence note lands inside developer_instructions (a TOML
+        // comment would never reach the model), after the static prompt.
+        let instructions = parsed["developer_instructions"].as_str().unwrap();
+        assert!(
+            instructions.starts_with(static_parsed["developer_instructions"].as_str().unwrap())
+        );
+        assert!(instructions.contains("Report with `--profile gpt55-coder`."));
         assert_eq!(
             parsed["skills"]["config"][0]["path"].as_str(),
             static_parsed["skills"]["config"][0]["path"].as_str()
@@ -267,7 +298,7 @@ mod tests {
     fn codex_render_always_contains_developer_instructions() {
         for (_, static_content) in agent_roles("codex") {
             let rendered =
-                render_codex_role(static_content, "p", &profile("gpt-5.5", None)).unwrap();
+                render_codex_role(static_content, "p", &profile("gpt-5.5", None), None).unwrap();
             let parsed: toml::Value = toml::from_str(&rendered).unwrap();
             assert!(
                 !parsed["developer_instructions"]
@@ -281,7 +312,8 @@ mod tests {
     #[test]
     fn codex_render_without_effort_omits_the_field_and_keeps_sandbox_mode() {
         let (_, reviewer) = agent_roles("codex")[1];
-        let rendered = render_codex_role(reviewer, "driver", &profile("fable-5", None)).unwrap();
+        let rendered =
+            render_codex_role(reviewer, "driver", &profile("fable-5", None), None).unwrap();
         let parsed: toml::Value = toml::from_str(&rendered).unwrap();
         assert_eq!(parsed["model"].as_str(), Some("fable-5"));
         assert!(parsed.get("model_reasoning_effort").is_none());
@@ -297,6 +329,7 @@ mod tests {
             static_content,
             "gpt55-coder",
             &profile("opus", Some("high")),
+            None,
         )
         .unwrap();
         let (lines, body) = frontmatter_and_body(&rendered);
@@ -324,9 +357,13 @@ mod tests {
     #[test]
     fn cursor_render_pins_model_only() {
         let (_, static_content) = agent_roles("cursor")[0];
-        let rendered =
-            render_cursor_role(static_content, "driver", &profile("fable-5", Some("high")))
-                .unwrap();
+        let rendered = render_cursor_role(
+            static_content,
+            "driver",
+            &profile("fable-5", Some("high")),
+            None,
+        )
+        .unwrap();
         let (lines, body) = frontmatter_and_body(&rendered);
         assert!(lines.contains(&"model: fable-5"));
         // Cursor frontmatter has no effort field; the profile's effort must
@@ -338,7 +375,23 @@ mod tests {
     }
 
     #[test]
+    fn markdown_render_appends_evidence_note_to_the_body() {
+        let (_, static_content) = agent_roles("cursor")[0];
+        let rendered = render_cursor_role(
+            static_content,
+            "gpt55-coder",
+            &profile("gpt-5.5", None),
+            Some("Report with `--profile gpt55-coder`."),
+        )
+        .unwrap();
+        let (_, body) = frontmatter_and_body(&rendered);
+        assert!(body.ends_with("Report with `--profile gpt55-coder`.\n"));
+    }
+
+    #[test]
     fn markdown_render_rejects_content_without_frontmatter() {
-        assert!(render_cursor_role("no frontmatter here", "p", &profile("m", None)).is_none());
+        assert!(
+            render_cursor_role("no frontmatter here", "p", &profile("m", None), None).is_none()
+        );
     }
 }

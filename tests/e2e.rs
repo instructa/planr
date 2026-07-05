@@ -993,11 +993,14 @@ profile = "judge"
     let parsed: toml::Value = toml::from_str(&worker).unwrap();
     assert_eq!(parsed["model"].as_str(), Some("gpt-5.5"));
     assert_eq!(parsed["model_reasoning_effort"].as_str(), Some("xhigh"));
+    // The worker's audit report is baked into its own definition: the
+    // concrete profile id as a --profile instruction, not worker memory.
     assert!(
-        !parsed["developer_instructions"]
+        parsed["developer_instructions"]
             .as_str()
             .unwrap()
-            .is_empty()
+            .contains("--profile coder"),
+        "rendered worker must instruct its own profile report: {worker}"
     );
     // The review route points at a Cursor profile: a Codex role file must
     // not pin a model Codex cannot dispatch, so the reviewer stays static.
