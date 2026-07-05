@@ -32,6 +32,22 @@ Two independent gates back the script:
 - `cargo test` fails on every push when any manifest version drifts from `Cargo.toml`.
 - The release workflow's `Verify release versions are consistent` step refuses the tag when the tag, any manifest, or the `CHANGELOG.md` section disagree.
 
+## Alpha Channel (Pre-Releases)
+
+Pre-release versions use the same script and pipeline with a semver pre-release suffix:
+
+```bash
+scripts/release.sh 1.2.0-alpha.1 "one-line summary"
+```
+
+The changelog section requirement applies verbatim (`## [1.2.0-alpha.1]`). What changes downstream:
+
+- The GitHub Release is marked as a **prerelease**, so `releases/latest` — and with it the curl installer's default — stays on the last stable version. Testers pin explicitly: `PLANR_VERSION=1.2.0-alpha.1 sh install.sh`.
+- npm publishes under the **`alpha` dist-tag** instead of `latest`: plain `npm install -g planr` keeps resolving stable, testers opt in with `npm install -g planr@alpha`.
+- The **Homebrew tap never moves** on pre-release tags.
+
+Only `-alpha.N`, `-beta.N`, and `-rc.N` suffixes are accepted; everything else the script rejects.
+
 ## Automated Release Pipeline
 
 Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`:

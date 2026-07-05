@@ -1,7 +1,7 @@
 use crate::model::{Item, Project};
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use rusqlite::Connection;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use slug::slugify;
 use std::{env, fs, path::Path};
 use time::OffsetDateTime;
@@ -158,20 +158,51 @@ pub fn now_string() -> String {
 /// identity, e.g. `maker-1`) or PLANR_SESSION_ID for the whole session so
 /// pick, done, and log all attribute to the same worker.
 pub fn worker_id() -> String {
-    if let Ok(id) = env::var("PLANR_WORKER_ID") {
-        return id;
+    explicit_worker_id().unwrap_or_else(|| {
+        let host = env::var("HOSTNAME").unwrap_or_else(|_| "local".to_string());
+        let user = env::var("USER")
+            .or_else(|_| env::var("USERNAME"))
+            .unwrap_or_else(|_| "worker".to_string());
+        format!("{}:{}:{}", detect_client(), host, user)
+    })
+}
+
+/// The identity only when it was deliberately set (env), as opposed to
+/// the anonymous `client:host:user` fallback. Review-mode derivation
+/// needs the distinction: two anonymous processes on one machine
+/// collapse into the same fallback string, so an `independent` stamp is
+/// only trustworthy for explicit identities.
+pub fn explicit_worker_id() -> Option<String> {
+    // Blank values are not identities: an empty PLANR_WORKER_ID must
+    // neither count as explicit nor mask a set PLANR_SESSION_ID.
+    let non_blank = |var: &str| {
+        env::var(var)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    };
+    non_blank("PLANR_WORKER_ID")
+        .or_else(|| non_blank("PLANR_SESSION_ID"))
+        .or_else(|| non_blank("CODEX_SESSION_ID").map(|id| format!("codex:{id}")))
+}
+
+/// The host this process observably runs under, in registry client
+/// vocabulary — from env vars the hosts set themselves, so it is
+/// observed rather than self-declared. Innermost host wins: Codex and
+/// Claude vars mark an active session, Cursor vars are inherited
+/// broadly, so they rank last. None when nothing identifies the host;
+/// callers must store nothing rather than guess.
+pub fn observed_client() -> Option<String> {
+    if env::var("CODEX_SANDBOX").is_ok() || env::var("CODEX_SESSION_ID").is_ok() {
+        return Some("codex".to_string());
     }
-    if let Ok(id) = env::var("PLANR_SESSION_ID") {
-        return id;
+    if env::var("CLAUDECODE").is_ok() {
+        return Some("claude-code".to_string());
     }
-    if let Ok(id) = env::var("CODEX_SESSION_ID") {
-        return format!("codex:{id}");
+    if env::var("CURSOR_AGENT").is_ok() || env::var("CURSOR_INVOKED_AS").is_ok() {
+        return Some("cursor".to_string());
     }
-    let host = env::var("HOSTNAME").unwrap_or_else(|_| "local".to_string());
-    let user = env::var("USER")
-        .or_else(|_| env::var("USERNAME"))
-        .unwrap_or_else(|_| "worker".to_string());
-    format!("{}:{}:{}", detect_client(), host, user)
+    None
 }
 
 pub fn detect_client() -> String {

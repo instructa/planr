@@ -175,7 +175,7 @@ fn render_node(
     }
     line.push_str(&format!(
         "{} {} {} {}",
-        status_icon(&item.status),
+        status_icon(item.status.as_str()),
         item.status,
         item.id,
         item.title
@@ -264,6 +264,7 @@ fn pressure_counts(items: &[Item], edges: &[RenderEdge]) -> HashMap<String, usiz
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{ItemStatus, WorkType};
 
     fn item(id: &str, title: &str, status: &str) -> Item {
         Item {
@@ -272,8 +273,8 @@ mod tests {
             parent_item_id: None,
             title: title.to_string(),
             description: String::new(),
-            status: status.to_string(),
-            work_type: "generic".to_string(),
+            status: ItemStatus::try_from(status).expect("valid test status"),
+            work_type: WorkType::Generic,
             priority: 0,
             worker_id: None,
             plan_path: None,

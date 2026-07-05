@@ -1,9 +1,11 @@
-use crate::util::now_string;
+//! Markdown plan package parsing and templates.
+
 use anyhow::Result;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use slug::slugify;
 use std::{fs, path::Path};
+use time::OffsetDateTime;
 
 pub fn project_pack_files() -> Vec<(&'static str, String)> {
     vec![
@@ -259,4 +261,10 @@ fn extract_specs_from_text(text: &str) -> Vec<(String, String)> {
         }
     }
     specs
+}
+
+fn now_string() -> String {
+    OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| "unknown-time".to_string())
 }

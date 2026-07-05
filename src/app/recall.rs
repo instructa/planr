@@ -1,10 +1,10 @@
-use super::lease::PickFilter;
 use super::App;
+use super::lease::PickFilter;
 use crate::storage::row_to_item;
 use crate::util::collect_rows;
 use anyhow::Result;
 use rusqlite::params;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 impl App {
     /// Picks the next ready item and returns it as a flat work packet, or a
@@ -74,7 +74,9 @@ impl App {
         for item in ready_items {
             let cause = if filter.exclude == Some(item.id.as_str()) {
                 "this worker just requested it (a maker never picks its own review)".to_string()
-            } else if let Some(required) = filter.work_type.filter(|wt| *wt != item.work_type) {
+            } else if let Some(required) =
+                filter.work_type.filter(|wt| *wt != item.work_type.as_str())
+            {
                 let without_work_type = match plan {
                     Some(plan_id) => format!("planr pick --plan {plan_id} --json"),
                     None => "planr pick --json".to_string(),
@@ -146,6 +148,11 @@ impl App {
             "would_remain_blocked": close_effect.would_remain_blocked,
         });
         packet["possible_file_conflicts"] = json!(self.possible_file_conflicts(item_id)?);
+        // Advisory model routing from .planr/agents.toml; the dispatching
+        // host stays the authority. Omitted when nothing resolves.
+        if let Some(routing) = self.routing_value_for_item(item_id)? {
+            packet["routing"] = routing;
+        }
         packet["privacy"] = json!({
             "source_file_content_included": false,
             "prompt_or_response_content_included": false,

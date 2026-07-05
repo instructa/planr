@@ -58,7 +58,7 @@ The loop never closes its own reviews when the host supports a second agent. Mak
 
 ## Skills Are The Prompts
 
-When the host supports subagents, the driver never implements: it dispatches, audits, and synthesizes. Driver tokens go into `plan audit`, dispatch decisions, and conflict resolution — implementation and review run in the subagent roles, which the host wiring can pin to a cheaper tier (see the role files and `docs/GOALS.md` "Cost Tiering"). Delegate with skill references plus an item id, nothing more:
+When the host supports subagents, the driver never implements: it dispatches, audits, and synthesizes. Driver tokens go into `plan audit`, dispatch decisions, and conflict resolution — implementation and review run in the subagent roles, which the host wiring can pin to a cheaper tier (see the role files and `docs/GOALS.md` "Cost Tiering"). When the pick packet carries a `routing` block, dispatch on it: run the worker on the named profile's client and model, and move down the `fallbacks` chain when the primary hits a rate limit or is unavailable — the chain is ordered, so no mid-run registry edits. Workers report the profile they actually ran on (`done --profile <id>` or `PLANR_PROFILE`), so a host that silently overrode the pin shows up in `planr trace item` instead of staying invisible. Delegate with skill references plus an item id, nothing more:
 
 - Worker dispatch: `Use $planr-work on item <item-id>. Stop after requesting review.`
 - Checker dispatch: `Use $planr-review on item <item-id>. Close the review with a verdict.`
@@ -69,6 +69,7 @@ Host wiring:
 
 - Codex: project agents in `.codex/agents/*.toml` preload the skill via `[[skills.config]]` (TOML templates in `agents/` next to this skill). Spawn explicitly: "spawn the planr_worker agent for item X". Keep `[agents] max_depth = 1`.
 - Claude Code: subagents preload via the `skills:` frontmatter field. The Planr plugin registers `planr-worker` and `planr-reviewer` automatically from its `agents/` directory; standalone installs copy them to `.claude/agents/`. The reviewer subagent is read-only except for `planr review` commands.
+- Cursor: project subagents in `.cursor/agents/*.md` (Markdown templates in `agents/` next to this skill; `planr install cursor` provisions them). Dispatch explicitly: `/planr-worker implement item X`, `/planr-reviewer review item X`. Parallel dispatches are safe — the map's pick lease keeps one owner per item.
 - Single-agent hosts: run worker and checker as separate sequential dispatches with a fresh read of map state in between; never carry the worker's self-assessment into the review step. The mode is recorded automatically: `review close` derives `review_mode` (`single_agent`/`independent`) from worker identity.
 
 ## Live Verification By Platform
@@ -103,7 +104,8 @@ Prefer the host's loop primitive over a bash while-loop so a separate model chec
 
 - Codex: `/goal Use $planr-loop on plan <plan-id>. The loop contract is stored in planr context (tag: goal-contract).` — or an Automation with the same prompt. Full workflow: `docs/GOALS.md` in the Planr repository.
 - Claude Code: `/goal` with the same prompt shape, or `/loop` for a fixed cadence.
-- Anywhere else (Cursor, plain MCP clients, hosts without /goal): re-dispatch `Use $planr-loop on plan <plan-id> ...` manually or per session. Nothing is lost except automatic re-prompting.
+- Cursor: no /goal primitive; re-dispatch `Use $planr-loop on plan <plan-id> ...` manually or per session. Within a session the loop dispatches the provisioned `/planr-worker` and `/planr-reviewer` subagents per item.
+- Anywhere else (plain MCP clients, hosts without /goal): re-dispatch `Use $planr-loop on plan <plan-id> ...` manually or per session. Nothing is lost except automatic re-prompting.
 
 Recovery is the same in all cases: a fresh session starts at step 1 (`$planr-status`), reads the map and the stored goal-contract, and continues exactly where the last iteration stopped — zero chat context required.
 

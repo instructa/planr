@@ -20,6 +20,9 @@ pub(crate) struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum Command {
+    /// Inspect the agent profile registry (.planr/agents.toml) that
+    /// drives advisory model routing in pick packets.
+    Agents(AgentsArgs),
     Project(ProjectArgs),
     Plan(PlanArgs),
     Map(MapArgs),
@@ -49,6 +52,47 @@ pub(crate) enum Command {
     Recover(RecoverArgs),
     Export(ExportArgs),
     Import(ImportArgs),
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct AgentsArgs {
+    #[command(subcommand)]
+    pub(crate) command: AgentsCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum AgentsCommand {
+    /// Show resolved profiles, routes, and validation warnings.
+    List(JsonOnlyArgs),
+    /// Validate the registry; exits non-zero only on parse failure.
+    Check,
+    /// Write a commented starter registry with cost-tiering defaults.
+    Init(AgentsInitArgs),
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct AgentsInitArgs {
+    /// Overwrite an existing .planr/agents.toml.
+    #[arg(long)]
+    pub(crate) force: bool,
+    /// Declare a profile: <id>=<client>/<model>[@<effort>][#<tier>]. Repeatable.
+    #[arg(long = "profile", value_name = "SPEC")]
+    pub(crate) profiles: Vec<String>,
+    /// Pair a declared profile with a skill: <profile>=<skill>. Repeatable.
+    #[arg(long = "skill", value_name = "SPEC")]
+    pub(crate) skills: Vec<String>,
+    /// Route a work type: <work_type>=<profile>[,<fallback>...]. Repeatable.
+    #[arg(long = "route", value_name = "SPEC")]
+    pub(crate) routes: Vec<String>,
+    /// Default route: <profile>[,<fallback>...].
+    #[arg(long = "default-route", value_name = "SPEC")]
+    pub(crate) default_route: Option<String>,
+    /// Build the registry through guided prompts (requires a terminal).
+    #[arg(
+        long,
+        conflicts_with_all = ["profiles", "skills", "routes", "default_route"]
+    )]
+    pub(crate) interactive: bool,
 }
 
 #[derive(Args, Debug)]
@@ -226,6 +270,9 @@ pub(crate) enum ItemCommand {
     Amend(ItemAmendArgs),
     Replan(ItemReplanArgs),
     Cancel(ItemCancelArgs),
+    /// Show or pin the item's advisory model route. Without flags,
+    /// prints the resolved route and whether an override or policy won.
+    Route(ItemRouteArgs),
 }
 
 #[derive(Args, Debug)]
@@ -247,7 +294,10 @@ pub(crate) struct ItemCreateArgs {
     pub(crate) pre: Option<String>,
     #[arg(long)]
     pub(crate) post: Option<String>,
-    #[arg(long, hide = true)]
+    /// Work type (free-form): built-in vocabulary like code/fix/review,
+    /// or a registry route's use case (frontend, backend, ...) so model
+    /// routing binds. Defaults to generic.
+    #[arg(long)]
     pub(crate) work_type: Option<String>,
 }
 
@@ -258,6 +308,10 @@ pub(crate) struct ItemUpdateArgs {
     pub(crate) title: Option<String>,
     #[arg(long)]
     pub(crate) description: Option<String>,
+    /// Retag the item's work type (free-form, e.g. a registry route's
+    /// use case like `frontend`); model routing re-resolves on next pick.
+    #[arg(long)]
+    pub(crate) work_type: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -302,6 +356,18 @@ pub(crate) struct ItemReplanArgs {
     pub(crate) preview: bool,
     #[arg(long)]
     pub(crate) confirm: bool,
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct ItemRouteArgs {
+    pub(crate) id: String,
+    /// Pin the item to this profile id from .planr/agents.toml; the pin
+    /// beats every policy route until cleared.
+    #[arg(long, value_name = "PROFILE", conflicts_with = "clear")]
+    pub(crate) set: Option<String>,
+    /// Remove the pinned profile so policy routing applies again.
+    #[arg(long)]
+    pub(crate) clear: bool,
 }
 
 #[derive(Args, Debug)]
@@ -472,6 +538,10 @@ pub(crate) struct LogAddArgs {
     /// (live-verify evidence; `plan audit` checks for it).
     #[arg(long, default_value = "completion")]
     pub(crate) kind: String,
+    /// Registry profile this run actually executed on (fallback:
+    /// PLANR_PROFILE env). Mismatches with the declared route are advisory.
+    #[arg(long)]
+    pub(crate) profile: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -507,6 +577,10 @@ pub(crate) struct DoneArgs {
     /// Pick the next ready item after finishing this step.
     #[arg(long)]
     pub(crate) next: bool,
+    /// Registry profile this run actually executed on (fallback:
+    /// PLANR_PROFILE env). Mismatches with the declared route are advisory.
+    #[arg(long)]
+    pub(crate) profile: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -657,6 +731,13 @@ pub(crate) enum InstallCommand {
 pub(crate) struct InstallClientArgs {
     #[arg(long)]
     pub(crate) dry_run: bool,
+    /// Plugin-style install: write subagent roles and skills only, no MCP config.
+    #[arg(long)]
+    pub(crate) no_mcp: bool,
+    /// Overwrite existing role and skill files, e.g. to re-render roles
+    /// after editing .planr/agents.toml. Never touches hand edits without it.
+    #[arg(long)]
+    pub(crate) force: bool,
 }
 
 #[derive(Args, Debug)]
@@ -670,6 +751,8 @@ pub(crate) enum PromptCommand {
     Cli(PromptPrintArgs),
     Mcp(PromptPrintArgs),
     Http(PromptPrintArgs),
+    /// Model-prioritization block from the registry plus host dispatch traps.
+    Routing(PromptPrintArgs),
 }
 
 #[derive(Args, Debug)]

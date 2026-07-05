@@ -2,9 +2,9 @@ use super::{App, ReviewAnnotationInput};
 use crate::model::Item;
 use crate::storage::row_to_item;
 use crate::util::{now_string, short_id, worker_id};
-use anyhow::{anyhow, bail, Result};
-use rusqlite::{params, OptionalExtension};
-use serde_json::{json, Value};
+use anyhow::{Result, anyhow, bail};
+use rusqlite::{OptionalExtension, params};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::PathBuf;
 
@@ -190,7 +190,9 @@ impl App {
             review.status.as_str(),
             "closed" | "closed_partial" | "cancelled"
         ) {
-            bail!("already_closed: review {review_id} is already settled; a second close would duplicate evidence logs");
+            bail!(
+                "already_closed: review {review_id} is already settled; a second close would duplicate evidence logs"
+            );
         }
         let verdict = match verdict {
             "complete" | "not-complete" | "unclear" => verdict,
@@ -222,6 +224,15 @@ impl App {
         } else {
             None
         };
+        // `independent` must be earned, not lucked into: it requires an
+        // explicitly set reviewer identity (--reviewer or PLANR_WORKER_ID).
+        // An anonymous fallback identity that merely differs from the
+        // maker's string proves nothing, so it stamps single_agent — and
+        // a blank `--reviewer ""` is not an identity either.
+        let reviewer = reviewer
+            .map(str::trim)
+            .filter(|reviewer| !reviewer.is_empty());
+        let explicit_identity = reviewer.is_some() || crate::util::explicit_worker_id().is_some();
         let reviewer = reviewer
             .map(ToOwned::to_owned)
             .unwrap_or_else(crate::util::worker_id);
@@ -232,7 +243,8 @@ impl App {
             .and_then(|target| target.worker_id);
         let review_mode = match maker.as_deref() {
             Some(maker) if maker == reviewer => "single_agent",
-            Some(_) => "independent",
+            Some(_) if explicit_identity => "independent",
+            Some(_) => "single_agent",
             None => "unattributed",
         };
         let summary =

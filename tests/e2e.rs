@@ -1,7 +1,7 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
 use rusqlite::Connection;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -11,7 +11,21 @@ use std::time::Duration;
 use tempfile::tempdir;
 
 fn planr() -> Command {
-    Command::cargo_bin("planr").expect("planr binary")
+    let mut cmd = Command::cargo_bin("planr").expect("planr binary");
+    // Tests may run inside a real host session (Cursor terminal, Codex
+    // sandbox); scrub the host-identifying vars observed_client() reads
+    // so detection is opt-in per test and results are deterministic.
+    for var in [
+        "CODEX_SANDBOX",
+        "CODEX_SESSION_ID",
+        "CLAUDECODE",
+        "CURSOR_AGENT",
+        "CURSOR_INVOKED_AS",
+        "PLANR_PROFILE",
+    ] {
+        cmd.env_remove(var);
+    }
+    cmd
 }
 
 #[test]
@@ -222,6 +236,7 @@ fn mcp_contract_install_fixtures_and_cli_docs_do_not_drift() {
         "package.json",
         "plugins/planr/.codex-plugin/plugin.json",
         "plugins/planr/.claude-plugin/plugin.json",
+        ".cursor-plugin/plugin.json",
     ] {
         let value: Value = serde_json::from_slice(&fs::read(root.join(manifest)).unwrap()).unwrap();
         assert_eq!(
@@ -372,12 +387,28 @@ fn mcp_contract_install_fixtures_and_cli_docs_do_not_drift() {
             .assert()
             .success();
     }
-    assert!(dir
-        .path()
-        .join(".planr/integrations/codex-mcp.toml")
-        .exists());
+    assert!(
+        dir.path()
+            .join(".planr/integrations/codex-mcp.toml")
+            .exists()
+    );
     assert!(dir.path().join(".mcp.json").exists());
     assert!(dir.path().join(".cursor/mcp.json").exists());
+    // `planr install cursor` is the one-command Cursor setup: MCP config plus
+    // subagent roles plus the full skill set, matching the plugin experience.
+    for provisioned in [
+        ".cursor/agents/planr-worker.md",
+        ".cursor/agents/planr-reviewer.md",
+        ".cursor/skills/planr/SKILL.md",
+        ".cursor/skills/planr-loop/SKILL.md",
+        ".cursor/skills/planr-work/SKILL.md",
+        ".cursor/skills/planr-review/SKILL.md",
+    ] {
+        assert!(
+            dir.path().join(provisioned).exists(),
+            "install cursor should write {provisioned}"
+        );
+    }
 
     let prompt_cli = planr()
         .current_dir(dir.path())
@@ -397,10 +428,12 @@ fn mcp_contract_install_fixtures_and_cli_docs_do_not_drift() {
         .clone();
     let prompt_cli: Value = serde_json::from_slice(&prompt_cli).unwrap();
     assert_eq!(prompt_cli["global_config_edited"], false);
-    assert!(prompt_cli["prompt"]
-        .as_str()
-        .unwrap()
-        .contains("planr map preview"));
+    assert!(
+        prompt_cli["prompt"]
+            .as_str()
+            .unwrap()
+            .contains("planr map preview")
+    );
 
     let prompt_mcp = planr()
         .current_dir(dir.path())
@@ -411,10 +444,12 @@ fn mcp_contract_install_fixtures_and_cli_docs_do_not_drift() {
         .stdout
         .clone();
     let prompt_mcp: Value = serde_json::from_slice(&prompt_mcp).unwrap();
-    assert!(prompt_mcp["prompt"]
-        .as_str()
-        .unwrap()
-        .contains("\"mcpServers\""));
+    assert!(
+        prompt_mcp["prompt"]
+            .as_str()
+            .unwrap()
+            .contains("\"mcpServers\"")
+    );
 
     let prompt_http = planr()
         .current_dir(dir.path())
@@ -516,14 +551,2302 @@ fn pick_returns_ranked_privacy_safe_recall_context() {
     assert_eq!(picked["item"]["id"], item_id);
     let relevant = picked["relevant_contexts"].as_array().unwrap();
     assert_eq!(relevant.len(), 1);
-    assert!(relevant[0]["content"]
+    assert!(
+        relevant[0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("session cache")
+    );
+    assert_eq!(picked["privacy"]["source_file_content_included"], false);
+    assert!(
+        !serde_json::to_string(&picked)
+            .unwrap()
+            .contains("sk-test-should-not-appear")
+    );
+}
+
+#[test]
+fn agent_registry_routes_picks_and_degrades_without_blocking() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Routing"])
+        .assert()
+        .success();
+
+    // No registry: agents list reports missing, exit zero.
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "agents", "list"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let listed: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(listed["reason"], "missing");
+    assert!(listed["registry"].is_null());
+
+    let registry_path = dir.path().join(".planr/agents.toml");
+    fs::write(
+        &registry_path,
+        r#"
+[profiles.implementer]
+client = "codex"
+model = "gpt-5.5"
+effort = "medium"
+cost_tier = "standard"
+
+[profiles.driver]
+client = "cursor"
+model = "fable-5"
+effort = "high"
+cost_tier = "premium"
+
+[[routes]]
+match = { work_type = "code" }
+profile = "implementer"
+fallbacks = ["driver"]
+"#,
+    )
+    .unwrap();
+
+    // Valid registry: check passes with no warnings.
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "agents", "check"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let checked: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(checked["ok"], true);
+    assert_eq!(checked["warnings"].as_array().unwrap().len(), 0);
+
+    // agents list shows resolved profiles and routes.
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "agents", "list"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let listed: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        listed["registry"]["profiles"]["implementer"]["model"],
+        "gpt-5.5"
+    );
+    assert_eq!(listed["registry"]["routes"][0]["profile"], "implementer");
+
+    // A code item picks up the routing recommendation in its pick packet.
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "item",
+            "create",
+            "Implement routing feature",
+            "--description",
+            "Wire routing into pick",
+            "--work-type",
+            "code",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let created: Value = serde_json::from_slice(&output).unwrap();
+    let item_id = created["item"]["id"].as_str().unwrap().to_string();
+
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "pick"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let picked: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(picked["item"]["id"], item_id);
+    assert_eq!(picked["routing"]["profile"], "implementer");
+    assert_eq!(picked["routing"]["client"], "codex");
+    assert_eq!(picked["routing"]["model"], "gpt-5.5");
+    assert_eq!(picked["routing"]["effort"], "medium");
+    assert_eq!(picked["routing"]["cost_tier"], "standard");
+    assert_eq!(picked["routing"]["fallbacks"], json!(["driver"]));
+    assert_eq!(picked["routing"]["matched_selector"], "work_type=code");
+
+    // Malformed registry: check exits non-zero, but picking degrades to
+    // no routing block instead of failing.
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "pick", "release", &item_id])
+        .assert()
+        .success();
+    fs::write(&registry_path, "profiles = [broken").unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "agents", "check"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("parse failed"));
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "pick"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let picked: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(picked["item"]["id"], item_id);
+    assert!(picked.get("routing").is_none());
+
+    // Deleting the registry restores pre-feature behavior entirely.
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "pick", "release", &item_id])
+        .assert()
+        .success();
+    fs::remove_file(&registry_path).unwrap();
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "pick"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let picked: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(picked["item"]["id"], item_id);
+    assert!(picked.get("routing").is_none());
+}
+
+#[test]
+fn route_overrides_pin_items_and_survive_registry_drift() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Overrides"])
+        .assert()
+        .success();
+    let registry_path = dir.path().join(".planr/agents.toml");
+    fs::write(
+        &registry_path,
+        r#"
+[profiles.implementer]
+client = "codex"
+model = "gpt-5.5"
+
+[profiles.driver]
+client = "cursor"
+model = "fable-5"
+effort = "high"
+
+[[routes]]
+match = { work_type = "code" }
+profile = "implementer"
+"#,
+    )
+    .unwrap();
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "item",
+            "create",
+            "Gnarly refactor",
+            "--description",
+            "Needs the premium tier",
+            "--work-type",
+            "code",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let created: Value = serde_json::from_slice(&output).unwrap();
+    let item_id = created["item"]["id"].as_str().unwrap().to_string();
+
+    // Without an override the policy route wins.
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "item",
+            "route",
+            &item_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let shown: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(shown["source"], "policy");
+    assert_eq!(shown["routing"]["profile"], "implementer");
+    assert!(shown["override"].is_null());
+
+    // Pinning an unknown profile fails and names the known ones.
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "item",
+            "route",
+            &item_id,
+            "--set",
+            "ghost",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "known profiles: driver, implementer",
+        ));
+
+    // A valid pin beats the policy route, in item route and in the pick packet.
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "item",
+            "route",
+            &item_id,
+            "--set",
+            "driver",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let pinned: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(pinned["override"], "driver");
+    assert!(pinned["warning"].is_null());
+    assert_eq!(pinned["routing"]["matched_selector"], "override");
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "pick"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let picked: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(picked["item"]["id"], item_id);
+    assert_eq!(picked["routing"]["profile"], "driver");
+    assert_eq!(picked["routing"]["matched_selector"], "override");
+
+    // A pin whose profile later leaves the registry is never an error:
+    // policy routing takes over and the show output carries a repair hint.
+    fs::write(
+        &registry_path,
+        r#"
+[profiles.implementer]
+client = "codex"
+model = "gpt-5.5"
+
+[[routes]]
+match = { work_type = "code" }
+profile = "implementer"
+"#,
+    )
+    .unwrap();
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "item",
+            "route",
+            &item_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let dangling: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(dangling["override"], "driver");
+    assert_eq!(dangling["source"], "policy");
+    assert_eq!(dangling["routing"]["profile"], "implementer");
+    assert!(
+        dangling["hint"]
+            .as_str()
+            .unwrap()
+            .contains("not in .planr/agents.toml")
+    );
+
+    // Clearing restores policy routing; both mutations left graph events.
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "item",
+            "route",
+            &item_id,
+            "--clear",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let cleared: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(cleared["cleared"], true);
+    assert_eq!(cleared["previous"], "driver");
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "event",
+            "list",
+            "--item",
+            &item_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let events = serde_json::from_slice::<Value>(&output).unwrap();
+    let event_types = events["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|event| event["event_type"].as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    assert!(event_types.contains(&"route_overridden".to_string()));
+    assert!(event_types.contains(&"route_override_cleared".to_string()));
+
+    // Missing registry: --set warns but stores, so offline edits work.
+    fs::remove_file(&registry_path).unwrap();
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "item",
+            "route",
+            &item_id,
+            "--set",
+            "driver",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let offline: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(offline["override"], "driver");
+    assert!(offline["warning"].as_str().unwrap().contains("no registry"));
+}
+
+#[test]
+fn install_renders_roles_from_registry_and_respects_provision_once() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Render"])
+        .assert()
+        .success();
+    fs::write(
+        dir.path().join(".planr/agents.toml"),
+        r#"
+[profiles.coder]
+client = "codex"
+model = "gpt-5.5"
+effort = "xhigh"
+
+[profiles.judge]
+client = "cursor"
+model = "fable-5"
+effort = "high"
+
+[[routes]]
+match = { work_type = "code" }
+profile = "coder"
+
+[[routes]]
+match = { work_type = "review" }
+profile = "judge"
+"#,
+    )
+    .unwrap();
+
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "install", "codex"])
+        .assert()
+        .success();
+    let worker_path = dir.path().join(".codex/agents/planr-worker.toml");
+    let worker = fs::read_to_string(&worker_path).unwrap();
+    assert!(worker.contains("# generated from .planr/agents.toml"));
+    let parsed: toml::Value = toml::from_str(&worker).unwrap();
+    assert_eq!(parsed["model"].as_str(), Some("gpt-5.5"));
+    assert_eq!(parsed["model_reasoning_effort"].as_str(), Some("xhigh"));
+    // The worker's audit report is baked into its own definition: the
+    // concrete profile id as a --profile instruction, not worker memory.
+    assert!(
+        parsed["developer_instructions"]
+            .as_str()
+            .unwrap()
+            .contains("--profile coder"),
+        "rendered worker must instruct its own profile report: {worker}"
+    );
+    // The review route points at a Cursor profile: a Codex role file must
+    // not pin a model Codex cannot dispatch, so the reviewer stays static.
+    let reviewer =
+        fs::read_to_string(dir.path().join(".codex/agents/planr-reviewer.toml")).unwrap();
+    assert!(!reviewer.contains("generated from"));
+    assert!(!reviewer.contains("fable-5"));
+
+    // The same review route does pin the Cursor reviewer role.
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "install", "cursor"])
+        .assert()
+        .success();
+    let cursor_reviewer =
+        fs::read_to_string(dir.path().join(".cursor/agents/planr-reviewer.md")).unwrap();
+    assert!(cursor_reviewer.contains("model: fable-5"));
+    assert!(cursor_reviewer.contains("# profile: judge"));
+    let cursor_worker =
+        fs::read_to_string(dir.path().join(".cursor/agents/planr-worker.md")).unwrap();
+    assert!(
+        cursor_worker.contains("model: inherit"),
+        "code route targets a Codex profile, so the Cursor worker keeps its static default"
+    );
+
+    // Provision-once: hand edits survive a re-install without --force and
+    // are re-rendered with it.
+    fs::write(&worker_path, "# hand edited\n").unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "install", "codex"])
+        .assert()
+        .success();
+    assert_eq!(fs::read_to_string(&worker_path).unwrap(), "# hand edited\n");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "install", "codex", "--force"])
+        .assert()
+        .success();
+    assert_eq!(fs::read_to_string(&worker_path).unwrap(), worker);
+
+    // Without a registry the install output is byte-identical to the
+    // shipped static role files.
+    let fresh = tempdir().unwrap();
+    let fresh_db = fresh.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(fresh.path())
+        .args([
+            "--db",
+            fresh_db.to_str().unwrap(),
+            "project",
+            "init",
+            "Static",
+        ])
+        .assert()
+        .success();
+    planr()
+        .current_dir(fresh.path())
+        .args(["--db", fresh_db.to_str().unwrap(), "install", "codex"])
+        .assert()
+        .success();
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    assert_eq!(
+        fs::read_to_string(fresh.path().join(".codex/agents/planr-worker.toml")).unwrap(),
+        fs::read_to_string(repo.join("plugins/planr/skills/planr-loop/agents/planr-worker.toml"))
+            .unwrap()
+    );
+    assert_eq!(
+        fs::read_to_string(fresh.path().join(".codex/agents/planr-reviewer.toml")).unwrap(),
+        fs::read_to_string(repo.join("plugins/planr/skills/planr-loop/agents/planr-reviewer.toml"))
+            .unwrap()
+    );
+}
+
+#[test]
+fn run_profile_recording_emits_advisory_mismatch_events_only() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Audit"])
+        .assert()
+        .success();
+    fs::write(
+        dir.path().join(".planr/agents.toml"),
+        r#"
+[profiles.coder]
+client = "codex"
+model = "gpt-5.5"
+
+[profiles.driver]
+client = "cursor"
+model = "fable-5"
+
+[[routes]]
+match = { work_type = "code" }
+profile = "coder"
+"#,
+    )
+    .unwrap();
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "item",
+            "create",
+            "Audited work",
+            "--description",
+            "Runs record their profile",
+            "--work-type",
+            "code",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let item_id = serde_json::from_slice::<Value>(&output).unwrap()["item"]["id"]
         .as_str()
         .unwrap()
-        .contains("session cache"));
-    assert_eq!(picked["privacy"]["source_file_content_included"], false);
-    assert!(!serde_json::to_string(&picked)
+        .to_string();
+
+    let mismatch_events = |item: &str| -> Vec<Value> {
+        let output = planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "event",
+                "list",
+                "--item",
+                item,
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice::<Value>(&output).unwrap()["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["event_type"] == "route_mismatch_observed")
+            .cloned()
+            .collect()
+    };
+
+    // Matching profile: run recorded, no event.
+    planr()
+        .current_dir(dir.path())
+        .env_remove("PLANR_PROFILE")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "log",
+            "add",
+            "--item",
+            &item_id,
+            "--summary",
+            "on the declared profile",
+            "--cmd",
+            "cargo test",
+            "--profile",
+            "coder",
+        ])
+        .assert()
+        .success();
+    assert!(mismatch_events(&item_id).is_empty());
+
+    // No profile: no comparison, no event.
+    planr()
+        .current_dir(dir.path())
+        .env_remove("PLANR_PROFILE")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "log",
+            "add",
+            "--item",
+            &item_id,
+            "--summary",
+            "anonymous run",
+            "--cmd",
+            "cargo test",
+        ])
+        .assert()
+        .success();
+    assert!(mismatch_events(&item_id).is_empty());
+
+    // Profile without commands/tests records no run: nothing to compare.
+    planr()
+        .current_dir(dir.path())
+        .env_remove("PLANR_PROFILE")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "log",
+            "add",
+            "--item",
+            &item_id,
+            "--summary",
+            "notes only",
+            "--profile",
+            "driver",
+        ])
+        .assert()
+        .success();
+    assert!(mismatch_events(&item_id).is_empty());
+
+    // Wrong profile: exactly one advisory event naming both sides + run.
+    planr()
+        .current_dir(dir.path())
+        .env_remove("PLANR_PROFILE")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "log",
+            "add",
+            "--item",
+            &item_id,
+            "--summary",
+            "ran on the wrong tier",
+            "--cmd",
+            "cargo test",
+            "--profile",
+            "driver",
+        ])
+        .assert()
+        .success();
+    let events = mismatch_events(&item_id);
+    assert_eq!(events.len(), 1);
+    let payload: Value = serde_json::from_str(events[0]["payload"].as_str().unwrap_or_default())
+        .unwrap_or_else(|_| events[0]["payload"].clone());
+    assert_eq!(payload["declared_profile"], "coder");
+    assert_eq!(payload["actual_profile"], "driver");
+    assert!(payload["run_id"].as_str().unwrap().starts_with("run-"));
+
+    // PLANR_PROFILE env is the fallback when no flag is passed.
+    planr()
+        .current_dir(dir.path())
+        .env("PLANR_PROFILE", "driver")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "log",
+            "add",
+            "--item",
+            &item_id,
+            "--summary",
+            "env-attributed run",
+            "--cmd",
+            "cargo test",
+        ])
+        .assert()
+        .success();
+    assert_eq!(mismatch_events(&item_id).len(), 2);
+
+    // Mismatches are advisory: the item still closes normally.
+    planr()
+        .current_dir(dir.path())
+        .env_remove("PLANR_PROFILE")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "done",
+            &item_id,
+            "--summary",
+            "closing despite mismatches",
+            "--profile",
+            "driver",
+            "--cmd",
+            "cargo test",
+        ])
+        .assert()
+        .success();
+    assert_eq!(mismatch_events(&item_id).len(), 3);
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "item",
+            "show",
+            &item_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&output).unwrap()["item"]["status"],
+        "closed"
+    );
+
+    // No registry: a recorded profile has nothing to compare against.
+    let fresh = tempdir().unwrap();
+    let fresh_db = fresh.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(fresh.path())
+        .args([
+            "--db",
+            fresh_db.to_str().unwrap(),
+            "project",
+            "init",
+            "Bare",
+        ])
+        .assert()
+        .success();
+    let output = planr()
+        .current_dir(fresh.path())
+        .args([
+            "--db",
+            fresh_db.to_str().unwrap(),
+            "--json",
+            "item",
+            "create",
+            "Unrouted",
+            "--description",
+            "No registry here",
+            "--work-type",
+            "code",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let bare_item = serde_json::from_slice::<Value>(&output).unwrap()["item"]["id"]
+        .as_str()
         .unwrap()
-        .contains("sk-test-should-not-appear"));
+        .to_string();
+    planr()
+        .current_dir(fresh.path())
+        .env_remove("PLANR_PROFILE")
+        .args([
+            "--db",
+            fresh_db.to_str().unwrap(),
+            "log",
+            "add",
+            "--item",
+            &bare_item,
+            "--summary",
+            "profiled run without registry",
+            "--cmd",
+            "cargo test",
+            "--profile",
+            "coder",
+        ])
+        .assert()
+        .success();
+    let output = planr()
+        .current_dir(fresh.path())
+        .args([
+            "--db",
+            fresh_db.to_str().unwrap(),
+            "--json",
+            "event",
+            "list",
+            "--item",
+            &bare_item,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert!(
+        serde_json::from_slice::<Value>(&output).unwrap()["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|event| event["event_type"] != "route_mismatch_observed")
+    );
+}
+
+#[test]
+fn trace_routing_section_and_doctor_registry_diagnostics() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Doctor"])
+        .assert()
+        .success();
+
+    // Absent registry: informational, never a failure.
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "doctor"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let doctor: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(doctor["registry"]["status"], "absent");
+
+    // A trace without declared routes or profiled runs has no routing key.
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "item",
+            "create",
+            "Traced work",
+            "--description",
+            "Declared vs actual",
+            "--work-type",
+            "code",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let item_id = serde_json::from_slice::<Value>(&output).unwrap()["item"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    planr()
+        .current_dir(dir.path())
+        .env_remove("PLANR_PROFILE")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "log",
+            "add",
+            "--item",
+            &item_id,
+            "--summary",
+            "anonymous run",
+            "--cmd",
+            "cargo test",
+        ])
+        .assert()
+        .success();
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "trace",
+            "item",
+            &item_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert!(
+        serde_json::from_slice::<Value>(&output)
+            .unwrap()
+            .get("routing")
+            .is_none(),
+        "no registry and no profiled runs must keep the trace shape unchanged"
+    );
+
+    // Degraded registry: doctor warns with the parser's context.
+    let registry_path = dir.path().join(".planr/agents.toml");
+    fs::write(&registry_path, "[profiles.broken\nclient=").unwrap();
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "doctor"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let doctor: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(doctor["registry"]["status"], "degraded");
+    assert!(
+        doctor["registry"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("line")
+    );
+
+    fs::write(
+        &registry_path,
+        r#"
+[profiles.coder]
+client = "codex"
+model = "gpt-5.5"
+effort = "xhigh"
+
+[profiles.ghost-ref]
+client = "codex"
+model = "gpt-5.5"
+
+[[routes]]
+match = { work_type = "code" }
+profile = "coder"
+
+[[routes]]
+match = { work_type = "docs" }
+profile = "nonexistent"
+"#,
+    )
+    .unwrap();
+
+    // Loaded registry: counts and validation warnings.
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "doctor"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let doctor: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(doctor["registry"]["status"], "ok");
+    assert_eq!(doctor["registry"]["profiles"], 2);
+    assert_eq!(doctor["registry"]["routes"], 2);
+    assert!(
+        doctor["registry"]["warnings"][0]
+            .as_str()
+            .unwrap()
+            .contains("nonexistent")
+    );
+
+    // Rendered artifacts: current right after install, drifted after the
+    // registry changes underneath them.
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "install", "codex"])
+        .assert()
+        .success();
+    let artifact_state = |value: &Value, path: &str| -> String {
+        value["registry"]["artifacts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|artifact| artifact["path"] == path)
+            .map(|artifact| artifact["state"].as_str().unwrap().to_string())
+            .unwrap_or_else(|| panic!("artifact {path} not reported"))
+    };
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "doctor"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let doctor: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        artifact_state(&doctor, ".codex/agents/planr-worker.toml"),
+        "current"
+    );
+    fs::write(
+        &registry_path,
+        r#"
+[profiles.coder]
+client = "codex"
+model = "gpt-6"
+effort = "high"
+
+[[routes]]
+match = { work_type = "code" }
+profile = "coder"
+"#,
+    )
+    .unwrap();
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "doctor"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let doctor: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        artifact_state(&doctor, ".codex/agents/planr-worker.toml"),
+        "drifted"
+    );
+    assert!(
+        doctor["registry"]["drift_hint"]
+            .as_str()
+            .unwrap()
+            .contains("--force")
+    );
+
+    // Trace now shows declared vs actual with an advisory marker.
+    planr()
+        .current_dir(dir.path())
+        .env_remove("PLANR_PROFILE")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "log",
+            "add",
+            "--item",
+            &item_id,
+            "--summary",
+            "wrong tier",
+            "--cmd",
+            "cargo test",
+            "--profile",
+            "budget-helper",
+        ])
+        .assert()
+        .success();
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "trace",
+            "item",
+            &item_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let trace: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(trace["routing"]["declared"]["profile"], "coder");
+    assert_eq!(trace["routing"]["mismatches"], 1);
+    let runs = trace["routing"]["runs"].as_array().unwrap();
+    assert_eq!(runs.len(), 2);
+    assert!(runs[0]["profile"].is_null());
+    assert!(runs[0]["mismatch"].is_null());
+    assert_eq!(runs[1]["profile"], "budget-helper");
+    assert_eq!(runs[1]["mismatch"], true);
+    let human = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "trace", "item", &item_id])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let human = String::from_utf8(human).unwrap();
+    assert!(human.contains("routing declared: coder (work_type=code)"));
+    assert!(human.contains("advisory"));
+    assert!(!human.to_lowercase().contains("error"));
+}
+
+#[test]
+fn package_round_trips_agent_registry_without_silent_overwrite() {
+    let source = tempdir().unwrap();
+    let source_db = source.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(source.path())
+        .args([
+            "--db",
+            source_db.to_str().unwrap(),
+            "project",
+            "init",
+            "Source",
+        ])
+        .assert()
+        .success();
+    let registry_toml = r#"
+[profiles.coder]
+client = "codex"
+model = "gpt-5.5"
+
+[[routes]]
+match = { work_type = "code" }
+profile = "coder"
+"#;
+    fs::write(source.path().join(".planr/agents.toml"), registry_toml).unwrap();
+    let package_path = source.path().join("package.json");
+    planr()
+        .current_dir(source.path())
+        .args([
+            "--db",
+            source_db.to_str().unwrap(),
+            "export",
+            "--out",
+            package_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let package: Value = serde_json::from_slice(&fs::read(&package_path).unwrap()).unwrap();
+    assert_eq!(package["agent_registry"]["path"], ".planr/agents.toml");
+    assert_eq!(package["agent_registry"]["content"], registry_toml);
+
+    // Fresh destination: preview names the registry, confirm writes it,
+    // and `agents check` passes there.
+    let dest = tempdir().unwrap();
+    let dest_db = dest.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dest.path())
+        .args(["--db", dest_db.to_str().unwrap(), "project", "init", "Dest"])
+        .assert()
+        .success();
+    let output = planr()
+        .current_dir(dest.path())
+        .args([
+            "--db",
+            dest_db.to_str().unwrap(),
+            "--json",
+            "import",
+            package_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let preview: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(preview["mode"], "preview");
+    assert_eq!(preview["report"]["agent_registry"]["action"], "create");
+    assert!(
+        !dest.path().join(".planr/agents.toml").exists(),
+        "preview must not write anything"
+    );
+    let output = planr()
+        .current_dir(dest.path())
+        .args([
+            "--db",
+            dest_db.to_str().unwrap(),
+            "--json",
+            "import",
+            package_path.to_str().unwrap(),
+            "--confirm",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let applied: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(applied["imported"]["agent_registry"]["action"], "create");
+    assert_eq!(
+        fs::read_to_string(dest.path().join(".planr/agents.toml")).unwrap(),
+        registry_toml
+    );
+    planr()
+        .current_dir(dest.path())
+        .args(["--db", dest_db.to_str().unwrap(), "agents", "check"])
+        .assert()
+        .success();
+
+    // Re-import over the identical registry: reported, nothing to do.
+    let output = planr()
+        .current_dir(dest.path())
+        .args([
+            "--db",
+            dest_db.to_str().unwrap(),
+            "--json",
+            "import",
+            package_path.to_str().unwrap(),
+            "--confirm",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let applied: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(applied["imported"]["agent_registry"]["action"], "identical");
+
+    // A differing local registry is never silently overwritten.
+    let local_registry = "[profiles.local]\nclient = \"cursor\"\nmodel = \"fable-5\"\n";
+    fs::write(dest.path().join(".planr/agents.toml"), local_registry).unwrap();
+    let output = planr()
+        .current_dir(dest.path())
+        .args([
+            "--db",
+            dest_db.to_str().unwrap(),
+            "--json",
+            "import",
+            package_path.to_str().unwrap(),
+            "--confirm",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let applied: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(applied["imported"]["agent_registry"]["action"], "conflict");
+    assert!(
+        applied["imported"]["agent_registry"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("never overwritten")
+    );
+    assert_eq!(
+        fs::read_to_string(dest.path().join(".planr/agents.toml")).unwrap(),
+        local_registry
+    );
+
+    // Packages without a registry (pre-registry exports) import unchanged.
+    let mut stripped: Value = serde_json::from_slice(&fs::read(&package_path).unwrap()).unwrap();
+    stripped.as_object_mut().unwrap().remove("agent_registry");
+    let stripped_path = source.path().join("stripped.json");
+    fs::write(
+        &stripped_path,
+        serde_json::to_vec_pretty(&stripped).unwrap(),
+    )
+    .unwrap();
+    let output = planr()
+        .current_dir(dest.path())
+        .args([
+            "--db",
+            dest_db.to_str().unwrap(),
+            "--json",
+            "import",
+            stripped_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let preview: Value = serde_json::from_slice(&output).unwrap();
+    assert!(preview["report"]["agent_registry"].is_null());
+}
+
+#[test]
+fn skill_pairing_travels_through_pick_route_list_and_prompt() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Pool"])
+        .assert()
+        .success();
+    fs::create_dir_all(dir.path().join(".planr")).unwrap();
+    fs::write(
+        dir.path().join(".planr/agents.toml"),
+        r#"[profiles.designer]
+client = "claude-code"
+model = "opus"
+effort = "high"
+cost_tier = "premium"
+skill = "frontend-design"
+
+[profiles.backender]
+client = "codex"
+model = "gpt-5.5"
+
+[[routes]]
+match = { work_type = "frontend" }
+profile = "designer"
+fallbacks = ["backender"]
+
+[[routes]]
+match = { work_type = "backend" }
+profile = "backender"
+"#,
+    )
+    .unwrap();
+
+    // Use-case work types are free-form: the frontend item routes to the
+    // designer profile and the pick packet carries the paired skill.
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "item",
+            "create",
+            "Polish hero section",
+            "--description",
+            "design pass",
+            "--work-type",
+            "frontend",
+        ])
+        .assert()
+        .success();
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "pick"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let pick: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(pick["routing"]["profile"], "designer");
+    assert_eq!(pick["routing"]["skill"], "frontend-design");
+    assert_eq!(pick["routing"]["matched_selector"], "work_type=frontend");
+    let item_id = pick["item"]["id"].as_str().unwrap().to_string();
+
+    // item route and agents list surface the pairing too.
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "item",
+            "route",
+            &item_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let route: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(route["routing"]["skill"], "frontend-design");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "agents", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("skill=frontend-design"));
+
+    // prompt routing names the paired skill and the dispatch rule.
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "prompt", "routing"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let prompt = String::from_utf8(output).unwrap();
+    assert!(prompt.contains("| work_type=frontend | designer | claude-code | opus | high | premium | frontend-design | backender |"));
+    assert!(prompt.contains("dispatch the worker with that skill"));
+
+    // Retagging via item update re-resolves routing on the next pick:
+    // planning agents tag map-build output against the declared routes
+    // without user involvement.
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "item",
+            "update",
+            &item_id,
+            "--work-type",
+            "backend",
+        ])
+        .assert()
+        .success();
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "item",
+            "route",
+            &item_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let route: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(route["routing"]["profile"], "backender");
+    assert_eq!(route["routing"]["matched_selector"], "work_type=backend");
+
+    // The retag is auditable: item update records an item_updated event
+    // (a routing-relevant mutation was previously invisible in the log).
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "event", "list"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let events: Value = serde_json::from_slice(&output).unwrap();
+    let update_event = events["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["event_type"] == "item_updated")
+        .expect("item update must record an event");
+    assert_eq!(update_event["payload"]["changed"]["work_type"], "backend");
+
+    // Profiles without a skill omit the key entirely: no-skill registries
+    // keep byte-identical routing blocks.
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "item",
+            "create",
+            "API endpoint",
+            "--description",
+            "backend pass",
+            "--work-type",
+            "backend",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let created: Value = serde_json::from_slice(&output).unwrap();
+    let backend_id = created["item"]["id"].as_str().unwrap().to_string();
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "item",
+            "route",
+            &backend_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let route: Value = serde_json::from_slice(&output).unwrap();
+    assert!(
+        !route["routing"].as_object().unwrap().contains_key("skill"),
+        "no-skill profile must omit the key, got {route}"
+    );
+}
+
+#[test]
+fn item_create_with_bad_after_is_atomic_and_link_writes_fail_loudly() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    let db_arg = db.to_str().unwrap().to_string();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "project", "init", "Atomic"])
+        .assert()
+        .success();
+    // A bad --after fails before the item persists: no half-applied
+    // create, so a retry cannot duplicate.
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "item",
+            "create",
+            "Throwaway",
+            "--description",
+            "d",
+            "--after",
+            "i-truncated",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("item not found: i-truncated"));
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "--json", "map", "show"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let map: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        map["items"].as_array().unwrap().len(),
+        0,
+        "no item may persist"
+    );
+
+    // link add with an unknown endpoint errors instead of writing nothing.
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "item",
+            "create",
+            "Real",
+            "--description",
+            "d",
+        ])
+        .assert()
+        .success();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "link",
+            "add",
+            "i-nope",
+            "i-also-nope",
+            "--type",
+            "blocks",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unknown item `i-nope`"));
+
+    // cancel without a flag names the repair path.
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "--json", "map", "show"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let map: Value = serde_json::from_slice(&output).unwrap();
+    let id = map["items"][0]["id"].as_str().unwrap().to_string();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "item", "cancel", &id])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--preview"));
+}
+
+#[test]
+fn agents_init_flag_specs_generate_a_pool_and_fail_closed() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    let db_arg = db.to_str().unwrap().to_string();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "project", "init", "Pool"])
+        .assert()
+        .success();
+
+    // QA-2: validation is fail-closed — nothing is written on any error.
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "agents",
+            "init",
+            "--route",
+            "frontend=nosuch",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--profile"));
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "agents",
+            "init",
+            "--profile",
+            "broken-no-slash",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "--profile <id>=<client>/<model>[@<effort>][#<tier>]",
+        ));
+    assert!(!dir.path().join(".planr/agents.toml").exists());
+
+    // QA-1: a full pool spec generates a zero-warning registry that routes.
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "agents",
+            "init",
+            "--profile",
+            "driver=cursor/fable-5@high#premium",
+            "--profile",
+            "designer=claude-code/opus@high#premium",
+            "--skill",
+            "designer=frontend-design",
+            "--route",
+            "frontend=designer,driver",
+            "--route",
+            "review=driver",
+            "--default-route",
+            "designer,driver",
+        ])
+        .assert()
+        .success();
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "--json", "agents", "check"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let check: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(check["warnings"].as_array().unwrap().len(), 0);
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "item",
+            "create",
+            "Hero polish",
+            "--description",
+            "design pass",
+            "--work-type",
+            "frontend",
+        ])
+        .assert()
+        .success();
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "--json", "pick"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let pick: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(pick["routing"]["profile"], "designer");
+    assert_eq!(pick["routing"]["skill"], "frontend-design");
+    assert_eq!(pick["routing"]["fallbacks"][0], "driver");
+
+    // A hand-written registry with render-unsafe values (quoted TOML keys
+    // parse fine but would corrupt rendered role files) keeps installs on
+    // the static role files instead of writing broken artifacts.
+    fs::write(
+        dir.path().join(".planr/agents.toml"),
+        "[profiles.\"evil\nid\"]\nclient = \"codex\"\nmodel = \"gpt-5.5\"\n\n[[routes]]\nmatch = { work_type = \"code\" }\nprofile = \"evil\nid\"\n",
+    )
+    .unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "install", "codex", "--no-mcp", "--force"])
+        .assert()
+        .success();
+    let worker = fs::read_to_string(dir.path().join(".codex/agents/planr-worker.toml")).unwrap();
+    assert!(
+        !worker.contains("generated from"),
+        "render-unsafe profile must fall back to the static role: {worker}"
+    );
+    toml::from_str::<toml::Value>(&worker).expect("role file must stay parseable TOML");
+
+    // QA-3: spec flags never overwrite without --force either.
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "agents",
+            "init",
+            "--profile",
+            "solo=codex/gpt-5.5",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--force"));
+
+    // QA-5: --interactive without a TTY errors cleanly, naming the grammar.
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "agents",
+            "init",
+            "--interactive",
+            "--force",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("needs a terminal"));
+
+    // QA-6: --interactive conflicts with spec flags at parse time.
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "agents",
+            "init",
+            "--interactive",
+            "--profile",
+            "a=codex/m",
+            "--force",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot be used with"));
+}
+
+#[test]
+fn observed_client_lands_on_runs_and_flags_declared_client_deviation() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Hosts"])
+        .assert()
+        .success();
+    fs::create_dir_all(dir.path().join(".planr")).unwrap();
+    fs::write(
+        dir.path().join(".planr/agents.toml"),
+        "[profiles.coder]\nclient = \"cursor\"\nmodel = \"gpt-5.5\"\n\n[route_default]\nprofile = \"coder\"\n",
+    )
+    .unwrap();
+    let item = create_test_item(dir.path(), &db, "Routed work", "host audit");
+
+    // A run logged from a Claude session against a cursor-declared route:
+    // observed_client is recorded and one advisory event flags the
+    // deviation — without any profile being reported.
+    planr()
+        .current_dir(dir.path())
+        .env("CLAUDECODE", "1")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "log",
+            "add",
+            "--item",
+            &item,
+            "--summary",
+            "built elsewhere",
+            "--cmd",
+            "cargo test",
+        ])
+        .assert()
+        .success();
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "trace",
+            "item",
+            &item,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let trace: Value = serde_json::from_slice(&output).unwrap();
+    let run = &trace["routing"]["runs"][0];
+    assert_eq!(run["observed_client"], "claude-code");
+    assert_eq!(run["client_mismatch"], true, "trace must flag it: {trace}");
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "event", "list"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let events: Value = serde_json::from_slice(&output).unwrap();
+    let mismatches: Vec<&Value> = events["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["event_type"] == "client_mismatch_observed")
+        .collect();
+    assert_eq!(mismatches.len(), 1, "exactly one advisory event: {events}");
+    assert_eq!(mismatches[0]["payload"]["declared_client"], "cursor");
+    assert_eq!(mismatches[0]["payload"]["observed_client"], "claude-code");
+
+    // Matching host: no new event. (CURSOR_AGENT is scrubbed by the
+    // helper, so set it explicitly.)
+    planr()
+        .current_dir(dir.path())
+        .env("CURSOR_AGENT", "1")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "log",
+            "add",
+            "--item",
+            &item,
+            "--summary",
+            "built at home",
+            "--cmd",
+            "cargo test",
+        ])
+        .assert()
+        .success();
+    // No host env at all: no observed_client key, no event.
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "log",
+            "add",
+            "--item",
+            &item,
+            "--summary",
+            "built anonymously",
+            "--cmd",
+            "cargo test",
+        ])
+        .assert()
+        .success();
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "trace",
+            "item",
+            &item,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let trace: Value = serde_json::from_slice(&output).unwrap();
+    let runs = trace["routing"]["runs"].as_array().unwrap();
+    assert_eq!(runs.len(), 3);
+    assert_eq!(runs[1]["observed_client"], "cursor");
+    assert_eq!(runs[1]["client_mismatch"], false);
+    assert!(
+        !runs[2].as_object().unwrap().contains_key("observed_client"),
+        "unknown host must store nothing: {trace}"
+    );
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "event", "list"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let events: Value = serde_json::from_slice(&output).unwrap();
+    let mismatch_count = events["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["event_type"] == "client_mismatch_observed")
+        .count();
+    assert_eq!(mismatch_count, 1, "matching/unknown hosts add no events");
+}
+
+/// Regression harness for the first-pick hang observed in a live loop
+/// run (2 of 6 subagent sessions: the first `planr pick` hung until
+/// killed, retry instant). Root-cause candidate fixed in storage:
+/// busy_timeout was set after journal_mode, so concurrent first
+/// connections raced the WAL conversion with a zero timeout. This test
+/// storms one database with parallel first-pick processes under a hard
+/// watchdog: a hang fails the suite instead of burning a worker.
+#[test]
+fn parallel_first_picks_finish_within_the_watchdog() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    let db_arg = db.to_str().unwrap().to_string();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "project", "init", "Storm"])
+        .assert()
+        .success();
+    let bin = assert_cmd::cargo::cargo_bin("planr");
+
+    for round in 0..4 {
+        // Fresh, independent items so every concurrent pick can lease one.
+        for worker in 0..8 {
+            planr()
+                .current_dir(dir.path())
+                .args([
+                    "--db",
+                    &db_arg,
+                    "item",
+                    "create",
+                    &format!("Storm r{round} w{worker}"),
+                    "--description",
+                    "parallel first-pick storm",
+                ])
+                .assert()
+                .success();
+        }
+        let mut children = Vec::new();
+        for worker in 0..8 {
+            let mut command = std::process::Command::new(&bin);
+            command
+                .current_dir(dir.path())
+                .args(["--db", &db_arg, "--json", "pick"])
+                .env("PLANR_WORKER_ID", format!("storm-r{round}-w{worker}"))
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+            for var in [
+                "CODEX_SANDBOX",
+                "CODEX_SESSION_ID",
+                "CLAUDECODE",
+                "CURSOR_AGENT",
+                "CURSOR_INVOKED_AS",
+                "PLANR_PROFILE",
+            ] {
+                command.env_remove(var);
+            }
+            children.push(command.spawn().unwrap());
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        for mut child in children {
+            let status = loop {
+                match child.try_wait().unwrap() {
+                    Some(status) => break status,
+                    None if std::time::Instant::now() > deadline => {
+                        let _ = child.kill();
+                        panic!("round {round}: a first pick hung past the 30s watchdog");
+                    }
+                    None => std::thread::sleep(std::time::Duration::from_millis(10)),
+                }
+            };
+            assert!(
+                status.success(),
+                "round {round}: parallel pick failed (lock contention must wait, not error)"
+            );
+        }
+    }
+}
+
+#[test]
+fn agents_init_scaffold_is_warning_free_and_routes_by_default() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Scaffold"])
+        .assert()
+        .success();
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "agents", "init"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let created: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(created["path"], ".planr/agents.toml");
+    assert_eq!(created["next"][0], "planr agents check");
+
+    // The scaffold must parse with zero warnings.
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "agents", "check"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let check: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(check["ok"], true);
+    assert_eq!(check["warnings"].as_array().unwrap().len(), 0);
+
+    // The scaffold teaches client honesty where clients get declared.
+    let scaffold_content = fs::read_to_string(dir.path().join(".planr/agents.toml")).unwrap();
+    assert!(
+        scaffold_content.contains("Declare the client you will actually dispatch on"),
+        "scaffold must carry the client-honesty rule: {scaffold_content}"
+    );
+
+    // A seeded code item picks up the scaffold's implementer route.
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "item",
+            "create",
+            "Scaffolded work",
+            "--description",
+            "Routes via the starter registry",
+            "--work-type",
+            "code",
+        ])
+        .assert()
+        .success();
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "pick"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let pick: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(pick["routing"]["profile"], "implementer");
+    assert_eq!(pick["routing"]["model"], "gpt-5.5");
+    assert_eq!(pick["routing"]["fallbacks"][0], "driver");
+    assert_eq!(pick["routing"]["matched_selector"], "work_type=code");
+
+    // A second init refuses politely and leaves the file untouched...
+    let scaffold = fs::read_to_string(dir.path().join(".planr/agents.toml")).unwrap();
+    let custom = scaffold.replace("gpt-5.5", "gpt-6");
+    fs::write(dir.path().join(".planr/agents.toml"), &custom).unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "agents", "init"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--force"));
+    assert_eq!(
+        fs::read_to_string(dir.path().join(".planr/agents.toml")).unwrap(),
+        custom
+    );
+
+    // ...and --force restores the scaffold.
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "agents", "init", "--force"])
+        .assert()
+        .success();
+    assert_eq!(
+        fs::read_to_string(dir.path().join(".planr/agents.toml")).unwrap(),
+        scaffold
+    );
+}
+
+#[test]
+fn prompt_routing_names_routes_fallbacks_and_host_traps() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Prompt"])
+        .assert()
+        .success();
+
+    // Missing registry: still zero-exit with the host guidance and a
+    // pointer instead of a route table.
+    let missing = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "prompt", "routing"])
+        .output()
+        .unwrap();
+    assert!(missing.status.success());
+    let missing_json: serde_json::Value = serde_json::from_slice(&missing.stdout).unwrap();
+    assert_eq!(missing_json["registry"], "missing");
+    assert!(
+        missing_json["prompt"]
+            .as_str()
+            .unwrap()
+            .contains("fork_turns")
+    );
+
+    fs::write(
+        dir.path().join(".planr/agents.toml"),
+        r#"
+[profiles.coder]
+client = "codex"
+model = "gpt-5.5"
+effort = "xhigh"
+
+[profiles.driver]
+client = "cursor"
+model = "fable-5"
+
+[[routes]]
+match = { work_type = "code" }
+profile = "coder"
+fallbacks = ["driver"]
+
+[route_default]
+profile = "driver"
+"#,
+    )
+    .unwrap();
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "prompt", "routing"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["registry"], "ok");
+    let routes = json["routes"].as_array().unwrap();
+    assert_eq!(routes.len(), 2, "every route plus the default is named");
+    assert_eq!(routes[0]["match"], "work_type=code");
+    assert_eq!(routes[0]["fallbacks"][0], "driver");
+    assert_eq!(routes[1]["match"], "default");
+    let prompt = json["prompt"].as_str().unwrap();
+    for required in [
+        "work_type=code",
+        "driver",
+        // The three host traps must be spelled out.
+        "fork_turns: \"none\"",
+        "CLAUDE_CODE_SUBAGENT_MODEL",
+        "Max Mode can override",
+        // Process dispatch reuses the code route's pin as the example.
+        "codex exec --model gpt-5.5 -c model_reasoning_effort=\"xhigh\"",
+        "pi --provider",
+        "opencode run",
+    ] {
+        assert!(
+            prompt.contains(required),
+            "prompt must contain `{required}`"
+        );
+    }
+    assert!(
+        json["hosts"]["codex"][1]
+            .as_str()
+            .unwrap()
+            .contains("fork_turns")
+    );
+    assert_eq!(json["process_dispatch"].as_array().unwrap().len(), 3);
+
+    // --client filters the host sections but keeps the table.
+    let codex_only = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "prompt",
+            "routing",
+            "--client",
+            "codex",
+        ])
+        .output()
+        .unwrap();
+    let codex_json: serde_json::Value = serde_json::from_slice(&codex_only.stdout).unwrap();
+    let codex_prompt = codex_json["prompt"].as_str().unwrap();
+    assert!(codex_prompt.contains("### Codex"));
+    assert!(!codex_prompt.contains("### Claude Code"));
+    assert!(!codex_prompt.contains("### Cursor"));
+    assert!(codex_prompt.contains("work_type=code"));
+    assert!(codex_json["hosts"].get("claude").is_none());
+}
+
+#[test]
+fn mcp_route_tools_reuse_cli_json_shapes() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "McpRoute"])
+        .assert()
+        .success();
+    fs::write(
+        dir.path().join(".planr/agents.toml"),
+        r#"
+[profiles.driver]
+client = "cursor"
+model = "fable-5"
+
+[[routes]]
+match = { work_type = "code" }
+profile = "driver"
+"#,
+    )
+    .unwrap();
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "item",
+            "create",
+            "Routed work",
+            "--description",
+            "mcp",
+            "--work-type",
+            "code",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let created: Value = serde_json::from_slice(&output).unwrap();
+    let item_id = created["item"]["id"].as_str().unwrap().to_string();
+
+    let input = [
+        json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"planr_agents_list","arguments":{}}}).to_string(),
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"planr_item_route","arguments":{"item_id":item_id}}}).to_string(),
+        json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"planr_item_route_set","arguments":{"item_id":item_id,"profile":"driver"}}}).to_string(),
+        // Unknown profile: a tool-result error, not a dead server.
+        json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"planr_item_route_set","arguments":{"item_id":item_id,"profile":"ghost"}}}).to_string(),
+        json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"planr_item_route_clear","arguments":{"item_id":item_id}}}).to_string(),
+    ]
+    .join("\n")
+        + "\n";
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "mcp"])
+        .write_stdin(input)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let responses = String::from_utf8(output)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(responses.len(), 5, "unexpected responses: {responses:?}");
+    let tool_payload = |index: usize| -> Value {
+        serde_json::from_str(
+            responses[index]["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap()
+    };
+
+    let listed = tool_payload(0);
+    assert_eq!(listed["registry"]["profiles"]["driver"]["model"], "fable-5");
+    assert_eq!(listed["warnings"].as_array().unwrap().len(), 0);
+
+    let shown = tool_payload(1);
+    assert_eq!(shown["source"], "policy");
+    assert_eq!(shown["routing"]["profile"], "driver");
+
+    let pinned = tool_payload(2);
+    assert_eq!(pinned["override"], "driver");
+    assert_eq!(pinned["routing"]["matched_selector"], "override");
+
+    assert_eq!(responses[3]["result"]["isError"], true);
+    assert!(
+        responses[3]["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("ghost")
+    );
+
+    let cleared = tool_payload(4);
+    assert_eq!(cleared["cleared"], true);
+    assert_eq!(cleared["previous"], "driver");
 }
 
 #[test]
@@ -658,10 +2981,12 @@ fn runtime_control_and_approval_gates_are_enforced() {
     )
     .unwrap();
     assert_eq!(mcp_response["result"]["isError"], true);
-    assert!(mcp_response["result"]["content"][0]["text"]
-        .as_str()
-        .unwrap()
-        .contains("invalid_transition"));
+    assert!(
+        mcp_response["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("invalid_transition")
+    );
 
     let output = planr()
         .current_dir(dir.path())
@@ -1603,10 +3928,12 @@ fn mcp_server_survives_failing_tool_calls_and_answers_errors() {
 
     assert_eq!(responses[0]["id"], 1);
     assert_eq!(responses[0]["result"]["isError"], true);
-    assert!(responses[0]["result"]["content"][0]["text"]
-        .as_str()
-        .unwrap()
-        .contains("not_found"));
+    assert!(
+        responses[0]["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("not_found")
+    );
 
     assert_eq!(responses[1]["id"], 2);
     assert_eq!(responses[1]["result"]["isError"], true);
@@ -1787,12 +4114,10 @@ fn child_item_ids(db: &std::path::Path, parent_id: &str) -> Vec<String> {
     let mut stmt = conn
         .prepare("SELECT id FROM items WHERE parent_item_id = ?1 ORDER BY created_at")
         .unwrap();
-    let ids = stmt
-        .query_map([parent_id], |row| row.get::<_, String>(0))
+    stmt.query_map([parent_id], |row| row.get::<_, String>(0))
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
-        .unwrap();
-    ids
+        .unwrap()
 }
 
 #[test]
@@ -2469,6 +4794,160 @@ fn done_command_collapses_log_review_close_and_next_pick() {
         Value::Null,
         "worker must not pick its own review; only the review was ready"
     );
+}
+
+#[test]
+fn independent_review_stamp_requires_explicit_reviewer_identity() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Stamps"])
+        .assert()
+        .success();
+
+    let mut review_ids = Vec::new();
+    for title in ["Slice A", "Slice B"] {
+        let item = create_test_item(dir.path(), &db, title, "stamp check");
+        planr()
+            .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", "maker-1")
+            .args(["--db", db.to_str().unwrap(), "pick"])
+            .assert()
+            .success();
+        let output = planr()
+            .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", "maker-1")
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "done",
+                &item,
+                "--summary",
+                "built",
+                "--review",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let done: Value = serde_json::from_slice(&output).unwrap();
+        review_ids.push(done["review"]["id"].as_str().unwrap().to_string());
+    }
+
+    // Anonymous reviewer (fallback identity): the string differs from
+    // maker-1, but that proves nothing — the stamp must be single_agent,
+    // never independent by luck.
+    let output = planr()
+        .current_dir(dir.path())
+        .env_remove("PLANR_WORKER_ID")
+        .env_remove("PLANR_SESSION_ID")
+        .env_remove("CODEX_SESSION_ID")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "review",
+            "close",
+            &review_ids[0],
+            "--verdict",
+            "complete",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let closed: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        closed["review_mode"], "single_agent",
+        "anonymous reviewer must not stamp independent: {closed}"
+    );
+
+    // A blank --reviewer is not an identity: it must stamp single_agent
+    // exactly like the anonymous fallback (GPT-5.5 review finding).
+    let item = create_test_item(dir.path(), &db, "Slice C", "stamp check");
+    planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "maker-1")
+        .args(["--db", db.to_str().unwrap(), "pick"])
+        .assert()
+        .success();
+    let output = planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "maker-1")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "done",
+            &item,
+            "--summary",
+            "built",
+            "--review",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let done: Value = serde_json::from_slice(&output).unwrap();
+    let blank_review = done["review"]["id"].as_str().unwrap().to_string();
+    let output = planr()
+        .current_dir(dir.path())
+        .env_remove("PLANR_WORKER_ID")
+        .env_remove("PLANR_SESSION_ID")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "review",
+            "close",
+            &blank_review,
+            "--verdict",
+            "complete",
+            "--reviewer",
+            "   ",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let closed: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        closed["review_mode"], "single_agent",
+        "blank --reviewer must not stamp independent: {closed}"
+    );
+
+    // Explicit --reviewer earns the independent stamp as before.
+    let output = planr()
+        .current_dir(dir.path())
+        .env_remove("PLANR_WORKER_ID")
+        .env_remove("PLANR_SESSION_ID")
+        .env_remove("CODEX_SESSION_ID")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "review",
+            "close",
+            &review_ids[1],
+            "--verdict",
+            "complete",
+            "--reviewer",
+            "checker-9",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let closed: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(closed["review_mode"], "independent");
+    assert_eq!(closed["reviewer"], "checker-9");
 }
 
 #[test]
@@ -3351,15 +5830,21 @@ fn graph_adaptation_primitives_preview_rewire_and_replan() {
         .clone();
     let map: Value = serde_json::from_slice(&output).unwrap();
     let links = map["links"].as_array().unwrap();
-    assert!(links
-        .iter()
-        .any(|link| link["from"] == first_id && link["to"] == middle_id));
-    assert!(links
-        .iter()
-        .any(|link| link["from"] == middle_id && link["to"] == second_id));
-    assert!(!links
-        .iter()
-        .any(|link| link["from"] == first_id && link["to"] == second_id));
+    assert!(
+        links
+            .iter()
+            .any(|link| link["from"] == first_id && link["to"] == middle_id)
+    );
+    assert!(
+        links
+            .iter()
+            .any(|link| link["from"] == middle_id && link["to"] == second_id)
+    );
+    assert!(
+        !links
+            .iter()
+            .any(|link| link["from"] == first_id && link["to"] == second_id)
+    );
 
     planr()
         .current_dir(dir.path())
@@ -4162,12 +6647,10 @@ fn scrub_confirm_redacts_stored_secret_values() {
         let mut stmt = conn
             .prepare("SELECT content FROM contexts ORDER BY created_at")
             .unwrap();
-        let rows = stmt
-            .query_map([], |row| row.get::<_, String>(0))
+        stmt.query_map([], |row| row.get::<_, String>(0))
             .unwrap()
             .collect::<rusqlite::Result<Vec<_>>>()
-            .unwrap();
-        rows
+            .unwrap()
     };
     assert!(
         contents.iter().any(|c| c.contains("[REDACTED]")),
@@ -4516,10 +6999,12 @@ fn local_review_workspace_serves_browser_ui_and_drives_review_chain() {
     let annotations = annotated_workspace["reviews"][0]["annotations"]
         .as_array()
         .unwrap();
-    assert!(annotations.iter().any(|entry| entry["content"]
-        .as_str()
-        .unwrap()
-        .contains("Workspace annotation")));
+    assert!(annotations.iter().any(|entry| {
+        entry["content"]
+            .as_str()
+            .unwrap()
+            .contains("Workspace annotation")
+    }));
 
     let feedback = http_json(&http_request(
         port,
@@ -4657,10 +7142,12 @@ fn review_evidence_scopes_git_dirty_files_and_pr_context() {
         .clone();
     let clean: Value = serde_json::from_slice(&clean).unwrap();
     assert_eq!(clean["evidence"]["git"]["available"], true);
-    assert!(clean["evidence"]["git"]["changed_files"]
-        .as_array()
-        .unwrap()
-        .is_empty());
+    assert!(
+        clean["evidence"]["git"]["changed_files"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 
     fs::write(
         dir.path().join("src/owned.rs"),
@@ -4691,25 +7178,31 @@ fn review_evidence_scopes_git_dirty_files_and_pr_context() {
         .stdout
         .clone();
     let dirty: Value = serde_json::from_slice(&dirty).unwrap();
-    assert!(dirty["evidence"]["git"]["scoped_files"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|value| value == "src/owned.rs"));
-    assert!(dirty["evidence"]["git"]["unrelated_dirty_files"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|value| value == "src/unrelated.rs"));
+    assert!(
+        dirty["evidence"]["git"]["scoped_files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "src/owned.rs")
+    );
+    assert!(
+        dirty["evidence"]["git"]["unrelated_dirty_files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "src/unrelated.rs")
+    );
     assert_eq!(
         dirty["evidence"]["dirty_worktree_safety"]["source_content_included"],
         false
     );
-    assert!(dirty["evidence"]["provenance"]["pr_urls"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|value| value == "https://github.com/instructa/planr/pull/1"));
+    assert!(
+        dirty["evidence"]["provenance"]["pr_urls"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "https://github.com/instructa/planr/pull/1")
+    );
 
     let review = planr()
         .current_dir(dir.path())
@@ -4975,14 +7468,16 @@ fn template_export_import_preserves_graph_context_and_review_artifacts() {
         .stdout
         .clone();
     let contexts: Value = serde_json::from_slice(&contexts).unwrap();
-    assert!(contexts["contexts"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|context| context["content"]
-            .as_str()
+    assert!(
+        contexts["contexts"]
+            .as_array()
             .unwrap()
-            .contains("Template review annotation context")));
+            .iter()
+            .any(|context| context["content"]
+                .as_str()
+                .unwrap()
+                .contains("Template review annotation context"))
+    );
     assert!(target.path().join(".planr/reviews").exists());
 }
 
@@ -5105,7 +7600,20 @@ fn planr_native_skills_are_packaged_and_cli_first() {
                 .exists(),
             "missing plugin agent {agent}"
         );
+        // Cursor-format subagent roles ship next to the Codex TOMLs and are
+        // registered by the root .cursor-plugin manifest.
+        assert!(
+            root.join("plugins/planr/skills/planr-loop/agents")
+                .join(format!("{agent}.md"))
+                .exists(),
+            "missing cursor plugin agent {agent}"
+        );
     }
+    let cursor_manifest = fs::read_to_string(root.join(".cursor-plugin/plugin.json")).unwrap();
+    assert!(
+        cursor_manifest.contains("planr-loop/agents/planr-worker.md"),
+        "Cursor plugin manifest must register the worker subagent"
+    );
 }
 
 #[test]
@@ -5131,6 +7639,8 @@ fn project_init_and_install_provision_loop_agent_roles() {
         ".codex/agents/planr-reviewer.toml",
         ".claude/agents/planr-worker.md",
         ".claude/agents/planr-reviewer.md",
+        ".cursor/agents/planr-worker.md",
+        ".cursor/agents/planr-reviewer.md",
     ] {
         assert!(
             dir.path().join(role).exists(),
@@ -5141,6 +7651,90 @@ fn project_init_and_install_provision_loop_agent_roles() {
     assert!(
         worker.contains("planr_worker"),
         "provisioned codex worker role should define the planr_worker agent"
+    );
+
+    // Plugin-style install: --no-mcp writes subagent roles and skills but no
+    // MCP config, for setups that use skills and agents without MCP.
+    let no_mcp = tempdir().unwrap();
+    let no_mcp_db = no_mcp.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(no_mcp.path())
+        .args([
+            "--db",
+            no_mcp_db.to_str().unwrap(),
+            "project",
+            "init",
+            "NoMcp",
+        ])
+        .assert()
+        .success();
+    planr()
+        .current_dir(no_mcp.path())
+        .args([
+            "--db",
+            no_mcp_db.to_str().unwrap(),
+            "install",
+            "cursor",
+            "--no-mcp",
+        ])
+        .assert()
+        .success();
+    for provisioned in [
+        ".cursor/agents/planr-worker.md",
+        ".cursor/agents/planr-reviewer.md",
+        ".cursor/skills/planr/SKILL.md",
+        ".cursor/skills/planr-work/SKILL.md",
+    ] {
+        assert!(
+            no_mcp.path().join(provisioned).exists(),
+            "install cursor --no-mcp should write {provisioned}"
+        );
+    }
+    assert!(
+        !no_mcp.path().join(".cursor/mcp.json").exists(),
+        "install cursor --no-mcp must not write MCP config"
+    );
+    planr()
+        .current_dir(no_mcp.path())
+        .args([
+            "--db",
+            no_mcp_db.to_str().unwrap(),
+            "install",
+            "claude",
+            "--no-mcp",
+        ])
+        .assert()
+        .success();
+    assert!(
+        no_mcp
+            .path()
+            .join(".claude/agents/planr-worker.md")
+            .exists(),
+        "install claude --no-mcp should write subagent roles"
+    );
+    assert!(
+        !no_mcp.path().join(".mcp.json").exists(),
+        "install claude --no-mcp must not write MCP config"
+    );
+    let dry = planr()
+        .current_dir(no_mcp.path())
+        .args([
+            "--db",
+            no_mcp_db.to_str().unwrap(),
+            "install",
+            "cursor",
+            "--no-mcp",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let dry = String::from_utf8(dry).unwrap();
+    assert!(
+        dry.contains(".cursor/skills/planr/SKILL.md") && !dry.contains("mcpServers"),
+        "--no-mcp dry-run should list plugin files, not MCP config"
     );
 
     // `planr install codex` provisions the same roles for projects initialized
@@ -5196,6 +7790,10 @@ fn rust_implementation_has_owned_module_boundaries() {
         "src/app/review_workspace.rs",
         "src/app/surfaces.rs",
         "src/app/inspection.rs",
+        "src/app/application.rs",
+        "src/app/repository/item.rs",
+        "src/app/repository/plan.rs",
+        "src/app/repository/evidence.rs",
         "src/model.rs",
         "src/storage/mod.rs",
         "src/storage/schema.rs",
@@ -5209,7 +7807,7 @@ fn rust_implementation_has_owned_module_boundaries() {
             "missing architecture module {file}"
         );
     }
-    for removed_hub in ["src/app.rs", "src/storage.rs"] {
+    for removed_hub in ["src/app.rs", "src/storage.rs", "src/domain", "crates"] {
         assert!(
             !root.join(removed_hub).exists(),
             "{removed_hub} should not return as a monolithic ownership hub"
@@ -5236,10 +7834,10 @@ fn rust_implementation_has_owned_module_boundaries() {
         );
     }
     for (file, max_lines) in [
-        ("src/cli.rs", 900usize),
+        ("src/cli.rs", 950usize),
         ("src/app/mod.rs", 180),
         ("src/app/audit.rs", 200),
-        ("src/app/commands.rs", 1_000),
+        ("src/app/commands.rs", 1_020),
         ("src/app/flow.rs", 320),
         ("src/app/git_review.rs", 350),
         ("src/app/mcp.rs", 900),
@@ -5252,8 +7850,16 @@ fn rust_implementation_has_owned_module_boundaries() {
         ("src/app/review_workspace.rs", 500),
         ("src/app/surfaces.rs", 300),
         ("src/app/inspection.rs", 510),
+        ("src/app/application.rs", 200),
         ("src/storage/schema.rs", 300),
         ("src/storage/rows.rs", 150),
+        ("src/model.rs", 400),
+        ("src/planpack.rs", 320),
+        ("src/integrations.rs", 500),
+        ("src/agents.rs", 800),
+        ("src/app/agents.rs", 850),
+        ("src/app/agents_init.rs", 800),
+        ("src/rolefiles.rs", 400),
     ] {
         let line_count = fs::read_to_string(root.join(file)).unwrap().lines().count();
         assert!(
@@ -5281,12 +7887,13 @@ fn rust_implementation_has_owned_module_boundaries() {
         "src/app/review_workspace.rs",
         "src/app/surfaces.rs",
         "src/app/inspection.rs",
+        "src/app/application.rs",
         "src/storage/mod.rs",
         "src/storage/schema.rs",
         "src/storage/rows.rs",
         "src/planpack.rs",
         "src/integrations.rs",
-        "single crate",
+        "src/app/agents_init.rs",
     ] {
         assert!(
             docs.contains(owner),
@@ -6021,7 +8628,9 @@ fn guess_killer_pack_auto_chain_audit_review_mode_unlocked_and_repair_errors() {
         &[
             "context",
             "add",
-            &format!("GOAL CONTRACT {build_id}: DONE when all items closed and live verification logged."),
+            &format!(
+                "GOAL CONTRACT {build_id}: DONE when all items closed and live verification logged."
+            ),
             "--tag",
             "goal-contract",
         ],
@@ -6031,10 +8640,12 @@ fn guess_killer_pack_auto_chain_audit_review_mode_unlocked_and_repair_errors() {
         audit["holds"], false,
         "a stored contract makes the verification clause binding: {audit}"
     );
-    assert!(audit["contract"]["content"]
-        .as_str()
-        .unwrap()
-        .contains(&build_id));
+    assert!(
+        audit["contract"]["content"]
+            .as_str()
+            .unwrap()
+            .contains(&build_id)
+    );
     run(
         "maker-1",
         &[

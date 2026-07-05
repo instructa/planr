@@ -1,12 +1,12 @@
-use super::{recovery::ItemRecoveryInput, App, ReviewAnnotationInput};
+use super::{
+    App, LogInput, ReviewAnnotationInput, application::ArtifactInput, recovery::ItemRecoveryInput,
+};
 use crate::integrations::{mcp_json, mcp_resources, mcp_tools};
 use crate::planpack::{build_plan_body, product_plan_files};
-use crate::util::{
-    append_line, item_id, now_string, required_arg, short_id, worker_id, write_if_missing,
-};
-use anyhow::{anyhow, bail, Result};
+use crate::util::{append_line, item_id, now_string, required_arg, write_if_missing};
+use anyhow::{Result, anyhow, bail};
 use rusqlite::params;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use slug::slugify;
 use std::fs;
 use std::io::{self, BufRead, Write};
@@ -96,6 +96,22 @@ impl App {
             .unwrap_or_else(|| json!({}));
         match name {
             "planr_project_show" => Ok(mcp_json(self.default_project()?)),
+            "planr_agents_list" => Ok(mcp_json(self.agents_list_value()?.0)),
+            "planr_item_route" => Ok(mcp_json(
+                self.item_route_show_value(required_arg(&args, "item_id")?)?
+                    .0,
+            )),
+            "planr_item_route_set" => Ok(mcp_json(
+                self.item_route_set_value(
+                    required_arg(&args, "item_id")?,
+                    required_arg(&args, "profile")?,
+                )?
+                .0,
+            )),
+            "planr_item_route_clear" => Ok(mcp_json(
+                self.item_route_clear_value(required_arg(&args, "item_id")?)?
+                    .0,
+            )),
             "planr_map_show" => Ok(mcp_json(
                 self.map_value(args.get("plan").and_then(Value::as_str))?,
             )),
@@ -346,15 +362,10 @@ impl App {
                 ) {
                     bail!("cannot amend item {} from status {}", item.id, item.status);
                 }
-                let id = short_id("ctx");
-                self.conn.execute(
-                    "INSERT INTO contexts(id, project_id, item_id, worker_id, kind, content, tags, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'))",
-                    params![id, self.default_project()?.id, item.id, worker_id(), kind, content, json!(["amend"]).to_string()],
-                )?;
-                self.index_search("context", &id, kind, content, None)?;
-                Ok(mcp_json(
-                    json!({"item": item, "context": self.get_context(&id)?}),
-                ))
+                Ok(mcp_json(json!({
+                    "item": item,
+                    "context": self.add_context_value(Some(item_id), kind, content, json!(["amend"]), Some("mcp"))?
+                })))
             }
             "planr_item_replan" => {
                 let parent_id = required_arg(&args, "parent_id")?;
@@ -488,35 +499,28 @@ impl App {
             }
             "planr_approval_request" => {
                 let item_id = required_arg(&args, "item_id")?;
-                self.conn.execute(
-                    "UPDATE items SET approval_status = 'requested', approval_requested_at = datetime('now'), approval_comment = ?1, approved_by = NULL, updated_at = datetime('now') WHERE id = ?2",
-                    params![args.get("reason").and_then(Value::as_str), item_id],
-                )?;
-                Ok(mcp_json(
-                    json!({"item": self.get_item(item_id)?, "approval": self.item_approval(item_id)?}),
-                ))
+                Ok(mcp_json(self.request_approval_value(
+                    item_id,
+                    args.get("reason").and_then(Value::as_str),
+                )?))
             }
             "planr_approval_approve" => {
                 let item_id = required_arg(&args, "item_id")?;
                 let by = required_arg(&args, "by")?;
-                self.conn.execute(
-                    "UPDATE items SET approval_status = 'approved', approved_by = ?1, approval_comment = ?2, updated_at = datetime('now') WHERE id = ?3",
-                    params![by, args.get("comment").and_then(Value::as_str), item_id],
-                )?;
-                Ok(mcp_json(
-                    json!({"item": self.get_item(item_id)?, "approval": self.item_approval(item_id)?}),
-                ))
+                Ok(mcp_json(self.approve_value(
+                    item_id,
+                    by,
+                    args.get("comment").and_then(Value::as_str),
+                )?))
             }
             "planr_approval_deny" => {
                 let item_id = required_arg(&args, "item_id")?;
                 let by = required_arg(&args, "by")?;
-                self.conn.execute(
-                    "UPDATE items SET approval_status = 'denied', approved_by = ?1, approval_comment = ?2, updated_at = datetime('now') WHERE id = ?3",
-                    params![by, args.get("comment").and_then(Value::as_str), item_id],
-                )?;
-                Ok(mcp_json(
-                    json!({"item": self.get_item(item_id)?, "approval": self.item_approval(item_id)?}),
-                ))
+                Ok(mcp_json(self.deny_value(
+                    item_id,
+                    by,
+                    args.get("comment").and_then(Value::as_str),
+                )?))
             }
             "planr_approval_list" => {
                 let open = args.get("open").and_then(Value::as_bool).unwrap_or(false);
@@ -525,37 +529,23 @@ impl App {
             "planr_artifact_add" => {
                 let name = required_arg(&args, "name")?;
                 let item = args.get("item").and_then(Value::as_str);
-                if let Some(item_id) = item {
-                    self.get_item(item_id)?;
-                }
-                let id = short_id("art");
                 let mime = args.get("mime").and_then(Value::as_str).unwrap_or_else(|| {
                     args.get("path")
                         .and_then(Value::as_str)
                         .map(crate::util::mime_for_path)
                         .unwrap_or("text/plain")
                 });
-                self.conn.execute(
-                    "INSERT INTO artifacts(id, project_id, item_id, name, kind, path, content, mime_type, size_bytes, metadata, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, datetime('now'))",
-                    params![
-                        id,
-                        self.default_project()?.id,
-                        item,
-                        name,
-                        args.get("kind").and_then(Value::as_str).unwrap_or("evidence"),
-                        args.get("path").and_then(Value::as_str),
-                        args.get("content").and_then(Value::as_str),
-                        mime,
-                        args.get("content").and_then(Value::as_str).map(|content| content.len() as i64),
-                        json!({"source": "mcp"}).to_string(),
-                    ],
-                )?;
-                self.record_event(
-                    "artifact_created",
-                    item,
-                    json!({"artifact_id": id.clone(), "name": name}),
-                )?;
-                Ok(mcp_json(json!({"artifact": self.get_artifact(&id)?})))
+                Ok(mcp_json(
+                    json!({"artifact": self.add_artifact_value(ArtifactInput {
+                    item_id: item,
+                    name,
+                    kind: args.get("kind").and_then(Value::as_str).unwrap_or("evidence"),
+                    path: args.get("path").and_then(Value::as_str),
+                    content: args.get("content").and_then(Value::as_str),
+                    mime_type: mime,
+                    metadata: json!({"source": "mcp"}),
+                })?}),
+                ))
             }
             "planr_artifact_list" => Ok(mcp_json(json!({
                 "artifacts": self.list_artifacts(args.get("item").and_then(Value::as_str))?
@@ -620,27 +610,19 @@ impl App {
             "planr_log_add" => {
                 let item = required_arg(&args, "item")?;
                 let summary = required_arg(&args, "summary")?;
-                let id = short_id("log");
-                self.conn.execute(
-                        "INSERT INTO logs(id, project_id, item_id, kind, summary, files, commands, tests, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'))",
-                    params![
-                        id,
-                        self.default_project()?.id,
-                        item,
-                        args.get("kind").and_then(Value::as_str).unwrap_or("completion"),
-                        summary,
-                        serde_json::to_string(args.get("files").unwrap_or(&json!([])))?,
-                        serde_json::to_string(args.get("commands").unwrap_or(&json!([])))?,
-                        serde_json::to_string(args.get("tests").unwrap_or(&json!([])))?,
-                    ],
-                )?;
-                self.index_search("log", &id, summary, summary, None)?;
-                self.record_event(
-                    "log_created",
-                    Some(item),
-                    json!({"log_id": id.clone(), "kind": args.get("kind").and_then(Value::as_str).unwrap_or("completion")}),
-                )?;
-                Ok(mcp_json(json!({"log": self.get_log(&id)?})))
+                let files = string_array_arg(&args, "files");
+                let commands = string_array_arg(&args, "commands");
+                let tests = string_array_arg(&args, "tests");
+                Ok(mcp_json(json!({"log": self.add_log_value(LogInput {
+                    item_id: item,
+                    kind: args.get("kind").and_then(Value::as_str).unwrap_or("completion"),
+                    summary,
+                    files: &files,
+                    commands: &commands,
+                    tests: &tests,
+                    source: Some("mcp"),
+                    profile: args.get("profile").and_then(Value::as_str),
+                })?})))
             }
             "planr_review_close" => {
                 let review_id = required_arg(&args, "review_item_id")?;
@@ -674,38 +656,17 @@ impl App {
             }
             "planr_close_item" => {
                 let item_id = required_arg(&args, "item_id")?;
-                let ready_before = self.ready_item_ids()?;
-                self.promote_ready()?;
-                self.ensure_can_close(item_id)?;
-                self.conn.execute("UPDATE items SET status = 'closed', completed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1", params![item_id])?;
-                self.promote_ready()?;
-                self.record_event("item_closed", Some(item_id), json!({"source": "mcp"}))?;
-                Ok(mcp_json(
-                    json!({"closed": item_id, "unlocked": self.unlocked_since(&ready_before)?, "next": "planr pick"}),
-                ))
+                let mut value = self.close_item_value(item_id, "closed from mcp")?;
+                value["next"] = json!("planr pick");
+                Ok(mcp_json(value))
             }
-            "planr_context_create" => {
-                let id = short_id("ctx");
-                self.conn.execute(
-                    "INSERT INTO contexts(id, project_id, item_id, worker_id, kind, content, tags, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, '[]', datetime('now'))",
-                    params![id, self.default_project()?.id, args.get("item").and_then(Value::as_str), worker_id(), args.get("kind").and_then(Value::as_str).unwrap_or("discovery"), required_arg(&args, "content")?],
-                )?;
-                self.index_search(
-                    "context",
-                    &id,
-                    args.get("kind")
-                        .and_then(Value::as_str)
-                        .unwrap_or("discovery"),
-                    required_arg(&args, "content")?,
-                    None,
-                )?;
-                self.record_event(
-                    "context_created",
+            "planr_context_create" => Ok(mcp_json(json!({"context": self.add_context_value(
                     args.get("item").and_then(Value::as_str),
-                    json!({"context_id": id.clone(), "source": "mcp"}),
-                )?;
-                Ok(mcp_json(json!({"context": self.get_context(&id)?})))
-            }
+                    args.get("kind").and_then(Value::as_str).unwrap_or("discovery"),
+                    required_arg(&args, "content")?,
+                    json!([]),
+                    Some("mcp"),
+                )?}))),
             "planr_search" => {
                 let query = required_arg(&args, "query")?;
                 let results = self.search_results(query)?;
@@ -746,11 +707,21 @@ impl App {
             .and_then(Value::as_str)
             .unwrap_or("planr-work");
         let text = match name {
-            "planr-plan" => "Create or refine a Planr product or build plan. Keep scope, ownership, verification, and acceptance criteria explicit.",
-            "planr-work" => "Use Planr as: inspect map, pick one ready item, implement, log evidence, request or close review when appropriate.",
-            "planr-review" => "Review item evidence against plan, changed files, commands, and acceptance criteria before closure.",
-            "planr-map" => "Summarize ready, blocked, picked, review, and closed items. Identify critical path and pressure points.",
-            "planr-summary" => "Produce a concise status summary grounded in Planr map, logs, contexts, and reviews.",
+            "planr-plan" => {
+                "Create or refine a Planr product or build plan. Keep scope, ownership, verification, and acceptance criteria explicit."
+            }
+            "planr-work" => {
+                "Use Planr as: inspect map, pick one ready item, implement, log evidence, request or close review when appropriate."
+            }
+            "planr-review" => {
+                "Review item evidence against plan, changed files, commands, and acceptance criteria before closure."
+            }
+            "planr-map" => {
+                "Summarize ready, blocked, picked, review, and closed items. Identify critical path and pressure points."
+            }
+            "planr-summary" => {
+                "Produce a concise status summary grounded in Planr map, logs, contexts, and reviews."
+            }
             _ => "Use Planr map, plans, logs, and reviews as the source of truth.",
         };
         json!({"description": name, "messages": [{"role": "user", "content": {"type": "text", "text": text}}]})
@@ -765,4 +736,17 @@ fn write_rpc_error(stdout: &mut io::Stdout, id: Value, code: i64, message: &str)
     )?;
     stdout.flush()?;
     Ok(())
+}
+
+fn string_array_arg(args: &Value, name: &str) -> Vec<String> {
+    args.get(name)
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
 }

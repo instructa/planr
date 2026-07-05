@@ -2,9 +2,39 @@ use super::App;
 use crate::cli::DoneArgs;
 use crate::model::Item;
 use crate::util::{short_id, worker_id};
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use rusqlite::params;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
+
+/// The profile a run actually executed on: explicit input wins, then the
+/// `PLANR_PROFILE` environment variable (role files rendered from the
+/// registry can export it), else none — and none means no comparison and
+/// no event, never a guess.
+fn effective_profile(explicit: Option<&str>) -> Option<String> {
+    explicit
+        .map(str::trim)
+        .filter(|profile| !profile.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            std::env::var("PLANR_PROFILE")
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        })
+}
+
+pub(crate) struct LogInput<'a> {
+    pub(crate) item_id: &'a str,
+    pub(crate) kind: &'a str,
+    pub(crate) summary: &'a str,
+    pub(crate) files: &'a [String],
+    pub(crate) commands: &'a [String],
+    pub(crate) tests: &'a [String],
+    pub(crate) source: Option<&'a str>,
+    /// Registry profile the work actually executed on, when the worker
+    /// knows it (`--profile` flag; `PLANR_PROFILE` env is the fallback).
+    pub(crate) profile: Option<&'a str>,
+}
 
 /// Owner of the compound work flow: evidence logging, the close transition,
 /// review requests, and the `done` command that chains them. CLI, HTTP, and
@@ -13,50 +43,52 @@ impl App {
     /// Single owner for writing evidence logs. Logging from the pick owner
     /// also refreshes the runtime heartbeat: evidence is a liveness signal,
     /// so agents do not need a separate `pick heartbeat` call.
-    pub(crate) fn add_log_entry(
-        &self,
-        item_id: &str,
-        kind: &str,
-        summary: &str,
-        files: &[String],
-        cmd: &[String],
-        tests: &[String],
-    ) -> Result<String> {
+    pub(crate) fn add_log_entry(&self, input: LogInput<'_>) -> Result<String> {
         let id = short_id("log");
-        let run_id = if cmd.is_empty() && tests.is_empty() {
+        let profile = effective_profile(input.profile);
+        let run_id = if input.commands.is_empty() && input.tests.is_empty() {
             None
         } else {
-            Some(self.record_run(item_id, cmd, "closed")?)
+            Some(self.record_run(input.item_id, input.commands, "closed", profile.as_deref())?)
         };
+        if let Some(run_id) = run_id.as_deref() {
+            if let Some(actual_profile) = profile.as_deref() {
+                self.observe_route_compliance(input.item_id, run_id, actual_profile)?;
+            }
+            // Client compliance needs no profile: the observed host comes
+            // from the environment, so it also audits runs whose worker
+            // never reported a profile.
+            self.observe_client_compliance(input.item_id, run_id)?;
+        }
         self.conn.execute(
             "INSERT INTO logs(id, project_id, item_id, run_id, kind, summary, files, commands, tests, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, datetime('now'))",
             params![
                 id,
                 self.default_project()?.id,
-                item_id,
+                input.item_id,
                 run_id,
-                kind,
-                summary,
+                input.kind,
+                input.summary,
                 serde_json::to_string(
-                    &files
+                    &input.files
                         .iter()
                         .map(|file| file.trim())
                         .filter(|file| !file.is_empty())
                         .collect::<Vec<_>>(),
                 )?,
-                serde_json::to_string(cmd)?,
-                serde_json::to_string(tests)?,
+                serde_json::to_string(input.commands)?,
+                serde_json::to_string(input.tests)?,
             ],
         )?;
-        self.index_search("log", &id, summary, summary, None)?;
-        self.record_event(
-            "log_created",
-            Some(item_id),
-            json!({"log_id": id, "kind": kind}),
-        )?;
+        self.index_search("log", &id, input.summary, input.summary, None)?;
+        let mut event = json!({"log_id": id, "kind": input.kind});
+        if let Some(source) = input.source {
+            event["source"] = json!(source);
+        }
+        self.record_event("log_created", Some(input.item_id), event)?;
         self.conn.execute(
             "UPDATE items SET status = CASE WHEN status = 'picked' THEN 'running' ELSE status END, last_heartbeat_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1 AND worker_id = ?2 AND status IN ('picked','running','in_review')",
-            params![item_id, worker_id()],
+            params![input.item_id, worker_id()],
         )?;
         Ok(id)
     }
@@ -74,7 +106,16 @@ impl App {
         self.ensure_can_close(item_id)?;
         self.conn.execute("UPDATE items SET status = 'closed', completed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1", params![item_id])?;
         let log_id = if write_log {
-            Some(self.add_log_entry(item_id, "completion", summary, &[], &[], &[])?)
+            Some(self.add_log_entry(LogInput {
+                item_id,
+                kind: "completion",
+                summary,
+                files: &[],
+                commands: &[],
+                tests: &[],
+                source: None,
+                profile: None,
+            })?)
         } else {
             None
         };
@@ -193,14 +234,16 @@ impl App {
         // completion carries worker attribution and the review transition
         // cannot be skipped.
         let adopted = self.adopt_ready_item(&item_id)?;
-        let log_id = self.add_log_entry(
-            &item_id,
-            "completion",
-            &args.summary,
-            &args.files,
-            &args.cmd,
-            &args.tests,
-        )?;
+        let log_id = self.add_log_entry(LogInput {
+            item_id: &item_id,
+            kind: "completion",
+            summary: &args.summary,
+            files: &args.files,
+            commands: &args.cmd,
+            tests: &args.tests,
+            source: None,
+            profile: args.profile.as_deref(),
+        })?;
         let review = if args.review {
             Some(self.request_review_for(&item_id)?)
         } else {

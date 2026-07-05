@@ -7,11 +7,13 @@ use std::env;
 use storage::{default_db_path, ensure_schema, open_db};
 use util::{infer_error_code, print_json};
 
+mod agents;
 mod app;
 mod cli;
 mod integrations;
 mod model;
 mod planpack;
+mod rolefiles;
 mod storage;
 mod util;
 
@@ -36,11 +38,6 @@ fn run() -> Result<()> {
     let db_path = cli.db.clone().unwrap_or_else(|| default_db_path(&root));
     let conn = open_db(&db_path)?;
     ensure_schema(&conn)?;
-    let app = App {
-        conn,
-        root,
-        db_path,
-        json: cli.json,
-    };
+    let app = App::new(conn, root, db_path, cli.json);
     app.dispatch(cli.command)
 }

@@ -1,6 +1,6 @@
 # Planr Architecture
 
-Planr V1 is a single Rust binary with explicit module ownership. The crate stays small enough that a Cargo workspace would add more process overhead than value today, and there is only one deployable: the `planr` CLI. The source tree is split by ownership boundary inside that crate instead of using a premature workspace.
+Planr V1 is a single Rust binary with explicit module ownership. The crate stays small enough that a Cargo workspace would add more process overhead than value today, and there is only one deployable: the `planr` CLI. The source tree is split by ownership boundary inside that crate instead of using a premature workspace. Shared mutations that must behave identically across CLI, MCP, and HTTP live in one place (`src/app/application.rs`) so the three surfaces cannot drift.
 
 ## Repository Layout
 
@@ -32,12 +32,18 @@ Planr V1 is a single Rust binary with explicit module ownership. The crate stays
 - `src/app/surfaces.rs`: non-CLI runtime surfaces. Owns trace, scrub, artifact, event, debug, export, and import command handlers.
 - `src/app/inspection.rs`: local inspection helpers. Owns debug bundles, context/link snapshots, pick context, secret scans, export value assembly, run recording, search results, and Planr-directory import parsing.
 - `src/app/audit.rs`: goal contract audit boundary. Owns the clause-by-clause `plan audit` verdict (items settled, reviews complete, approvals clear, verification logged) and its human rendering.
-- `src/model.rs`: JSON-facing data transfer types. Owns serializable Planr DTOs used by CLI JSON, MCP, HTTP, and tests.
+- `src/app/application.rs`: shared surface-mutation boundary. Owns the approval request/approve/deny, context, log, artifact, and close mutations reused verbatim by CLI, MCP, and HTTP handlers so the three surfaces cannot drift.
+- `src/app/repository/`: focused data-access submodules (`item.rs`, `plan.rs`, `project.rs`, `link.rs`, `context.rs`, `evidence.rs`, `search.rs`) split out of `src/app/repository.rs` by entity ownership.
+- `src/model.rs`: JSON-facing data transfer types and typed vocabulary. Owns serializable Planr DTOs plus the `ItemStatus`, `WorkType`, `LinkKind`, and `ApprovalStatus` enums with their parsing and display behavior, used by CLI JSON, MCP, HTTP, storage rows, and tests.
 - `src/storage/mod.rs`: SQLite connection boundary. Owns default database path, connection setup, pragma configuration, and storage submodule exports.
 - `src/storage/schema.rs`: SQLite schema boundary. Owns DDL, additive schema upgrade helpers, and schema version recording.
 - `src/storage/rows.rs`: SQLite row mapping boundary. Owns row-to-DTO and row-to-JSON mapping functions.
-- `src/planpack.rs`: Markdown package generation. Owns project context templates and product/build plan file templates.
-- `src/integrations.rs`: agent-client integration descriptors. Owns Codex, Claude Code, Cursor, and MCP install metadata.
+- `src/planpack.rs`: Markdown package generation and parsing. Owns project context templates, product/build plan templates, plan metadata parsing, hashes, search body extraction, and task extraction.
+- `src/agents.rs`: agent profile registry core. Owns `.planr/agents.toml` parsing, registry validation warnings, and the pure advisory `resolve_route` precedence logic (override > work_type > plan > default); no storage or host concerns.
+- `src/app/agents.rs`: routing application boundary. Owns the `agents` and `item route` command handlers, the shared `*_value` JSON shapes reused by MCP, per-item route facts assembly, and registry-aware role content selection for installs.
+- `src/app/agents_init.rs`: registry bootstrap boundary. Owns `planr agents init` — the static cost-tiering scaffold and, per the agent-pool plan, the flag-spec builder and interactive wizard.
+- `src/integrations.rs`: agent-client integration descriptor boundary. Owns Codex, Claude Code, Cursor, MCP install metadata, MCP tool schemas, MCP resources, and MCP text response wrapping.
+- `src/rolefiles.rs`: host role file boundary. Owns the shipped static subagent role files and Cursor skills payloads, plus the pure renderers that re-pin role files from registry profiles (Codex TOML with strict field names, Claude/Cursor markdown frontmatter) under the generated-from header.
 - `src/util.rs`: small CLI-boundary utilities. Owns ids, timestamps, path helpers, output formatting, and safe file writes.
 
 ## Boundary Rules
@@ -45,10 +51,12 @@ Planr V1 is a single Rust binary with explicit module ownership. The crate stays
 - Command parsing belongs in `src/cli.rs`; process startup belongs in `src/main.rs`; command execution belongs under `src/app/`.
 - `src/main.rs` must stay small enough to be only a composition root. It must not own product use cases.
 - `src/app/mod.rs` must stay small enough to wire runtime state and dispatch. It must not absorb app submodule behavior.
-- SQLite schema belongs in `src/storage/schema.rs`; row mapping belongs in `src/storage/rows.rs`; app data access helpers belong in `src/app/repository.rs`.
+- SQLite schema belongs in `src/storage/schema.rs`; row mapping belongs in `src/storage/rows.rs`; app data access helpers belong in `src/app/repository.rs` and its submodules.
+- Mutations shared by more than one surface (CLI, MCP, HTTP) belong in `src/app/application.rs`; surface handlers must call the shared helper instead of repeating SQL.
 - Markdown templates belong in `planpack.rs`; command handlers should request generated file sets instead of embedding large template bodies.
-- Agent install metadata belongs in `integrations.rs`; client-specific strings should not drift across command handlers and docs.
-- DTO changes belong in `model.rs`; JSON response shapes should reuse those DTOs before adding ad hoc maps.
+- Agent install metadata and MCP schema descriptors belong in `src/integrations.rs`; client-specific strings should not drift across command handlers and docs.
+- DTO and vocabulary-enum changes belong in `src/model.rs`; JSON response shapes should reuse those DTOs before adding ad hoc maps.
+- Item status, work type, link kind, and approval status values are typed enums; new states must be added to the enum, not smuggled in as strings.
 - Utility code must stay narrow. If a helper starts owning product behavior, move it to the owning module instead of growing `util.rs`.
 - Do not add catch-all `common`, `shared`, or broad utility modules. New modules must name a durable ownership boundary.
 
@@ -58,10 +66,10 @@ Planr remains a single crate for V1 because:
 
 - there is one deployable binary and no separate service or reusable library boundary;
 - the current behavior contract is tighter when CLI, MCP, HTTP, storage, and docs ship together;
-- module-level ownership now gives the needed architecture separation without duplicating Cargo settings or release packaging;
+- module-level ownership gives the needed architecture separation without duplicating Cargo settings or release packaging;
 - npm, release, and external consumer tests assume one native binary named `planr`.
 
-A Cargo workspace should be introduced only after a concrete deployable, reuse, compilation, or team ownership boundary exists and package/release scripts are updated in the same change.
+A Cargo workspace was tried and reverted: it produced anemic crates whose only job was being a layer, plus re-export shims in the binary. A workspace should be introduced only after a concrete deployable, reuse, compilation, or team ownership boundary exists and package/release scripts are updated in the same change.
 
 ## Future Extract Points
 
@@ -72,4 +80,4 @@ If Planr grows past the V1 binary shape, the first clean extraction path is:
 - `planr-cli`: `src/cli.rs`, human output, and install helpers.
 - `planr-server`: `src/app/http.rs`, `src/app/mcp.rs`, and runtime server adapters.
 
-Do not extract those crates until a real reuse, compile-time, or ownership boundary exists.
+Do not extract those crates until a real reuse, compile-time, or ownership boundary exists. Every extraction must leave a real owner with runtime code, tests, and one-way dependencies.

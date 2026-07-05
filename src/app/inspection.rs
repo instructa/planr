@@ -1,15 +1,13 @@
 use super::App;
+use crate::agents::{REGISTRY_RELATIVE_PATH, registry_path};
 use crate::planpack::{
-    parse_plan_metadata, unfilled_required_sections, BUILD_PLAN_REQUIRED_SECTIONS,
-    PRODUCT_PLAN_REQUIRED_SECTIONS,
+    BUILD_PLAN_REQUIRED_SECTIONS, PRODUCT_PLAN_REQUIRED_SECTIONS, parse_plan_metadata,
+    unfilled_required_sections,
 };
-use crate::storage::row_to_context;
-use crate::util::{
-    collect_rows, detect_client, now_string, query_json, quote_fts, short_id, worker_id,
-};
-use anyhow::{anyhow, Result};
-use rusqlite::{params, OptionalExtension};
-use serde_json::{json, Value};
+use crate::util::{collect_rows, detect_client, now_string, short_id, worker_id};
+use anyhow::Result;
+use rusqlite::params;
+use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
 
@@ -175,25 +173,6 @@ impl App {
                 "source_file_content_included": false
             }
         }))
-    }
-
-    pub(crate) fn get_context(&self, id: &str) -> Result<Value> {
-        self.conn.query_row("SELECT id, item_id, kind, content, worker_id, created_at FROM contexts WHERE id = ?1", params![id], row_to_context).optional()?.ok_or_else(|| anyhow!("context not found: {id}"))
-    }
-
-    pub(crate) fn list_contexts(&self, item: Option<&str>) -> Result<Vec<Value>> {
-        let sql = if item.is_some() {
-            "SELECT id, item_id, kind, content, worker_id, created_at FROM contexts WHERE item_id = ?1 ORDER BY created_at DESC"
-        } else {
-            "SELECT id, item_id, kind, content, worker_id, created_at FROM contexts ORDER BY created_at DESC"
-        };
-        let mut stmt = self.conn.prepare(sql)?;
-        let rows = if let Some(item) = item {
-            stmt.query_map(params![item], row_to_context)?
-        } else {
-            stmt.query_map([], row_to_context)?
-        };
-        collect_rows(rows)
     }
 
     pub(crate) fn links_for(&self, item_id: &str) -> Result<Vec<Value>> {
@@ -375,6 +354,13 @@ impl App {
             "contexts": self.list_contexts(None)?,
             "artifacts": self.list_artifacts(None)?,
             "review_artifacts": json!(self.export_review_artifacts()?),
+            // Raw file snapshot: routing declarations travel with the
+            // package; a malformed registry exports as-is and `agents
+            // check` diagnoses it on the other side.
+            "agent_registry": fs::read_to_string(registry_path(&self.root)).ok().map_or(
+                Value::Null,
+                |content| json!({"path": REGISTRY_RELATIVE_PATH, "content": content}),
+            ),
             "events": self.list_events(None, 500)?,
         }))
     }
@@ -429,16 +415,19 @@ impl App {
         item_id: &str,
         commands: &[String],
         status: &str,
+        profile: Option<&str>,
     ) -> Result<String> {
         let id = short_id("run");
         self.conn.execute(
-            "INSERT INTO runs(id, project_id, item_id, worker_id, client, command, cwd, status, started_at, ended_at, metadata) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'), datetime('now'), ?9)",
+            "INSERT INTO runs(id, project_id, item_id, worker_id, client, profile, observed_client, command, cwd, status, started_at, ended_at, metadata) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, datetime('now'), datetime('now'), ?11)",
             params![
                 id,
                 self.default_project()?.id,
                 item_id,
                 worker_id(),
                 detect_client(),
+                profile,
+                crate::util::observed_client(),
                 commands.join(" && "),
                 self.root.to_string_lossy(),
                 status,
@@ -446,58 +435,5 @@ impl App {
             ],
         )?;
         Ok(id)
-    }
-
-    pub(crate) fn index_search(
-        &self,
-        source_type: &str,
-        source_id: &str,
-        title: &str,
-        body: &str,
-        path: Option<&str>,
-    ) -> Result<()> {
-        self.conn.execute(
-            "INSERT INTO search_index(source_type, source_id, title, body, path) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![source_type, source_id, title, body, path],
-        )?;
-        Ok(())
-    }
-
-    pub(crate) fn search_results(&self, query: &str) -> Result<Vec<Value>> {
-        let mut results = Vec::new();
-        let fts = quote_fts(query);
-        let mut stmt = self.conn.prepare(
-            "SELECT source_type, source_id, title, body, path FROM search_index WHERE search_index MATCH ?1 ORDER BY rank LIMIT 30",
-        )?;
-        let rows = stmt.query_map(params![fts], |row| {
-            Ok(json!({
-                "type": row.get::<_, String>(0)?,
-                "id": row.get::<_, String>(1)?,
-                "title": row.get::<_, String>(2)?,
-                "text": row.get::<_, String>(3)?,
-                "path": row.get::<_, Option<String>>(4)?,
-            }))
-        })?;
-        for row in rows {
-            results.push(row?);
-        }
-        if results.is_empty() {
-            let like = format!("%{}%", query);
-            query_json(&self.conn, "SELECT 'item', id, title, description FROM items WHERE title LIKE ?1 OR description LIKE ?1 LIMIT 20", params![like.clone()], &mut results)?;
-            query_json(&self.conn, "SELECT 'plan', id, title, path FROM plans WHERE title LIKE ?1 OR path LIKE ?1 LIMIT 20", params![like.clone()], &mut results)?;
-            query_json(
-                &self.conn,
-                "SELECT 'log', id, summary, item_id FROM logs WHERE summary LIKE ?1 LIMIT 20",
-                params![like.clone()],
-                &mut results,
-            )?;
-            query_json(
-                &self.conn,
-                "SELECT 'context', id, kind, content FROM contexts WHERE content LIKE ?1 LIMIT 20",
-                params![like],
-                &mut results,
-            )?;
-        }
-        Ok(results)
     }
 }

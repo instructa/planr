@@ -1,5 +1,5 @@
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::Path;
 
 pub fn install_snippet(client: &str, db: &Path) -> String {
@@ -14,39 +14,52 @@ pub fn install_snippet(client: &str, db: &Path) -> String {
             db.display()
         ),
         "cursor" => format!(
-            "# Cursor project scope: .cursor/mcp.json\n# stdio is the V1 default. SSE/streamable HTTP can point at planr serve --port 7526 when enabled for local dashboard automation.\n{{\n  \"mcpServers\": {{\n    \"planr\": {{\"command\": \"planr\", \"args\": [\"--db\", \"{}\", \"mcp\"]}}\n  }}\n}}\n",
-            db.display()
+            "# Cursor project scope: .cursor/mcp.json\n# stdio is the V1 default. SSE/streamable HTTP can point at planr serve --port 7526 when enabled for local dashboard automation.\n{{\n  \"mcpServers\": {{\n    \"planr\": {{\"command\": \"planr\", \"args\": [\"--db\", \"{}\", \"mcp\"]}}\n  }}\n}}\n# One-click user-level MCP install (uses each workspace's own .planr db):\n{}\n# Non-dry install also writes .cursor/agents/planr-worker.md, .cursor/agents/planr-reviewer.md, and the Planr skills under .cursor/skills/.\n",
+            db.display(),
+            cursor_deeplink()
         ),
         _ => String::new(),
     }
 }
 
-/// Subagent role files installed into a project so loop dispatches work
-/// without the host plugin system (Codex plugins cannot register agents).
-pub fn agent_roles(client: &str) -> &'static [(&'static str, &'static str)] {
-    match client {
-        "codex" => &[
-            (
-                ".codex/agents/planr-worker.toml",
-                include_str!("../plugins/planr/skills/planr-loop/agents/planr-worker.toml"),
-            ),
-            (
-                ".codex/agents/planr-reviewer.toml",
-                include_str!("../plugins/planr/skills/planr-loop/agents/planr-reviewer.toml"),
-            ),
-        ],
-        "claude" => &[
-            (
-                ".claude/agents/planr-worker.md",
-                include_str!("../plugins/planr/agents/planr-worker.md"),
-            ),
-            (
-                ".claude/agents/planr-reviewer.md",
-                include_str!("../plugins/planr/agents/planr-reviewer.md"),
-            ),
-        ],
-        _ => &[],
+/// One-click Cursor MCP install link (cursor://anysphere.cursor-deeplink).
+/// The embedded config carries no --db path on purpose: Cursor spawns stdio
+/// servers with the workspace as working directory, so each project resolves
+/// its own `.planr/planr.sqlite`, making the link safe at user scope.
+pub fn cursor_deeplink() -> String {
+    let config = json!({"command": "planr", "args": ["mcp"]});
+    format!(
+        "cursor://anysphere.cursor-deeplink/mcp/install?name=planr&config={}",
+        base64_url(config.to_string().as_bytes())
+    )
+}
+
+/// URL-safe base64 (RFC 4648 section 5, with padding), matching what Cursor's
+/// deeplink handler accepts. Small enough that a dependency is not warranted.
+fn base64_url(input: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    for chunk in input.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        out.push(ALPHABET[(n >> 18) as usize & 63] as char);
+        out.push(ALPHABET[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 {
+            ALPHABET[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            ALPHABET[n as usize & 63] as char
+        } else {
+            '='
+        });
     }
+    out
 }
 
 pub fn mcp_json_config(db: &Path) -> String {
@@ -107,39 +120,25 @@ pub fn mcp_tools() -> Vec<Value> {
         tool(
             "planr_map_lookahead",
             "Show near-term ready and blocked work",
-            json!({
-                "from": prop("string", "Optional item id to start the lookahead from"),
-                "limit": prop("integer", "Maximum entries to return (default 10)")
-            }),
+            json!({"from": prop("string", "Optional item id to start the lookahead from"), "limit": prop("integer", "Maximum entries to return (default 10)")}),
             &[],
         ),
         tool(
             "planr_plan_create",
             "Create a product plan package",
-            json!({
-                "title": prop("string", "Plan title"),
-                "platform": prop("string", "Target platform label"),
-                "ai": prop("boolean", "Include AI feature planning files"),
-                "backend": prop("boolean", "Include backend planning files")
-            }),
+            json!({"title": prop("string", "Plan title"), "platform": prop("string", "Target platform label"), "ai": prop("boolean", "Include AI feature planning files"), "backend": prop("boolean", "Include backend planning files")}),
             &["title"],
         ),
         tool(
             "planr_plan_refine",
             "Append refinement context to a plan",
-            json!({
-                "id": prop("string", "Plan id"),
-                "note": prop("string", "Refinement note to append")
-            }),
+            json!({"id": prop("string", "Plan id"), "note": prop("string", "Refinement note to append")}),
             &["id"],
         ),
         tool(
             "planr_plan_split",
             "Create a build plan from a product plan",
-            json!({
-                "id": prop("string", "Source product plan id"),
-                "slice": prop("string", "Build slice name")
-            }),
+            json!({"id": prop("string", "Source product plan id"), "slice": prop("string", "Build slice name")}),
             &["id", "slice"],
         ),
         tool(
@@ -157,12 +156,7 @@ pub fn mcp_tools() -> Vec<Value> {
         tool(
             "planr_plan_link",
             "Link a plan source to an item",
-            json!({
-                "source_id": prop("string", "Plan source id"),
-                "item_id": prop("string", "Item id"),
-                "relationship": prop("string", "Link relationship (default references)"),
-                "section_id": prop("string", "Optional plan section id")
-            }),
+            json!({"source_id": prop("string", "Plan source id"), "item_id": prop("string", "Item id"), "relationship": prop("string", "Link relationship (default references)"), "section_id": prop("string", "Optional plan section id")}),
             &["source_id", "item_id"],
         ),
         tool(
@@ -174,68 +168,61 @@ pub fn mcp_tools() -> Vec<Value> {
         tool(
             "planr_item_create",
             "Create a map item",
-            json!({
-                "title": prop("string", "Item title"),
-                "description": prop("string", "Item description"),
-                "work_type": prop("string", "Work type (default generic)"),
-                "after": prop("string", "Existing item id this item depends on"),
-                "timeout_seconds": prop("integer", "Runtime timeout before the pick is stale"),
-                "max_retries": prop("integer", "Maximum automatic retries"),
-                "retry_delay_ms": prop("integer", "Base retry delay in milliseconds"),
-                "retry_backoff": prop("string", "Retry backoff strategy"),
-                "pre": prop("string", "Pre-condition note"),
-                "post": prop("string", "Post-condition note")
-            }),
+            json!({"title": prop("string", "Item title"), "description": prop("string", "Item description"), "work_type": prop("string", "Work type (default generic)"), "after": prop("string", "Existing item id this item depends on"), "timeout_seconds": prop("integer", "Runtime timeout before the pick is stale"), "max_retries": prop("integer", "Maximum automatic retries"), "retry_delay_ms": prop("integer", "Base retry delay in milliseconds"), "retry_backoff": prop("string", "Retry backoff strategy"), "pre": prop("string", "Pre-condition note"), "post": prop("string", "Post-condition note")}),
             &["title", "description"],
         ),
         tool(
             "planr_item_breakdown",
             "Break an item into chained child items (parent parks as a gate)",
-            json!({
-                "id": prop("string", "Parent item id"),
-                "into": prop("string", "Child titles separated by newlines or commas")
-            }),
+            json!({"id": prop("string", "Parent item id"), "into": prop("string", "Child titles separated by newlines or commas")}),
             &["id", "into"],
         ),
         tool(
             "planr_item_insert",
             "Insert an item between linked work",
-            json!({
-                "title": prop("string", "New item title"),
-                "description": prop("string", "New item description"),
-                "after": prop("string", "Item id the new item comes after"),
-                "before": prop("string", "Optional item id the new item comes before"),
-                "confirm": prop("boolean", "Apply the insert instead of previewing")
-            }),
+            json!({"title": prop("string", "New item title"), "description": prop("string", "New item description"), "after": prop("string", "Item id the new item comes after"), "before": prop("string", "Optional item id the new item comes before"), "confirm": prop("boolean", "Apply the insert instead of previewing")}),
             &["title", "description", "after"],
         ),
         tool(
             "planr_item_amend",
             "Add future-work context to an item",
-            json!({
-                "id": prop("string", "Item id"),
-                "note": prop("string", "Amendment content"),
-                "tag": prop("string", "Context kind label (default amendment)")
-            }),
+            json!({"id": prop("string", "Item id"), "note": prop("string", "Amendment content"), "tag": prop("string", "Context kind label (default amendment)")}),
             &["id", "note"],
         ),
         tool(
             "planr_item_replan",
             "Preview or replace pending child work",
-            json!({
-                "parent_id": prop("string", "Parent item id"),
-                "into": prop("string", "Comma-separated replacement child titles"),
-                "confirm": prop("boolean", "Apply the replan instead of previewing")
-            }),
+            json!({"parent_id": prop("string", "Parent item id"), "into": prop("string", "Comma-separated replacement child titles"), "confirm": prop("boolean", "Apply the replan instead of previewing")}),
             &["parent_id", "into"],
+        ),
+        tool(
+            "planr_agents_list",
+            "Show the agent profile registry: profiles, routes, and validation warnings",
+            json!({}),
+            &[],
+        ),
+        tool(
+            "planr_item_route",
+            "Show an item's resolved advisory route and whether an override or policy won",
+            json!({"item_id": prop("string", "Item id")}),
+            &["item_id"],
+        ),
+        tool(
+            "planr_item_route_set",
+            "Pin an item to an agent profile from the registry (beats every policy route)",
+            json!({"item_id": prop("string", "Item id"), "profile": prop("string", "Profile id declared in .planr/agents.toml")}),
+            &["item_id", "profile"],
+        ),
+        tool(
+            "planr_item_route_clear",
+            "Remove an item's pinned profile so policy routing applies again",
+            json!({"item_id": prop("string", "Item id")}),
+            &["item_id"],
         ),
         tool(
             "planr_pick_item",
             "Atomically pick the next ready item",
-            json!({
-                "work_type": prop("string", "Only lease items of this work type (e.g. review for checkers, code for makers)"),
-                "plan": prop("string", "Only lease items belonging to this plan (plan id), so plan-scoped goal runs stay inside their contract")
-            }),
+            json!({"work_type": prop("string", "Only lease items of this work type (e.g. review for checkers, code for makers)"), "plan": prop("string", "Only lease items belonging to this plan (plan id), so plan-scoped goal runs stay inside their contract")}),
             &[],
         ),
         tool(
@@ -247,20 +234,13 @@ pub fn mcp_tools() -> Vec<Value> {
         tool(
             "planr_pick_progress",
             "Record progress for picked work",
-            json!({
-                "item_id": prop("string", "Item id"),
-                "percent": prop("integer", "Progress percent 0-100"),
-                "note": prop("string", "Optional progress note")
-            }),
+            json!({"item_id": prop("string", "Item id"), "percent": prop("integer", "Progress percent 0-100"), "note": prop("string", "Optional progress note")}),
             &["item_id"],
         ),
         tool(
             "planr_pick_pause",
             "Pause picked work without releasing it",
-            json!({
-                "item_id": prop("string", "Item id"),
-                "note": prop("string", "Optional pause note")
-            }),
+            json!({"item_id": prop("string", "Item id"), "note": prop("string", "Optional pause note")}),
             &["item_id"],
         ),
         tool(
@@ -278,39 +258,25 @@ pub fn mcp_tools() -> Vec<Value> {
         tool(
             "planr_recover_sweep",
             "Preview or apply stale, timed-out, and retryable recovery",
-            json!({
-                "older_than_seconds": prop("integer", "Staleness threshold in seconds (default 900)"),
-                "apply": prop("boolean", "Apply recovery instead of previewing")
-            }),
+            json!({"older_than_seconds": prop("integer", "Staleness threshold in seconds (default 900)"), "apply": prop("boolean", "Apply recovery instead of previewing")}),
             &[],
         ),
         tool(
             "planr_approval_request",
             "Request human approval before close",
-            json!({
-                "item_id": prop("string", "Item id"),
-                "reason": prop("string", "Why approval is needed")
-            }),
+            json!({"item_id": prop("string", "Item id"), "reason": prop("string", "Why approval is needed")}),
             &["item_id"],
         ),
         tool(
             "planr_approval_approve",
             "Approve item close gate",
-            json!({
-                "item_id": prop("string", "Item id"),
-                "by": prop("string", "Approver identity"),
-                "comment": prop("string", "Optional approval comment")
-            }),
+            json!({"item_id": prop("string", "Item id"), "by": prop("string", "Approver identity"), "comment": prop("string", "Optional approval comment")}),
             &["item_id", "by"],
         ),
         tool(
             "planr_approval_deny",
             "Deny item close gate",
-            json!({
-                "item_id": prop("string", "Item id"),
-                "by": prop("string", "Denier identity"),
-                "comment": prop("string", "Optional denial comment")
-            }),
+            json!({"item_id": prop("string", "Item id"), "by": prop("string", "Denier identity"), "comment": prop("string", "Optional denial comment")}),
             &["item_id", "by"],
         ),
         tool(
@@ -322,14 +288,7 @@ pub fn mcp_tools() -> Vec<Value> {
         tool(
             "planr_artifact_add",
             "Attach artifact metadata or small content",
-            json!({
-                "name": prop("string", "Artifact name"),
-                "item": prop("string", "Optional item id"),
-                "kind": prop("string", "Artifact kind (default evidence)"),
-                "path": prop("string", "Optional file path reference"),
-                "content": prop("string", "Optional inline content"),
-                "mime": prop("string", "MIME type (default text/plain)")
-            }),
+            json!({"name": prop("string", "Artifact name"), "item": prop("string", "Optional item id"), "kind": prop("string", "Artifact kind (default evidence)"), "path": prop("string", "Optional file path reference"), "content": prop("string", "Optional inline content"), "mime": prop("string", "MIME type (default text/plain)")}),
             &["name"],
         ),
         tool(
@@ -347,10 +306,7 @@ pub fn mcp_tools() -> Vec<Value> {
         tool(
             "planr_event_list",
             "List persisted events",
-            json!({
-                "item": prop("string", "Optional item id filter"),
-                "limit": prop("integer", "Maximum events (default 50)")
-            }),
+            json!({"item": prop("string", "Optional item id filter"), "limit": prop("integer", "Maximum events (default 50)")}),
             &[],
         ),
         tool(
@@ -362,30 +318,15 @@ pub fn mcp_tools() -> Vec<Value> {
         tool(
             "planr_log_add",
             "Add evidence log to an item",
-            json!({
-                "item": prop("string", "Item id"),
-                "summary": prop("string", "What was done"),
-                "kind": prop("string", "Log kind (default completion)"),
-                "files": string_array("Changed file paths"),
-                "commands": string_array("Commands run"),
-                "tests": string_array("Tests run with results")
-            }),
+            json!({"item": prop("string", "Item id"), "summary": prop("string", "What was done"), "kind": prop("string", "Log kind (default completion)"), "files": string_array("Changed file paths"), "commands": string_array("Commands run"), "tests": string_array("Tests run with results"), "profile": prop("string", "Registry profile the run actually executed on (advisory mismatch check)")}),
             &["item", "summary"],
         ),
         tool(
             "planr_review_annotate",
             "Attach review annotation feedback",
-            json!({
-                "item_id": prop("string", "Item id"),
-                "message": prop("string", "Annotation message"),
-                "severity": prop("string", "Severity (default info)"),
-                "author": prop("string", "Annotation author"),
-                "file": prop("string", "File path the annotation refers to"),
-                "line": prop("integer", "Line number the annotation refers to")
-            }),
+            json!({"item_id": prop("string", "Item id"), "message": prop("string", "Annotation message"), "severity": prop("string", "Severity (default info)"), "author": prop("string", "Annotation author"), "file": prop("string", "File path the annotation refers to"), "line": prop("integer", "Line number the annotation refers to")}),
             &["item_id", "message"],
         ),
-        // review_ingest intentionally accepts arbitrary hook payload shapes.
         json!({
             "name": "planr_review_ingest",
             "description": "Ingest hook-compatible review feedback",
@@ -409,22 +350,13 @@ pub fn mcp_tools() -> Vec<Value> {
         tool(
             "planr_review_evidence",
             "Collect scoped Git and PR evidence for an item",
-            json!({
-                "item_id": prop("string", "Item id"),
-                "pr_url": prop("string", "Optional pull request URL to record")
-            }),
+            json!({"item_id": prop("string", "Item id"), "pr_url": prop("string", "Optional pull request URL to record")}),
             &["item_id"],
         ),
         tool(
             "planr_review_close",
             "Close a review item with verdict",
-            json!({
-                "review_item_id": prop("string", "Review item id"),
-                "verdict": prop("string", "Verdict: complete, partial, failed, or unclear"),
-                "findings": string_array("Findings discovered during review"),
-                "reviewer": prop("string", "Reviewer identity recorded on the review log, artifact, and event (defaults to the worker id)"),
-                "close_target": prop("boolean", "With verdict complete: also close the reviewed target item (requires a completion log on the target)")
-            }),
+            json!({"review_item_id": prop("string", "Review item id"), "verdict": prop("string", "Verdict: complete, partial, failed, or unclear"), "findings": string_array("Findings discovered during review"), "reviewer": prop("string", "Reviewer identity recorded on the review log, artifact, and event (defaults to the worker id)"), "close_target": prop("boolean", "With verdict complete: also close the reviewed target item (requires a completion log on the target)")}),
             &["review_item_id"],
         ),
         tool(
@@ -436,11 +368,7 @@ pub fn mcp_tools() -> Vec<Value> {
         tool(
             "planr_context_create",
             "Add project or item context",
-            json!({
-                "content": prop("string", "Context content"),
-                "item": prop("string", "Optional item id"),
-                "kind": prop("string", "Context kind (default discovery)")
-            }),
+            json!({"content": prop("string", "Context content"), "item": prop("string", "Optional item id"), "kind": prop("string", "Context kind (default discovery)")}),
             &["content"],
         ),
         tool(
@@ -470,4 +398,36 @@ pub fn mcp_resources() -> Vec<Value> {
 
 pub fn mcp_json(value: impl Serialize) -> Value {
     json!({"content": [{"type": "text", "text": serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string())}]})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{base64_url, cursor_deeplink};
+
+    #[test]
+    fn base64_url_matches_rfc4648_vectors() {
+        assert_eq!(base64_url(b""), "");
+        assert_eq!(base64_url(b"f"), "Zg==");
+        assert_eq!(base64_url(b"fo"), "Zm8=");
+        assert_eq!(base64_url(b"foo"), "Zm9v");
+        assert_eq!(base64_url(b"foob"), "Zm9vYg==");
+        assert_eq!(base64_url(b"fooba"), "Zm9vYmE=");
+        assert_eq!(base64_url(b"foobar"), "Zm9vYmFy");
+        // URL-safe alphabet: 0xfb 0xff maps to -_ instead of +/.
+        assert_eq!(base64_url(&[0xfb, 0xff]), "-_8=");
+    }
+
+    #[test]
+    fn cursor_deeplink_encodes_portable_stdio_config() {
+        let link = cursor_deeplink();
+        assert!(
+            link.starts_with("cursor://anysphere.cursor-deeplink/mcp/install?name=planr&config=")
+        );
+        let encoded = link.split("config=").nth(1).unwrap();
+        assert_eq!(
+            encoded,
+            base64_url(br#"{"args":["mcp"],"command":"planr"}"#),
+            "deeplink config must be the portable stdio server object"
+        );
+    }
 }

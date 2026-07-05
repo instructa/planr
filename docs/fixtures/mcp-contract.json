@@ -18,6 +18,10 @@
     "planr_item_insert",
     "planr_item_amend",
     "planr_item_replan",
+    "planr_agents_list",
+    "planr_item_route",
+    "planr_item_route_set",
+    "planr_item_route_clear",
     "planr_pick_item",
     "planr_pick_heartbeat",
     "planr_pick_progress",
@@ -74,12 +78,16 @@
     "cursor": [
       ".cursor/mcp.json",
       "\"mcpServers\"",
-      "\"planr\""
+      "\"planr\"",
+      "cursor://anysphere.cursor-deeplink/mcp/install?name=planr&config="
     ]
   },
   "cli_reference_commands": [
     "planr install codex|claude|cursor",
     "planr prompt cli|mcp|http",
+    "planr prompt routing",
+    "planr agents init",
+    "planr agents init --profile|--skill|--route|--default-route|--interactive",
     "planr mcp",
     "planr review annotate",
     "planr review ingest",
@@ -87,6 +95,9 @@
     "planr review evidence",
     "planr review close",
     "planr recover sweep",
+    "planr agents list",
+    "planr agents check",
+    "planr item route",
     "planr serve --port"
   ]
 }

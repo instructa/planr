@@ -6,8 +6,8 @@ use super::App;
 use crate::storage::row_to_item;
 use crate::util::collect_rows;
 use anyhow::Result;
-use rusqlite::{params, OptionalExtension};
-use serde_json::{json, Value};
+use rusqlite::{OptionalExtension, params};
+use serde_json::{Value, json};
 
 impl App {
     pub(crate) fn plan_audit_value(&self, plan_id: &str) -> Result<Value> {
@@ -24,7 +24,7 @@ impl App {
                 .map(|item| json!({"id": item.id, "status": item.status, "title": item.title}))
                 .collect()
         };
-        let is_open = |status: &str| !matches!(status, "closed" | "closed_partial" | "cancelled");
+        let is_open = |status: &crate::model::ItemStatus| !status.is_settled();
 
         let open_items: Vec<_> = scope
             .iter()
@@ -70,8 +70,7 @@ impl App {
             collect_rows(rows)?
         };
 
-        let contract: Option<Value> = self
-            .conn
+        let contract: Option<Value> = self.conn
             .query_row(
                 "SELECT id, content FROM contexts WHERE kind = 'goal-contract' AND content LIKE ?1 ORDER BY created_at DESC LIMIT 1",
                 params![format!("%{plan_id}%")],

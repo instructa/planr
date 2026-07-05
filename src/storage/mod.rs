@@ -23,8 +23,13 @@ pub fn open_db(path: &Path) -> Result<Connection> {
         fs::create_dir_all(parent)?;
     }
     let conn = Connection::open(path)?;
+    // busy_timeout must be set before journal_mode: the WAL conversion
+    // needs an exclusive lock, and with the default timeout of 0 two
+    // processes opening a fresh database concurrently (parallel workers'
+    // first pick) race into an immediate "database is locked" instead of
+    // waiting out the moment the other one needs.
     conn.execute_batch(
-        "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;",
+        "PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;",
     )?;
     Ok(conn)
 }

@@ -115,16 +115,26 @@ Same shape via the plugin (`/plugin install planr@planr`), which registers the `
 
 `/loop` works for fixed-cadence runs instead of goal-conditioned ones. The registered worker subagent pins a cheaper model tier; see [Cost Tiering](#cost-tiering).
 
-### Cursor and hosts without a loop primitive
+### Cursor
 
-Identical protocol; the human (or a background agent) is the re-dispatcher:
+No `/goal` primitive, but full subagent support. Install once:
+
+```bash
+planr install cursor   # writes .cursor/mcp.json, .cursor/agents/planr-worker.md + planr-reviewer.md, and the skills
+```
+
+Then run the identical protocol with the human (or an automation) as the re-dispatcher:
 
 ```text
 Use $planr-goal: <your goal>
 Use $planr-loop on plan <plan-id>. The loop contract is stored in planr context (tag: goal-contract).
 ```
 
-`$planr-loop` iterates within the session under its own budget. If the session ends before the contract holds, dispatch the same line again — recovery is identical to the `/goal` case.
+`$planr-loop` iterates within the session under its own budget, dispatching `/planr-worker` and `/planr-reviewer` per item — the provisioned subagents preload the work and review protocols, so dispatches stay one line. If the session ends before the contract holds, dispatch the same line again — recovery is identical to the `/goal` case. Parallelism, background subagents, and worktree caveats: [Cursor](CURSOR.md).
+
+### Hosts without a loop primitive
+
+Identical protocol; the human (or a background agent) is the re-dispatcher, and worker/reviewer run as separate sequential dispatches when the host has no subagents.
 
 ### Plain MCP clients
 
@@ -144,16 +154,17 @@ Where each host configures the worker tier (the shipped role files carry these d
 | --- | --- | --- | --- |
 | Codex | session default (e.g. `gpt-5.5` at `high`) | `model = "gpt-5.5"`, `model_reasoning_effort = "medium"` | `.codex/agents/planr-worker.toml` |
 | Claude Code | session model (e.g. `fable` at `high` via `/model` + `/effort`) | `model: opus`, `effort: medium` | `planr-worker.md` frontmatter |
-| Cursor | chat model of the driving session | chosen per dispatch in the host's subagent tooling | no Planr files — pick a cheaper model when dispatching the worker task |
+| Cursor | chat model of the driving session | `model: inherit` by default; pin a cheaper Cursor model id | `.cursor/agents/planr-worker.md` frontmatter |
 
 The defaults use aliases and generic names so they track model generations; pin a full model id (e.g. `claude-opus-4-8`) only if you need determinism, and use `model: sonnet` as the budget alternative. The role files are user-owned copies — `planr project init` provisions them once and never overwrites local edits — so changing the tier is editing one line.
 
-Two traps to verify once per setup:
+To declare the tiering itself — which model handles which work type, with fallbacks for rate limits — use the agent profile registry (`.planr/agents.toml`): the routing recommendation then travels inside every `planr pick --json` packet, so the driver dispatches the right tier without consulting this table mid-run. `planr agents init` writes a working starter registry with these defaults; see [Model Routing](MODEL_ROUTING.md). The role files above still carry the host-native pins (`planr install <client> --force` re-renders them from the registry); the registry is the declared source of truth for the routing decision.
 
-- **Claude Code:** the `CLAUDE_CODE_SUBAGENT_MODEL` environment variable silently overrides every subagent's `model:` frontmatter. Make sure it is unset, then dispatch the worker on a trivial item and confirm the subagent's messages in the session log (`~/.claude/projects/<project>/*.jsonl`) carry the worker model, not the driver's.
-- **Codex:** some versions ignore custom agent files on spawn ([openai/codex#26868](https://github.com/openai/codex/issues/26868)) — the child then inherits the parent model. Spawn `planr_worker` on a trivial item and confirm the child metadata shows the pinned model and effort with a non-null `agent_path`.
+Traps to verify once per setup — every one of them is silent (the run still works, just at driver prices), which is why the smoke test is worth the two minutes:
 
-Both failure modes are silent (the run still works, just at driver prices), which is why the smoke test is worth the two minutes.
+- **Claude Code:** the `CLAUDE_CODE_SUBAGENT_MODEL` environment variable clamps every subagent's `model:` frontmatter and per-invocation model with no signal in the `tool_result` ([anthropics/claude-code#57718](https://github.com/anthropics/claude-code/issues/57718)); since v2.1.196, setting it to `inherit` behaves like unset, so that is the safe pin for "driver decides". Org-managed `availableModels` allowlists are equally quiet: a frontmatter model outside the allowlist falls back to inherit without warning. Make sure the env var is unset (or `inherit`), then dispatch the worker on a trivial item and confirm the subagent's messages in the session log (`~/.claude/projects/<project>/*.jsonl`) carry the worker model, not the driver's.
+- **Codex:** the spawn regressions that made children ignore custom agent files ([openai/codex#26868](https://github.com/openai/codex/issues/26868), [#26363](https://github.com/openai/codex/issues/26363)) are fixed in v0.138+, but two traps remain. First, `fork_turns = "all"` (the multi-agent v2 default) intentionally drops the child's `agent_type` and `model` so the fork replays the parent exactly — dispatch that should honor the worker pin needs `fork_turns = "none"` or a partial fork. Second, the role registry is loaded once at session start ([#26408](https://github.com/openai/codex/issues/26408)): after editing or re-rendering `.codex/agents/*.toml`, restart the session, or the child spawns from the stale definitions. Spawn `planr_worker` on a trivial item and confirm the child metadata shows the pinned model and effort with a non-null `agent_path`.
+- **Cursor:** `model: <id>` in `.cursor/agents/planr-worker.md` frontmatter can be overridden without an error by team-admin model policies, plan availability (a model your plan lacks resolves to a fallback), and Max-Mode-only models. On legacy request-based plans, subagents are forced onto Composer regardless of the pin. Dispatch the worker once and check which model the subagent transcript reports before trusting the pin.
 
 ## Coming From Other Goal Tools
 

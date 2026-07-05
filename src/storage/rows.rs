@@ -1,5 +1,6 @@
-use crate::model::{Item, Plan, Project};
-use serde_json::{json, Value};
+use crate::model::{Item, ItemStatus, Plan, Project, WorkType};
+use rusqlite::types::Type;
+use serde_json::{Value, json};
 
 pub fn row_to_project(row: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
     Ok(Project {
@@ -26,14 +27,20 @@ pub fn row_to_plan(row: &rusqlite::Row<'_>) -> rusqlite::Result<Plan> {
 }
 
 pub fn row_to_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<Item> {
+    let status = row.get::<_, String>(5)?;
+    let work_type = row.get::<_, String>(6)?;
     Ok(Item {
         id: row.get(0)?,
         project_id: row.get(1)?,
         parent_item_id: row.get(2)?,
         title: row.get(3)?,
         description: row.get(4)?,
-        status: row.get(5)?,
-        work_type: row.get(6)?,
+        status: ItemStatus::try_from(status.as_str()).map_err(|err| {
+            rusqlite::Error::FromSqlConversionFailure(5, Type::Text, Box::new(err))
+        })?,
+        work_type: WorkType::try_from(work_type.as_str()).map_err(|err| {
+            rusqlite::Error::FromSqlConversionFailure(6, Type::Text, Box::new(err))
+        })?,
         priority: row.get(7)?,
         worker_id: row.get(8)?,
         plan_path: row.get(9)?,
@@ -74,9 +81,5 @@ fn parse_json_cell(text: Option<String>) -> Value {
 /// instead of `null` so log consumers see one stable shape.
 fn parse_list_cell(text: Option<String>) -> Value {
     let value = parse_json_cell(text);
-    if value.is_array() {
-        value
-    } else {
-        json!([])
-    }
+    if value.is_array() { value } else { json!([]) }
 }

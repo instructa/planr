@@ -5,15 +5,17 @@ use crate::cli::{
     ItemCommand, LinkCommand, LogCommand, MapCommand, PickCommand, PlanCommand, ProjectCommand,
     PromptCommand, ReviewCommand, SearchArgs,
 };
-use crate::integrations::{agent_roles, install_snippet, mcp_json_config};
+use crate::integrations::{cursor_deeplink, install_snippet, mcp_json_config};
+use crate::model::LinkKind;
 use crate::planpack::{build_plan_body, product_plan_files, project_pack_files};
+use crate::rolefiles::{agent_roles, cursor_skills};
 use crate::util::{
     append_line, command_exists, format_item, format_project, now_string, print_json, short_id,
     worker_id, write_if_missing,
 };
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use rusqlite::params;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use slug::slugify;
 use std::fs;
 use std::io::{self, Read};
@@ -52,7 +54,7 @@ impl App {
                 )?;
                 let client = args.client.map(|c| format!("{c:?}").to_lowercase());
                 let clients: Vec<&str> = match client.as_deref() {
-                    Some("all") => vec!["codex", "claude"],
+                    Some("all") => vec!["codex", "claude", "cursor"],
                     Some(name) => vec![name],
                     None => Vec::new(),
                 };
@@ -243,8 +245,12 @@ impl App {
                     .collect::<Vec<_>>();
                 let hint = match created.len() {
                     0 => "no new items created; this plan is already mapped",
-                    1 => "created a single coarse item; either expand the plan's task list (one `### TASK-00n:` per verifiable slice, typically 4-8) and re-run `map build`, or run `planr item breakdown <item-id> --into <slice>` once per slice — derive slices from the plan's acceptance criteria",
-                    _ => "items are chained in plan order; adjust with `planr link add <from> <to> --type blocks` if execution order differs, then `planr pick --plan <plan-id>`",
+                    1 => {
+                        "created a single coarse item; either expand the plan's task list (one `### TASK-00n:` per verifiable slice, typically 4-8) and re-run `map build`, or run `planr item breakdown <item-id> --into <slice>` once per slice — derive slices from the plan's acceptance criteria"
+                    }
+                    _ => {
+                        "items are chained in plan order; adjust with `planr link add <from> <to> --type blocks` if execution order differs, then `planr pick --plan <plan-id>`"
+                    }
                 };
                 let mut message = format!("created {} map item(s)", created.len());
                 for item in &created {
@@ -313,6 +319,11 @@ impl App {
     pub(crate) fn item(&self, command: ItemCommand) -> Result<()> {
         match command {
             ItemCommand::Create(args) => {
+                // A bad --after must fail before the create persists,
+                // or a retry after the error would duplicate the item.
+                if let Some(after) = args.after.as_deref() {
+                    self.get_item(after)?;
+                }
                 let item = self.create_item(
                     None,
                     &args.title,
@@ -352,14 +363,30 @@ impl App {
                 self.emit(json!({"item": item, "logs": logs}), format_item(&item))
             }
             ItemCommand::Update(args) => {
+                let mut changed = serde_json::Map::new();
                 if let Some(title) = args.title {
                     self.conn.execute(
                         "UPDATE items SET title = ?1, updated_at = datetime('now') WHERE id = ?2",
                         params![title, args.id],
                     )?;
+                    changed.insert("title".into(), json!(title));
                 }
                 if let Some(description) = args.description {
                     self.conn.execute("UPDATE items SET description = ?1, updated_at = datetime('now') WHERE id = ?2", params![description, args.id])?;
+                    changed.insert("description".into(), json!(description));
+                }
+                if let Some(work_type) = args.work_type {
+                    let work_type = crate::model::WorkType::from(work_type);
+                    self.conn.execute(
+                        "UPDATE items SET work_type = ?1, updated_at = datetime('now') WHERE id = ?2",
+                        params![work_type.as_str(), args.id],
+                    )?;
+                    changed.insert("work_type".into(), json!(work_type.as_str()));
+                }
+                // Every mutation must land in the audit trail: a retag
+                // that changes routing was previously invisible.
+                if !changed.is_empty() {
+                    self.record_event("item_updated", Some(&args.id), json!({"changed": changed}))?;
                 }
                 let item = self.get_item(&args.id)?;
                 self.emit(json!({"item": item}), "item updated".to_string())
@@ -393,6 +420,7 @@ impl App {
                 )
             }
             ItemCommand::Insert(args) => self.item_insert(args),
+            ItemCommand::Route(args) => self.item_route(args),
             ItemCommand::Amend(args) => self.item_amend(args),
             ItemCommand::Replan(args) => self.item_replan(args),
             ItemCommand::Cancel(args) => {
@@ -401,7 +429,10 @@ impl App {
                     return self.emit(json!({"would_cancel": item}), "preview only".to_string());
                 }
                 if !args.confirm {
-                    bail!("refusing to cancel without --confirm or --preview");
+                    bail!(
+                        "refusing to cancel without a flag; run `planr item cancel {} --preview` to see the impact, then re-run with --confirm",
+                        args.id
+                    );
                 }
                 self.conn.execute("UPDATE items SET status = 'cancelled', updated_at = datetime('now') WHERE id = ?1", params![args.id])?;
                 self.promote_ready()?;
@@ -425,9 +456,10 @@ impl App {
             }
             LinkCommand::Remove(args) => {
                 let changed = if let Some(kind) = args.r#type {
+                    let kind = LinkKind::try_from(kind.as_str())?;
                     self.conn.execute(
                         "DELETE FROM links WHERE from_item = ?1 AND to_item = ?2 AND kind = ?3",
-                        params![args.from_item, args.to_item, kind],
+                        params![args.from_item, args.to_item, kind.as_str()],
                     )?
                 } else {
                     self.conn.execute(
@@ -566,14 +598,16 @@ impl App {
     pub(crate) fn log(&self, command: LogCommand) -> Result<()> {
         match command {
             LogCommand::Add(args) => {
-                let id = self.add_log_entry(
-                    &args.item,
-                    &args.kind,
-                    &args.summary,
-                    &args.files,
-                    &args.cmd,
-                    &args.tests,
-                )?;
+                let id = self.add_log_entry(super::LogInput {
+                    item_id: &args.item,
+                    kind: &args.kind,
+                    summary: &args.summary,
+                    files: &args.files,
+                    commands: &args.cmd,
+                    tests: &args.tests,
+                    source: None,
+                    profile: args.profile.as_deref(),
+                })?;
                 self.emit(
                     json!({"log": self.get_log(&id)?}),
                     format!("created log {id}"),
@@ -592,39 +626,18 @@ impl App {
 
     pub(crate) fn approval(&self, command: ApprovalCommand) -> Result<()> {
         match command {
-            ApprovalCommand::Request(args) => {
-                let item = self.get_item(&args.item_id)?;
-                self.conn.execute(
-                    "UPDATE items SET approval_status = 'requested', approval_requested_at = datetime('now'), approval_comment = ?1, approved_by = NULL, updated_at = datetime('now') WHERE id = ?2",
-                    params![args.reason, item.id],
-                )?;
-                self.emit(
-                    json!({"item": self.get_item(&item.id)?, "approval": self.item_approval(&item.id)?}),
-                    "approval requested".to_string(),
-                )
-            }
-            ApprovalCommand::Approve(args) => {
-                let item = self.get_item(&args.item_id)?;
-                self.conn.execute(
-                    "UPDATE items SET approval_status = 'approved', approved_by = ?1, approval_comment = ?2, updated_at = datetime('now') WHERE id = ?3",
-                    params![args.by, args.comment, item.id],
-                )?;
-                self.emit(
-                    json!({"item": self.get_item(&item.id)?, "approval": self.item_approval(&item.id)?}),
-                    "approval recorded".to_string(),
-                )
-            }
-            ApprovalCommand::Deny(args) => {
-                let item = self.get_item(&args.item_id)?;
-                self.conn.execute(
-                    "UPDATE items SET approval_status = 'denied', approved_by = ?1, approval_comment = ?2, updated_at = datetime('now') WHERE id = ?3",
-                    params![args.by, args.comment, item.id],
-                )?;
-                self.emit(
-                    json!({"item": self.get_item(&item.id)?, "approval": self.item_approval(&item.id)?}),
-                    "approval denied".to_string(),
-                )
-            }
+            ApprovalCommand::Request(args) => self.emit(
+                self.request_approval_value(&args.item_id, args.reason.as_deref())?,
+                "approval requested".to_string(),
+            ),
+            ApprovalCommand::Approve(args) => self.emit(
+                self.approve_value(&args.item_id, &args.by, args.comment.as_deref())?,
+                "approval recorded".to_string(),
+            ),
+            ApprovalCommand::Deny(args) => self.emit(
+                self.deny_value(&args.item_id, &args.by, args.comment.as_deref())?,
+                "approval denied".to_string(),
+            ),
             ApprovalCommand::List(args) => {
                 let approvals = self.list_approvals(args.open)?;
                 self.emit(
@@ -777,21 +790,15 @@ impl App {
     pub(crate) fn context(&self, command: ContextCommand) -> Result<()> {
         match command {
             ContextCommand::Add(args) => {
-                let id = short_id("ctx");
-                self.conn.execute(
-                    "INSERT INTO contexts(id, project_id, item_id, worker_id, kind, content, tags, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'))",
-                    params![id, self.default_project()?.id, args.item, worker_id(), args.tag, args.text, "[]"],
-                )?;
-                self.index_search("context", &id, &args.tag, &args.text, None)?;
-                self.record_event(
-                    "context_created",
+                let context = self.add_context_value(
                     args.item.as_deref(),
-                    json!({"context_id": id.clone(), "tag": args.tag}),
+                    &args.tag,
+                    &args.text,
+                    json!([]),
+                    None,
                 )?;
-                self.emit(
-                    json!({"context": self.get_context(&id)?}),
-                    format!("added note {id}"),
-                )
+                let id = context["id"].as_str().unwrap_or_default();
+                self.emit(json!({"context": context}), format!("added note {id}"))
             }
             ContextCommand::List(args) => {
                 let mut values = self.list_contexts(args.item.as_deref())?;
@@ -836,11 +843,13 @@ impl App {
                 })
             })
             .collect();
+        let registry = self.registry_doctor_value()?;
         let data = json!({
             "db": self.db_path,
             "db_status": if self.db_path.exists() { "pass" } else { "warning" },
             "project": self.default_project().ok(),
             "clients": checks,
+            "registry": registry,
             "mcp": {"command": "planr mcp"}
         });
         if self.json {
@@ -859,54 +868,117 @@ impl App {
                     check["install"].as_str().unwrap_or("")
                 );
             }
+            let registry = &data["registry"];
+            match registry["status"].as_str().unwrap_or("absent") {
+                "ok" => {
+                    println!(
+                        "registry: ok ({} profile(s), {} route(s), {} warning(s))",
+                        registry["profiles"],
+                        registry["routes"],
+                        registry["warnings"].as_array().map_or(0, Vec::len),
+                    );
+                    for warning in registry["warnings"].as_array().into_iter().flatten() {
+                        println!("  warning: {}", warning.as_str().unwrap_or_default());
+                    }
+                    if let Some(hint) = registry["drift_hint"].as_str() {
+                        println!("  warning: {hint}");
+                    }
+                }
+                "degraded" => println!(
+                    "registry: degraded ({})\n  hint: {}",
+                    registry["error"].as_str().unwrap_or_default(),
+                    registry["hint"].as_str().unwrap_or_default(),
+                ),
+                _ => println!(
+                    "registry: absent ({})",
+                    registry["hint"].as_str().unwrap_or_default()
+                ),
+            }
             println!("mcp: planr mcp");
             Ok(())
         }
     }
 
     pub(crate) fn install(&self, command: InstallCommand) -> Result<()> {
-        let (client, dry_run) = match command {
-            InstallCommand::Codex(args) => ("codex", args.dry_run),
-            InstallCommand::Claude(args) => ("claude", args.dry_run),
-            InstallCommand::Cursor(args) => ("cursor", args.dry_run),
+        let (client, args) = match command {
+            InstallCommand::Codex(args) => ("codex", args),
+            InstallCommand::Claude(args) => ("claude", args),
+            InstallCommand::Cursor(args) => ("cursor", args),
         };
-        let snippet = install_snippet(client, &self.db_path);
-        if dry_run {
-            println!("{snippet}");
+        if args.dry_run {
+            if args.no_mcp {
+                println!(
+                    "# Plugin-style install for {client}: subagent roles and skills only, no MCP config."
+                );
+                for (relative, _) in agent_roles(client) {
+                    println!("{relative}");
+                }
+                if client == "cursor" {
+                    for (relative, _) in cursor_skills() {
+                        println!("{relative}");
+                    }
+                }
+            } else {
+                println!("{}", install_snippet(client, &self.db_path));
+            }
             return Ok(());
         }
         let mut agent_paths = Vec::new();
-        for (relative, content) in agent_roles(client) {
+        for (relative, content) in self.agent_role_contents(client) {
             let path = self.root.join(relative);
-            write_if_missing(&path, content, false)?;
+            write_if_missing(&path, &content, args.force)?;
             agent_paths.push(path);
         }
-        match client {
-            "codex" => {
-                let path = self.root.join(".planr/integrations/codex-mcp.toml");
-                write_if_missing(&path, &snippet, true)?;
-                self.emit(
-                    json!({"client": client, "path": path, "agents": agent_paths}),
-                    "codex integration written".to_string(),
-                )
+        let mcp_path = if args.no_mcp {
+            None
+        } else {
+            let (relative, content) = match client {
+                "codex" => (
+                    ".planr/integrations/codex-mcp.toml",
+                    install_snippet(client, &self.db_path),
+                ),
+                "claude" => (".mcp.json", mcp_json_config(&self.db_path)),
+                "cursor" => (".cursor/mcp.json", mcp_json_config(&self.db_path)),
+                _ => bail!("unknown client: {client}"),
+            };
+            let path = self.root.join(relative);
+            write_if_missing(&path, &content, true)?;
+            Some(path)
+        };
+        if client == "cursor" {
+            let mut skill_paths = Vec::new();
+            for (relative, content) in cursor_skills() {
+                let skill_path = self.root.join(relative);
+                write_if_missing(&skill_path, content, args.force)?;
+                skill_paths.push(skill_path);
             }
-            "claude" => {
-                let path = self.root.join(".mcp.json");
-                write_if_missing(&path, &mcp_json_config(&self.db_path), true)?;
-                self.emit(
-                    json!({"client": client, "path": path, "agents": agent_paths}),
-                    "claude integration written".to_string(),
+            let mut payload = json!({
+                "client": client,
+                "path": mcp_path,
+                "agents": agent_paths,
+                "skills": skill_paths,
+            });
+            let human = if args.no_mcp {
+                "cursor integration written plugin-style (subagent roles, skills; no MCP config)"
+                    .to_string()
+            } else {
+                let deeplink = cursor_deeplink();
+                payload["deeplink"] = json!(deeplink);
+                format!(
+                    "cursor integration written (mcp config, subagent roles, skills)\none-click user-level MCP install: {deeplink}"
                 )
-            }
-            "cursor" => {
-                let path = self.root.join(".cursor/mcp.json");
-                write_if_missing(&path, &mcp_json_config(&self.db_path), true)?;
-                self.emit(
-                    json!({"client": client, "path": path}),
-                    "cursor integration written".to_string(),
-                )
-            }
-            _ => bail!("unknown client: {client}"),
+            };
+            self.emit(payload, human)
+        } else {
+            let human = if args.no_mcp {
+                format!("{client} subagent roles written (no MCP config)")
+            } else {
+                format!("{client} integration written")
+            };
+            self.emit(
+                json!({"client": client, "path": mcp_path, "agents": agent_paths}),
+                human,
+            )
         }
     }
 
@@ -915,6 +987,7 @@ impl App {
             PromptCommand::Cli(args) => ("cli", args.client),
             PromptCommand::Mcp(args) => ("mcp", args.client),
             PromptCommand::Http(args) => ("http", args.client),
+            PromptCommand::Routing(args) => return self.prompt_routing(args.client),
         };
         let client = client
             .map(|value| format!("{value:?}").to_lowercase())
