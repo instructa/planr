@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.2.0-alpha.1] - 2026-07-05
+
 Two threads: per-task model routing becomes a declared contract instead of prose, and Cursor becomes a first-class client — one command installs everything the plugin would carry, and the docs cover Cursor's native multitasking (subagents, parallel dispatch, worktrees).
 
 ### Added
@@ -347,7 +349,8 @@ Initial Planr product release.
 - Tag-driven release pipeline with multi-target builds (darwin/linux, arm64/x86_64) and Homebrew tap automation.
 - Skill workflow documentation for Codex, Claude Code, Cursor, and MCP-only clients.
 
-[Unreleased]: https://github.com/instructa/planr/compare/v1.1.16...HEAD
+[Unreleased]: https://github.com/instructa/planr/compare/v1.2.0-alpha.1...HEAD
+[1.2.0-alpha.1]: https://github.com/instructa/planr/compare/v1.1.19...v1.2.0-alpha.1
 [1.1.16]: https://github.com/instructa/planr/compare/v1.1.15...v1.1.16
 [1.1.15]: https://github.com/instructa/planr/compare/v1.1.14...v1.1.15
 [1.1.14]: https://github.com/instructa/planr/compare/v1.1.13...v1.1.14
