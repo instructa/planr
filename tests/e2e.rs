@@ -2460,6 +2460,83 @@ fn observed_client_lands_on_runs_and_flags_declared_client_deviation() {
     assert_eq!(mismatch_count, 1, "matching/unknown hosts add no events");
 }
 
+/// Regression harness for the first-pick hang observed in a live loop
+/// run (2 of 6 subagent sessions: the first `planr pick` hung until
+/// killed, retry instant). Root-cause candidate fixed in storage:
+/// busy_timeout was set after journal_mode, so concurrent first
+/// connections raced the WAL conversion with a zero timeout. This test
+/// storms one database with parallel first-pick processes under a hard
+/// watchdog: a hang fails the suite instead of burning a worker.
+#[test]
+fn parallel_first_picks_finish_within_the_watchdog() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    let db_arg = db.to_str().unwrap().to_string();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "project", "init", "Storm"])
+        .assert()
+        .success();
+    let bin = assert_cmd::cargo::cargo_bin("planr");
+
+    for round in 0..4 {
+        // Fresh, independent items so every concurrent pick can lease one.
+        for worker in 0..8 {
+            planr()
+                .current_dir(dir.path())
+                .args([
+                    "--db",
+                    &db_arg,
+                    "item",
+                    "create",
+                    &format!("Storm r{round} w{worker}"),
+                    "--description",
+                    "parallel first-pick storm",
+                ])
+                .assert()
+                .success();
+        }
+        let mut children = Vec::new();
+        for worker in 0..8 {
+            let mut command = std::process::Command::new(&bin);
+            command
+                .current_dir(dir.path())
+                .args(["--db", &db_arg, "--json", "pick"])
+                .env("PLANR_WORKER_ID", format!("storm-r{round}-w{worker}"))
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+            for var in [
+                "CODEX_SANDBOX",
+                "CODEX_SESSION_ID",
+                "CLAUDECODE",
+                "CURSOR_AGENT",
+                "CURSOR_INVOKED_AS",
+                "PLANR_PROFILE",
+            ] {
+                command.env_remove(var);
+            }
+            children.push(command.spawn().unwrap());
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        for mut child in children {
+            let status = loop {
+                match child.try_wait().unwrap() {
+                    Some(status) => break status,
+                    None if std::time::Instant::now() > deadline => {
+                        let _ = child.kill();
+                        panic!("round {round}: a first pick hung past the 30s watchdog");
+                    }
+                    None => std::thread::sleep(std::time::Duration::from_millis(10)),
+                }
+            };
+            assert!(
+                status.success(),
+                "round {round}: parallel pick failed (lock contention must wait, not error)"
+            );
+        }
+    }
+}
+
 #[test]
 fn agents_init_scaffold_is_warning_free_and_routes_by_default() {
     let dir = tempdir().unwrap();
