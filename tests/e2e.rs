@@ -2473,6 +2473,13 @@ fn agents_init_scaffold_is_warning_free_and_routes_by_default() {
     assert_eq!(check["ok"], true);
     assert_eq!(check["warnings"].as_array().unwrap().len(), 0);
 
+    // The scaffold teaches client honesty where clients get declared.
+    let scaffold_content = fs::read_to_string(dir.path().join(".planr/agents.toml")).unwrap();
+    assert!(
+        scaffold_content.contains("Declare the client you will actually dispatch on"),
+        "scaffold must carry the client-honesty rule: {scaffold_content}"
+    );
+
     // A seeded code item picks up the scaffold's implementer route.
     planr()
         .current_dir(dir.path())
