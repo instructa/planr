@@ -158,20 +158,29 @@ pub fn now_string() -> String {
 /// identity, e.g. `maker-1`) or PLANR_SESSION_ID for the whole session so
 /// pick, done, and log all attribute to the same worker.
 pub fn worker_id() -> String {
-    if let Ok(id) = env::var("PLANR_WORKER_ID") {
-        return id;
-    }
-    if let Ok(id) = env::var("PLANR_SESSION_ID") {
-        return id;
-    }
-    if let Ok(id) = env::var("CODEX_SESSION_ID") {
-        return format!("codex:{id}");
-    }
-    let host = env::var("HOSTNAME").unwrap_or_else(|_| "local".to_string());
-    let user = env::var("USER")
-        .or_else(|_| env::var("USERNAME"))
-        .unwrap_or_else(|_| "worker".to_string());
-    format!("{}:{}:{}", detect_client(), host, user)
+    explicit_worker_id().unwrap_or_else(|| {
+        let host = env::var("HOSTNAME").unwrap_or_else(|_| "local".to_string());
+        let user = env::var("USER")
+            .or_else(|_| env::var("USERNAME"))
+            .unwrap_or_else(|_| "worker".to_string());
+        format!("{}:{}:{}", detect_client(), host, user)
+    })
+}
+
+/// The identity only when it was deliberately set (env), as opposed to
+/// the anonymous `client:host:user` fallback. Review-mode derivation
+/// needs the distinction: two anonymous processes on one machine
+/// collapse into the same fallback string, so an `independent` stamp is
+/// only trustworthy for explicit identities.
+pub fn explicit_worker_id() -> Option<String> {
+    env::var("PLANR_WORKER_ID")
+        .ok()
+        .or_else(|| env::var("PLANR_SESSION_ID").ok())
+        .or_else(|| {
+            env::var("CODEX_SESSION_ID")
+                .ok()
+                .map(|id| format!("codex:{id}"))
+        })
 }
 
 pub fn detect_client() -> String {

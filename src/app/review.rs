@@ -224,6 +224,11 @@ impl App {
         } else {
             None
         };
+        // `independent` must be earned, not lucked into: it requires an
+        // explicitly set reviewer identity (--reviewer or PLANR_WORKER_ID).
+        // An anonymous fallback identity that merely differs from the
+        // maker's string proves nothing, so it stamps single_agent.
+        let explicit_identity = reviewer.is_some() || crate::util::explicit_worker_id().is_some();
         let reviewer = reviewer
             .map(ToOwned::to_owned)
             .unwrap_or_else(crate::util::worker_id);
@@ -234,7 +239,8 @@ impl App {
             .and_then(|target| target.worker_id);
         let review_mode = match maker.as_deref() {
             Some(maker) if maker == reviewer => "single_agent",
-            Some(_) => "independent",
+            Some(_) if explicit_identity => "independent",
+            Some(_) => "single_agent",
             None => "unattributed",
         };
         let summary =

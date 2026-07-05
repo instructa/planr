@@ -34,6 +34,7 @@ Two threads: per-task model routing becomes a declared contract instead of prose
 
 ### Fixed
 
+- `independent` review stamps must be earned, not lucked into: `review close` stamps `independent` only when the reviewer identity was explicitly set (`--reviewer` or `PLANR_WORKER_ID`); a review closed under the anonymous fallback identity stamps `single_agent` even when the identity strings happen to differ from the maker's (a live loop run produced exactly this accidental `independent`). Explicit-identity flows are unchanged.
 - `item create --work-type` is no longer a hidden flag: it is the way items opt into use-case routing, so it now appears in `--help` with the routing context (found while dogfooding the routing walkthrough).
 - Links no longer fail silently on unknown item ids: `link add`, `item create --after`, and every other link write now error with the offending id instead of writing nothing (previously a truncated id was ignored without signal — also a dogfood find).
 - `item create --after <bad-id>` is atomic: the id is validated before the item persists, so the error leaves nothing behind and a retry cannot duplicate the item (dogfood find from testing the loud-link fix).

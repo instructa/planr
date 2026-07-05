@@ -4523,6 +4523,104 @@ fn done_command_collapses_log_review_close_and_next_pick() {
 }
 
 #[test]
+fn independent_review_stamp_requires_explicit_reviewer_identity() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Stamps"])
+        .assert()
+        .success();
+
+    let mut review_ids = Vec::new();
+    for title in ["Slice A", "Slice B"] {
+        let item = create_test_item(dir.path(), &db, title, "stamp check");
+        planr()
+            .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", "maker-1")
+            .args(["--db", db.to_str().unwrap(), "pick"])
+            .assert()
+            .success();
+        let output = planr()
+            .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", "maker-1")
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "done",
+                &item,
+                "--summary",
+                "built",
+                "--review",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let done: Value = serde_json::from_slice(&output).unwrap();
+        review_ids.push(done["review"]["id"].as_str().unwrap().to_string());
+    }
+
+    // Anonymous reviewer (fallback identity): the string differs from
+    // maker-1, but that proves nothing — the stamp must be single_agent,
+    // never independent by luck.
+    let output = planr()
+        .current_dir(dir.path())
+        .env_remove("PLANR_WORKER_ID")
+        .env_remove("PLANR_SESSION_ID")
+        .env_remove("CODEX_SESSION_ID")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "review",
+            "close",
+            &review_ids[0],
+            "--verdict",
+            "complete",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let closed: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        closed["review_mode"], "single_agent",
+        "anonymous reviewer must not stamp independent: {closed}"
+    );
+
+    // Explicit --reviewer earns the independent stamp as before.
+    let output = planr()
+        .current_dir(dir.path())
+        .env_remove("PLANR_WORKER_ID")
+        .env_remove("PLANR_SESSION_ID")
+        .env_remove("CODEX_SESSION_ID")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "review",
+            "close",
+            &review_ids[1],
+            "--verdict",
+            "complete",
+            "--reviewer",
+            "checker-9",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let closed: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(closed["review_mode"], "independent");
+    assert_eq!(closed["reviewer"], "checker-9");
+}
+
+#[test]
 fn review_close_guard_reviewer_identity_and_role_aware_picks() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
