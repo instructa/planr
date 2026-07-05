@@ -171,6 +171,8 @@ Create items with the use-case work type (`planr item create ... --work-type fro
 
 Declare the `client` you will actually dispatch on. A loop running inside one host dispatches that host's subagents — an in-Cursor driver that dispatches Cursor subagents with per-dispatch models is running `client = "cursor"` profiles in practice, even when the model matches. A `client = "codex"` profile is only honest when the driver really spawns a Codex process (`codex exec ...`). This matters for the audit: workers report the *profile id*, so a profile whose declared client differs from the real dispatch host passes the mismatch check on the model alone — the client deviation stays invisible.
 
+When do you actually need more than one client? Hosts with a full model catalog (Cursor) can serve an entire pool natively — an all-`cursor` registry with different models per profile is the normal case there. Cross-client profiles exist for two real situations: vendor-locked hosts (Claude Code dispatches only Anthropic models, Codex CLI only OpenAI models — a Claude-Code driver that wants a GPT implementer must process-dispatch via `codex exec`), and subscription economics (the same model can bill differently per host, so routing backend work through a flat-rate CLI subscription instead of the driver host's quota is a legitimate cost decision).
+
 ## Host Matrix
 
 Where each host reads its model configuration from, and what silently defeats a pin there (state of July 2026):
