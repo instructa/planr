@@ -206,7 +206,9 @@ fn parse_route_spec(spec: &str) -> Result<RouteSpec> {
     if work_type.trim().is_empty() || profile.is_empty() {
         bail!("malformed route spec `{spec}`; expected {ROUTE_GRAMMAR}");
     }
-    check_spec_id("route work_type", work_type.trim())?;
+    // Work types are free-form in the engine and render as TOML strings
+    // (not keys), so only control characters are rejected here.
+    check_spec_value("route work_type", work_type.trim())?;
     Ok(RouteSpec {
         work_type: work_type.trim().to_string(),
         profile,
@@ -667,8 +669,8 @@ mod tests {
                 "control characters",
             ),
             (
-                args(&["a=codex/m"], &[], &["front end=a"], None),
-                "must contain only letters",
+                args(&["a=codex/m"], &[], &["qa\nmanual=a"], None),
+                "control characters",
             ),
             (
                 args(&["a=codex/m"], &["a=skill\nname"], &[], None),
