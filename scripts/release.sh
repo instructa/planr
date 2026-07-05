@@ -4,19 +4,23 @@
 # pushes. A release that skips this script fails the tag-time gate in
 # .github/workflows/release.yml.
 #
-# Usage: scripts/release.sh <x.y.z> "one-line release summary"
+# Usage: scripts/release.sh <x.y.z[-alpha.N|-beta.N|-rc.N]> "one-line release summary"
+#
+# Pre-release versions (e.g. 1.2.0-alpha.1) ship a GitHub prerelease and
+# publish npm under the `alpha` dist-tag instead of `latest`; the
+# Homebrew tap only moves on stable versions.
 #
 # Preconditions:
 # - branch is main with a clean worktree
-# - CHANGELOG.md already contains the committed `## [x.y.z]` section
+# - CHANGELOG.md already contains the committed `## [<version>]` section
 set -eu
 
 cd "$(dirname "$0")/.."
 
 version="${1:-}"
 summary="${2:-}"
-if ! echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-  echo "usage: scripts/release.sh <x.y.z> \"one-line release summary\"" >&2
+if ! echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?$'; then
+  echo "usage: scripts/release.sh <x.y.z[-alpha.N|-beta.N|-rc.N]> \"one-line release summary\"" >&2
   exit 1
 fi
 if [ -z "$summary" ]; then

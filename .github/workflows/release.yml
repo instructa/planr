@@ -55,9 +55,16 @@ jobs:
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "release $TAG already exists; reusing"
           else
+            # Pre-release tags (v1.2.0-alpha.1) are marked as GitHub
+            # prereleases so `latest` and the curl installer stay on stable.
+            prerelease_flag=""
+            case "$TAG" in
+              *-*) prerelease_flag="--prerelease" ;;
+            esac
             gh release create "$TAG" \
               --repo "$GITHUB_REPOSITORY" \
               --draft \
+              $prerelease_flag \
               --title "planr $TAG" \
               --generate-notes
           fi
@@ -214,14 +221,24 @@ jobs:
           node npm/bin/planr.js --version
 
       - name: Publish to npm
-        run: npm publish --access public
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          # Pre-releases publish under the `alpha` dist-tag so plain
+          # `npm install -g planr` keeps resolving to the stable line;
+          # testers opt in with `npm install -g planr@alpha`.
+          case "$TAG" in
+            *-*) npm publish --access public --tag alpha ;;
+            *) npm publish --access public ;;
+          esac
 
   homebrew-tap:
     name: Update Homebrew Tap
     needs: finalize
     runs-on: ubuntu-24.04
     permissions: {}
-    if: ${{ vars.HOMEBREW_TAP_ENABLED == 'true' }}
+    # The tap has no channel concept: pre-release tags never move it.
+    if: ${{ vars.HOMEBREW_TAP_ENABLED == 'true' && !contains(github.ref_name, '-') }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
