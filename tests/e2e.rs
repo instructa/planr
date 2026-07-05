@@ -11,7 +11,20 @@ use std::time::Duration;
 use tempfile::tempdir;
 
 fn planr() -> Command {
-    Command::cargo_bin("planr").expect("planr binary")
+    let mut cmd = Command::cargo_bin("planr").expect("planr binary");
+    // Tests may run inside a real host session (Cursor terminal, Codex
+    // sandbox); scrub the host-identifying vars observed_client() reads
+    // so detection is opt-in per test and results are deterministic.
+    for var in [
+        "CODEX_SANDBOX",
+        "CODEX_SESSION_ID",
+        "CLAUDECODE",
+        "CURSOR_AGENT",
+        "CURSOR_INVOKED_AS",
+    ] {
+        cmd.env_remove(var);
+    }
+    cmd
 }
 
 #[test]
@@ -2271,6 +2284,159 @@ fn agents_init_flag_specs_generate_a_pool_and_fail_closed() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("cannot be used with"));
+}
+
+#[test]
+fn observed_client_lands_on_runs_and_flags_declared_client_deviation() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Hosts"])
+        .assert()
+        .success();
+    fs::create_dir_all(dir.path().join(".planr")).unwrap();
+    fs::write(
+        dir.path().join(".planr/agents.toml"),
+        "[profiles.coder]\nclient = \"cursor\"\nmodel = \"gpt-5.5\"\n\n[route_default]\nprofile = \"coder\"\n",
+    )
+    .unwrap();
+    let item = create_test_item(dir.path(), &db, "Routed work", "host audit");
+
+    // A run logged from a Claude session against a cursor-declared route:
+    // observed_client is recorded and one advisory event flags the
+    // deviation — without any profile being reported.
+    planr()
+        .current_dir(dir.path())
+        .env("CLAUDECODE", "1")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "log",
+            "add",
+            "--item",
+            &item,
+            "--summary",
+            "built elsewhere",
+            "--cmd",
+            "cargo test",
+        ])
+        .assert()
+        .success();
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "trace",
+            "item",
+            &item,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let trace: Value = serde_json::from_slice(&output).unwrap();
+    let run = &trace["routing"]["runs"][0];
+    assert_eq!(run["observed_client"], "claude-code");
+    assert_eq!(run["client_mismatch"], true, "trace must flag it: {trace}");
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "event", "list"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let events: Value = serde_json::from_slice(&output).unwrap();
+    let mismatches: Vec<&Value> = events["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["event_type"] == "client_mismatch_observed")
+        .collect();
+    assert_eq!(mismatches.len(), 1, "exactly one advisory event: {events}");
+    assert_eq!(mismatches[0]["payload"]["declared_client"], "cursor");
+    assert_eq!(mismatches[0]["payload"]["observed_client"], "claude-code");
+
+    // Matching host: no new event. (CURSOR_AGENT is scrubbed by the
+    // helper, so set it explicitly.)
+    planr()
+        .current_dir(dir.path())
+        .env("CURSOR_AGENT", "1")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "log",
+            "add",
+            "--item",
+            &item,
+            "--summary",
+            "built at home",
+            "--cmd",
+            "cargo test",
+        ])
+        .assert()
+        .success();
+    // No host env at all: no observed_client key, no event.
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "log",
+            "add",
+            "--item",
+            &item,
+            "--summary",
+            "built anonymously",
+            "--cmd",
+            "cargo test",
+        ])
+        .assert()
+        .success();
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "trace",
+            "item",
+            &item,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let trace: Value = serde_json::from_slice(&output).unwrap();
+    let runs = trace["routing"]["runs"].as_array().unwrap();
+    assert_eq!(runs.len(), 3);
+    assert_eq!(runs[1]["observed_client"], "cursor");
+    assert_eq!(runs[1]["client_mismatch"], false);
+    assert!(
+        !runs[2].as_object().unwrap().contains_key("observed_client"),
+        "unknown host must store nothing: {trace}"
+    );
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "event", "list"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let events: Value = serde_json::from_slice(&output).unwrap();
+    let mismatch_count = events["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["event_type"] == "client_mismatch_observed")
+        .count();
+    assert_eq!(mismatch_count, 1, "matching/unknown hosts add no events");
 }
 
 #[test]

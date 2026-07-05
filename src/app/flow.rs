@@ -51,8 +51,14 @@ impl App {
         } else {
             Some(self.record_run(input.item_id, input.commands, "closed", profile.as_deref())?)
         };
-        if let (Some(run_id), Some(actual_profile)) = (run_id.as_deref(), profile.as_deref()) {
-            self.observe_route_compliance(input.item_id, run_id, actual_profile)?;
+        if let Some(run_id) = run_id.as_deref() {
+            if let Some(actual_profile) = profile.as_deref() {
+                self.observe_route_compliance(input.item_id, run_id, actual_profile)?;
+            }
+            // Client compliance needs no profile: the observed host comes
+            // from the environment, so it also audits runs whose worker
+            // never reported a profile.
+            self.observe_client_compliance(input.item_id, run_id)?;
         }
         self.conn.execute(
             "INSERT INTO logs(id, project_id, item_id, run_id, kind, summary, files, commands, tests, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, datetime('now'))",

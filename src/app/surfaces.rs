@@ -81,14 +81,22 @@ impl App {
             }
             for run in routing["runs"].as_array().into_iter().flatten() {
                 out.push_str(&format!(
-                    "\n  run {} [{}] profile {}{}",
+                    "\n  run {} [{}] profile {}{}{}",
                     run["id"].as_str().unwrap_or_default(),
                     run["client"].as_str().unwrap_or_default(),
                     run["profile"].as_str().unwrap_or("-"),
-                    if run["mismatch"] == serde_json::json!(true) {
-                        " (differs from declared route; advisory)"
-                    } else {
-                        ""
+                    run["observed_client"]
+                        .as_str()
+                        .map(|observed| format!(" on {observed}"))
+                        .unwrap_or_default(),
+                    match (
+                        run["mismatch"] == serde_json::json!(true),
+                        run["client_mismatch"] == serde_json::json!(true),
+                    ) {
+                        (true, true) => " (profile and host differ from declared route; advisory)",
+                        (true, false) => " (differs from declared route; advisory)",
+                        (false, true) => " (host differs from declared client; advisory)",
+                        (false, false) => "",
                     },
                 ));
             }

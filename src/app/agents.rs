@@ -153,6 +153,39 @@ impl App {
         Ok(())
     }
 
+    /// Compares the host a run observably executed under (env-detected,
+    /// not self-declared) with the client the item's declared route
+    /// names. Closes the audit blindspot where profile self-report
+    /// masks a client-level deviation — e.g. Cursor subagents standing
+    /// in for a declared Codex profile. Advisory like everything here:
+    /// no observation, no registry, or no declared client means no
+    /// comparison and no event.
+    pub(crate) fn observe_client_compliance(&self, item_id: &str, run_id: &str) -> Result<()> {
+        let Some(observed) = crate::util::observed_client() else {
+            return Ok(());
+        };
+        let Some(routing) = self.routing_value_for_item(item_id)? else {
+            return Ok(());
+        };
+        let Some(declared) = routing["client"].as_str() else {
+            return Ok(());
+        };
+        if !client_vocab_matches(declared, &observed) {
+            self.record_event(
+                "client_mismatch_observed",
+                Some(item_id),
+                json!({
+                    "declared_client": declared,
+                    "observed_client": observed,
+                    "declared_profile": routing["profile"],
+                    "run_id": run_id,
+                    "matched_selector": routing["matched_selector"],
+                }),
+            )?;
+        }
+        Ok(())
+    }
+
     /// The `routing` section of `trace item`: the declared route next to
     /// every recorded run's actual client/profile with a mismatch marker.
     /// Returns None when there is nothing to say (no declared route and
@@ -169,14 +202,23 @@ impl App {
             .as_ref()
             .and_then(|routing| routing["profile"].as_str())
             .map(ToOwned::to_owned);
+        let declared_client = declared
+            .as_ref()
+            .and_then(|routing| routing["client"].as_str())
+            .map(ToOwned::to_owned);
         let runs: Vec<Value> = runs
             .into_iter()
             .map(|mut run| {
-                // Advisory marker: only comparable when both sides exist.
+                // Advisory markers: only comparable when both sides exist.
                 run["mismatch"] = match (declared_profile.as_deref(), run["profile"].as_str()) {
                     (Some(declared), Some(actual)) => json!(declared != actual),
                     _ => Value::Null,
                 };
+                if let (Some(declared), Some(observed)) =
+                    (declared_client.as_deref(), run["observed_client"].as_str())
+                {
+                    run["client_mismatch"] = json!(!client_vocab_matches(declared, observed));
+                }
                 run
             })
             .collect();
@@ -748,6 +790,20 @@ fn client_matches(install_target: &str, profile_client: &str) -> bool {
         "claude" => matches!(profile_client, "claude" | "claude-code"),
         other => profile_client == other,
     }
+}
+
+/// Registry client vocabulary comparison for the run audit: `claude`
+/// and `claude-code` are the same host.
+fn client_vocab_matches(declared: &str, observed: &str) -> bool {
+    let canonical = |value: &str| {
+        if value == "claude" {
+            "claude-code"
+        } else {
+            value
+        }
+        .to_string()
+    };
+    canonical(declared) == canonical(observed)
 }
 
 struct ItemRouteInputs {

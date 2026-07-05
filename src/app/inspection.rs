@@ -419,7 +419,7 @@ impl App {
     ) -> Result<String> {
         let id = short_id("run");
         self.conn.execute(
-            "INSERT INTO runs(id, project_id, item_id, worker_id, client, profile, command, cwd, status, started_at, ended_at, metadata) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, datetime('now'), datetime('now'), ?10)",
+            "INSERT INTO runs(id, project_id, item_id, worker_id, client, profile, observed_client, command, cwd, status, started_at, ended_at, metadata) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, datetime('now'), datetime('now'), ?11)",
             params![
                 id,
                 self.default_project()?.id,
@@ -427,6 +427,7 @@ impl App {
                 worker_id(),
                 detect_client(),
                 profile,
+                crate::util::observed_client(),
                 commands.join(" && "),
                 self.root.to_string_lossy(),
                 status,
