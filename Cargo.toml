@@ -1,6 +1,6 @@
 [package]
 name = "planr"
-version = "1.2.0-alpha.1"
+version = "1.2.0"
 edition = "2024"
 license = "MIT"
 description = "Local-first planning and execution coordination for coding agents"
