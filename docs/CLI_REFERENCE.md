@@ -47,6 +47,7 @@ planr artifact list [--item <item-id>]
 planr event list [--item <item-id>] [--limit 50]
 planr debug bundle [--item <item-id>] --preview
 planr log add --item <item-id> --summary "..." [--files a --files b | --files a,b] [--cmd "..."] [--kind completion|progress|verification] [--profile <id>]
+# machine consumers: --cmd writes the `commands` field in log JSON; --tests writes `tests`
 planr review request <item-id>
 planr review annotate <item-id> --message "..." [--severity info|warning|blocking] [--file path] [--line N] [--author "..."]
 planr review ingest <item-id> (--from feedback.json|--stdin)

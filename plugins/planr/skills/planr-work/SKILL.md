@@ -30,6 +30,8 @@ Live verification (browser flow, executed binary, real requests) gets its own lo
 planr log add --item <item-id> --kind verification --summary "verified <flow>: <observed outcome>" --cmd "<exact command>"
 ```
 
+The `--cmd` value must be copy-paste replayable: a real shell command (or a small script you committed), never a prose transcript like "start server; curl /; check stats". A reviewer replays your command verbatim — if it cannot run, the verification cannot be independently confirmed.
+
 Log persistent evidence, not transient noise: a failure you immediately fixed belongs in the final log's narrative, not as a standalone failure log. Only record a failure separately when it blocks the item.
 
 Evidence logging refreshes the heartbeat automatically — a separate `planr pick heartbeat` is only needed for long silent stretches without logs.

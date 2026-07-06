@@ -126,6 +126,10 @@ Every host has a silent override path — the `CLAUDE_CODE_SUBAGENT_MODEL` env v
 
 Everything here is advisory (ADR-001): mismatches never fail logging, reviews, or closes. No profile reported, no run recorded, or no registry means no comparison and no event.
 
+One legitimate mismatch source to know: a driver adding a live-verification log to a routed item runs on the driver profile by design, which emits a `route_mismatch_observed` event. The payload carries `log_kind`, so audit consumers can discount `verification` entries and alarm only on `completion` mismatches.
+
+For single-host pools (e.g. all-Cursor), declare the host's *exact* model slugs (`claude-opus-4-8-thinking-high`, not `opus`): dispatch APIs resolve slugs, not aliases, and a driver forced to map `fable-5` onto the nearest slug at dispatch time is a silent translation the audit cannot see.
+
 ## Failure Behavior
 
 - **No registry file**: nothing changes. Pick packets simply have no `routing` key.

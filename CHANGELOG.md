@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- `planr item cancel --reason`: the why travels in a new `item_cancelled` graph event (recorded on every confirmed cancel), so cancellations are auditable instead of living only in chat history (dogfood run 3).
+- `planr agents routing`: discoverability alias for `planr prompt routing` — the place people guess the dispatch block lives.
+- `agents check` warns (advisory, exit unchanged) when a profile pins a skill with no `SKILL.md` under the project or home skill directories (`.cursor`/`.claude`/`.agents`/`.codex`); the third dogfood run shipped a worker silently missing its pinned skill.
+
+### Changed
+
+- `planr event list` human output lists one event per line (timestamp, type, item, compact payload) instead of a bare count — grep pipelines over events work now; `--json` is unchanged.
+- `route_mismatch_observed` and `client_mismatch_observed` payloads carry the originating `log_kind`, so audit consumers can discount the legitimate case of a driver adding a verification log to a routed item.
+- `trace item` drops the legacy identity-derived client bracket on runs that carry an observed host (`run ... [human] profile x on cursor` read contradictory).
+- MODEL_ROUTING documents the verification-log mismatch case and the exact-host-slug rule for single-host pools; CLI_REFERENCE documents the `--cmd` flag → `commands` JSON field mapping; the planr-work skill requires verification log commands to be copy-paste replayable.
+
 ## [1.2.0-alpha.1] - 2026-07-05
 
 Two threads: per-task model routing becomes a declared contract instead of prose, and Cursor becomes a first-class client — one command installs everything the plugin would carry, and the docs cover Cursor's native multitasking (subagents, parallel dispatch, worktrees).
