@@ -222,7 +222,7 @@ pub fn mcp_tools() -> Vec<Value> {
         tool(
             "planr_pick_item",
             "Atomically pick the next ready item",
-            json!({"work_type": prop("string", "Only lease items of this work type (e.g. review for checkers, code for makers)"), "plan": prop("string", "Only lease items belonging to this plan (plan id), so plan-scoped goal runs stay inside their contract")}),
+            json!({"work_type": prop("string", "Only lease items of this work type (e.g. review for checkers, code for makers)"), "plan": prop("string", "Only lease items belonging to this plan (plan id), so plan-scoped goal runs stay inside their contract"), "peek": prop("boolean", "Read the next work packet (incl. routing) without leasing it; the worker takes the lease")}),
             &[],
         ),
         tool(

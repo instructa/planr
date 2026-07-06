@@ -424,6 +424,10 @@ pub(crate) struct PickArgs {
     /// goal runs never pick work outside their contract.
     #[arg(long)]
     pub(crate) plan: Option<String>,
+    /// Read the next work packet (incl. its routing block) without
+    /// leasing it — for drivers that dispatch; the worker takes the lease.
+    #[arg(long)]
+    pub(crate) peek: bool,
 }
 
 #[derive(Subcommand, Debug)]

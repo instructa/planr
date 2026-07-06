@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- `planr pick --peek` (MCP `planr_pick_item` with `"peek": true`): the full work packet for the next pickable item — routing block included — without writing a lease, heartbeat, or pick event. Dispatching drivers read, dispatch, and leave the lease to the worker's own identity; the third dogfood run needed a pick → `pick release --force` → re-pick dance per item for this, three calls that are now one.
 - `planr item cancel --reason`: the why travels in a new `item_cancelled` graph event (recorded on every confirmed cancel), so cancellations are auditable instead of living only in chat history (dogfood run 3).
 - `planr agents routing`: discoverability alias for `planr prompt routing` — the place people guess the dispatch block lives.
 - `agents check` warns (advisory, exit unchanged) when a profile pins a skill with no `SKILL.md` under the project or home skill directories (`.cursor`/`.claude`/`.agents`/`.codex`); the third dogfood run shipped a worker silently missing its pinned skill.

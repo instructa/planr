@@ -31,6 +31,39 @@ impl App {
     /// `exclude` keeps a worker from picking an item it must not own, e.g.
     /// the review it just requested via `done --review --next`. `work_type`
     /// and `plan_path` narrow the lease for role-aware and plan-scoped picks.
+    /// Read-only counterpart of `pick_next_ready_item_filtered`: the same
+    /// candidate selection, no lease, no heartbeat, no event.
+    pub(crate) fn peek_next_ready_item_filtered(
+        &self,
+        filter: &PickFilter<'_>,
+    ) -> Result<Option<String>> {
+        let project = self.default_project()?;
+        self.promote_ready()?;
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id FROM items
+                 WHERE project_id = ?1 AND status = 'ready'
+                 AND id IS NOT ?2
+                 AND (?3 IS NULL OR work_type = ?3)
+                 AND (?4 IS NULL OR plan_path = ?4)
+                 AND NOT EXISTS (
+                   SELECT 1 FROM items c WHERE c.parent_item_id = items.id
+                   AND c.status NOT IN ('cancelled')
+                 )
+                 ORDER BY priority DESC, created_at ASC
+                 LIMIT 1",
+                params![
+                    project.id,
+                    filter.exclude,
+                    filter.work_type,
+                    filter.plan_path
+                ],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?)
+    }
+
     pub(crate) fn pick_next_ready_item_filtered(
         &self,
         filter: &PickFilter<'_>,

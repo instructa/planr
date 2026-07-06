@@ -19,14 +19,47 @@ impl App {
         work_type: Option<&str>,
         plan: Option<&str>,
     ) -> Result<Value> {
+        self.pick_value(exclude, work_type, plan, false)
+    }
+
+    /// `pick --peek`: the same packet a pick would hand out, without
+    /// writing the lease, heartbeat, or pick event. Drivers read the
+    /// routing block for dispatch decisions and leave the lease for the
+    /// worker — killing the pick -> `release --force` -> re-pick dance.
+    pub(crate) fn peek_pick_value(
+        &self,
+        work_type: Option<&str>,
+        plan: Option<&str>,
+    ) -> Result<Value> {
+        self.pick_value(None, work_type, plan, true)
+    }
+
+    fn pick_value(
+        &self,
+        exclude: Option<&str>,
+        work_type: Option<&str>,
+        plan: Option<&str>,
+        peek: bool,
+    ) -> Result<Value> {
         let plan_path = plan.map(|id| self.get_plan(id)).transpose()?;
         let filter = PickFilter {
             exclude,
             work_type,
             plan_path: plan_path.as_ref().map(|plan| plan.path.as_str()),
         };
-        if let Some((id, worker)) = self.pick_next_ready_item_filtered(&filter)? {
-            self.work_packet(&id, &worker)
+        let leased = if peek {
+            self.peek_next_ready_item_filtered(&filter)?
+                .map(|id| (id, None))
+        } else {
+            self.pick_next_ready_item_filtered(&filter)?
+                .map(|(id, worker)| (id, Some(worker)))
+        };
+        if let Some((id, worker)) = leased {
+            let mut packet = self.work_packet(&id, worker.as_deref())?;
+            if peek {
+                packet["peek"] = json!(true);
+            }
+            Ok(packet)
         } else {
             let remaining = self.progress_value()?;
             let total = remaining["total"].as_i64().unwrap_or(0);
@@ -123,11 +156,14 @@ impl App {
     /// approval) extended with recall context and board progress. Empty
     /// collections and null sub-objects are omitted — a missing key means
     /// "empty"; `remaining.counts` always carries the full status vocabulary.
-    pub(crate) fn work_packet(&self, item_id: &str, worker: &str) -> Result<Value> {
+    pub(crate) fn work_packet(&self, item_id: &str, worker: Option<&str>) -> Result<Value> {
         let mut packet = self.trace_item_value(item_id)?;
         // Worker identity lives in `item.worker_id` and `runtime.worker_id`
         // already; `worker` is the same value, so no third top-level copy.
-        debug_assert_eq!(packet["item"]["worker_id"].as_str(), Some(worker));
+        // None means peek: no lease was written, the item stays ready.
+        if let Some(worker) = worker {
+            debug_assert_eq!(packet["item"]["worker_id"].as_str(), Some(worker));
+        }
         let mut stmt = self.conn.prepare("SELECT source_type, source_id, section_id, relationship FROM source_links WHERE item_id = ?1 ORDER BY id")?;
         let source_links = collect_rows(stmt.query_map(params![item_id], |row| {
             Ok(json!({

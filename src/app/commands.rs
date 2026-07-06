@@ -485,6 +485,7 @@ impl App {
         command: Option<PickCommand>,
         work_type: Option<String>,
         plan: Option<String>,
+        peek: bool,
     ) -> Result<()> {
         match command {
             Some(PickCommand::Release(args)) => {
@@ -568,10 +569,19 @@ impl App {
                 )
             }
             None => {
-                let pick = self.next_pick_value(None, work_type.as_deref(), plan.as_deref())?;
+                let pick = if peek {
+                    self.peek_pick_value(work_type.as_deref(), plan.as_deref())?
+                } else {
+                    self.next_pick_value(None, work_type.as_deref(), plan.as_deref())?
+                };
                 let human = match pick["item"]["id"].as_str() {
                     Some(id) => format!(
-                        "picked {} {}",
+                        "{} {} {}",
+                        if peek {
+                            "peeked (not leased)"
+                        } else {
+                            "picked"
+                        },
                         id,
                         pick["item"]["title"].as_str().unwrap_or_default()
                     ),

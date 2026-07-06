@@ -436,11 +436,16 @@ impl App {
                     json!({"cancelled": cancellable, "created": created}),
                 ))
             }
-            "planr_pick_item" => Ok(mcp_json(self.next_pick_value(
-                None,
-                args.get("work_type").and_then(Value::as_str),
-                args.get("plan").and_then(Value::as_str),
-            )?)),
+            "planr_pick_item" => {
+                let work_type = args.get("work_type").and_then(Value::as_str);
+                let plan = args.get("plan").and_then(Value::as_str);
+                let value = if args.get("peek").and_then(Value::as_bool).unwrap_or(false) {
+                    self.peek_pick_value(work_type, plan)?
+                } else {
+                    self.next_pick_value(None, work_type, plan)?
+                };
+                Ok(mcp_json(value))
+            }
             "planr_pick_heartbeat" => {
                 let item_id = args
                     .get("item_id")
