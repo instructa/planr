@@ -131,6 +131,7 @@ impl App {
         item_id: &str,
         run_id: &str,
         actual_profile: &str,
+        log_kind: &str,
     ) -> Result<()> {
         let Some(routing) = self.routing_value_for_item(item_id)? else {
             return Ok(());
@@ -139,6 +140,9 @@ impl App {
             return Ok(());
         };
         if declared != actual_profile {
+            // log_kind lets audit consumers discount the legitimate
+            // case: a driver adding a verification log to a routed item
+            // runs on the driver profile by design.
             self.record_event(
                 "route_mismatch_observed",
                 Some(item_id),
@@ -146,6 +150,7 @@ impl App {
                     "declared_profile": declared,
                     "actual_profile": actual_profile,
                     "run_id": run_id,
+                    "log_kind": log_kind,
                     "matched_selector": routing["matched_selector"],
                 }),
             )?;
@@ -160,7 +165,12 @@ impl App {
     /// in for a declared Codex profile. Advisory like everything here:
     /// no observation, no registry, or no declared client means no
     /// comparison and no event.
-    pub(crate) fn observe_client_compliance(&self, item_id: &str, run_id: &str) -> Result<()> {
+    pub(crate) fn observe_client_compliance(
+        &self,
+        item_id: &str,
+        run_id: &str,
+        log_kind: &str,
+    ) -> Result<()> {
         let Some(observed) = crate::util::observed_client() else {
             return Ok(());
         };
@@ -179,6 +189,7 @@ impl App {
                     "observed_client": observed,
                     "declared_profile": routing["profile"],
                     "run_id": run_id,
+                    "log_kind": log_kind,
                     "matched_selector": routing["matched_selector"],
                 }),
             )?;

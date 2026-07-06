@@ -2381,6 +2381,31 @@ fn observed_client_lands_on_runs_and_flags_declared_client_deviation() {
     assert_eq!(mismatches.len(), 1, "exactly one advisory event: {events}");
     assert_eq!(mismatches[0]["payload"]["declared_client"], "cursor");
     assert_eq!(mismatches[0]["payload"]["observed_client"], "claude-code");
+    // The payload names the log kind so audit consumers can discount
+    // legitimate cases (driver verification logs on routed items).
+    assert_eq!(mismatches[0]["payload"]["log_kind"], "completion");
+
+    // Human event output is greppable: one event per line with type and
+    // compact payload, not a bare count.
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "event", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("client_mismatch_observed"))
+        .stdout(predicate::str::contains(
+            "\"observed_client\":\"claude-code\"",
+        ));
+
+    // Human trace drops the legacy identity-derived client bracket when
+    // the run carries an observed host.
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "trace", "item", &item])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("on claude-code"))
+        .stdout(predicate::str::contains("[human]").not());
 
     // Matching host: no new event. (CURSOR_AGENT is scrubbed by the
     // helper, so set it explicitly.)

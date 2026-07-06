@@ -80,10 +80,17 @@ impl App {
                 None => out.push_str("\n  routing declared: none (no route resolves)"),
             }
             for run in routing["runs"].as_array().into_iter().flatten() {
+                // The observed host supersedes the legacy identity-derived
+                // client bracket; showing both read contradictory
+                // ("[human] ... on cursor").
+                let legacy_client = match run["observed_client"].as_str() {
+                    Some(_) => String::new(),
+                    None => format!("[{}] ", run["client"].as_str().unwrap_or_default()),
+                };
                 out.push_str(&format!(
-                    "\n  run {} [{}] profile {}{}{}",
+                    "\n  run {} {}profile {}{}{}",
                     run["id"].as_str().unwrap_or_default(),
-                    run["client"].as_str().unwrap_or_default(),
+                    legacy_client,
                     run["profile"].as_str().unwrap_or("-"),
                     run["observed_client"]
                         .as_str()
@@ -217,10 +224,20 @@ impl App {
         match command {
             EventCommand::List(args) => {
                 let events = self.list_events(args.item.as_deref(), args.limit)?;
-                self.emit(
-                    json!({"events": events}),
-                    format!("{} event(s)", events.len()),
-                )
+                // One event per line so shell pipelines can grep for
+                // event types; the payload is compacted, not swallowed.
+                let mut human = format!("{} event(s)", events.len());
+                for event in &events {
+                    let payload = serde_json::to_string(&event["payload"]).unwrap_or_default();
+                    human.push_str(&format!(
+                        "\n{} {} {} {}",
+                        event["timestamp"].as_str().unwrap_or("-"),
+                        event["event_type"].as_str().unwrap_or("-"),
+                        event["item_id"].as_str().unwrap_or("-"),
+                        payload,
+                    ));
+                }
+                self.emit(json!({"events": events}), human)
             }
         }
     }
