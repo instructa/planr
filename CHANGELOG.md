@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-07-06
+
+Per-task model routing becomes a declared contract instead of prose, and Cursor becomes a first-class client — one command installs everything the plugin would carry. The whole feature set was hardened through three live dogfood runs (a real web app built end to end through the routed pool) plus an independent GPT-5.5 review before this stable release. Includes everything previewed in 1.2.0-alpha.1.
+
 ### Added
 
 - `planr pick --peek` (MCP `planr_pick_item` with `"peek": true`): the full work packet for the next pickable item — routing block included — without writing a lease, heartbeat, or pick event. Dispatching drivers read, dispatch, and leave the lease to the worker's own identity; the third dogfood run needed a pick → `pick release --force` → re-pick dance per item for this, three calls that are now one.
@@ -13,20 +17,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `planr item cancel --reason`: the why travels in a new `item_cancelled` graph event (recorded on every confirmed cancel), so cancellations are auditable instead of living only in chat history (dogfood run 3).
 - `planr agents routing`: discoverability alias for `planr prompt routing` — the place people guess the dispatch block lives.
 - `agents check` warns (advisory, exit unchanged) when a profile pins a skill with no `SKILL.md` under the project or home skill directories (`.cursor`/`.claude`/`.agents`/`.codex`); the third dogfood run shipped a worker silently missing its pinned skill.
-
-### Changed
-
-- `planr event list` human output lists one event per line (timestamp, type, item, compact payload) instead of a bare count — grep pipelines over events work now; `--json` is unchanged.
-- `route_mismatch_observed` and `client_mismatch_observed` payloads carry the originating `log_kind`, so audit consumers can discount the legitimate case of a driver adding a verification log to a routed item.
-- `trace item` drops the legacy identity-derived client bracket on runs that carry an observed host (`run ... [human] profile x on cursor` read contradictory).
-- MODEL_ROUTING documents the verification-log mismatch case and the exact-host-slug rule for single-host pools; CLI_REFERENCE documents the `--cmd` flag → `commands` JSON field mapping; the planr-work skill requires verification log commands to be copy-paste replayable.
-
-## [1.2.0-alpha.1] - 2026-07-05
-
-Two threads: per-task model routing becomes a declared contract instead of prose, and Cursor becomes a first-class client — one command installs everything the plugin would carry, and the docs cover Cursor's native multitasking (subagents, parallel dispatch, worktrees).
-
-### Added
-
 - Agent profile registry: `.planr/agents.toml` declares named profiles (host client, model, effort, cost tier, capabilities) and advisory routes from work selectors to profiles with fallback chains — "code goes to codex/gpt-5.5 xhigh, falls back to cursor/fable-5; review stays on the driver tier" is one declared file instead of hand-maintained prose in three host dialects. Planr never dispatches models; hosts stay the authority.
 - `planr pick --json` now carries a `routing` block (profile, client, model, effort, cost tier, fallbacks, matched selector) resolved per item with precedence `work_type` > `plan` > default route, so a driver dispatches the right worker model from the pick packet alone — including the fallback order when the primary hits a rate limit. Omitted entirely when no registry resolves; deleting the registry restores pre-feature packets byte-identically.
 - `planr agents list` and `planr agents check`: registry inspection with advisory warnings (unknown profile references, empty or duplicate selectors, review work routed to a budget tier, secret-like values). `check` exits non-zero only on parse failure — a missing registry is a state, not an error, and a malformed one degrades picking to no-routing instead of blocking it.
@@ -67,12 +57,20 @@ Two threads: per-task model routing becomes a declared contract instead of prose
 
 ### Changed
 
+- `planr event list` human output lists one event per line (timestamp, type, item, compact payload) instead of a bare count — grep pipelines over events work now; `--json` is unchanged.
+- `route_mismatch_observed` and `client_mismatch_observed` payloads carry the originating `log_kind`, so audit consumers can discount the legitimate case of a driver adding a verification log to a routed item.
+- `trace item` drops the legacy identity-derived client bracket on runs that carry an observed host (`run ... [human] profile x on cursor` read contradictory).
+- MODEL_ROUTING documents the verification-log mismatch case and the exact-host-slug rule for single-host pools; CLI_REFERENCE documents the `--cmd` flag → `commands` JSON field mapping; the planr-work skill requires verification log commands to be copy-paste replayable.
 - Route-aware tagging without user involvement: `planr item update` gains `--work-type`, and the planning skills (planr-plan, planr-task-graph, planr-goal) now instruct agents to read the registry's route selectors (`agents list --json`) after `map build` and retag items to the matching use case (`frontend`, `backend`, ...) themselves — a human never has to know work types exist for routing to bind.
 - The worker and loop skills are routing-aware: `planr-work` instructs workers to report the profile they actually ran on (`--profile`/`PLANR_PROFILE`) as part of the evidence, and `planr-loop` instructs drivers to dispatch on the pick packet's `routing` block and walk the `fallbacks` chain on rate limits.
 - `docs/MODEL_ROUTING.md` describes the shipped end state (quick start via `agents init`, overrides, rendering, prompt routing, run audit) and adds a five-host matrix (Cursor, Claude Code, Codex CLI, opencode, Pi) with each host's native mechanism and its silent-override traps. `docs/GOALS.md` Cost Tiering is corrected to July 2026 host behavior: the Codex spawn regressions (#26868/#26363) are fixed in v0.138+ and replaced by the live `fork_turns` and session-start registry-staleness traps (#26408); the Claude section covers v2.1.196 `inherit` semantics, the signal-free `CLAUDE_CODE_SUBAGENT_MODEL` clamp (#57718), and silent `availableModels` fallbacks; Cursor's admin/plan/Max-Mode override path is a named trap.
 - Shared surface mutations (approval request/approve/deny, context create, log add, artifact add, item close) now live once in `src/app/application.rs`; CLI, MCP, and HTTP call the same helpers, so MCP evidence logs now record runs and refresh the pick heartbeat exactly like CLI logs.
 - Item status, work type, link kind, and approval status are typed enums in `src/model.rs`; invalid vocabulary is rejected at the boundary instead of stored as strings (`link remove --type` now errors on unknown kinds).
 - Toolchain: edition 2024 and MSRV 1.85 (was 1.80), with an explicit clippy lint policy in `Cargo.toml`.
+
+## [1.2.0-alpha.1] - 2026-07-05
+
+Preview release of 1.2.0. All changes are listed under [1.2.0] above; this tag shipped the routing feature set before the third dogfood run's findings landed.
 
 ## [1.1.19] - 2026-06-11
 
@@ -364,7 +362,8 @@ Initial Planr product release.
 - Tag-driven release pipeline with multi-target builds (darwin/linux, arm64/x86_64) and Homebrew tap automation.
 - Skill workflow documentation for Codex, Claude Code, Cursor, and MCP-only clients.
 
-[Unreleased]: https://github.com/instructa/planr/compare/v1.2.0-alpha.1...HEAD
+[Unreleased]: https://github.com/instructa/planr/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/instructa/planr/compare/v1.2.0-alpha.1...v1.2.0
 [1.2.0-alpha.1]: https://github.com/instructa/planr/compare/v1.1.19...v1.2.0-alpha.1
 [1.1.16]: https://github.com/instructa/planr/compare/v1.1.15...v1.1.16
 [1.1.15]: https://github.com/instructa/planr/compare/v1.1.14...v1.1.15
