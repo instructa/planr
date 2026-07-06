@@ -68,6 +68,8 @@ pub(crate) enum AgentsCommand {
     Check,
     /// Write a commented starter registry with cost-tiering defaults.
     Init(AgentsInitArgs),
+    /// The driver dispatch block (alias for `planr prompt routing`).
+    Routing(PromptPrintArgs),
 }
 
 #[derive(Args, Debug)]
@@ -377,6 +379,9 @@ pub(crate) struct ItemCancelArgs {
     pub(crate) preview: bool,
     #[arg(long)]
     pub(crate) confirm: bool,
+    /// Why the item is cancelled; recorded on the item_cancelled event.
+    #[arg(long)]
+    pub(crate) reason: Option<String>,
 }
 
 #[derive(Args, Debug)]

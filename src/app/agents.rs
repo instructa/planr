@@ -34,7 +34,8 @@ impl App {
                     bail!("agent registry parse failed: {error}")
                 }
                 RegistryLoad::Loaded(registry) => {
-                    let warnings = validation_warnings(&registry);
+                    let mut warnings = validation_warnings(&registry);
+                    warnings.extend(self.skill_existence_warnings(&registry));
                     let human = if warnings.is_empty() {
                         "agent registry check passed".to_string()
                     } else {
@@ -49,6 +50,9 @@ impl App {
                 }
             },
             AgentsCommand::Init(args) => self.agents_init(args),
+            // Discoverability alias: `agents routing` is where people
+            // guess the dispatch block lives (dogfood finding F6).
+            AgentsCommand::Routing(args) => self.prompt_routing(args.client),
         }
     }
 
@@ -106,6 +110,41 @@ impl App {
                 (json!({"registry": registry, "warnings": warnings}), human)
             }
         })
+    }
+
+    /// Advisory check that pinned profile skills actually exist
+    /// somewhere a host could load them (project and home skill
+    /// directories). Skills stay passthrough vocabulary (ADR-102) — a
+    /// missing one is a warning, never an error: the dogfood run showed
+    /// a worker silently operating without its pinned skill.
+    fn skill_existence_warnings(&self, registry: &AgentRegistry) -> Vec<String> {
+        let home = std::env::var("HOME").map(std::path::PathBuf::from).ok();
+        let mut roots = vec![self.root.clone()];
+        if let Some(home) = home {
+            roots.push(home);
+        }
+        let dirs = [
+            ".cursor/skills",
+            ".claude/skills",
+            ".agents/skills",
+            ".codex/skills",
+        ];
+        let mut warnings = Vec::new();
+        for (id, profile) in &registry.profiles {
+            let Some(skill) = profile.skill.as_deref() else {
+                continue;
+            };
+            let found = roots.iter().any(|root| {
+                dirs.iter()
+                    .any(|dir| root.join(dir).join(skill).join("SKILL.md").exists())
+            });
+            if !found {
+                warnings.push(format!(
+                    "profile `{id}` pins skill `{skill}` but no SKILL.md was found under the project or home skill directories (.cursor/.claude/.agents/.codex); workers will run without it"
+                ));
+            }
+        }
+        warnings
     }
 
     /// The advisory routing block for a pick packet, or None when no

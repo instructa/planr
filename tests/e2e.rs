@@ -2179,6 +2179,14 @@ fn agents_init_flag_specs_generate_a_pool_and_fail_closed() {
     assert!(!dir.path().join(".planr/agents.toml").exists());
 
     // QA-1: a full pool spec generates a zero-warning registry that routes.
+    // The pinned skill exists in the project so the (separate) skill-
+    // existence advisory stays out of this structural zero-warning check.
+    fs::create_dir_all(dir.path().join(".cursor/skills/frontend-design")).unwrap();
+    fs::write(
+        dir.path().join(".cursor/skills/frontend-design/SKILL.md"),
+        "---\nname: frontend-design\n---\n",
+    )
+    .unwrap();
     planr()
         .current_dir(dir.path())
         .args([
@@ -2203,6 +2211,7 @@ fn agents_init_flag_specs_generate_a_pool_and_fail_closed() {
         .success();
     let output = planr()
         .current_dir(dir.path())
+        .env("HOME", dir.path())
         .args(["--db", &db_arg, "--json", "agents", "check"])
         .assert()
         .success()
@@ -2560,6 +2569,110 @@ fn parallel_first_picks_finish_within_the_watchdog() {
             );
         }
     }
+}
+
+#[test]
+fn cancel_reasons_routing_alias_and_skill_existence_warning() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    let db_arg = db.to_str().unwrap().to_string();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "project", "init", "Polish"])
+        .assert()
+        .success();
+
+    // Cancel with --reason records an item_cancelled event carrying it.
+    let item = create_test_item(dir.path(), &db, "Doomed", "will be cancelled");
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "item",
+            "cancel",
+            &item,
+            "--confirm",
+            "--reason",
+            "superseded by a better slice",
+        ])
+        .assert()
+        .success();
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "--json", "event", "list"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let events: Value = serde_json::from_slice(&output).unwrap();
+    let cancelled = events["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["event_type"] == "item_cancelled")
+        .expect("cancel must record an event");
+    assert_eq!(
+        cancelled["payload"]["reason"],
+        "superseded by a better slice"
+    );
+
+    // A registry pinning a nonexistent skill draws exactly one advisory
+    // warning; check still exits 0. HOME is pinned to the tempdir so a
+    // developer's real skill collection cannot leak in.
+    fs::write(
+        dir.path().join(".planr/agents.toml"),
+        "[profiles.designer]\nclient = \"cursor\"\nmodel = \"opus\"\nskill = \"definitely-missing-skill\"\n\n[route_default]\nprofile = \"designer\"\n",
+    )
+    .unwrap();
+    let output = planr()
+        .current_dir(dir.path())
+        .env("HOME", dir.path())
+        .args(["--db", &db_arg, "--json", "agents", "check"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let check: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(check["ok"], true);
+    let warnings = check["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "one skill warning expected: {check}");
+    assert!(
+        warnings[0]
+            .as_str()
+            .unwrap()
+            .contains("definitely-missing-skill")
+    );
+
+    // Creating the skill in a project skill directory clears the warning.
+    fs::create_dir_all(dir.path().join(".cursor/skills/definitely-missing-skill")).unwrap();
+    fs::write(
+        dir.path()
+            .join(".cursor/skills/definitely-missing-skill/SKILL.md"),
+        "---\nname: definitely-missing-skill\n---\n",
+    )
+    .unwrap();
+    let output = planr()
+        .current_dir(dir.path())
+        .env("HOME", dir.path())
+        .args(["--db", &db_arg, "--json", "agents", "check"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let check: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(check["warnings"].as_array().unwrap().len(), 0);
+
+    // `agents routing` resolves as an alias for `prompt routing`.
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "agents", "routing"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("## Model routing"));
 }
 
 #[test]
@@ -7862,7 +7975,7 @@ fn rust_implementation_has_owned_module_boundaries() {
         ("src/cli.rs", 950usize),
         ("src/app/mod.rs", 180),
         ("src/app/audit.rs", 200),
-        ("src/app/commands.rs", 1_020),
+        ("src/app/commands.rs", 1_040),
         ("src/app/flow.rs", 320),
         ("src/app/git_review.rs", 350),
         ("src/app/mcp.rs", 900),
@@ -7882,7 +7995,7 @@ fn rust_implementation_has_owned_module_boundaries() {
         ("src/planpack.rs", 320),
         ("src/integrations.rs", 500),
         ("src/agents.rs", 800),
-        ("src/app/agents.rs", 850),
+        ("src/app/agents.rs", 950),
         ("src/app/agents_init.rs", 800),
         ("src/rolefiles.rs", 400),
     ] {

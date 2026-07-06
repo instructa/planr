@@ -436,6 +436,13 @@ impl App {
                 }
                 self.conn.execute("UPDATE items SET status = 'cancelled', updated_at = datetime('now') WHERE id = ?1", params![args.id])?;
                 self.promote_ready()?;
+                // Cancellations are graph mutations like any other: the
+                // event carries the reason so it outlives chat history.
+                self.record_event(
+                    "item_cancelled",
+                    Some(&args.id),
+                    json!({"reason": args.reason}),
+                )?;
                 self.emit(
                     json!({"cancelled": args.id, "item": self.get_item(&args.id)?}),
                     "item cancelled".to_string(),
