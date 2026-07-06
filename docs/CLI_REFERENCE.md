@@ -27,6 +27,7 @@ planr item insert "title" --description "..." --after <item-id> [--before <item-
 planr item amend <item-id> --note "..." [--tag amendment]
 planr item replan <parent-id> --into "A, B, C" [--preview|--confirm]
 planr item update <item-id> [--title "..."] [--description "..."] [--work-type <type>]
+# plan task lists can declare work types inline: `### TASK-001 (backend): ...` / `- [ ] (frontend) ...` seed map build directly
 planr item route <item-id> [--set <profile>|--clear]
 planr link add <from-item> <to-item> --type blocks
 planr pick [--work-type <type>] [--plan <plan-id>] [--peek]

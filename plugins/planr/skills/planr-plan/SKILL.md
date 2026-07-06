@@ -53,15 +53,16 @@ A build plan must include:
 
 ## Route-Aware Tagging
 
-Before `map build`, check whether the project declares model routing: `planr agents list --json`. If routes exist, their `work_type` selectors are the project's use-case vocabulary (e.g. `frontend`, `backend`, `design`) — and tagging is your job, not the user's; never ask a human to name work types. `map build` seeds every item as `code`, so after building the map, retag each item whose work matches a declared route:
+Before writing the task list, check whether the project declares model routing: `planr agents list --json`. If routes exist, their `work_type` selectors are the project's use-case vocabulary (e.g. `frontend`, `backend`, `design`) — and tagging is your job, not the user's; never ask a human to name work types.
 
-```bash
-planr agents list --json          # route selectors = the use-case vocabulary
-planr map build --from <build-plan-id>
-planr item update <item-id> --work-type frontend   # per item that matches a route
+Declare the use case in the task list itself — `map build` seeds annotated tasks with that work type directly:
+
+```markdown
+### TASK-001 (backend): REST API for todos
+- [ ] (frontend) Build the form and list view
 ```
 
-Match by the item's actual work (UI/components/styling -> a `frontend` route, API/server/storage -> `backend`, and so on). Items matching no route keep `code` — the default route covers them. The payoff: every pick packet then carries the right profile, model, and paired skill for its use case, so dispatch needs no human routing knowledge.
+Match by the task's actual work (UI/components/styling -> a `frontend` route, API/server/storage -> `backend`, and so on); unannotated tasks stay `code`, which the default route covers. For maps that were already built without annotations, retag instead: `planr item update <item-id> --work-type frontend`. The payoff: every pick packet then carries the right profile, model, and paired skill for its use case, so dispatch needs no human routing knowledge.
 
 ## Done
 

@@ -42,7 +42,7 @@ Before `map build`, expand the plan's task list: the scaffold ships a single pla
 planr link add <earlier-item> <later-item> --type blocks
 ```
 
-If `planr agents list --json` shows routes with use-case `work_type` selectors (e.g. `frontend`, `backend`), retag the built items to match their work (`planr item update <id> --work-type frontend`) so every pick packet carries the declared profile and paired skill — this is prep-agent work, never a question for the user.
+If `planr agents list --json` shows routes with use-case `work_type` selectors (e.g. `frontend`, `backend`), declare them in the plan's task list before building — `### TASK-00n (backend): ...` headings and `- [ ] (frontend) ...` items seed with that work type directly. For maps already built without annotations, retag (`planr item update <id> --work-type frontend`). Either way this is prep-agent work, never a question for the user.
 
 ## Store The Goal Contract
 

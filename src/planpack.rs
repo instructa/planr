@@ -215,14 +215,25 @@ pub fn scaffold_placeholder_state(path: &Path) -> Result<Option<&'static str>> {
     let specs = extract_work_specs(path)?;
     Ok(match specs.as_slice() {
         [] => Some("the task list has no work specs"),
-        [(title, _)] if title == "Build first slice" || title.starts_with("Implement ") => {
+        [spec] if spec.title == "Build first slice" || spec.title.starts_with("Implement ") => {
             Some("the task list still contains only the scaffold placeholder")
         }
         _ => None,
     })
 }
 
-pub fn extract_work_specs(path: &Path) -> Result<Vec<(String, String)>> {
+/// One task from a plan's work list. `work_type` comes from an optional
+/// annotation — `### TASK-001 (frontend): ...` or `- [ ] (frontend) ...`
+/// — so plans can declare the use case where the task is written and
+/// `map build` seeds routed items directly (no post-build retag).
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorkSpec {
+    pub title: String,
+    pub description: String,
+    pub work_type: Option<String>,
+}
+
+pub fn extract_work_specs(path: &Path) -> Result<Vec<WorkSpec>> {
     let mut specs = Vec::new();
     if path.is_dir() {
         let task_file = path.join("TASKS.md");
@@ -235,16 +246,17 @@ pub fn extract_work_specs(path: &Path) -> Result<Vec<(String, String)>> {
     Ok(specs)
 }
 
-fn extract_specs_from_text(text: &str) -> Vec<(String, String)> {
+fn extract_specs_from_text(text: &str) -> Vec<WorkSpec> {
     let mut specs = Vec::new();
     let lines: Vec<_> = text.lines().collect();
     for (idx, line) in lines.iter().enumerate() {
-        if let Some(title) = line.strip_prefix("### ") {
-            let title = title
-                .split_once(':')
-                .map(|(_, rest)| rest.trim())
-                .unwrap_or(title)
-                .trim();
+        if let Some(heading) = line.strip_prefix("### ") {
+            // `### TASK-001 (frontend): Title` — the annotation lives in
+            // the pre-colon part so the title stays clean.
+            let (prefix, title) = match heading.split_once(':') {
+                Some((prefix, rest)) => (prefix, rest.trim()),
+                None => ("", heading.trim()),
+            };
             let desc = lines
                 .iter()
                 .skip(idx + 1)
@@ -252,15 +264,50 @@ fn extract_specs_from_text(text: &str) -> Vec<(String, String)> {
                 .copied()
                 .collect::<Vec<_>>()
                 .join("\n");
-            specs.push((title.to_string(), desc.trim().to_string()));
-        } else if let Some(title) = line.trim().strip_prefix("- [ ] ") {
-            specs.push((
-                title.trim().to_string(),
-                format!("Complete checklist item: {}", title.trim()),
-            ));
+            specs.push(WorkSpec {
+                title: title.to_string(),
+                description: desc.trim().to_string(),
+                work_type: annotation(prefix),
+            });
+        } else if let Some(rest) = line.trim().strip_prefix("- [ ] ") {
+            let (work_type, title) = match leading_annotation(rest.trim()) {
+                Some((work_type, title)) => (Some(work_type), title),
+                None => (None, rest.trim().to_string()),
+            };
+            specs.push(WorkSpec {
+                description: format!("Complete checklist item: {title}"),
+                title,
+                work_type,
+            });
         }
     }
     specs
+}
+
+/// A `(work-type)` token anywhere in a task-heading prefix. Single
+/// identifier-like tokens only, so prose parentheticals never match.
+fn annotation(prefix: &str) -> Option<String> {
+    let start = prefix.find('(')?;
+    let end = prefix[start..].find(')')? + start;
+    work_type_token(&prefix[start + 1..end])
+}
+
+/// `(work-type) rest of title` at the start of a checklist item.
+fn leading_annotation(text: &str) -> Option<(String, String)> {
+    let rest = text.strip_prefix('(')?;
+    let (token, title) = rest.split_once(')')?;
+    let work_type = work_type_token(token)?;
+    let title = title.trim();
+    (!title.is_empty()).then(|| (work_type, title.to_string()))
+}
+
+fn work_type_token(token: &str) -> Option<String> {
+    let token = token.trim();
+    let valid = !token.is_empty()
+        && token
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    valid.then(|| token.to_string())
 }
 
 fn now_string() -> String {

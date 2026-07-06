@@ -2676,6 +2676,120 @@ fn cancel_reasons_routing_alias_and_skill_existence_warning() {
 }
 
 #[test]
+fn plan_work_type_annotations_seed_routed_items_without_retags() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    let db_arg = db.to_str().unwrap().to_string();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "project", "init", "Annotated"])
+        .assert()
+        .success();
+    fs::write(
+        dir.path().join(".planr/agents.toml"),
+        "[profiles.frontender]\nclient = \"cursor\"\nmodel = \"opus\"\n\n[profiles.backender]\nclient = \"cursor\"\nmodel = \"gpt-5.5-high\"\n\n[[routes]]\nmatch = { work_type = \"frontend\" }\nprofile = \"frontender\"\n\n[[routes]]\nmatch = { work_type = \"backend\" }\nprofile = \"backender\"\n",
+    )
+    .unwrap();
+    // A build plan whose task list carries annotations: heading style,
+    // checklist style, prose parenthetical (must NOT annotate), and an
+    // unannotated line (stays code).
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "--json", "plan", "new", "Annotated"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let created: Value = serde_json::from_slice(&output).unwrap();
+    let product_id = created["plan"]["id"].as_str().unwrap().to_string();
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "--json",
+            "plan",
+            "split",
+            &product_id,
+            "--slice",
+            "v1",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let split: Value = serde_json::from_slice(&output).unwrap();
+    let plan_id = split["plan"]["id"].as_str().unwrap().to_string();
+    let plan_path = split["plan"]["path"].as_str().unwrap().to_string();
+    let content = fs::read_to_string(&plan_path).unwrap();
+    let tasks = "### TASK-001 (backend): REST API\n\nbuild the api\n\n### TASK-002: Wire everything\n\n- [ ] (frontend) Build the form\n- [ ] Ship docs (see appendix A) tomorrow\n\n";
+    let start = content.find("## Phase 1").unwrap();
+    let end = content.find("## Out Of Scope").unwrap();
+    fs::write(
+        &plan_path,
+        format!("{}{}{}", &content[..start], tasks, &content[end..]),
+    )
+    .unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "map", "build", "--from", &plan_id])
+        .assert()
+        .success();
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "--json", "map", "show"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let map: Value = serde_json::from_slice(&output).unwrap();
+    let work_type = |title: &str| {
+        map["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["title"] == title)
+            .unwrap_or_else(|| panic!("item `{title}` missing: {map}"))["work_type"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(work_type("REST API"), "backend");
+    assert_eq!(work_type("Wire everything"), "code");
+    assert_eq!(work_type("Build the form"), "frontend");
+    assert_eq!(
+        work_type("Ship docs (see appendix A) tomorrow"),
+        "code",
+        "prose parentheticals must not annotate"
+    );
+
+    // Routing binds with zero retags: the annotated backend item resolves.
+    let api_id = map["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["title"] == "REST API")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "--json", "item", "route", &api_id])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let route: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(route["routing"]["profile"], "backender");
+    assert_eq!(route["routing"]["matched_selector"], "work_type=backend");
+}
+
+#[test]
 fn pick_peek_reads_the_packet_without_leasing() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");

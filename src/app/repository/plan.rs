@@ -87,25 +87,34 @@ impl App {
     pub(crate) fn seed_items_from_plan(&self, plan: &Plan) -> Result<Vec<Item>> {
         let mut specs = extract_work_specs(Path::new(&plan.path))?;
         if specs.is_empty() {
-            specs.push((
-                format!("Implement {}", plan.title),
-                format!("Execute build plan {}", plan.id),
-            ));
+            specs.push(crate::planpack::WorkSpec {
+                title: format!("Implement {}", plan.title),
+                description: format!("Execute build plan {}", plan.id),
+                work_type: None,
+            });
         }
         let mut created = Vec::new();
-        for (title, description) in specs {
+        for spec in specs {
             let already_seeded: i64 = self.conn.query_row(
                 "SELECT COUNT(*) FROM source_links sl JOIN items i ON i.id = sl.item_id
                  WHERE sl.source_type = 'plan' AND sl.source_id = ?1
                  AND sl.relationship = 'implements' AND i.title = ?2
                  AND i.status != 'cancelled'",
-                params![plan.id, title],
+                params![plan.id, spec.title],
                 |row| row.get(0),
             )?;
             if already_seeded > 0 {
                 continue;
             }
-            let item = self.create_item(None, &title, &description, "code", Some(&plan.path))?;
+            // Annotated tasks seed their declared use case so routing
+            // binds at map build; unannotated tasks keep `code`.
+            let item = self.create_item(
+                None,
+                &spec.title,
+                &spec.description,
+                spec.work_type.as_deref().unwrap_or("code"),
+                Some(&plan.path),
+            )?;
             self.conn.execute(
                 "INSERT INTO source_links(source_type, source_id, item_id, section_id, relationship) VALUES ('plan', ?1, ?2, NULL, 'implements')",
                 params![plan.id, item.id],
