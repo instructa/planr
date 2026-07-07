@@ -11,12 +11,17 @@ use anyhow::Result;
 use serde_json::{Value, json};
 use std::fs;
 
-const PRIME_COMMAND: &str = "planr prime 2>/dev/null || true";
+const PRIME_COMMAND_CODEX: &str = "planr prime 2>/dev/null || true";
+const PRIME_COMMAND_CURSOR: &str = "planr prime --cursor-json 2>/dev/null || true";
 const PRIME_COMMAND_CLAUDE: &str = "planr prime --hook-json 2>/dev/null || true";
 const GUARD_RELATIVE: &str = ".cursor/hooks/planr-evidence-guard.sh";
 
-/// Advisory stop-time guard: reminds an ending subagent about held
-/// picks that have no completion log yet. Silent otherwise; fails open.
+/// Advisory stop-time guard: reminds an ending subagent about held picks
+/// that have no completion log yet. Scoped to the current worker
+/// identity when one is set — on shared boards a global "you still owe
+/// evidence" message could steer the wrong agent, so without an explicit
+/// identity the guard stays silent rather than misleading. JSON is built
+/// by jq, never by string interpolation.
 const EVIDENCE_GUARD: &str = r#"#!/bin/bash
 # planr evidence guard (advisory): a subagent that stops while holding a
 # pick without a completion log gets one follow-up reminder. Never
@@ -24,15 +29,17 @@ const EVIDENCE_GUARD: &str = r#"#!/bin/bash
 set -u
 command -v planr >/dev/null 2>&1 || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
-held=$(planr --json map show 2>/dev/null | jq -r '
-  [.items[]? | select(.status == "picked" or .status == "running")] | .[0].id // empty
+worker="${PLANR_WORKER_ID:-${PLANR_SESSION_ID:-}}"
+[ -z "$worker" ] && exit 0
+held=$(planr --json map show 2>/dev/null | jq -r --arg w "$worker" '
+  [.items[]? | select((.status == "picked" or .status == "running") and .worker_id == $w)] | .[0].id // empty
 ' 2>/dev/null)
 [ -z "$held" ] && exit 0
 logs=$(planr --json log list --item "$held" 2>/dev/null | jq -r '
   [.logs[]? | select(.kind == "completion")] | length
 ' 2>/dev/null)
 if [ "${logs:-0}" = "0" ]; then
-  printf '{"followup_message": "planr: %s is still picked with no completion log. Log evidence (planr done %s --summary ... --cmd ...) or release it (planr pick release %s)."}\n' "$held" "$held" "$held"
+  jq -nc --arg held "$held" '{followup_message: ("planr: " + $held + " is still picked with no completion log. Log evidence (planr done " + $held + " --summary ... --cmd ...) or release it (planr pick release " + $held + ").")}'
 fi
 exit 0
 "#;
@@ -65,6 +72,9 @@ impl App {
                     }
                     result.written.push(GUARD_RELATIVE.to_string());
                 }
+                // sessionStart is the one Cursor event that injects
+                // context from hook output; preCompact cannot restore
+                // model context, so it is deliberately not wired.
                 self.merge_hook_file(
                     ".cursor/hooks.json",
                     json!({"version": 1, "hooks": {}}),
@@ -73,12 +83,7 @@ impl App {
                         (
                             "sessionStart",
                             "planr prime",
-                            json!({"command": PRIME_COMMAND, "timeout": 10}),
-                        ),
-                        (
-                            "preCompact",
-                            "planr prime",
-                            json!({"command": PRIME_COMMAND, "timeout": 10}),
+                            json!({"command": PRIME_COMMAND_CURSOR, "timeout": 10}),
                         ),
                         (
                             "subagentStop",
@@ -90,47 +95,39 @@ impl App {
                 )?;
             }
             "claude" => {
+                // SessionStart's `compact` source fires after
+                // compaction, so one matcher group covers session start,
+                // resume, and post-compaction refresh; PreCompact cannot
+                // inject context and its envelope differs, so it is
+                // deliberately not wired.
                 self.merge_hook_file(
                     ".claude/settings.json",
                     json!({}),
                     Some("hooks"),
-                    &[
-                        (
-                            "SessionStart",
-                            "planr prime",
-                            json!({
-                                "matcher": "startup|resume|compact",
-                                "hooks": [{"type": "command", "command": PRIME_COMMAND_CLAUDE, "timeout": 10}],
-                            }),
-                        ),
-                        (
-                            "PreCompact",
-                            "planr prime",
-                            json!({
-                                "hooks": [{"type": "command", "command": PRIME_COMMAND_CLAUDE, "timeout": 10}],
-                            }),
-                        ),
-                    ],
+                    &[(
+                        "SessionStart",
+                        "planr prime",
+                        json!({
+                            "matcher": "startup|resume|compact",
+                            "hooks": [{"type": "command", "command": PRIME_COMMAND_CLAUDE, "timeout": 10}],
+                        }),
+                    )],
                     &mut result,
                 )?;
             }
             "codex" => {
+                // SessionStart covers fresh and post-compaction session
+                // starts; PostCompact ignores stdout for context, so it
+                // is deliberately not wired.
                 self.merge_hook_file(
                     ".codex/hooks.json",
                     json!({}),
                     None,
-                    &[
-                        (
-                            "SessionStart",
-                            "planr prime",
-                            json!({"hooks": [{"type": "command", "command": PRIME_COMMAND, "timeout": 10}]}),
-                        ),
-                        (
-                            "PostCompact",
-                            "planr prime",
-                            json!({"hooks": [{"type": "command", "command": PRIME_COMMAND, "timeout": 10}]}),
-                        ),
-                    ],
+                    &[(
+                        "SessionStart",
+                        "planr prime",
+                        json!({"hooks": [{"type": "command", "command": PRIME_COMMAND_CODEX, "timeout": 10}]}),
+                    )],
                     &mut result,
                 )?;
                 result.warnings.push(

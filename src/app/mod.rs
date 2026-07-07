@@ -110,7 +110,7 @@ impl App {
             Command::Note(args) => self.context(args.command),
             Command::Search(args) => self.search(args),
             Command::Doctor(args) => self.doctor(args),
-            Command::Prime(args) => self.prime(args.hook_json),
+            Command::Prime(args) => self.prime(args.envelope()),
             Command::Install(args) => self.install(args.command),
             Command::Prompt(args) => self.prompt(args.command),
             Command::Mcp => self.mcp(),

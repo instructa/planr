@@ -6,14 +6,16 @@
 
 | Host | File | Events | Runs |
 | --- | --- | --- | --- |
-| Cursor | `.cursor/hooks.json` | `sessionStart`, `preCompact` | `planr prime` |
+| Cursor | `.cursor/hooks.json` | `sessionStart` | `planr prime --cursor-json` |
 | | | `subagentStop` | `.cursor/hooks/planr-evidence-guard.sh` |
-| Claude Code | `.claude/settings.json` | `SessionStart` (matcher `startup\|resume\|compact`), `PreCompact` | `planr prime --hook-json` |
-| Codex CLI | `.codex/hooks.json` | `SessionStart`, `PostCompact` | `planr prime` |
+| Claude Code | `.claude/settings.json` | `SessionStart` (matcher `startup\|resume\|compact`) | `planr prime --hook-json` |
+| Codex CLI | `.codex/hooks.json` | `SessionStart` | `planr prime` |
 
-`planr prime` prints one compact state block (project, map counts, your held items with log status, the goal contract, registry presence, and the next command) — well under ~1k tokens, deterministic, read-only. `--hook-json` wraps it in the Claude Code SessionStart envelope (`hookSpecificOutput.additionalContext`).
+`planr prime` prints one compact, bounded state block (project, map counts, your held items with log status, the goal contract, registry presence, and the next command) — deterministic and read-only. `--hook-json` wraps it in the Claude Code SessionStart envelope (`hookSpecificOutput.additionalContext`); `--cursor-json` emits Cursor's `additional_context` shape.
 
-The evidence guard is advisory: a Cursor subagent that stops while a pick has no completion log gets one follow-up message naming the item and the two ways out (`planr done ...` or `planr pick release ...`). It never blocks.
+Only session-start events are wired, deliberately: they are the one place all three hosts inject hook output as context, and Claude's `compact` source plus post-compaction session starts cover the compaction case. Pre/post-compaction events (`preCompact`, `PreCompact`, `PostCompact`) cannot restore model context and are not used.
+
+The evidence guard is advisory and identity-scoped: a Cursor subagent that stops while *its own* pick (matched via `PLANR_WORKER_ID`/`PLANR_SESSION_ID`) has no completion log gets one follow-up message naming the item and the two ways out (`planr done ...` or `planr pick release ...`). Without an explicit worker identity it stays silent rather than steering the wrong agent toward foreign items. It never blocks.
 
 ## Design rules
 

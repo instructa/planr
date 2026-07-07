@@ -2835,11 +2835,14 @@ fn install_writes_host_hooks_by_default_with_additive_merge() {
         "prime hooks must fail open"
     );
     assert!(
-        cursor_hooks["hooks"]["preCompact"][0]["command"]
+        session_start[1]["command"]
             .as_str()
             .unwrap()
-            .contains("planr prime")
+            .contains("--cursor-json"),
+        "cursor needs its context-injection envelope"
     );
+    // preCompact cannot restore model context in Cursor: not wired.
+    assert!(cursor_hooks["hooks"].get("preCompact").is_none());
     assert!(
         cursor_hooks["hooks"]["subagentStop"][0]["command"]
             .as_str()
@@ -2900,6 +2903,9 @@ fn install_writes_host_hooks_by_default_with_additive_merge() {
             .unwrap()
             .contains("planr prime --hook-json")
     );
+    // SessionStart's `compact` source covers post-compaction refresh;
+    // PreCompact injects nothing and its envelope differs: not wired.
+    assert!(claude["hooks"].get("PreCompact").is_none());
 
     // Codex: hooks file + trust note; --no-hooks skips entirely.
     planr()
@@ -2908,7 +2914,17 @@ fn install_writes_host_hooks_by_default_with_additive_merge() {
         .assert()
         .success()
         .stdout(predicate::str::contains("run /hooks"));
-    assert!(dir.path().join(".codex/hooks.json").exists());
+    let codex: Value =
+        serde_json::from_str(&fs::read_to_string(dir.path().join(".codex/hooks.json")).unwrap())
+            .unwrap();
+    assert!(
+        codex["SessionStart"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("planr prime")
+    );
+    // PostCompact ignores stdout for context injection: not wired.
+    assert!(codex.get("PostCompact").is_none());
 
     let skipped = tempdir().unwrap();
     let skipped_db = skipped.path().join(".planr/planr.sqlite");
@@ -3006,29 +3022,43 @@ fn evidence_guard_reminds_about_unlogged_picks_and_stays_silent_otherwise() {
         bin_dir.display(),
         std::env::var("PATH").unwrap_or_default()
     );
-    let run_guard = |dir: &std::path::Path| {
-        let output = std::process::Command::new("bash")
+    let run_guard = |dir: &std::path::Path, worker: Option<&str>| {
+        let mut command = std::process::Command::new("bash");
+        command
             .arg(&guard)
             .current_dir(dir)
             .env("PATH", &path_env)
             .env("PLANR_DB", &db_arg)
-            .output()
-            .unwrap();
+            .env_remove("PLANR_WORKER_ID")
+            .env_remove("PLANR_SESSION_ID");
+        if let Some(worker) = worker {
+            command.env("PLANR_WORKER_ID", worker);
+        }
+        let output = command.output().unwrap();
         assert!(output.status.success(), "guard must always exit 0");
         String::from_utf8(output.stdout).unwrap()
     };
 
     // No picked items: silent.
-    assert!(run_guard(dir.path()).trim().is_empty());
+    assert!(run_guard(dir.path(), Some("guard-w1")).trim().is_empty());
 
-    // A picked item without a completion log: one advisory follow-up.
+    // A picked item without a completion log: one advisory follow-up —
+    // but only for the worker that owns it. Anonymous shells and other
+    // workers stay silent so nobody gets steered toward foreign items.
     let item = create_test_item(dir.path(), &db, "Unlogged work", "guard target");
     planr()
         .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "guard-w1")
         .args(["--db", &db_arg, "pick"])
         .assert()
         .success();
-    let reminder = run_guard(dir.path());
+    assert!(run_guard(dir.path(), None).trim().is_empty());
+    assert!(
+        run_guard(dir.path(), Some("someone-else"))
+            .trim()
+            .is_empty()
+    );
+    let reminder = run_guard(dir.path(), Some("guard-w1"));
     let message: Value = serde_json::from_str(&reminder).expect("guard emits valid JSON");
     assert!(
         message["followup_message"]
@@ -3052,7 +3082,7 @@ fn evidence_guard_reminds_about_unlogged_picks_and_stays_silent_otherwise() {
         ])
         .assert()
         .success();
-    assert!(run_guard(dir.path()).trim().is_empty());
+    assert!(run_guard(dir.path(), Some("guard-w1")).trim().is_empty());
 }
 
 #[test]
@@ -3089,6 +3119,12 @@ fn prime_emits_compact_state_and_stays_silent_without_a_db() {
         .args(["--db", &db_arg, "pick"])
         .assert()
         .success();
+    // Non-ASCII near the truncation boundary: prime must never panic
+    // (chars, not bytes).
+    let long_contract = format!(
+        "GOAL CONTRACT pln-x: DONE when everything is closed with evidence. {}",
+        "ü".repeat(400)
+    );
     planr()
         .current_dir(dir.path())
         .args([
@@ -3096,7 +3132,7 @@ fn prime_emits_compact_state_and_stays_silent_without_a_db() {
             &db_arg,
             "context",
             "add",
-            "GOAL CONTRACT pln-x: DONE when everything is closed with evidence.",
+            &long_contract,
             "--tag",
             "goal-contract",
         ])
@@ -3136,6 +3172,24 @@ fn prime_emits_compact_state_and_stays_silent_without_a_db() {
     );
     assert!(
         envelope["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap()
+            .contains("## planr state")
+    );
+
+    // Cursor envelope: additional_context for command-hook injection.
+    let output = planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "primer-1")
+        .args(["--db", &db_arg, "prime", "--cursor-json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let envelope: Value = serde_json::from_slice(&output).unwrap();
+    assert!(
+        envelope["additional_context"]
             .as_str()
             .unwrap()
             .contains("## planr state")
