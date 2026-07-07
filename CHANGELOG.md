@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Native host hooks, installed by default: `planr install codex|claude|cursor` now wires `planr prime` into the host's hook system — Cursor `.cursor/hooks.json` (`sessionStart`/`preCompact`), Claude Code `.claude/settings.json` (`SessionStart` with matcher `startup|resume|compact` + `PreCompact`, using the `--hook-json` envelope), Codex `.codex/hooks.json` (`SessionStart`/`PostCompact`, with the one-time `/hooks` trust note in the install output). Every new session and every context compaction gets map state injected automatically, so loop recovery becomes mechanism instead of discipline. `--no-hooks` opts out; existing hook files are merged additively (foreign entries preserved, planr entries never duplicated, unparseable files left untouched with a note); every hook command fails open (`|| true`, 10s timeout) so a missing or broken planr never blocks a session.
+- `planr prime [--hook-json]`: one compact, deterministic state block (project, map counts, held items with completion-log status, goal contract, registry presence, next command) in well under ~1k tokens. In a repo without a Planr database it exits silently and creates nothing. `--hook-json` emits the Claude Code SessionStart envelope.
+- Evidence guard (Cursor `subagentStop`): a subagent that stops while a pick has no completion log gets one advisory follow-up naming the item and the two ways out (`planr done` or `planr pick release`); silent otherwise, never blocking, shellcheck-clean.
+- docs/HOOKS.md: what gets installed per host, the fail-open and additive-merge rules, the Codex trust model, and how to remove the hooks.
+
 ## [1.2.0] - 2026-07-06
 
 Per-task model routing becomes a declared contract instead of prose, and Cursor becomes a first-class client — one command installs everything the plugin would carry. The whole feature set was hardened through three live dogfood runs (a real web app built end to end through the routed pool) plus an independent GPT-5.5 review before this stable release. Includes everything previewed in 1.2.0-alpha.1.

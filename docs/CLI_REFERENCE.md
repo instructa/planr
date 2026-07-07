@@ -30,6 +30,7 @@ planr item update <item-id> [--title "..."] [--description "..."] [--work-type <
 # plan task lists can declare work types inline: `### TASK-001 (backend): ...` / `- [ ] (frontend) ...` seed map build directly
 planr item route <item-id> [--set <profile>|--clear]
 planr link add <from-item> <to-item> --type blocks
+planr prime [--hook-json]
 planr pick [--work-type <type>] [--plan <plan-id>] [--peek]
 planr pick release <item-id> [--force]
 planr pick heartbeat [item-id]
@@ -65,7 +66,7 @@ planr agents init --profile|--skill|--route|--default-route|--interactive
 planr agents list [--json]
 planr agents check
 planr doctor [--client codex|claude|cursor|all]
-planr install codex|claude|cursor [--dry-run] [--no-mcp] [--force]
+planr install codex|claude|cursor [--dry-run] [--no-mcp] [--force] [--no-hooks]
 planr prompt cli|mcp|http [--client codex|claude|cursor|all]
 planr prompt routing [--client codex|claude|cursor|all]
 planr mcp
@@ -126,6 +127,8 @@ With `--json`, responses follow one convention so agents never guess where data 
 `doctor` also reports the agent registry in all states without ever failing: absent (informational hint), degraded (parse error with line context), or loaded with profile/route counts, validation warnings, and per-artifact drift — a rendered role file whose content no longer matches what the current registry would render is flagged `drifted` with a `planr install <client> --force` hint, while files without the generated-from header are the user's (`manual`) and never flagged.
 
 `done` is the compound worker command: it writes a completion log, then requests a review (`--review`) or closes the item, and optionally picks the next ready item (`--next`). Without `--next`, the response's `next` field carries the exact follow-up command instead (`planr pick --work-type review --json` after a review request, `planr pick --json` after a close), so every settlement output ends in an action. It chains the same single-owner operations as `log add`, `review request`, `close`, and `pick` — identical evidence, fewer commands. `done`, `close`, and `review close` report what the settlement `unlocked` (id, title, work type of every item that became ready), `done` and `close` echo the item's `post_condition` at completion time, and a `hint` asks for `--cmd`/`--tests` evidence when downstream items depend on an item that closed without any. `done`, `close`, `review close`, and the pick packet include a `remaining` progress snapshot so loop agents can evaluate their stop condition without an extra `map status` call. `remaining.counts` always carries the full status vocabulary (`pending`, `ready`, `picked`, `running`, `in_review`, `blocked`, `failed`, `cancelled`, `closed`, `closed_partial`) with explicit zeros — a missing count never has to be inferred.
+
+`prime` prints the compact state block host hooks inject at session start and after context compaction (project, map counts, held items with log status, goal contract, registry presence, next command); `--hook-json` emits the Claude Code SessionStart envelope. In a repo without a Planr database it exits silently and creates nothing — hooks must never break a session. Installs wire it into the host's hook system by default (`--no-hooks` skips; existing hook files are merged additively, never overwritten). Full guide: [Host Hooks](HOOKS.md).
 
 `pick --json` returns one flat work packet in which every fact appears exactly once: `item`, `links`, `logs`, `runtime`, `recovery`, `conditions`, `approval`, recall context (`contexts`, `relevant_contexts`, `upstream_handoffs`, `review_history`, `source_links`, `possible_file_conflicts`), `close_effect`, `privacy`, `deeper_reads`, and `remaining`. Worker identity lives in `item.worker_id` and `runtime.worker_id`. Empty collections and inactive gates are omitted — a missing key means "empty". No separate `trace item` call is needed. Evidence written via `log add` or `done` by the pick owner refreshes the runtime heartbeat automatically. The same packet shape is returned by MCP `planr_pick_item`, HTTP `POST /v1/pick`, and `done --next`. `pick --peek` (MCP: `"peek": true`) returns the same packet for the next pickable item *without* leasing it — no lease, heartbeat, or pick event is written, and the packet carries `"peek": true` with the item still `ready`. Built for dispatching drivers: read the routing block, dispatch the worker, and let the worker take the lease under its own identity — replacing the pick → `pick release --force` → re-pick sequence.
 
