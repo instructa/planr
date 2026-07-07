@@ -1,0 +1,23 @@
+{
+  "hooks": {
+    "preCompact": [
+      {
+        "command": "planr prime 2>/dev/null || true",
+        "timeout": 10
+      }
+    ],
+    "sessionStart": [
+      {
+        "command": "planr prime 2>/dev/null || true",
+        "timeout": 10
+      }
+    ],
+    "subagentStop": [
+      {
+        "command": ".cursor/hooks/planr-evidence-guard.sh",
+        "timeout": 10
+      }
+    ]
+  },
+  "version": 1
+}
