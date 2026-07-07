@@ -12,11 +12,13 @@ mod commands;
 mod flow;
 mod git_review;
 mod graph;
+mod hooks;
 mod http;
 mod inspection;
 mod lease;
 mod mcp;
 mod packages;
+mod prime;
 mod recall;
 mod recovery;
 mod render;
@@ -108,6 +110,7 @@ impl App {
             Command::Note(args) => self.context(args.command),
             Command::Search(args) => self.search(args),
             Command::Doctor(args) => self.doctor(args),
+            Command::Prime(args) => self.prime(args.envelope()),
             Command::Install(args) => self.install(args.command),
             Command::Prompt(args) => self.prompt(args.command),
             Command::Mcp => self.mcp(),

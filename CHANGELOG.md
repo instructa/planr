@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Native host hooks, installed by default: `planr install codex|claude|cursor` now wires `planr prime` into the host's hook system — Cursor `.cursor/hooks.json` (`sessionStart` with the `--cursor-json` envelope), Claude Code `.claude/settings.json` (`SessionStart` with matcher `startup|resume|compact`, using the `--hook-json` envelope), Codex `.codex/hooks.json` (`SessionStart`, with the one-time `/hooks` trust note in the install output). Every new session — including post-compaction session starts — gets map state injected automatically, so loop recovery becomes mechanism instead of discipline. Only session-start events are wired: they are where hosts actually inject hook output as context (pre/post-compaction events cannot). `--no-hooks` opts out; existing hook files are merged additively (foreign entries preserved, planr entries never duplicated, unparseable files left untouched with a note); every hook command fails open (`|| true`, 10s timeout) so a missing or broken planr never blocks a session.
+- `planr prime [--hook-json|--cursor-json]`: one compact, bounded, deterministic state block (project, map counts, up to five held items with completion-log status, goal contract truncated char-safe, registry presence, next command). In a repo without a Planr database it exits silently and creates nothing. `--hook-json` emits the Claude Code SessionStart envelope; `--cursor-json` emits Cursor's `additional_context` shape.
+- Evidence guard (Cursor `subagentStop`), identity-scoped: a subagent that stops while *its own* pick (via `PLANR_WORKER_ID`/`PLANR_SESSION_ID`) has no completion log gets one advisory follow-up naming the item and the two ways out (`planr done` or `planr pick release`); without an explicit identity it stays silent instead of steering agents toward foreign items. JSON built by jq (never string interpolation), always exit 0, shellcheck-clean.
+- docs/HOOKS.md: what gets installed per host, the fail-open and additive-merge rules, the Codex trust model, and how to remove the hooks.
+
 ## [1.2.0] - 2026-07-06
 
 Per-task model routing becomes a declared contract instead of prose, and Cursor becomes a first-class client — one command installs everything the plugin would carry. The whole feature set was hardened through three live dogfood runs (a real web app built end to end through the routed pool) plus an independent GPT-5.5 review before this stable release. Includes everything previewed in 1.2.0-alpha.1.

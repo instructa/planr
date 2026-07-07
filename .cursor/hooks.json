@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "planr prime --cursor-json 2>/dev/null || true",
+        "timeout": 10
+      }
+    ],
+    "subagentStop": [
+      {
+        "command": ".cursor/hooks/planr-evidence-guard.sh",
+        "timeout": 10
+      }
+    ]
+  },
+  "version": 1
+}

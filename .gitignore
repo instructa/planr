@@ -28,3 +28,7 @@ temp/
 .codex/
 .planr/
 docs/planr-spec.zip
+
+# provisioned local copies (single source: plugins/planr); hooks stay committed
+.cursor/skills/
+.cursor/agents/

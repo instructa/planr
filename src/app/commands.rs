@@ -962,6 +962,23 @@ impl App {
             write_if_missing(&path, &content, true)?;
             Some(path)
         };
+        // Host hooks are default-but-optional: session-start and
+        // post-compaction state injection, opt out with --no-hooks.
+        let hook_install = if args.no_hooks {
+            None
+        } else {
+            Some(self.install_hooks(client)?)
+        };
+        let hooks_human = |human: &mut String| {
+            if let Some(hooks) = &hook_install {
+                if !hooks.written.is_empty() {
+                    human.push_str(&format!("\nhooks written: {}", hooks.written.join(", ")));
+                }
+                for warning in &hooks.warnings {
+                    human.push_str(&format!("\nnote: {warning}"));
+                }
+            }
+        };
         if client == "cursor" {
             let mut skill_paths = Vec::new();
             for (relative, content) in cursor_skills() {
@@ -975,7 +992,7 @@ impl App {
                 "agents": agent_paths,
                 "skills": skill_paths,
             });
-            let human = if args.no_mcp {
+            let mut human = if args.no_mcp {
                 "cursor integration written plugin-style (subagent roles, skills; no MCP config)"
                     .to_string()
             } else {
@@ -985,17 +1002,23 @@ impl App {
                     "cursor integration written (mcp config, subagent roles, skills)\none-click user-level MCP install: {deeplink}"
                 )
             };
+            if let Some(hooks) = &hook_install {
+                payload["hooks"] = json!({"written": hooks.written, "warnings": hooks.warnings});
+            }
+            hooks_human(&mut human);
             self.emit(payload, human)
         } else {
-            let human = if args.no_mcp {
+            let mut human = if args.no_mcp {
                 format!("{client} subagent roles written (no MCP config)")
             } else {
                 format!("{client} integration written")
             };
-            self.emit(
-                json!({"client": client, "path": mcp_path, "agents": agent_paths}),
-                human,
-            )
+            let mut payload = json!({"client": client, "path": mcp_path, "agents": agent_paths});
+            if let Some(hooks) = &hook_install {
+                payload["hooks"] = json!({"written": hooks.written, "warnings": hooks.warnings});
+            }
+            hooks_human(&mut human);
+            self.emit(payload, human)
         }
     }
 

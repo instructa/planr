@@ -2790,6 +2790,460 @@ fn plan_work_type_annotations_seed_routed_items_without_retags() {
 }
 
 #[test]
+fn install_writes_host_hooks_by_default_with_additive_merge() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    let db_arg = db.to_str().unwrap().to_string();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "project", "init", "Hooked"])
+        .assert()
+        .success();
+
+    // Pre-existing foreign hooks must survive the merge.
+    fs::create_dir_all(dir.path().join(".cursor")).unwrap();
+    fs::write(
+        dir.path().join(".cursor/hooks.json"),
+        "{\"version\":1,\"hooks\":{\"sessionStart\":[{\"command\":\"echo mine\"}]}}",
+    )
+    .unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "install", "cursor", "--no-mcp"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("hooks written"));
+    let cursor_hooks: Value =
+        serde_json::from_str(&fs::read_to_string(dir.path().join(".cursor/hooks.json")).unwrap())
+            .unwrap();
+    let session_start = cursor_hooks["hooks"]["sessionStart"].as_array().unwrap();
+    assert_eq!(
+        session_start[0]["command"], "echo mine",
+        "foreign hook kept"
+    );
+    assert!(
+        session_start[1]["command"]
+            .as_str()
+            .unwrap()
+            .contains("planr prime"),
+    );
+    assert!(
+        session_start[1]["command"]
+            .as_str()
+            .unwrap()
+            .ends_with("|| true"),
+        "prime hooks must fail open"
+    );
+    assert!(
+        session_start[1]["command"]
+            .as_str()
+            .unwrap()
+            .contains("--cursor-json"),
+        "cursor needs its context-injection envelope"
+    );
+    // preCompact cannot restore model context in Cursor: not wired.
+    assert!(cursor_hooks["hooks"].get("preCompact").is_none());
+    assert!(
+        cursor_hooks["hooks"]["subagentStop"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("planr-evidence-guard")
+    );
+    let guard = dir.path().join(".cursor/hooks/planr-evidence-guard.sh");
+    assert!(guard.exists());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert!(
+            fs::metadata(&guard).unwrap().permissions().mode() & 0o111 != 0,
+            "guard must be executable"
+        );
+    }
+
+    // Idempotent: a second install adds nothing.
+    let before = fs::read_to_string(dir.path().join(".cursor/hooks.json")).unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "install", "cursor", "--no-mcp"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("hooks written").not());
+    assert_eq!(
+        before,
+        fs::read_to_string(dir.path().join(".cursor/hooks.json")).unwrap()
+    );
+
+    // Upgrade path: stale planr-owned entries from an older version are
+    // reconciled in place — the outdated sessionStart command is
+    // replaced, the retired preCompact entry removed, an old guard
+    // script refreshed — while foreign entries survive untouched.
+    fs::write(
+        dir.path().join(".cursor/hooks.json"),
+        "{\"version\":1,\"hooks\":{\"sessionStart\":[{\"command\":\"echo mine\"},{\"command\":\"planr prime 2>/dev/null || true\",\"timeout\":10}],\"preCompact\":[{\"command\":\"planr prime 2>/dev/null || true\",\"timeout\":10},{\"command\":\"echo foreign-compact\"}]}}",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join(".cursor/hooks/planr-evidence-guard.sh"),
+        "#!/bin/bash\n# old unscoped guard\nexit 0\n",
+    )
+    .unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "install", "cursor", "--no-mcp"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("hooks written"));
+    let upgraded: Value =
+        serde_json::from_str(&fs::read_to_string(dir.path().join(".cursor/hooks.json")).unwrap())
+            .unwrap();
+    let session_start = upgraded["hooks"]["sessionStart"].as_array().unwrap();
+    assert_eq!(session_start[0]["command"], "echo mine");
+    assert!(
+        session_start[1]["command"]
+            .as_str()
+            .unwrap()
+            .contains("--cursor-json"),
+        "stale planr entry must be upgraded in place: {upgraded}"
+    );
+    assert_eq!(session_start.len(), 2, "no duplicate planr entries");
+    let pre_compact = upgraded["hooks"]["preCompact"].as_array().unwrap();
+    assert_eq!(
+        pre_compact.len(),
+        1,
+        "retired planr entry removed, foreign kept: {upgraded}"
+    );
+    assert_eq!(pre_compact[0]["command"], "echo foreign-compact");
+    assert!(
+        fs::read_to_string(dir.path().join(".cursor/hooks/planr-evidence-guard.sh"))
+            .unwrap()
+            .contains("PLANR_WORKER_ID"),
+        "old guard script must be refreshed"
+    );
+
+    // Claude: merge into an existing settings.json without losing keys.
+    fs::create_dir_all(dir.path().join(".claude")).unwrap();
+    fs::write(
+        dir.path().join(".claude/settings.json"),
+        "{\"permissions\":{\"allow\":[\"Bash\"]}}",
+    )
+    .unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "install", "claude", "--no-mcp"])
+        .assert()
+        .success();
+    let claude: Value = serde_json::from_str(
+        &fs::read_to_string(dir.path().join(".claude/settings.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        claude["permissions"]["allow"][0], "Bash",
+        "foreign keys kept"
+    );
+    assert_eq!(
+        claude["hooks"]["SessionStart"][0]["matcher"],
+        "startup|resume|compact"
+    );
+    assert!(
+        claude["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("planr prime --hook-json")
+    );
+    // SessionStart's `compact` source covers post-compaction refresh;
+    // PreCompact injects nothing and its envelope differs: not wired.
+    assert!(claude["hooks"].get("PreCompact").is_none());
+
+    // Codex: hooks file + trust note; --no-hooks skips entirely.
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "install", "codex", "--no-mcp"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("run /hooks"));
+    let codex: Value =
+        serde_json::from_str(&fs::read_to_string(dir.path().join(".codex/hooks.json")).unwrap())
+            .unwrap();
+    assert!(
+        codex["SessionStart"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("planr prime")
+    );
+    // PostCompact ignores stdout for context injection: not wired.
+    assert!(codex.get("PostCompact").is_none());
+
+    let skipped = tempdir().unwrap();
+    let skipped_db = skipped.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(skipped.path())
+        .args([
+            "--db",
+            skipped_db.to_str().unwrap(),
+            "project",
+            "init",
+            "NoHooks",
+        ])
+        .assert()
+        .success();
+    planr()
+        .current_dir(skipped.path())
+        .args([
+            "--db",
+            skipped_db.to_str().unwrap(),
+            "install",
+            "cursor",
+            "--no-mcp",
+            "--no-hooks",
+        ])
+        .assert()
+        .success();
+    assert!(!skipped.path().join(".cursor/hooks.json").exists());
+
+    // An unparseable existing file is never touched, only warned about.
+    let broken = tempdir().unwrap();
+    let broken_db = broken.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(broken.path())
+        .args([
+            "--db",
+            broken_db.to_str().unwrap(),
+            "project",
+            "init",
+            "Broken",
+        ])
+        .assert()
+        .success();
+    fs::create_dir_all(broken.path().join(".claude")).unwrap();
+    fs::write(broken.path().join(".claude/settings.json"), "not json {").unwrap();
+    planr()
+        .current_dir(broken.path())
+        .args([
+            "--db",
+            broken_db.to_str().unwrap(),
+            "install",
+            "claude",
+            "--no-mcp",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("hooks skipped"));
+    assert_eq!(
+        fs::read_to_string(broken.path().join(".claude/settings.json")).unwrap(),
+        "not json {"
+    );
+}
+
+#[test]
+fn evidence_guard_reminds_about_unlogged_picks_and_stays_silent_otherwise() {
+    if std::process::Command::new("jq")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("jq not installed; skipping guard execution test");
+        return;
+    }
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    let db_arg = db.to_str().unwrap().to_string();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "project", "init", "Guarded"])
+        .assert()
+        .success();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "install", "cursor", "--no-mcp"])
+        .assert()
+        .success();
+    let guard = dir.path().join(".cursor/hooks/planr-evidence-guard.sh");
+    // The guard calls bare `planr`; point PATH at the freshly built binary
+    // and PLANR_DB at this project's database.
+    let bin_dir = assert_cmd::cargo::cargo_bin("planr")
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let path_env = format!(
+        "{}:{}",
+        bin_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let run_guard = |dir: &std::path::Path, worker: Option<&str>| {
+        let mut command = std::process::Command::new("bash");
+        command
+            .arg(&guard)
+            .current_dir(dir)
+            .env("PATH", &path_env)
+            .env("PLANR_DB", &db_arg)
+            .env_remove("PLANR_WORKER_ID")
+            .env_remove("PLANR_SESSION_ID");
+        if let Some(worker) = worker {
+            command.env("PLANR_WORKER_ID", worker);
+        }
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "guard must always exit 0");
+        String::from_utf8(output.stdout).unwrap()
+    };
+
+    // No picked items: silent.
+    assert!(run_guard(dir.path(), Some("guard-w1")).trim().is_empty());
+
+    // A picked item without a completion log: one advisory follow-up —
+    // but only for the worker that owns it. Anonymous shells and other
+    // workers stay silent so nobody gets steered toward foreign items.
+    let item = create_test_item(dir.path(), &db, "Unlogged work", "guard target");
+    planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "guard-w1")
+        .args(["--db", &db_arg, "pick"])
+        .assert()
+        .success();
+    assert!(run_guard(dir.path(), None).trim().is_empty());
+    assert!(
+        run_guard(dir.path(), Some("someone-else"))
+            .trim()
+            .is_empty()
+    );
+    let reminder = run_guard(dir.path(), Some("guard-w1"));
+    let message: Value = serde_json::from_str(&reminder).expect("guard emits valid JSON");
+    assert!(
+        message["followup_message"]
+            .as_str()
+            .unwrap()
+            .contains(&item),
+    );
+
+    // After logging evidence, the guard goes silent again.
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "log",
+            "add",
+            "--item",
+            &item,
+            "--summary",
+            "done",
+        ])
+        .assert()
+        .success();
+    assert!(run_guard(dir.path(), Some("guard-w1")).trim().is_empty());
+}
+
+#[test]
+fn prime_emits_compact_state_and_stays_silent_without_a_db() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    let db_arg = db.to_str().unwrap().to_string();
+
+    // No database: exit 0, no output, and crucially no db created —
+    // prime runs from hooks in every repo, planr project or not.
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["prime"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert!(output.is_empty(), "no-db prime must stay silent");
+    assert!(
+        !dir.path().join(".planr/planr.sqlite").exists(),
+        "prime must not create a database"
+    );
+
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "project", "init", "Primed"])
+        .assert()
+        .success();
+    let item = create_test_item(dir.path(), &db, "Held work", "prime target");
+    planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "primer-1")
+        .args(["--db", &db_arg, "pick"])
+        .assert()
+        .success();
+    // Non-ASCII near the truncation boundary: prime must never panic
+    // (chars, not bytes).
+    let long_contract = format!(
+        "GOAL CONTRACT pln-x: DONE when everything is closed with evidence. {}",
+        "ü".repeat(400)
+    );
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "context",
+            "add",
+            &long_contract,
+            "--tag",
+            "goal-contract",
+        ])
+        .assert()
+        .success();
+
+    let output = planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "primer-1")
+        .args(["--db", &db_arg, "prime"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8(output).unwrap();
+    assert!(text.contains("project: Primed"));
+    assert!(text.contains(&format!("you hold: {item}")));
+    assert!(text.contains("(no completion log yet)"));
+    assert!(text.contains("goal contract: GOAL CONTRACT pln-x"));
+    assert!(text.contains("next: continue"));
+
+    // Claude SessionStart envelope: valid JSON with the injected context.
+    let output = planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "primer-1")
+        .args(["--db", &db_arg, "prime", "--hook-json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let envelope: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        envelope["hookSpecificOutput"]["hookEventName"],
+        "SessionStart"
+    );
+    assert!(
+        envelope["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap()
+            .contains("## planr state")
+    );
+
+    // Cursor envelope: additional_context for command-hook injection.
+    let output = planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "primer-1")
+        .args(["--db", &db_arg, "prime", "--cursor-json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let envelope: Value = serde_json::from_slice(&output).unwrap();
+    assert!(
+        envelope["additional_context"]
+            .as_str()
+            .unwrap()
+            .contains("## planr state")
+    );
+}
+
+#[test]
 fn pick_peek_reads_the_packet_without_leasing() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
@@ -8157,7 +8611,7 @@ fn rust_implementation_has_owned_module_boundaries() {
         ("src/cli.rs", 1_000usize),
         ("src/app/mod.rs", 180),
         ("src/app/audit.rs", 200),
-        ("src/app/commands.rs", 1_040),
+        ("src/app/commands.rs", 1_080),
         ("src/app/flow.rs", 320),
         ("src/app/git_review.rs", 350),
         ("src/app/mcp.rs", 900),
