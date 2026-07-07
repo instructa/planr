@@ -22,6 +22,30 @@ Flat todo lists break down the moment real work has structure. Planr models work
 
 Three layers make that work: **Plans** (reviewable Markdown packages), the **Map** (live dependency graph with picks, reviews, logs), and **Agent loops** (skills, CLI, and MCP workflows for every major coding agent). Full model: [Task Graph Model](docs/TASK_GRAPH_MODEL.md) and [Operating Model](docs/OPERATING_MODEL.md).
 
+## New in 1.2.0: Model Routing
+
+Declare once which model handles which work — every task then carries its own routing, and your agents delegate automatically:
+
+```toml
+# .planr/agents.toml  (write it with `planr agents init`)
+[profiles.frontender]
+client = "cursor"
+model = "opus"
+skill = "frontend-design"
+
+[[routes]]
+match = { work_type = "frontend" }
+profile = "frontender"
+fallbacks = ["driver"]
+```
+
+- **Routing travels in the pick packet** — `planr pick --json` hands the worker its profile, model, and paired skill; `planr pick --peek` lets dispatching drivers read it without taking the lease.
+- **Rendered into your hosts' native config** — `planr install codex|claude|cursor` writes the subagent role files with model pins from the registry, in each host's exact vocabulary.
+- **Declared vs. actual, with receipts** — workers report the profile they ran on, runs record the observed host, and `planr trace item` shows deviations as advisory markers.
+- **Use-case pools** — free-form work types (`frontend`, `backend`, ...) declared right in the plan's task list (`### TASK-001 (backend): ...`), plus per-item pins via `planr item route`.
+
+Routing is advisory by design: Planr never dispatches models and never blocks a pick — hosts stay the authority. Full guide: [Model Routing](docs/MODEL_ROUTING.md) · replayable walkthrough: [Worked Example: Web App](docs/EXAMPLE_WEBAPP.md) · [Release notes](https://github.com/instructa/planr/releases/tag/v1.2.0).
+
 ## Install
 
 ```bash
