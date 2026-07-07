@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.3.0-alpha.1] - 2026-07-07
+
+Native host hooks: loop state that survives sessions becomes mechanism instead of discipline. Hardened through a three-round independent GPT-5.5 review (verdict: complete).
+
 ### Added
 
 - Native host hooks, installed by default: `planr install codex|claude|cursor` now wires `planr prime` into the host's hook system — Cursor `.cursor/hooks.json` (`sessionStart` with the `--cursor-json` envelope), Claude Code `.claude/settings.json` (`SessionStart` with matcher `startup|resume|compact`, using the `--hook-json` envelope), Codex `.codex/hooks.json` (`SessionStart`, with the one-time `/hooks` trust note in the install output). Every new session — including post-compaction session starts — gets map state injected automatically, so loop recovery becomes mechanism instead of discipline. Only session-start events are wired: they are where hosts actually inject hook output as context (pre/post-compaction events cannot). `--no-hooks` opts out; existing hook files are merged additively (foreign entries preserved, planr entries never duplicated, unparseable files left untouched with a note); every hook command fails open (`|| true`, 10s timeout) so a missing or broken planr never blocks a session.
@@ -369,7 +373,8 @@ Initial Planr product release.
 - Tag-driven release pipeline with multi-target builds (darwin/linux, arm64/x86_64) and Homebrew tap automation.
 - Skill workflow documentation for Codex, Claude Code, Cursor, and MCP-only clients.
 
-[Unreleased]: https://github.com/instructa/planr/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/instructa/planr/compare/v1.3.0-alpha.1...HEAD
+[1.3.0-alpha.1]: https://github.com/instructa/planr/compare/v1.2.0...v1.3.0-alpha.1
 [1.2.0]: https://github.com/instructa/planr/compare/v1.2.0-alpha.1...v1.2.0
 [1.2.0-alpha.1]: https://github.com/instructa/planr/compare/v1.1.19...v1.2.0-alpha.1
 [1.1.16]: https://github.com/instructa/planr/compare/v1.1.15...v1.1.16
