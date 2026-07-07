@@ -62,9 +62,13 @@ impl App {
         let mut result = HookInstall::default();
         match client {
             "cursor" => {
+                // The guard file is planr-owned by name: refresh it
+                // whenever the shipped content changed, so re-installs
+                // upgrade old (e.g. unscoped) guard versions.
                 let guard_path = self.root.join(GUARD_RELATIVE);
-                if !guard_path.exists() {
-                    crate::util::write_if_missing(&guard_path, EVIDENCE_GUARD, false)?;
+                let guard_current = fs::read_to_string(&guard_path).ok();
+                if guard_current.as_deref() != Some(EVIDENCE_GUARD) {
+                    crate::util::write_if_missing(&guard_path, EVIDENCE_GUARD, true)?;
                     #[cfg(unix)]
                     {
                         use std::os::unix::fs::PermissionsExt;
@@ -184,8 +188,21 @@ impl App {
             None => root.as_object_mut().expect("checked object above"),
         };
         let mut changed = false;
+        // Retired events: earlier planr versions wired pre/post-compaction
+        // events that cannot inject context. Planr-owned entries there are
+        // removed on re-install; foreign entries stay.
+        for retired in ["preCompact", "PreCompact", "PostCompact"] {
+            if let Some(list) = events.get_mut(retired).and_then(Value::as_array_mut) {
+                let before = list.len();
+                list.retain(|entry| !entry.to_string().contains("planr prime"));
+                changed |= list.len() != before;
+                if list.is_empty() {
+                    events.remove(retired);
+                }
+            }
+        }
         for (event, marker, entry) in entries {
-            changed |= push_unique(events, event, marker, entry.clone());
+            changed |= reconcile_entry(events, event, marker, entry.clone());
         }
         if changed {
             if let Some(parent) = path.parent() {
@@ -198,10 +215,12 @@ impl App {
     }
 }
 
-/// Appends `entry` to the event's array unless an existing entry already
-/// mentions `marker` anywhere in its serialized form — the additive-merge
-/// rule that keeps foreign hooks intact and planr hooks unduplicated.
-fn push_unique(
+/// Reconciles the planr-owned entry for one event: appended when absent,
+/// replaced in place when an owned entry (matched by `marker`) is
+/// outdated, untouched when already current. Foreign entries are never
+/// modified — that is the additive-merge contract; planr only owns what
+/// carries its marker.
+fn reconcile_entry(
     events: &mut serde_json::Map<String, Value>,
     event: &str,
     marker: &str,
@@ -211,11 +230,15 @@ fn push_unique(
     let Some(list) = list.as_array_mut() else {
         return false;
     };
-    if list
-        .iter()
-        .any(|existing| existing.to_string().contains(marker))
+    if let Some(existing) = list
+        .iter_mut()
+        .find(|existing| existing.to_string().contains(marker))
     {
-        return false;
+        if *existing == entry {
+            return false;
+        }
+        *existing = entry;
+        return true;
     }
     list.push(entry);
     true

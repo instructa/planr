@@ -20,7 +20,7 @@ The evidence guard is advisory and identity-scoped: a Cursor subagent that stops
 ## Design rules
 
 - **Fail open, always.** Every hook command ends in `|| true` with a 10-second timeout; a missing, broken, or uninitialized planr never blocks a session. In a repo without a Planr database, `planr prime` exits silently and creates nothing.
-- **Additive merge, never overwrite.** Existing hook files keep their entries; planr adds its own only if absent (re-installs are no-ops). A file planr cannot parse as a JSON object is left untouched with a note in the install output — add the snippet manually in that case.
+- **Additive merge, planr owns only its own entries.** Existing hook files keep every foreign entry; planr entries are reconciled on re-install (current ones untouched, outdated ones upgraded in place, entries under retired events removed) — so `planr install <client>` after an update also refreshes the hooks. A file planr cannot parse as a JSON object is left untouched with a note in the install output — add the snippet manually in that case.
 - **Default, not mandatory.** `--no-hooks` skips hook installation entirely; deleting the planr entries from the hook files removes the behavior with no other effect.
 
 ## Codex trust model

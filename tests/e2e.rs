@@ -2873,6 +2873,53 @@ fn install_writes_host_hooks_by_default_with_additive_merge() {
         fs::read_to_string(dir.path().join(".cursor/hooks.json")).unwrap()
     );
 
+    // Upgrade path: stale planr-owned entries from an older version are
+    // reconciled in place — the outdated sessionStart command is
+    // replaced, the retired preCompact entry removed, an old guard
+    // script refreshed — while foreign entries survive untouched.
+    fs::write(
+        dir.path().join(".cursor/hooks.json"),
+        "{\"version\":1,\"hooks\":{\"sessionStart\":[{\"command\":\"echo mine\"},{\"command\":\"planr prime 2>/dev/null || true\",\"timeout\":10}],\"preCompact\":[{\"command\":\"planr prime 2>/dev/null || true\",\"timeout\":10},{\"command\":\"echo foreign-compact\"}]}}",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join(".cursor/hooks/planr-evidence-guard.sh"),
+        "#!/bin/bash\n# old unscoped guard\nexit 0\n",
+    )
+    .unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "install", "cursor", "--no-mcp"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("hooks written"));
+    let upgraded: Value =
+        serde_json::from_str(&fs::read_to_string(dir.path().join(".cursor/hooks.json")).unwrap())
+            .unwrap();
+    let session_start = upgraded["hooks"]["sessionStart"].as_array().unwrap();
+    assert_eq!(session_start[0]["command"], "echo mine");
+    assert!(
+        session_start[1]["command"]
+            .as_str()
+            .unwrap()
+            .contains("--cursor-json"),
+        "stale planr entry must be upgraded in place: {upgraded}"
+    );
+    assert_eq!(session_start.len(), 2, "no duplicate planr entries");
+    let pre_compact = upgraded["hooks"]["preCompact"].as_array().unwrap();
+    assert_eq!(
+        pre_compact.len(),
+        1,
+        "retired planr entry removed, foreign kept: {upgraded}"
+    );
+    assert_eq!(pre_compact[0]["command"], "echo foreign-compact");
+    assert!(
+        fs::read_to_string(dir.path().join(".cursor/hooks/planr-evidence-guard.sh"))
+            .unwrap()
+            .contains("PLANR_WORKER_ID"),
+        "old guard script must be refreshed"
+    );
+
     // Claude: merge into an existing settings.json without losing keys.
     fs::create_dir_all(dir.path().join(".claude")).unwrap();
     fs::write(
