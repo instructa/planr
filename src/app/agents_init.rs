@@ -580,6 +580,7 @@ impl App {
                 dry_run: false,
                 no_mcp: true,
                 force: true,
+                no_hooks: false,
             };
             self.install(match client.as_str() {
                 "codex" => InstallCommand::Codex(install_args),

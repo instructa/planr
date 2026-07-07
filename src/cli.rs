@@ -757,6 +757,10 @@ pub(crate) struct InstallClientArgs {
     /// after editing .planr/agents.toml. Never touches hand edits without it.
     #[arg(long)]
     pub(crate) force: bool,
+    /// Skip installing host hooks (session-start/post-compaction state
+    /// injection via `planr prime`). Hooks are installed by default.
+    #[arg(long)]
+    pub(crate) no_hooks: bool,
 }
 
 #[derive(Args, Debug)]

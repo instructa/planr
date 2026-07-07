@@ -12,6 +12,7 @@ mod commands;
 mod flow;
 mod git_review;
 mod graph;
+mod hooks;
 mod http;
 mod inspection;
 mod lease;

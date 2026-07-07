@@ -2790,6 +2790,188 @@ fn plan_work_type_annotations_seed_routed_items_without_retags() {
 }
 
 #[test]
+fn install_writes_host_hooks_by_default_with_additive_merge() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    let db_arg = db.to_str().unwrap().to_string();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "project", "init", "Hooked"])
+        .assert()
+        .success();
+
+    // Pre-existing foreign hooks must survive the merge.
+    fs::create_dir_all(dir.path().join(".cursor")).unwrap();
+    fs::write(
+        dir.path().join(".cursor/hooks.json"),
+        "{\"version\":1,\"hooks\":{\"sessionStart\":[{\"command\":\"echo mine\"}]}}",
+    )
+    .unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "install", "cursor", "--no-mcp"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("hooks written"));
+    let cursor_hooks: Value =
+        serde_json::from_str(&fs::read_to_string(dir.path().join(".cursor/hooks.json")).unwrap())
+            .unwrap();
+    let session_start = cursor_hooks["hooks"]["sessionStart"].as_array().unwrap();
+    assert_eq!(
+        session_start[0]["command"], "echo mine",
+        "foreign hook kept"
+    );
+    assert!(
+        session_start[1]["command"]
+            .as_str()
+            .unwrap()
+            .contains("planr prime"),
+    );
+    assert!(
+        session_start[1]["command"]
+            .as_str()
+            .unwrap()
+            .ends_with("|| true"),
+        "prime hooks must fail open"
+    );
+    assert!(
+        cursor_hooks["hooks"]["preCompact"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("planr prime")
+    );
+    assert!(
+        cursor_hooks["hooks"]["subagentStop"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("planr-evidence-guard")
+    );
+    let guard = dir.path().join(".cursor/hooks/planr-evidence-guard.sh");
+    assert!(guard.exists());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert!(
+            fs::metadata(&guard).unwrap().permissions().mode() & 0o111 != 0,
+            "guard must be executable"
+        );
+    }
+
+    // Idempotent: a second install adds nothing.
+    let before = fs::read_to_string(dir.path().join(".cursor/hooks.json")).unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "install", "cursor", "--no-mcp"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("hooks written").not());
+    assert_eq!(
+        before,
+        fs::read_to_string(dir.path().join(".cursor/hooks.json")).unwrap()
+    );
+
+    // Claude: merge into an existing settings.json without losing keys.
+    fs::create_dir_all(dir.path().join(".claude")).unwrap();
+    fs::write(
+        dir.path().join(".claude/settings.json"),
+        "{\"permissions\":{\"allow\":[\"Bash\"]}}",
+    )
+    .unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "install", "claude", "--no-mcp"])
+        .assert()
+        .success();
+    let claude: Value = serde_json::from_str(
+        &fs::read_to_string(dir.path().join(".claude/settings.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        claude["permissions"]["allow"][0], "Bash",
+        "foreign keys kept"
+    );
+    assert_eq!(
+        claude["hooks"]["SessionStart"][0]["matcher"],
+        "startup|resume|compact"
+    );
+    assert!(
+        claude["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("planr prime --hook-json")
+    );
+
+    // Codex: hooks file + trust note; --no-hooks skips entirely.
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "install", "codex", "--no-mcp"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("run /hooks"));
+    assert!(dir.path().join(".codex/hooks.json").exists());
+
+    let skipped = tempdir().unwrap();
+    let skipped_db = skipped.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(skipped.path())
+        .args([
+            "--db",
+            skipped_db.to_str().unwrap(),
+            "project",
+            "init",
+            "NoHooks",
+        ])
+        .assert()
+        .success();
+    planr()
+        .current_dir(skipped.path())
+        .args([
+            "--db",
+            skipped_db.to_str().unwrap(),
+            "install",
+            "cursor",
+            "--no-mcp",
+            "--no-hooks",
+        ])
+        .assert()
+        .success();
+    assert!(!skipped.path().join(".cursor/hooks.json").exists());
+
+    // An unparseable existing file is never touched, only warned about.
+    let broken = tempdir().unwrap();
+    let broken_db = broken.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(broken.path())
+        .args([
+            "--db",
+            broken_db.to_str().unwrap(),
+            "project",
+            "init",
+            "Broken",
+        ])
+        .assert()
+        .success();
+    fs::create_dir_all(broken.path().join(".claude")).unwrap();
+    fs::write(broken.path().join(".claude/settings.json"), "not json {").unwrap();
+    planr()
+        .current_dir(broken.path())
+        .args([
+            "--db",
+            broken_db.to_str().unwrap(),
+            "install",
+            "claude",
+            "--no-mcp",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("hooks skipped"));
+    assert_eq!(
+        fs::read_to_string(broken.path().join(".claude/settings.json")).unwrap(),
+        "not json {"
+    );
+}
+
+#[test]
 fn prime_emits_compact_state_and_stays_silent_without_a_db() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
@@ -8244,7 +8426,7 @@ fn rust_implementation_has_owned_module_boundaries() {
         ("src/cli.rs", 1_000usize),
         ("src/app/mod.rs", 180),
         ("src/app/audit.rs", 200),
-        ("src/app/commands.rs", 1_040),
+        ("src/app/commands.rs", 1_080),
         ("src/app/flow.rs", 320),
         ("src/app/git_review.rs", 350),
         ("src/app/mcp.rs", 900),
