@@ -2790,6 +2790,93 @@ fn plan_work_type_annotations_seed_routed_items_without_retags() {
 }
 
 #[test]
+fn prime_emits_compact_state_and_stays_silent_without_a_db() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    let db_arg = db.to_str().unwrap().to_string();
+
+    // No database: exit 0, no output, and crucially no db created —
+    // prime runs from hooks in every repo, planr project or not.
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["prime"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert!(output.is_empty(), "no-db prime must stay silent");
+    assert!(
+        !dir.path().join(".planr/planr.sqlite").exists(),
+        "prime must not create a database"
+    );
+
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "project", "init", "Primed"])
+        .assert()
+        .success();
+    let item = create_test_item(dir.path(), &db, "Held work", "prime target");
+    planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "primer-1")
+        .args(["--db", &db_arg, "pick"])
+        .assert()
+        .success();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "context",
+            "add",
+            "GOAL CONTRACT pln-x: DONE when everything is closed with evidence.",
+            "--tag",
+            "goal-contract",
+        ])
+        .assert()
+        .success();
+
+    let output = planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "primer-1")
+        .args(["--db", &db_arg, "prime"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8(output).unwrap();
+    assert!(text.contains("project: Primed"));
+    assert!(text.contains(&format!("you hold: {item}")));
+    assert!(text.contains("(no completion log yet)"));
+    assert!(text.contains("goal contract: GOAL CONTRACT pln-x"));
+    assert!(text.contains("next: continue"));
+
+    // Claude SessionStart envelope: valid JSON with the injected context.
+    let output = planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "primer-1")
+        .args(["--db", &db_arg, "prime", "--hook-json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let envelope: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        envelope["hookSpecificOutput"]["hookEventName"],
+        "SessionStart"
+    );
+    assert!(
+        envelope["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap()
+            .contains("## planr state")
+    );
+}
+
+#[test]
 fn pick_peek_reads_the_packet_without_leasing() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");

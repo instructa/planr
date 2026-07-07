@@ -36,6 +36,12 @@ fn run() -> Result<()> {
     let cli = Cli::parse();
     let root = env::current_dir()?;
     let db_path = cli.db.clone().unwrap_or_else(|| default_db_path(&root));
+    // Prime is wired into host hooks that fire in every repo, planr
+    // project or not: without a database it must exit silently instead
+    // of creating one (open_db creates the file).
+    if matches!(cli.command, cli::Command::Prime(_)) && !db_path.exists() {
+        return Ok(());
+    }
     let conn = open_db(&db_path)?;
     ensure_schema(&conn)?;
     let app = App::new(conn, root, db_path, cli.json);

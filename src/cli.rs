@@ -40,6 +40,8 @@ pub(crate) enum Command {
     Note(NoteArgs),
     Search(SearchArgs),
     Doctor(DoctorArgs),
+    /// Compact state block for host hooks (session start / post-compaction).
+    Prime(PrimeArgs),
     Install(InstallArgs),
     Prompt(PromptArgs),
     Mcp,
@@ -70,6 +72,14 @@ pub(crate) enum AgentsCommand {
     Init(AgentsInitArgs),
     /// The driver dispatch block (alias for `planr prompt routing`).
     Routing(PromptPrintArgs),
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct PrimeArgs {
+    /// Emit the Claude Code SessionStart hook envelope
+    /// (hookSpecificOutput.additionalContext).
+    #[arg(long)]
+    pub(crate) hook_json: bool,
 }
 
 #[derive(Args, Debug)]
