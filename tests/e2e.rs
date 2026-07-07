@@ -2972,6 +2972,90 @@ fn install_writes_host_hooks_by_default_with_additive_merge() {
 }
 
 #[test]
+fn evidence_guard_reminds_about_unlogged_picks_and_stays_silent_otherwise() {
+    if std::process::Command::new("jq")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("jq not installed; skipping guard execution test");
+        return;
+    }
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    let db_arg = db.to_str().unwrap().to_string();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "project", "init", "Guarded"])
+        .assert()
+        .success();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "install", "cursor", "--no-mcp"])
+        .assert()
+        .success();
+    let guard = dir.path().join(".cursor/hooks/planr-evidence-guard.sh");
+    // The guard calls bare `planr`; point PATH at the freshly built binary
+    // and PLANR_DB at this project's database.
+    let bin_dir = assert_cmd::cargo::cargo_bin("planr")
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let path_env = format!(
+        "{}:{}",
+        bin_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let run_guard = |dir: &std::path::Path| {
+        let output = std::process::Command::new("bash")
+            .arg(&guard)
+            .current_dir(dir)
+            .env("PATH", &path_env)
+            .env("PLANR_DB", &db_arg)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "guard must always exit 0");
+        String::from_utf8(output.stdout).unwrap()
+    };
+
+    // No picked items: silent.
+    assert!(run_guard(dir.path()).trim().is_empty());
+
+    // A picked item without a completion log: one advisory follow-up.
+    let item = create_test_item(dir.path(), &db, "Unlogged work", "guard target");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "pick"])
+        .assert()
+        .success();
+    let reminder = run_guard(dir.path());
+    let message: Value = serde_json::from_str(&reminder).expect("guard emits valid JSON");
+    assert!(
+        message["followup_message"]
+            .as_str()
+            .unwrap()
+            .contains(&item),
+    );
+
+    // After logging evidence, the guard goes silent again.
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "log",
+            "add",
+            "--item",
+            &item,
+            "--summary",
+            "done",
+        ])
+        .assert()
+        .success();
+    assert!(run_guard(dir.path()).trim().is_empty());
+}
+
+#[test]
 fn prime_emits_compact_state_and_stays_silent_without_a_db() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
