@@ -55,6 +55,7 @@ Attach screenshots or traces as artifacts on the item:
 
 ```bash
 planr artifact add "verify-web screenshot" --item <item-id> --path <screenshot-path> --kind screenshot
+planr artifact add "verify-web recording" --item <item-id> --path <recording.mp4> --kind video
 ```
 
 The replay command is mandatory. The reviewer reruns it instead of trusting this run; a verification that cannot be replayed is not evidence.

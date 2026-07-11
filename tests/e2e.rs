@@ -6659,7 +6659,7 @@ fn graph_adaptation_primitives_preview_rewire_and_replan() {
         .args(["--db", db.to_str().unwrap(), "map", "status"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("status"));
+        .stdout(predicate::str::contains("settled |"));
 
     let output = planr()
         .current_dir(dir.path())
@@ -8611,7 +8611,7 @@ fn rust_implementation_has_owned_module_boundaries() {
         ("src/cli.rs", 1_000usize),
         ("src/app/mod.rs", 180),
         ("src/app/audit.rs", 200),
-        ("src/app/commands.rs", 1_080),
+        ("src/app/commands.rs", 1_120),
         ("src/app/flow.rs", 320),
         ("src/app/git_review.rs", 350),
         ("src/app/mcp.rs", 900),

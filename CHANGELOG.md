@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- `planr map status` human output shows the actual summary (settled/total, per-status counts, up to five items per bucket) instead of a bare "map status calculated" — the fourth dogfood run pointed out that `prime` sends users exactly there.
+- `planr prime`'s `next:` hint after a fully settled map points at the contract verdict (`planr plan audit <plan-id> --json`, plan id parsed from the stored goal contract) instead of another status read.
+- `planr install <client>` prints `hooks: unchanged (already current)` when the hook reconciliation was a no-op, so re-installs confirm themselves.
+- `planr doctor` probes `cursor-agent` and `agent` in addition to `cursor` before reporting the Cursor CLI as not installed.
+- Docs: artifact `--kind` vocabulary documented (screenshot, video, recording, ...), planr-verify-web shows a video-artifact example, and CLI_REFERENCE carries a one-line jq example for the `plan audit` JSON shape (`holds`, `clauses[].pass`).
+
 ## [1.3.0-alpha.1] - 2026-07-07
 
 Native host hooks: loop state that survives sessions becomes mechanism instead of discipline. Hardened through a three-round independent GPT-5.5 review (verdict: complete).

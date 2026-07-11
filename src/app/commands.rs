@@ -282,7 +282,36 @@ impl App {
             }
             MapCommand::Status => {
                 let status = self.map_status_value()?;
-                self.emit(status, "map status calculated".to_string())
+                // The human view carries the actual summary — `prime`
+                // points here, so a bare "calculated" is not an answer.
+                let mut human = format!(
+                    "map: {}/{} settled | {} ready, {} picked, {} in_review, {} blocked",
+                    status["settled"],
+                    status["total"],
+                    status["counts"]["ready"],
+                    status["counts"]["picked"],
+                    status["counts"]["in_review"],
+                    status["counts"]["blocked"],
+                );
+                let list =
+                    |human: &mut String, label: &str, entries: &Value, item_key: Option<&str>| {
+                        for entry in entries.as_array().into_iter().flatten().take(5) {
+                            let item = match item_key {
+                                Some(key) => &entry[key],
+                                None => entry,
+                            };
+                            human.push_str(&format!(
+                                "\n  {label} {} {}",
+                                item["id"].as_str().unwrap_or_default(),
+                                item["title"].as_str().unwrap_or_default(),
+                            ));
+                        }
+                    };
+                list(&mut human, "ready:", &status["ready"], None);
+                list(&mut human, "picked:", &status["picked"], Some("item"));
+                list(&mut human, "in_review:", &status["in_review"], Some("item"));
+                list(&mut human, "blocked:", &status["blocked"], Some("item"));
+                self.emit(status, human)
             }
             MapCommand::Preview(args) => {
                 let preview = self.preview_close_value(&args.close)?;
@@ -851,7 +880,14 @@ impl App {
         let checks: Vec<_> = clients
             .into_iter()
             .map(|client| {
-                let installed = command_exists(client);
+                // Hosts ship under several binary names (Cursor's CLI is
+                // `cursor-agent`/`agent`, the IDE binary `cursor`): probe
+                // all of them before claiming not_installed.
+                let binaries: &[&str] = match client {
+                    "cursor" => &["cursor-agent", "agent", "cursor"],
+                    other => &[other],
+                };
+                let installed = binaries.iter().any(|binary| command_exists(binary));
                 json!({
                     "client": client,
                     "status": if installed { "pass" } else { "not_installed" },
@@ -973,6 +1009,10 @@ impl App {
             if let Some(hooks) = &hook_install {
                 if !hooks.written.is_empty() {
                     human.push_str(&format!("\nhooks written: {}", hooks.written.join(", ")));
+                } else {
+                    // Silence read as "did it even reconcile?" in the
+                    // dogfood audit — confirm the no-op explicitly.
+                    human.push_str("\nhooks: unchanged (already current)");
                 }
                 for warning in &hooks.warnings {
                     human.push_str(&format!("\nnote: {warning}"));

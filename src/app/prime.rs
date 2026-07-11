@@ -79,8 +79,16 @@ impl App {
                 |row| row.get(0),
             )
             .optional()?;
-        if let Some(contract) = contract {
+        let mut contract_plan: Option<String> = None;
+        if let Some(contract) = &contract {
             let compact = contract.split_whitespace().collect::<Vec<_>>().join(" ");
+            contract_plan = compact
+                .split_whitespace()
+                .find(|word| word.starts_with("pln-"))
+                .map(|word| {
+                    word.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '-')
+                        .to_string()
+                });
             out.push_str(&format!(
                 "\ngoal contract: {}",
                 truncate_chars(&compact, 300)
@@ -95,6 +103,8 @@ impl App {
         }
 
         let ready = counts["ready"].as_i64().unwrap_or(0);
+        let settled = progress["settled"].as_i64().unwrap_or(0);
+        let total = progress["total"].as_i64().unwrap_or(0);
         let next = if !held.is_empty() {
             format!(
                 "continue {} (log evidence with planr done, or release)",
@@ -102,6 +112,15 @@ impl App {
             )
         } else if ready > 0 {
             "planr pick --json".to_string()
+        } else if total > 0 && settled == total {
+            // Everything settled: the useful next step is the contract
+            // verdict, not another status read.
+            match &contract_plan {
+                Some(plan) => format!("planr plan audit {plan} --json (all settled)"),
+                None => {
+                    "all settled — start new work with planr plan new or item create".to_string()
+                }
+            }
         } else {
             "planr map status".to_string()
         };
