@@ -22,7 +22,26 @@ Flat todo lists break down the moment real work has structure. Planr models work
 
 Three layers make that work: **Plans** (reviewable Markdown packages), the **Map** (live dependency graph with picks, reviews, logs), and **Agent loops** (skills, CLI, and MCP workflows for every major coding agent). Full model: [Task Graph Model](docs/TASK_GRAPH_MODEL.md) and [Operating Model](docs/OPERATING_MODEL.md).
 
-## New in 1.2.0: Model Routing
+## New in 1.3.0: Native Host Hooks
+
+`planr install codex|claude|cursor` now wires Planr into the host's native hook system by default — every new session (including post-compaction restarts) gets one compact state block injected automatically:
+
+```text
+## planr state
+project: Hookboard | map: 5/5 settled | 0 ready, 0 picked, 0 in_review
+goal contract: DONE when every in-scope map item is closed with log evidence, ...
+routing: registry active (3 profiles; pick packets carry model routing)
+next: planr plan audit pln-fc584c28 --json
+```
+
+- **`planr prime`** — the state block behind the hooks: project, map counts, held items with log status, goal contract, and the next command. Silent in repos without a Planr database.
+- **Loop recovery becomes mechanism, not discipline** — an agent that restarts or compacts mid-loop picks up exactly where the map says it left off.
+- **Evidence guard (Cursor)** — a subagent that stops while its own pick has no completion log gets one advisory reminder naming the item and the two ways out.
+- **Fail-open and additive** — hooks never block a session (10s timeout, always exit 0), existing hook files are merged, `--no-hooks` opts out.
+
+Full guide: [Hooks](docs/HOOKS.md) · [Release notes](https://github.com/instructa/planr/releases/tag/v1.3.0).
+
+## Model Routing (1.2.0)
 
 Declare once which model handles which work — every task then carries its own routing, and your agents delegate automatically:
 
