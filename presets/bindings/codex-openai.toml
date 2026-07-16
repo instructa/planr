@@ -1,56 +1,206 @@
 schema_version = 1
 id = "codex-openai"
-version = "1.0.0"
+version = "2.0.0"
 host = "codex"
 driver_role = "driver"
 default_role = "driver"
-capability_evidence = ["builtin-codex-none-fork-contract"]
+capability_evidence = ["codex-0.144.0-native-v2-9ff47868eb"]
 billing_assumptions = ["Planr records declared tiers; Codex remains billing authority"]
-known_limitations = ["effective model and effort require host-reported evidence"]
+known_limitations = ["native multi-agent v2 and the requested model must be active on the current Codex backend"]
 
 [capabilities]
 model_override = true
 effort_override = true
 fork_none = true
-fork_all = false
-max_partial_fork_turns = 4
+fork_all = true
 
 [profiles.driver]
-profile = "codex-openai-driver"
+profile = "codex-sol-medium"
 client = "codex"
-model = "gpt-5.5"
-effort = "xhigh"
-cost_tier = "premium"
+model = "gpt-5.6-sol"
+agent_type = "planr-sol-medium"
+effort = "medium"
+cost_tier = "standard"
+
+[profiles.explorer]
+profile = "codex-terra-medium"
+client = "codex"
+model = "gpt-5.6-terra"
+agent_type = "planr-terra-medium"
+effort = "medium"
+cost_tier = "standard"
+fork_turns = { mode = "none" }
 
 [profiles.worker]
-profile = "codex-openai-worker"
+profile = "codex-terra-high"
 client = "codex"
-model = "gpt-5.4-mini"
+model = "gpt-5.6-terra"
+agent_type = "planr-terra-high"
 effort = "high"
 cost_tier = "standard"
 skill = "planr-work"
 fork_turns = { mode = "none" }
 
+[profiles.mechanical]
+profile = "codex-luna-xhigh"
+client = "codex"
+model = "gpt-5.6-luna"
+agent_type = "planr-luna-xhigh"
+effort = "xhigh"
+cost_tier = "premium"
+skill = "planr-work"
+fork_turns = { mode = "none" }
+
+[profiles.reviewer]
+profile = "codex-sol-high"
+client = "codex"
+model = "gpt-5.6-sol"
+agent_type = "planr-sol-high"
+effort = "high"
+cost_tier = "premium"
+skill = "planr-review"
+fork_turns = { mode = "none" }
+
+[profiles.moonshot]
+profile = "codex-sol-ultra"
+client = "codex"
+model = "gpt-5.6-sol"
+agent_type = "planr-sol-ultra"
+effort = "ultra"
+cost_tier = "premium"
+fork_turns = { mode = "none" }
+
+[[routes]]
+work_type = "exploration"
+role = "explorer"
+
+[[routes]]
+work_type = "research"
+role = "explorer"
+
 [[routes]]
 work_type = "code"
 role = "worker"
-fallback_roles = ["driver"]
+
+[[routes]]
+work_type = "mechanical"
+role = "mechanical"
+
+[[routes]]
+work_type = "review"
+role = "reviewer"
+
+[[routes]]
+work_type = "moonshot"
+role = "moonshot"
 
 [verification]
-id = "builtin-codex-openai-v1"
-verified_at_unix = 1783987200
+id = "builtin-codex-native-v2"
+verified_at_unix = 1784160000
 max_age_seconds = 31536000
 
 [[artifacts]]
-path = ".codex/agents/planr-preset-worker.toml"
+path = ".codex/agents/planr-sol-medium.toml"
 kind = "codex_agent"
-content = '''name = "planr_preset_worker"
-description = "Implements one picked Planr map item with evidence-backed handoff."
-model = "gpt-5.4-mini"
+content = '''name = "planr_sol_medium"
+description = "Normal Planr orchestration and synthesis."
+model = "gpt-5.6-sol"
+model_reasoning_effort = "medium"
+sandbox_mode = "workspace-write"
+
+developer_instructions = """
+Orchestrate the Planr map, delegate bounded work by agent type, and retain synthesis ownership.
+"""
+'''
+
+[[artifacts]]
+path = ".codex/agents/planr-terra-medium.toml"
+kind = "codex_agent"
+content = '''name = "planr_terra_medium"
+description = "Repository exploration and research."
+model = "gpt-5.6-terra"
+model_reasoning_effort = "medium"
+sandbox_mode = "read-only"
+
+developer_instructions = """
+Explore the assigned scope, report concrete evidence, and do not edit files.
+"""
+'''
+
+[[artifacts]]
+path = ".codex/agents/planr-terra-high.toml"
+kind = "codex_agent"
+content = '''name = "planr_terra_high"
+description = "Normal implementation and testing."
+model = "gpt-5.6-terra"
 model_reasoning_effort = "high"
 sandbox_mode = "workspace-write"
 
 developer_instructions = """
-Use the planr-work skill for exactly one picked item. Preserve the task scope, record changed files and real verification commands, request review, and stop.
+Use the planr-work skill for one picked item, implement the smallest correct slice, and record real verification evidence.
 """
+'''
+
+[[artifacts]]
+path = ".codex/agents/planr-luna-xhigh.toml"
+kind = "codex_agent"
+content = '''name = "planr_luna_xhigh"
+description = "Bounded checklist-driven and mechanical implementation."
+model = "gpt-5.6-luna"
+model_reasoning_effort = "xhigh"
+sandbox_mode = "workspace-write"
+
+developer_instructions = """
+Use the planr-work skill for one tightly bounded item, follow the checklist exactly, verify the result, and stop.
+"""
+'''
+
+[[artifacts]]
+path = ".codex/agents/planr-sol-high.toml"
+kind = "codex_agent"
+content = '''name = "planr_sol_high"
+description = "Independent final review."
+model = "gpt-5.6-sol"
+model_reasoning_effort = "high"
+sandbox_mode = "read-only"
+
+developer_instructions = """
+Use the planr-review skill, independently verify acceptance criteria and evidence, and report findings before the verdict.
+"""
+'''
+
+[[artifacts]]
+path = ".codex/agents/planr-sol-ultra.toml"
+kind = "codex_agent"
+content = '''name = "planr_sol_ultra"
+description = "Explicit moonshot planning only."
+model = "gpt-5.6-sol"
+model_reasoning_effort = "ultra"
+sandbox_mode = "read-only"
+
+developer_instructions = """
+Work only on an explicitly selected moonshot planning task; do not treat this role as the balanced default.
+"""
+'''
+
+[[artifacts]]
+path = ".codex/skills/planr-native-routing/SKILL.md"
+kind = "codex_skill"
+content = '''---
+name: planr-native-routing
+description: Dispatch Planr work through the repository-owned native Codex Sol, Terra, and Luna roles generated by the selected preset.
+---
+# Planr native Codex routing
+
+Use the generated repository roles directly. The role file owns its model and reasoning effort; do not repeat or override those values at the call site.
+
+| Work type | Native dispatch |
+| --- | --- |
+| exploration or research | `spawn_agent({ agent_type: "planr-terra-medium", fork_turns: "none", ... })` |
+| code | `spawn_agent({ agent_type: "planr-terra-high", fork_turns: "none", ... })` |
+| mechanical | `spawn_agent({ agent_type: "planr-luna-xhigh", fork_turns: "none", ... })` |
+| review | `spawn_agent({ agent_type: "planr-sol-high", fork_turns: "none", ... })` |
+| explicitly selected moonshot planning | `spawn_agent({ agent_type: "planr-sol-ultra", fork_turns: "none", ... })` |
+
+The parent remains the generated `planr-sol-medium` driver. Every dispatch that changes role, model, or reasoning effort must name `agent_type` and use `fork_turns: "none"` or an evidenced positive bounded integer. Native Codex rejects `fork_turns: "all"` when `agent_type` selects a role with model or effort overrides. Do not use implicit model inheritance or a fallback role.
 '''

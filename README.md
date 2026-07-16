@@ -28,11 +28,11 @@ Planr now ships a verified preset system for composing a provider-neutral usage 
 
 ```bash
 planr agents preset list
-planr agents preset apply balanced --binding codex-openai --preview
-planr agents preset apply balanced --binding codex-openai --confirm
+planr agents preset apply balanced --binding codex-openai --live-host-command /absolute/codex-adapter --trusted-telemetry-signer codex --trusted-telemetry-collector /absolute/collector --preview
+planr agents preset apply balanced --binding codex-openai --live-host-command /absolute/codex-adapter --trusted-telemetry-signer codex --trusted-telemetry-collector /absolute/collector --confirm
 ```
 
-The built-in catalog includes four policies, five host bindings, and 20 declared safe pairs. Reproducible evaluation, signed registry verification, and the public [Planr Preset Catalog](https://planr-test-catalog.office-35d.workers.dev/) keep recommendation evidence inspectable without making the registry a runtime dependency. Full guides: [Preset Composition](docs/PRESET_COMPOSITION.md) · [Preset Evaluation](docs/PRESET_EVALUATION.md) · [Preset Registry](docs/PRESET_REGISTRY.md).
+The built-in catalog includes four policies, five host bindings, and 20 declared safe pairs. Codex has one current topology: repository-owned GPT-5.6 Sol, Terra, and Luna roles selected through native `agent_type` dispatch. Reproducible evaluation and the public [Planr Preset Catalog](https://planr-test-catalog.office-35d.workers.dev/) keep evidence inspectable without making the registry a runtime dependency. The native Codex entry remains visibly experimental and unrecommended until a fresh independently signed live oracle passes every objective gate. Full guides: [Preset Composition](docs/PRESET_COMPOSITION.md) · [Preset Evaluation](docs/PRESET_EVALUATION.md) · [Preset Registry](docs/PRESET_REGISTRY.md).
 
 ## New in 1.3.0: Native Host Hooks
 
@@ -59,19 +59,20 @@ Declare once which model handles which work — every task then carries its own 
 
 ```toml
 # .planr/agents.toml  (write it with `planr agents init`)
-[profiles.frontender]
-client = "cursor"
-model = "opus"
-skill = "frontend-design"
+[profiles.worker]
+client = "codex"
+model = "gpt-5.6-terra"
+agent_type = "planr-terra-high"
+effort = "high"
+skill = "planr-work"
 
 [[routes]]
-match = { work_type = "frontend" }
-profile = "frontender"
-fallbacks = ["driver"]
+match = { work_type = "code" }
+profile = "worker"
 ```
 
 - **Routing travels in the pick packet** — `planr pick --json` hands the worker its profile, model, and paired skill; `planr pick --peek` lets dispatching drivers read it without taking the lease.
-- **Rendered into your hosts' native config** — `planr install codex|claude|cursor` writes the subagent role files with model pins from the registry, in each host's exact vocabulary.
+- **Rendered into native config** — the default `agents init` atomically writes the canonical repository-local Codex roles; verified preset apply owns subsequent policy composition. `planr install claude|cursor` retains independent role rendering.
 - **Declared vs. actual, with receipts** — workers report the profile they ran on, runs record the observed host, and `planr trace item` shows deviations as advisory markers.
 - **Use-case pools** — free-form work types (`frontend`, `backend`, ...) declared right in the plan's task list (`### TASK-001 (backend): ...`), plus per-item pins via `planr item route`.
 
@@ -105,7 +106,7 @@ Manual downloads, from-source builds, and client wiring details: [Install Guide]
 
 ## Install The Plugin (Skills)
 
-The plugin under `plugins/planr` carries the nine Planr skills plus the `planr-worker` and `planr-reviewer` subagent roles. The `planr` CLI (above) is required separately.
+The plugin under `plugins/planr` carries the ten Planr skills. Claude Code also consumes its independent `planr-worker` and `planr-reviewer` roles; Cursor receives its own roles through `planr install cursor`. Codex roles are generated only from the canonical native preset into the repository. The `planr` CLI (above) is required separately.
 
 <a id="install-plugin-codex"></a>
 <details>

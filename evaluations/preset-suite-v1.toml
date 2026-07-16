@@ -114,13 +114,13 @@ requires_write = false
 minimum_tool_budget = 1
 
 [[tasks]]
-id = "subagent-sol-luna-dispatch"
+id = "subagent-sol-terra-luna-dispatch"
 version = "1.0.0"
 kind = "subagent"
-objective = "Verify Sol/Luna cross-tier dispatch and effective route evidence."
-input = "dispatch-sol-luna-worker"
+objective = "Verify Sol/Terra/Luna cross-role dispatch and effective route evidence."
+input = "dispatch-sol-terra-luna-worker"
 artifact_kind = "dispatch_trace"
-expected_output = "sol-luna-dispatch-verified"
+expected_output = "sol-terra-luna-dispatch-verified"
 work_units = 12
 transition = "availability_fallback"
 requires_write = false

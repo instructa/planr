@@ -187,6 +187,7 @@ impl App {
                     args.get("confirm")
                         .and_then(Value::as_bool)
                         .unwrap_or(false),
+                    crate::app::presets::codex_capability_probe_mcp(&self.root, &args)?,
                 )?,
             )),
             "planr_preset_registry_verify" => {

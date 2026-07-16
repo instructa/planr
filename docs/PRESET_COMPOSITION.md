@@ -8,19 +8,19 @@ Planr composes two independent inputs:
 Preview is the default:
 
 ```bash
-planr agents preset apply ./policy.toml --binding ./codex-binding.toml --preview --json
-planr agents preset apply ./policy.toml --binding ./codex-binding.toml --confirm --json
+planr agents preset apply ./policy.toml --binding ./cursor-binding.toml --preview --json
+planr agents preset apply ./policy.toml --binding ./cursor-binding.toml --confirm --json
 ```
 
-The equivalent MCP tool is `planr_preset_apply` with `policy`, `binding`, and optional `confirm` fields. Both surfaces call one application service and return the same compatibility, permission, verification-age, provenance, conflict, and artifact shapes.
+The equivalent MCP tool is `planr_preset_apply` with `policy`, `binding`, optional `confirm`, and—when any profile targets Codex—the same `live_host_command`, `live_host_args`, `trusted_telemetry_signer`, and `trusted_telemetry_collector` inputs used by live evaluation. Planr reads the local version from `codex --version`; native-v2 and every requested model/effort must be proven by challenge-bound receipts from the hash-pinned collector. Caller assertions are not accepted.
 
 ## Built-in Catalog and Safe Packs
 
 `planr agents preset list --json` (MCP: `planr_presets_list`) lists the four embedded policy presets, five host bindings, source checksums, and 20 declared safe pairs. Built-ins resolve by id or id plus `.toml`, so they work from any repository without copying package files first:
 
 ```bash
-planr agents preset apply balanced --binding codex-openai --preview --json
-planr agents preset apply read-only-audit --binding mixed-host --confirm --json
+planr agents preset apply balanced --binding codex-openai --live-host-command /absolute/codex-adapter --trusted-telemetry-signer codex --trusted-telemetry-collector /absolute/collector --preview --json
+planr agents preset apply read-only-audit --binding cursor-openai --confirm --json
 ```
 
 Policies: `balanced`, `low-usage`, `max-quality`, and `read-only-audit`. Bindings: `codex-openai`, `cursor-openai`, `cursor-fable-grok`, `claude-native`, and `mixed-host`. The exact inspectable sources ship under `presets/policies/` and `presets/bindings/` and are also compiled into the binary.
@@ -33,56 +33,112 @@ Bindings use strict TOML: unknown fields fail parsing. Abstract role keys must c
 
 ```toml
 schema_version = 1
-id = "codex-team"
-version = "1.0.0"
+id = "codex-native"
+version = "2.0.0"
 host = "codex"
 driver_role = "driver"
 default_role = "driver"
-capability_evidence = ["codex-0.138-cross-tier-smoke"]
+capability_evidence = ["codex-0.144.0-native-v2-9ff47868eb"]
 billing_assumptions = ["local subscription"]
-known_limitations = ["effective model requires host evidence"]
+known_limitations = ["native multi-agent v2 and the requested model must be active"]
 
 [capabilities]
 model_override = true
 effort_override = true
 fork_none = true
 fork_all = true
-max_partial_fork_turns = 4
 
 [profiles.driver]
-profile = "sol"
+profile = "codex-sol-medium"
 client = "codex"
-model = "gpt-5.5"
-effort = "xhigh"
+model = "gpt-5.6-sol"
+effort = "medium"
+
+[profiles.explorer]
+profile = "codex-terra-medium"
+client = "codex"
+model = "gpt-5.6-terra"
+effort = "medium"
+fork_turns = { mode = "none" }
 
 [profiles.worker]
-profile = "luna"
+profile = "codex-terra-high"
 client = "codex"
-model = "gpt-5.4-mini"
+model = "gpt-5.6-terra"
 effort = "high"
 skill = "planr-work"
-# Omit for the deterministic `none` default.
-fork_turns = { mode = "partial", turns = 2 }
+fork_turns = { mode = "none" }
+
+[profiles.mechanical]
+profile = "codex-luna-xhigh"
+client = "codex"
+model = "gpt-5.6-luna"
+effort = "xhigh"
+skill = "planr-work"
+fork_turns = { mode = "none" }
+
+[profiles.reviewer]
+profile = "codex-sol-high"
+client = "codex"
+model = "gpt-5.6-sol"
+effort = "high"
+skill = "planr-review"
+fork_turns = { mode = "none" }
+
+[profiles.moonshot]
+profile = "codex-sol-ultra"
+client = "codex"
+model = "gpt-5.6-sol"
+effort = "ultra"
+fork_turns = { mode = "none" }
+
+[[routes]]
+work_type = "exploration"
+role = "explorer"
 
 [[routes]]
 work_type = "code"
 role = "worker"
-fallback_roles = ["driver"]
+
+[[routes]]
+work_type = "mechanical"
+role = "mechanical"
+
+[[routes]]
+work_type = "review"
+role = "reviewer"
+
+[[routes]]
+work_type = "moonshot"
+role = "moonshot"
 
 [verification]
-id = "verify-codex-team"
+id = "verify-codex-native"
 verified_at_unix = 1900000000
 max_age_seconds = 2592000
 
 [[artifacts]]
-path = ".codex/agents/luna.toml"
+path = ".codex/agents/planr-terra-high.toml"
 kind = "codex_agent"
-content = '''model = "gpt-5.4-mini"
+content = '''name = "planr_terra_high"
+description = "Normal implementation and testing."
+model = "gpt-5.6-terra"
 model_reasoning_effort = "high"
+developer_instructions = "Use planr-work for one picked item."
+'''
+
+[[artifacts]]
+path = ".codex/skills/planr-native-routing/SKILL.md"
+kind = "codex_skill"
+content = '''---
+name: planr-native-routing
+description: Dispatch the repository-owned native Codex roles.
+---
+Dispatch code with `spawn_agent({ agent_type: "planr-terra-high", fork_turns: "none", ... })`. The role TOML alone owns model and effort. Native Codex rejects `fork_turns: "all"` when `agent_type` selects a role with model or effort overrides.
 '''
 ```
 
-Codex cross-tier children never accept `fork_turns = { mode = "all" }`, because full history inheritance defeats the requested model/effort override. Omitted fork configuration defaults to `none`. A partial fork must be positive, at or below `max_partial_fork_turns`, and backed by non-empty `capability_evidence`. Secret-like values are forbidden in all binding metadata, including capability evidence, billing assumptions, limitations, profile metadata, routes, and artifact paths/kinds; composition rejects them with field-only diagnostics before producing dispatch/warning output or mutating the repository.
+Native Codex rejects `fork_turns = { mode = "all" }` when `agent_type` selects a role with model or effort overrides. Omitted fork configuration defaults to `none`. A partial fork accepts any positive integer and requires non-empty `capability_evidence`; zero is invalid. Secret-like values are forbidden in all binding metadata, including capability evidence, billing assumptions, limitations, profile metadata, routes, and artifact paths/kinds; composition rejects them with field-only diagnostics before producing dispatch/warning output or mutating the repository.
 
 ## Preview and Lock
 

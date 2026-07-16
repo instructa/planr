@@ -1,18 +1,12 @@
 # Planr Preset Catalog
 
-This directory is a dependency-free static website. Production catalog data is never authored by hand: `build-catalog.mjs` invokes Planr's canonical registry verifier, requires a trusted maintainer signature and safe policy/binding preview, binds status to the evaluation report, and writes `data/catalog.json`.
+This directory is a dependency-free static website. Production catalog data is never authored by hand: the repository regeneration script runs Planr's canonical evaluator and registry verifier, rewrites the report and manifest hashes, projects the verified policy/binding content, and writes `data/catalog.json`.
 
-The committed catalog is generated from the included `registry/manifest.toml`, canonical `registry/verification.json`, and separately pinned public maintainer trust store. Its private release and telemetry signing keys are intentionally not committed. If verification expires, is deprecated, or no longer earns recommendation, the generated catalog preserves the visible lifecycle state instead of inventing or retaining a recommendation.
+The committed native-v2 catalog is generated from the included `registry/manifest.toml` and canonical `registry/verification.json`. Private release and telemetry signing keys are intentionally not committed. The current Sol/Terra/Luna entry is unsigned, experimental, and unrecommended because only offline evidence exists; regeneration preserves that demotion instead of inventing or retaining a recommendation. A release operator may promote it only after a fresh trusted live oracle passes and the resulting manifest is signed offline.
 
 ```sh
-node website/build-catalog.mjs \
-  --planr-bin ./target/release/planr \
-  --manifest website/registry/manifest.toml \
-  --content-root . \
-  --trust-store website/registry/trusted-maintainers.toml \
-  --entry balanced-codex=codex \
-  --at-unix 1783987200 \
-  --output website/data/catalog.json
+cargo build --release
+npm run catalog:regenerate -- --planr-bin target/release/planr --at-unix 1784160000
 
 npm run site:test
 npm run site:serve
@@ -72,8 +66,8 @@ After Node 22+ is active, `pnpm destroy:test` is an equivalent convenience alias
 Never add private registry or telemetry signing keys to the deployment environment. The
 site deploy consumes only the already verified public `website/data/catalog.json`.
 
-Release operators must regenerate the evaluation report through `planr agents preset evaluate` with an independently pinned telemetry collector, update the manifest artifact digest, and sign the registry entry with the corresponding offline maintainer key before rebuilding this file. The public `registry/report.md` summarizes that evidence; the machine report and signature remain the verification source of truth.
+Release operators must regenerate recommendation-capable evidence through `planr agents preset evaluate` with an independently pinned telemetry collector, then use the offline maintainer signing workflow before changing the manifest status. The public `registry/report.md` summarizes the currently shipped evidence; the machine report and, when present, signature remain the verification source of truth.
 
 The report-wide `reproducible_evidence` flag summarizes the entire candidate matrix. Registry publication independently requires the selected candidate's complete reproducible evidence, passing thresholds, verified route receipts, and matching entry in `report.recommended`; candidates that fail those gates are not published as recommendations.
 
-The localhost-only `?fixture=recommended` query remains available for isolated UI regression checks. It is visibly labeled, ignored on non-local hosts, and never substitutes for live verification of the production `data/catalog.json` path.
+Recommendation-state rendering is covered only by clearly synthetic, non-provider in-memory unit data. The runtime website has one data source, `data/catalog.json`; no file-backed recommendation fixture, alternate query path, or fabricated provider evidence is shipped.

@@ -1,18 +1,18 @@
 schema_version = 1
 id = "planr-official"
-version = "2026.07"
-generated_at_unix = 1783987200
+version = "2026.07-native-v2"
+generated_at_unix = 1784160000
 
 [[entries]]
-id = "balanced-codex"
-version = "1.0.0"
+id = "balanced-codex-native-v2"
+version = "2.0.0"
 kind = "pack"
 lifecycle = "published"
-verification_status = "recommended"
-verified_at_unix = 1783987200
+verification_status = "experimental"
+verified_at_unix = 1784160000
 review_at_unix = 1815523200
 compatible_hosts = ["codex"]
-min_planr_version = "1.3.0"
+min_planr_version = "1.4.0"
 max_planr_version = "1.9.0"
 verification_path = "website/registry/verification.json"
 
@@ -20,7 +20,7 @@ verification_path = "website/registry/verification.json"
 policy_id = "balanced"
 policy_version = "1.0.0"
 binding_id = "codex-openai"
-binding_version = "1.0.0"
+binding_version = "2.0.0"
 suite_id = "planr-preset-suite"
 suite_version = "1.8.0"
 
@@ -33,16 +33,11 @@ size_bytes = 993
 [[entries.artifacts]]
 path = "presets/bindings/codex-openai.toml"
 kind = "host-binding"
-sha256 = "2f1f1d91000aff8e6a7424f0380c16c46d24ee38c94de5a9beee2158c0bf6575"
-size_bytes = 1449
+sha256 = "4719a22a802de9752a89ee39041ec50e9b0df80b8f2064df9c78ce595aeb43a8"
+size_bytes = 5884
 
 [[entries.artifacts]]
 path = "website/registry/verification.json"
 kind = "verification"
-sha256 = "7d1e36372b050ecab5080ea029fd3594f8f8f1df2f1d391c36aebd0fb56cf99a"
-size_bytes = 276027
-
-[entries.signature]
-signer = "planr-release-2026"
-algorithm = "ed25519"
-value = "122e213bab8e51b3030685a48b1a3520bc5e2397515dc3aa38da7ed333211e8202e4802949e667add6f29389af29510c2570c4511385206e61c17d4aa914d208"
+sha256 = "906cef90a72c6097d73c01111b2bb09308bbe6bcfb0a44c346ef441ace83e7f4"
+size_bytes = 204065

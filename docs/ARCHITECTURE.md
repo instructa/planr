@@ -6,7 +6,7 @@ Planr V1 is a single Rust binary with explicit module ownership. The crate stays
 
 - `src/`: the Rust CLI (module ownership below).
 - `tests/e2e.rs`: real CLI, MCP, HTTP, import, review-gate, run-log, and concurrent-pick tests.
-- `plugins/planr/`: the installable plugin payload — all nine skills, the worker and reviewer subagent roles, and the per-host plugin manifests.
+- `plugins/planr/`: the installable plugin payload — all ten skills, independent Claude/Cursor worker and reviewer role assets, and the per-host plugin manifests. Native Codex role TOMLs are generated from the selected binding instead of shipped here.
 - `.agents/plugins/marketplace.json`, `.claude-plugin/marketplace.json`: marketplace manifests pointing Codex and Claude Code at `plugins/planr`.
 - `docs/`: user and contributor guides; `docs/planr-spec/` is the production specification package for Planr V1.
 - `examples/real-world-flow.md`: executable real-world operator flow.
@@ -48,7 +48,7 @@ Planr V1 is a single Rust binary with explicit module ownership. The crate stays
 - `src/app/agents.rs`: routing application boundary. Owns the `agents` and `item route` command handlers, the shared `*_value` JSON shapes reused by MCP, per-item route facts assembly, and registry-aware role content selection for installs.
 - `src/app/agents_init.rs`: registry bootstrap boundary. Owns `planr agents init` — the static cost-tiering scaffold and, per the agent-pool plan, the flag-spec builder and interactive wizard.
 - `src/integrations.rs`: agent-client integration descriptor boundary. Owns Codex, Claude Code, Cursor, MCP install metadata, MCP tool schemas, MCP resources, and MCP text response wrapping.
-- `src/rolefiles.rs`: host role file boundary. Owns the shipped static subagent role files and Cursor skills payloads, plus the pure renderers that re-pin role files from registry profiles (Codex TOML with strict field names, Claude/Cursor markdown frontmatter) under the generated-from header.
+- `src/rolefiles.rs`: Claude/Cursor role-file boundary. Owns their shipped static subagent roles, Cursor skills payloads, and pure markdown-frontmatter renderers. Native Codex TOMLs are owned by the canonical preset artifacts in `presets/bindings/codex-openai.toml`, not this compatibility renderer.
 - `src/util.rs`: small CLI-boundary utilities. Owns ids, timestamps, path helpers, output formatting, and safe file writes.
 
 ## Boundary Rules

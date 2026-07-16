@@ -10,43 +10,46 @@ Want the whole flow on a concrete project first? [Worked Example: Routing a Smal
 
 ## Quick Start
 
-One command writes a working starter registry — the cost-tiering defaults with a premium driver, a standard implementer, and a budget helper, commented so the tiers explain themselves:
+Apply the built-in native Codex binding to generate the registry, repository role TOMLs, and dispatch skill as one previewed unit:
 
 ```bash
-planr agents init          # writes .planr/agents.toml; never overwrites without --force
+planr agents preset apply balanced --binding codex-openai --live-host-command /absolute/codex-adapter --trusted-telemetry-signer codex --trusted-telemetry-collector /absolute/collector --preview --json
+planr agents preset apply balanced --binding codex-openai --live-host-command /absolute/codex-adapter --trusted-telemetry-signer codex --trusted-telemetry-collector /absolute/collector --confirm --json
 ```
 
-Or declare `.planr/agents.toml` by hand:
+The generated `.planr/agents.toml` has the canonical direct routes:
 
 ```toml
-[profiles.fable-driver]
-client = "cursor"
-model = "fable-5"
+[profiles.codex-sol-medium]
+client = "codex"
+model = "gpt-5.6-sol"
+effort = "medium"
+cost_tier = "standard"
+
+[profiles.codex-terra-high]
+client = "codex"
+model = "gpt-5.6-terra"
+effort = "high"
+cost_tier = "standard"
+skill = "planr-work"
+
+[profiles.codex-sol-high]
+client = "codex"
+model = "gpt-5.6-sol"
 effort = "high"
 cost_tier = "premium"
-capabilities = ["orchestration", "review", "planning"]
-notes = "Planner/architect and judge. Verdicts stay on this tier."
-
-[profiles.gpt55-coder]
-client = "codex"
-model = "gpt-5.5"
-effort = "xhigh"
-cost_tier = "standard"
-capabilities = ["code", "steerable"]
-notes = "Primary implementer: strong, fast, cheap on subscription."
+skill = "planr-review"
 
 [[routes]]
 match = { work_type = "code" }
-profile = "gpt55-coder"
-fallbacks = ["fable-driver"]
+profile = "codex-terra-high"
 
 [[routes]]
 match = { work_type = "review" }
-profile = "fable-driver"
+profile = "codex-sol-high"
 
 [route_default]
-profile = "gpt55-coder"
-fallbacks = ["fable-driver"]
+profile = "codex-sol-medium"
 ```
 
 Validate and inspect:
@@ -64,17 +67,18 @@ planr pick --json
 
 ```json
 "routing": {
-  "profile": "gpt55-coder",
+  "profile": "codex-terra-high",
   "client": "codex",
-  "model": "gpt-5.5",
-  "effort": "xhigh",
+  "model": "gpt-5.6-terra",
+  "effort": "high",
   "cost_tier": "standard",
-  "fallbacks": ["fable-driver"],
+  "skill": "planr-work",
+  "fallbacks": [],
   "matched_selector": "work_type=code"
 }
 ```
 
-A driver session dispatches the right worker from the packet alone — and when the primary hits a rate limit, the fallback order is already in hand. No mid-run config edits.
+The driver follows `.codex/skills/planr-native-routing/SKILL.md` and dispatches `agent_type: "planr-terra-high"` with `fork_turns: "none"`; `.codex/agents/planr-terra-high.toml` alone owns model and effort. Canonical Codex routes have no fallback chain and require no mid-run edits.
 
 ## The Registry File
 
@@ -102,22 +106,22 @@ Tier the roles, not just the models: workers run safely on cheaper tiers because
 
 ## Host-Native Rendering
 
-Routes only matter if the host actually dispatches the declared model, so `planr install codex|claude|cursor` closes the gap: when a registry is present, the provisioned subagent role files are rendered with pins taken from it instead of the shipped static defaults. The `work_type=code` route pins the worker role, the `work_type=review` route pins the reviewer role, and each render uses the host's exact vocabulary — Codex TOML gets `model` and `model_reasoning_effort` (with `developer_instructions` always present, since Codex silently ignores a role file without it), Claude frontmatter gets `model:` and `effort:`, Cursor frontmatter gets `model:` only.
+Routes only matter if the host actually dispatches the declared model. For Codex, `agents preset apply` generates the complete repository-owned native topology: Sol Medium driver, Terra Medium explorer, Terra High worker, Luna xHigh mechanical worker, Sol High reviewer, and explicit-only Sol Ultra moonshot planner. Each `.codex/agents/*.toml` file owns its exact model and effort, while `.codex/skills/planr-native-routing/SKILL.md` owns `agent_type` plus bounded `fork_turns` dispatch. Claude and Cursor retain their independent role-file renderers and model vocabularies.
 
 Two safety rules keep this predictable:
 
-- **Client matching**: a role file only pins profiles whose `client` matches the install target, scanning the route's fallback chain for the first match. A review route pointing at a Cursor profile never writes a Cursor model id into a Codex TOML — that role keeps its static default instead.
-- **Provision-once**: existing files are never overwritten. After editing the registry, re-render explicitly with `planr install <client> --force`. Rendered files start with a `# generated from .planr/agents.toml` header so you (and future audit tooling) can tell them from hand-maintained ones.
+- **One owner**: Codex call sites never repeat model or effort; only the selected repository role TOML contains them.
+- **Preview and no-overwrite**: preset application previews every target and refuses different existing files. There is no force or global-config path.
 
-Without a registry, installs write the static role files byte-identically to previous releases.
+Without an applied Codex preset, Planr does not invent or fall back to the removed Codex topology.
 
 ## Prompt Routing
 
-`planr prompt routing [--client codex|claude|cursor|all]` prints a paste-ready block for the driver session: the prioritization table (every route, profile, and fallback in precedence order), per-host dispatch guidance including the traps that silently defeat pins (Codex requires `fork_turns: "none"` and a session restart after re-rendering; the `CLAUDE_CODE_SUBAGENT_MODEL` env var preempts Claude frontmatter; Cursor plan mode, admin policy, and Max Mode override silently), and process-dispatch snippets (`codex exec`, `pi`, `opencode run`) for hosts without role files, pre-filled from the `work_type=code` route. `--json` carries the same content structured.
+`planr prompt routing [--client codex|claude|cursor|all]` prints a paste-ready block for the driver session: the prioritization table (every route, profile, and fallback in precedence order), native Codex dispatch through the generated repository role TOMLs with explicit `agent_type` and `fork_turns`, host-specific guidance for Claude and Cursor, and process-dispatch snippets (`pi`, `opencode run`) only for hosts without role files. Codex model and effort never appear at the call site; the selected `.codex/agents/*.toml` file is their sole owner. `--json` carries the same content structured.
 
 ## Run Audit
 
-Every host has a silent override path — the `CLAUDE_CODE_SUBAGENT_MODEL` env var, Cursor plan/admin/Max-Mode policy, Codex full-history forks, org allowlists — so a pin alone is not proof. The audit loop closes this at two levels: workers report the profile they actually ran on via `planr log add`/`planr done --profile <id>` (or `PLANR_PROFILE`) for backward-compatible mismatch checks, and can attach a strict `--route-audit <observation.json>` that keeps requested, host-resolved, and effective model/effort/fork values separate. Every dimension carries enforcement confidence and a constrained evidence source; missing host evidence stays unavailable instead of inheriting the request.
+Host policy can still affect effective routing — for example the `CLAUDE_CODE_SUBAGENT_MODEL` environment variable, Cursor plan/admin/Max-Mode policy, Codex backend availability, and org allowlists — so a role pin alone is not proof. Native Codex rejects an all-history fork when the selected `agent_type` owns model or effort overrides. The audit loop closes this at two levels: workers report the profile they actually ran on via `planr log add`/`planr done --profile <id>` (or `PLANR_PROFILE`) for mismatch checks, and can attach a strict `--route-audit <observation.json>` that keeps requested, host-resolved, and effective model/effort/fork values separate. Every dimension carries enforcement confidence and a constrained evidence source; missing host evidence stays unavailable instead of inheriting the request.
 
 - `planr trace item <id>` (MCP: `planr_trace_item`) shows the declared route next to every run's actual client/profile and three-stage observation with a `mismatch` marker.
 - Runs also record the host they observably executed under (`observed_client`, detected from environment variables the hosts set themselves — no flags); a run whose host differs from the declared route's client emits an advisory `client_mismatch_observed` event, which catches exactly the deviation profile self-report cannot: a different host standing in for the declared client, even when the model matched.
@@ -133,7 +137,7 @@ For single-host pools (e.g. all-Cursor), declare the host's *exact* model slugs 
 ## Failure Behavior
 
 - **No registry file**: nothing changes. Pick packets simply have no `routing` key.
-- **Malformed registry**: `planr agents check` fails with the parser's line context; everything else (`pick`, `map`, `install`) keeps working with routing omitted — installs fall back to the static role files.
+- **Malformed registry**: `planr agents check` fails with the parser's line context; picks omit routing until the registry is repaired. Codex does not fall back to a removed static topology.
 - **Warnings** (unknown profile references, empty or duplicate selectors, budget-tier review routes, secret-like values) never block anything; `agents check` lists them and still exits zero.
 - Never put credentials in the registry — it holds configuration strings only, and secret-like values are flagged.
 
@@ -151,15 +155,14 @@ skill = "frontend-design"     # dispatch this profile *with* this skill
 
 [profiles.backender]
 client = "codex"
-model = "gpt-5.5"
-effort = "xhigh"
+model = "gpt-5.6-terra"
+effort = "high"
 cost_tier = "standard"
 skill = "planr-work"
 
 [[routes]]
 match = { work_type = "frontend" }
 profile = "designer"
-fallbacks = ["driver"]
 
 [[routes]]
 match = { work_type = "design" }
@@ -168,14 +171,13 @@ profile = "designer"
 [[routes]]
 match = { work_type = "backend" }
 profile = "backender"
-fallbacks = ["driver"]
 ```
 
 Create items with the use-case work type (`planr item create ... --work-type frontend`) — or retag existing ones with `planr item update <id> --work-type frontend`, which is how planning agents tag `map build` output against the declared routes (the planning skills read `agents list` and do this without user involvement) — and the pick packet carries the full pairing — `"profile": "designer"`, `"model": "opus"`, `"skill": "frontend-design"` — so the driver dispatches profile and skill together (`Use $frontend-design on item <id>` on the profile's client/model). Workers pull their slice of the pool with `planr pick --work-type frontend`. `skill` is passthrough vocabulary like model ids: Planr never validates it against installed skills, and profiles without one omit the key entirely. A profile that needs different skills for different use cases is simply two profiles.
 
-Declare the `client` you will actually dispatch on. A loop running inside one host dispatches that host's subagents — an in-Cursor driver that dispatches Cursor subagents with per-dispatch models is running `client = "cursor"` profiles in practice, even when the model matches. A `client = "codex"` profile is only honest when the driver really spawns a Codex process (`codex exec ...`). This matters for the audit: workers report the *profile id*, so a profile whose declared client differs from the real dispatch host passes the mismatch check on the model alone — the client deviation stays invisible.
+Declare the `client` you will actually dispatch on. A loop running inside one host dispatches that host's native subagents. A `client = "codex"` profile is honest only when the generated Codex `agent_type` role is dispatched; a Cursor-hosted model remains `client = "cursor"` even when its model family matches. This matters because workers report the profile id and effective-route evidence records the actual host.
 
-When do you actually need more than one client? Hosts with a full model catalog (Cursor) can serve an entire pool natively — an all-`cursor` registry with different models per profile is the normal case there. Cross-client profiles exist for two real situations: vendor-locked hosts (Claude Code dispatches only Anthropic models, Codex CLI only OpenAI models — a Claude-Code driver that wants a GPT implementer must process-dispatch via `codex exec`), and subscription economics (the same model can bill differently per host, so routing backend work through a flat-rate CLI subscription instead of the driver host's quota is a legitimate cost decision).
+Use more than one client only when the selected binding explicitly supports the cross-host topology. The built-in `mixed-host` binding keeps its Cursor Fable driver and dispatches repository-owned Codex Terra/Luna/Sol roles by `agent_type`; it does not synthesize a second process-level Codex model owner.
 
 ## Host Matrix
 
@@ -185,7 +187,7 @@ Where each host reads its model configuration from, and what silently defeats a 
 | --- | --- | --- | --- |
 | Cursor | `.cursor/agents/*.md` frontmatter `model: <id>` (default `inherit`) | yes (`cursor`) | Team-admin model policy, plan availability, and Max-Mode-only models override without error; legacy request-based plans force Composer for subagents; subagent transcripts record no model field, so the actual model cannot be verified from artifacts after the fact — the dispatch parameters in the driver session are the only record |
 | Claude Code | `planr-worker.md`/`planr-reviewer.md` frontmatter `model:` + `effort:` | yes (`claude`) | `CLAUDE_CODE_SUBAGENT_MODEL` clamps frontmatter and per-invocation models with no signal ([#57718](https://github.com/anthropics/claude-code/issues/57718)); since v2.1.196 `inherit` behaves as unset; org `availableModels` allowlists fall back silently |
-| Codex CLI | `.codex/agents/*.toml` with `model` + `model_reasoning_effort` | yes (`codex`) | `fork_turns = "all"` intentionally drops the child's `agent_type`/`model` — use `fork_turns = "none"` or a partial fork; the role registry loads at session start ([#26408](https://github.com/openai/codex/issues/26408)), so re-renders need a restart |
+| Codex CLI | `.codex/agents/*.toml` with `model` + `model_reasoning_effort` | yes (`codex`) | Native Codex rejects `fork_turns = "all"` when `agent_type` selects a role with model or effort overrides; use `fork_turns = "none"` or an evidenced positive partial fork, and restart after applying changed role files because the registry loads at session start ([#26408](https://github.com/openai/codex/issues/26408)) |
 | opencode | `opencode.json` `agent.<name>.model = "provider/model-id"` or `.opencode/agents/*.md` frontmatter | no — use the `planr prompt routing` process snippet | Subagent inherits the primary model when unset; malformed `provider/model-id` strings (quoting, trailing newline) raise `ProviderModelNotFoundError` ([#5623](https://github.com/sst/opencode/issues/5623)) |
 | Pi | none by design — process-level dispatch (`pi --provider --model --thinking`) or the `pi-subagents` extension (`.pi/agents/*.md`) | no — use the `planr prompt routing` process snippet | Extension model-scope enforcement against `enabledModels` is opt-in; without it, pins are best-effort |
 
@@ -193,4 +195,4 @@ For the hosts without rendered role files, `planr prompt routing` prints ready p
 
 ## Command Summary
 
-The registry surface end to end: `planr agents init [--force]` scaffolds, `planr agents list|check` inspect and validate, `planr pick --json` carries the `routing` block, `planr item route [--set|--clear]` pins per item, the MCP tools (`planr_agents_list`, `planr_item_route`, `planr_item_route_set`, `planr_item_route_clear`) return identical JSON shapes, `planr install <client> [--force]` renders host role files from the registry, `planr prompt routing` prints the driver dispatch block, `planr log add`/`done --profile` (or `PLANR_PROFILE`) feed the run audit, `planr trace item` and `planr doctor` surface mismatches and drift, and `planr export`/`import` carry the registry preview-first.
+The registry surface end to end: `planr agents init [--force]` atomically creates the native Codex registry, matching repository role TOMLs, and routing skill, while flags and the wizard build non-Codex pools. `planr agents list|check` inspect and validate, `planr pick --json` carries the routing block, and per-item pins override it. Verified preset apply reuses the same canonical owner, so its registry and role preview remains conflict-free after init. `planr install claude|cursor [--force]` retains independent host rendering.

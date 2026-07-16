@@ -10,7 +10,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
 use std::thread;
 use std::time::Duration;
@@ -32,6 +32,110 @@ fn planr() -> Command {
         cmd.env_remove(var);
     }
     cmd
+}
+
+struct SignedCodexCapabilityFixture {
+    path: String,
+    adapter: PathBuf,
+    collector: PathBuf,
+}
+
+impl SignedCodexCapabilityFixture {
+    fn install(root: &Path) -> Self {
+        let bin = root.join("capability-bin");
+        fs::create_dir(&bin).unwrap();
+        let codex = bin.join("codex");
+        fs::write(&codex, "#!/bin/sh\nprintf 'codex-cli 0.144.0\\n'\n").unwrap();
+        fs::set_permissions(&codex, fs::Permissions::from_mode(0o700)).unwrap();
+        let adapter = root.join("signed-capability-adapter.sh");
+        fs::write(&adapter, r#"#!/bin/sh
+request=$(cat)
+candidate=$(printf '%s' "$request" | sed -n 's/.*"candidate":{"id":"\([^"]*\)".*/\1/p')
+task=$(printf '%s' "$request" | sed -n 's/.*"task":{"id":"\([^"]*\)".*/\1/p')
+input_sha=$(printf '%s' "$request" | sed -n 's/.*"input_sha256":"\([^"]*\)".*/\1/p')
+kind=$(printf '%s' "$request" | sed -n 's/.*"artifact_kind":"\([^"]*\)".*/\1/p')
+challenge=$(printf '%s' "$request" | sed -n 's/.*"challenge_path":"\([^"]*\)".*/\1/p')
+artifact=$(printf '%s' "$request" | sed -n 's/.*"artifact_path":"\([^"]*\)".*/\1/p')
+case "$task" in
+  planr-sol-medium) model=gpt-5.6-sol; effort=medium ;;
+  planr-terra-medium) model=gpt-5.6-terra; effort=medium ;;
+  planr-terra-high) model=gpt-5.6-terra; effort=high ;;
+  planr-luna-xhigh) model=gpt-5.6-luna; effort=xhigh ;;
+  planr-sol-high) model=gpt-5.6-sol; effort=high ;;
+  planr-sol-ultra) model=gpt-5.6-sol; effort=ultra ;;
+esac
+challenge_sha=$(shasum -a 256 "$challenge" | awk '{print $1}')
+printf '{"schema_version":1,"candidate_id":"%s","task_id":"%s","input_sha256":"%s","artifact_kind":"%s","challenge_sha256":"%s","output":"ok"}' "$candidate" "$task" "$input_sha" "$kind" "$challenge_sha" > "$artifact"
+artifact_sha=$(shasum -a 256 "$artifact" | awk '{print $1}')
+printf '{"schema_version":1,"host_id":"codex","host_version":"0.144.0","candidate_id":"%s","task_id":"%s","input_sha256":"%s","artifact_kind":"%s","artifact_sha256":"%s","output":"ok","effective_model":"%s","effective_effort":"%s","effective_context_fork":{"mode":"none"},"effective_agent_type":"%s","tool_calls":1,"tokens":1,"credits_micros":1,"retries":0,"availability_fallbacks":0,"quality_escalations":0,"corrections":0,"violations":0}\n' "$candidate" "$task" "$input_sha" "$kind" "$artifact_sha" "$model" "$effort" "$task"
+"#).unwrap();
+        fs::set_permissions(&adapter, fs::Permissions::from_mode(0o700)).unwrap();
+        let seed = root.join("signed-capability-seed.hex");
+        fs::write(
+            &seed,
+            "0707070707070707070707070707070707070707070707070707070707070707",
+        )
+        .unwrap();
+        let collector = root.join("signed-capability-collector.sh");
+        let planr_bin = assert_cmd::cargo::cargo_bin("planr");
+        fs::write(&collector, format!(r#"#!/bin/sh
+request=$(cat)
+task=$(printf '%s' "$request" | sed -n 's/.*"task_id":"\([^"]*\)".*/\1/p')
+case "$task" in
+  planr-sol-medium) model=gpt-5.6-sol; effort=medium ;;
+  planr-terra-medium) model=gpt-5.6-terra; effort=medium ;;
+  planr-terra-high) model=gpt-5.6-terra; effort=high ;;
+  planr-luna-xhigh) model=gpt-5.6-luna; effort=xhigh ;;
+  planr-sol-high) model=gpt-5.6-sol; effort=high ;;
+  planr-sol-ultra) model=gpt-5.6-sol; effort=ultra ;;
+esac
+payload=$(printf '%s' "$request" | sed 's/}}$/,"host_id":"codex","host_version":"0.144.0","effective_model":"'"$model"'","effective_effort":"'"$effort"'","effective_context_fork":{{"mode":"none"}},"effective_agent_type":"'"$task"'","tool_calls":1,"tokens":1,"credits_micros":1,"retries":0,"availability_fallbacks":0,"quality_escalations":0,"corrections":0,"violations":0}}/')
+printf '%s' "$payload" | "{}" --json agents preset telemetry-sign --private-key-file "{}"
+"#, planr_bin.display(), seed.display())).unwrap();
+        fs::set_permissions(&collector, fs::Permissions::from_mode(0o700)).unwrap();
+        let public = SigningKey::from_bytes(&[7_u8; 32])
+            .verifying_key()
+            .as_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let digest = format!("{:x}", Sha256::digest(fs::read(&collector).unwrap()));
+        fs::write(root.join(".planr/trusted-telemetry.toml"), format!("schema_version = 1\n[[signers]]\nid = \"composition-e2e\"\npublic_key_hex = \"{public}\"\ncollector_sha256 = \"{digest}\"\n")).unwrap();
+        Self {
+            path: format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+            adapter,
+            collector,
+        }
+    }
+
+    fn configure(&self, command: &mut Command) {
+        command.env("PATH", &self.path);
+    }
+
+    fn cli_args(&self) -> Vec<String> {
+        vec![
+            "--live-host-command".into(),
+            "/bin/sh".into(),
+            "--live-host-arg".into(),
+            self.adapter.display().to_string(),
+            "--trusted-telemetry-signer".into(),
+            "composition-e2e".into(),
+            "--trusted-telemetry-collector".into(),
+            self.collector.display().to_string(),
+        ]
+    }
+
+    fn mcp_arguments(&self, policy: &str, binding: &str, confirm: bool) -> Value {
+        json!({
+            "policy": policy,
+            "binding": binding,
+            "confirm": confirm,
+            "live_host_command": "/bin/sh",
+            "live_host_args": [self.adapter],
+            "trusted_telemetry_signer": "composition-e2e",
+            "trusted_telemetry_collector": self.collector,
+        })
+    }
 }
 
 #[test]
@@ -599,8 +703,8 @@ fn agent_registry_routes_picks_and_degrades_without_blocking() {
         &registry_path,
         r#"
 [profiles.implementer]
-client = "codex"
-model = "gpt-5.5"
+client = "cursor"
+model = "fable-code"
 effort = "medium"
 cost_tier = "standard"
 
@@ -643,7 +747,7 @@ fallbacks = ["driver"]
     let listed: Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(
         listed["registry"]["profiles"]["implementer"]["model"],
-        "gpt-5.5"
+        "fable-code"
     );
     assert_eq!(listed["registry"]["routes"][0]["profile"], "implementer");
 
@@ -681,8 +785,8 @@ fallbacks = ["driver"]
     let picked: Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(picked["item"]["id"], item_id);
     assert_eq!(picked["routing"]["profile"], "implementer");
-    assert_eq!(picked["routing"]["client"], "codex");
-    assert_eq!(picked["routing"]["model"], "gpt-5.5");
+    assert_eq!(picked["routing"]["client"], "cursor");
+    assert_eq!(picked["routing"]["model"], "fable-code");
     assert_eq!(picked["routing"]["effort"], "medium");
     assert_eq!(picked["routing"]["cost_tier"], "standard");
     assert_eq!(picked["routing"]["fallbacks"], json!(["driver"]));
@@ -748,8 +852,8 @@ fn route_overrides_pin_items_and_survive_registry_drift() {
         &registry_path,
         r#"
 [profiles.implementer]
-client = "codex"
-model = "gpt-5.5"
+client = "cursor"
+model = "fable-code"
 
 [profiles.driver]
 client = "cursor"
@@ -864,8 +968,8 @@ profile = "implementer"
         &registry_path,
         r#"
 [profiles.implementer]
-client = "codex"
-model = "gpt-5.5"
+client = "cursor"
+model = "fable-code"
 
 [[routes]]
 match = { work_type = "code" }
@@ -970,7 +1074,7 @@ profile = "implementer"
 }
 
 #[test]
-fn install_renders_roles_from_registry_and_respects_provision_once() {
+fn install_keeps_cursor_rendering_and_codex_roles_preset_owned() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
     planr()
@@ -982,9 +1086,9 @@ fn install_renders_roles_from_registry_and_respects_provision_once() {
         dir.path().join(".planr/agents.toml"),
         r#"
 [profiles.coder]
-client = "codex"
-model = "gpt-5.5"
-effort = "xhigh"
+client = "cursor"
+model = "fable-code"
+effort = "high"
 
 [profiles.judge]
 client = "cursor"
@@ -1002,34 +1106,7 @@ profile = "judge"
     )
     .unwrap();
 
-    planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "install", "codex"])
-        .assert()
-        .success();
-    let worker_path = dir.path().join(".codex/agents/planr-worker.toml");
-    let worker = fs::read_to_string(&worker_path).unwrap();
-    assert!(worker.contains("# generated from .planr/agents.toml"));
-    let parsed: toml::Value = toml::from_str(&worker).unwrap();
-    assert_eq!(parsed["model"].as_str(), Some("gpt-5.5"));
-    assert_eq!(parsed["model_reasoning_effort"].as_str(), Some("xhigh"));
-    // The worker's audit report is baked into its own definition: the
-    // concrete profile id as a --profile instruction, not worker memory.
-    assert!(
-        parsed["developer_instructions"]
-            .as_str()
-            .unwrap()
-            .contains("--profile coder"),
-        "rendered worker must instruct its own profile report: {worker}"
-    );
-    // The review route points at a Cursor profile: a Codex role file must
-    // not pin a model Codex cannot dispatch, so the reviewer stays static.
-    let reviewer =
-        fs::read_to_string(dir.path().join(".codex/agents/planr-reviewer.toml")).unwrap();
-    assert!(!reviewer.contains("generated from"));
-    assert!(!reviewer.contains("fable-5"));
-
-    // The same review route does pin the Cursor reviewer role.
+    // Claude/Cursor retain independent role rendering.
     planr()
         .current_dir(dir.path())
         .args(["--db", db.to_str().unwrap(), "install", "cursor"])
@@ -1039,59 +1116,209 @@ profile = "judge"
         fs::read_to_string(dir.path().join(".cursor/agents/planr-reviewer.md")).unwrap();
     assert!(cursor_reviewer.contains("model: fable-5"));
     assert!(cursor_reviewer.contains("# profile: judge"));
-    let cursor_worker =
-        fs::read_to_string(dir.path().join(".cursor/agents/planr-worker.md")).unwrap();
-    assert!(
-        cursor_worker.contains("model: inherit"),
-        "code route targets a Codex profile, so the Cursor worker keeps its static default"
-    );
+    let worker_path = dir.path().join(".cursor/agents/planr-worker.md");
+    let cursor_worker = fs::read_to_string(&worker_path).unwrap();
+    assert!(cursor_worker.contains("model: fable-code"));
+    assert!(cursor_worker.contains("# profile: coder"));
 
     // Provision-once: hand edits survive a re-install without --force and
     // are re-rendered with it.
     fs::write(&worker_path, "# hand edited\n").unwrap();
     planr()
         .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "install", "codex"])
+        .args(["--db", db.to_str().unwrap(), "install", "cursor"])
         .assert()
         .success();
     assert_eq!(fs::read_to_string(&worker_path).unwrap(), "# hand edited\n");
     planr()
         .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "install", "codex", "--force"])
+        .args(["--db", db.to_str().unwrap(), "install", "cursor", "--force"])
         .assert()
         .success();
-    assert_eq!(fs::read_to_string(&worker_path).unwrap(), worker);
+    assert_eq!(fs::read_to_string(&worker_path).unwrap(), cursor_worker);
 
-    // Without a registry the install output is byte-identical to the
-    // shipped static role files.
-    let fresh = tempdir().unwrap();
-    let fresh_db = fresh.path().join(".planr/planr.sqlite");
+    // Codex install is MCP-only. Native role TOMLs are generated solely by
+    // preset preview/apply and the removed legacy names never reappear.
     planr()
-        .current_dir(fresh.path())
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "install", "codex"])
+        .assert()
+        .success();
+    assert!(
+        dir.path()
+            .join(".planr/integrations/codex-mcp.toml")
+            .exists()
+    );
+    assert!(!dir.path().join(".codex/agents/planr-worker.toml").exists());
+    assert!(
+        !dir.path()
+            .join(".codex/agents/planr-reviewer.toml")
+            .exists()
+    );
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "install", "codex", "--no-mcp"])
+        .assert()
+        .success();
+    assert!(!dir.path().join(".codex/agents/planr-worker.toml").exists());
+}
+
+#[test]
+fn agent_registry_rejects_non_current_codex_shapes() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
         .args([
             "--db",
-            fresh_db.to_str().unwrap(),
+            db.to_str().unwrap(),
             "project",
             "init",
-            "Static",
+            "Codex registry shape",
         ])
         .assert()
         .success();
+    let registry_path = dir.path().join(".planr/agents.toml");
+    let item = create_test_item(dir.path(), &db, "Current route", "Codex shape gate");
     planr()
-        .current_dir(fresh.path())
-        .args(["--db", fresh_db.to_str().unwrap(), "install", "codex"])
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "item",
+            "update",
+            &item,
+            "--work-type",
+            "code",
+        ])
         .assert()
         .success();
-    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    assert_eq!(
-        fs::read_to_string(fresh.path().join(".codex/agents/planr-worker.toml")).unwrap(),
-        fs::read_to_string(repo.join("plugins/planr/skills/planr-loop/agents/planr-worker.toml"))
+
+    fs::write(
+        &registry_path,
+        r#"
+[profiles.worker]
+client = "codex"
+model = "gpt-5.6-terra"
+agent_type = "  "
+
+[[routes]]
+match = { work_type = "code" }
+profile = "worker"
+"#,
+    )
+    .unwrap();
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "agents", "check"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let checked: Value = serde_json::from_slice(&output).unwrap();
+    assert!(
+        checked["warnings"].as_array().unwrap()[0]
+            .as_str()
             .unwrap()
+            .contains("nonblank `agent_type`")
     );
-    assert_eq!(
-        fs::read_to_string(fresh.path().join(".codex/agents/planr-reviewer.toml")).unwrap(),
-        fs::read_to_string(repo.join("plugins/planr/skills/planr-loop/agents/planr-reviewer.toml"))
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "pick"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let picked: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(picked["item"]["id"], item);
+    assert!(picked.get("routing").is_none());
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "pick", "release", &item])
+        .assert()
+        .success();
+
+    fs::write(
+        &registry_path,
+        r#"
+[profiles.worker]
+client = "codex"
+model = "gpt-5.6-terra"
+agent_type = "planr-terra-high"
+
+[profiles.driver]
+client = "cursor"
+model = "fable-5"
+
+[[routes]]
+match = { work_type = "code" }
+profile = "worker"
+fallbacks = ["driver"]
+"#,
+    )
+    .unwrap();
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "agents", "check"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let checked: Value = serde_json::from_slice(&output).unwrap();
+    assert!(
+        checked["warnings"].as_array().unwrap()[0]
+            .as_str()
             .unwrap()
+            .contains("fallback chain involving Codex")
+    );
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "pick"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let picked: Value = serde_json::from_slice(&output).unwrap();
+    assert!(picked.get("routing").is_none());
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "pick", "release", &item])
+        .assert()
+        .success();
+
+    fs::write(
+        &registry_path,
+        r#"
+[profiles.worker]
+client = "codex"
+model = "gpt-5.6-terra"
+agent_type = "planr-terra-high"
+
+[[routes]]
+match = { work_type = "code" }
+profile = "worker"
+"#,
+    )
+    .unwrap();
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "pick"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let picked: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(picked["routing"]["agent_type"], "planr-terra-high");
+    assert!(
+        picked["routing"]["fallbacks"]
+            .as_array()
+            .unwrap()
+            .is_empty()
     );
 }
 
@@ -1108,8 +1335,8 @@ fn run_profile_recording_emits_advisory_mismatch_events_only() {
         dir.path().join(".planr/agents.toml"),
         r#"
 [profiles.coder]
-client = "codex"
-model = "gpt-5.5"
+client = "cursor"
+model = "fable-code"
 
 [profiles.driver]
 client = "cursor"
@@ -1421,8 +1648,8 @@ fn route_audit_survives_logs_events_and_cli_mcp_trace_without_inference() {
         dir.path().join(".planr/agents.toml"),
         r#"
 [profiles.coder]
-client = "codex"
-model = "gpt-5.5"
+client = "cursor"
+model = "fable-code"
 effort = "high"
 
 [[routes]]
@@ -1459,7 +1686,8 @@ profile = "coder"
             "role": "worker",
             "profile": "coder",
             "client": "codex",
-            "model": {"value": "gpt-5.5", "enforcement": "requested_only", "evidence": "policy"},
+            "agent_type": {"value": "planr-terra-high", "enforcement": "requested_only", "evidence": "binding"},
+            "model": {"value": "gpt-5.6-terra", "enforcement": "requested_only", "evidence": "policy"},
             "effort": {"value": "high", "enforcement": "requested_only", "evidence": "policy"},
             "context_fork": {"value": {"mode": "none"}, "enforcement": "requested_only", "evidence": "policy"}
         },
@@ -1467,17 +1695,21 @@ profile = "coder"
             "role": "worker",
             "profile": "coder",
             "client": "codex",
-            "model": {"value": "gpt-5.5", "enforcement": "verified", "evidence": "binding"},
+            "agent_type": {"value": "planr-terra-high", "enforcement": "verified", "evidence": "binding"},
+            "model": {"value": "gpt-5.6-terra", "enforcement": "verified", "evidence": "binding"},
             "effort": {"value": "high", "enforcement": "verified", "evidence": "binding"},
             "context_fork": {"value": {"mode": "none"}, "enforcement": "verified", "evidence": "binding"}
         },
         "effective": {
-            "role": "worker",
+            "role": "planr-terra-high",
             "profile": "coder",
             "client": "codex",
+            "agent_type": {"value": "planr-terra-high", "enforcement": "verified", "evidence": "host_report"},
             "model": {"value": null, "enforcement": "unavailable"},
             "effort": {"value": null, "enforcement": "unavailable"},
-            "context_fork": {"value": {"mode": "none"}, "enforcement": "verified", "evidence": "host_report"}
+            "context_fork": {"value": {"mode": "none"}, "enforcement": "verified", "evidence": "host_report"},
+            "thread_id": "thread-terra-high",
+            "status": "completed"
         },
         "transition": {
             "kind": "availability_fallback",
@@ -1485,7 +1717,7 @@ profile = "coder"
             "evidence": ["host_report"]
         },
         "policy": {"id": "balanced", "version": "1.0.0"},
-        "binding": {"id": "codex-openai", "version": "1.0.0"},
+        "binding": {"id": "codex-openai", "version": "2.0.0"},
         "metering": {
             "wall_time_seconds": {"value": 12, "confidence": "trusted"},
             "tool_calls": {"value": 4, "confidence": "trusted"},
@@ -1543,13 +1775,20 @@ profile = "coder"
         .clone();
     let cli_trace: Value = serde_json::from_slice(&output).unwrap();
     let route = &cli_trace["routing"]["runs"][0]["route_observation"];
-    assert_eq!(route["requested"]["model"]["value"], "gpt-5.5");
+    assert_eq!(
+        route["requested"]["agent_type"]["value"],
+        "planr-terra-high"
+    );
+    assert_eq!(route["requested"]["model"]["value"], "gpt-5.6-terra");
     assert_eq!(route["resolved"]["effort"]["value"], "high");
     assert!(route["effective"]["model"]["value"].is_null());
     assert_eq!(route["effective"]["model"]["enforcement"], "unavailable");
     assert_eq!(route["effective"]["context_fork"]["value"]["mode"], "none");
+    assert_eq!(route["effective"]["role"], "planr-terra-high");
+    assert_eq!(route["effective"]["thread_id"], "thread-terra-high");
+    assert_eq!(route["effective"]["status"], "completed");
     assert_eq!(route["policy"]["id"], "balanced");
-    assert_eq!(route["binding"]["version"], "1.0.0");
+    assert_eq!(route["binding"]["version"], "2.0.0");
     assert_eq!(route["metering"]["tool_calls"]["value"], 4);
     assert_eq!(route["metering"]["tokens"]["confidence"], "unavailable");
 
@@ -1889,13 +2128,13 @@ fn trace_routing_section_and_doctor_registry_diagnostics() {
         &registry_path,
         r#"
 [profiles.coder]
-client = "codex"
-model = "gpt-5.5"
+client = "cursor"
+model = "fable-code"
 effort = "xhigh"
 
 [profiles.ghost-ref]
-client = "codex"
-model = "gpt-5.5"
+client = "cursor"
+model = "fable-code"
 
 [[routes]]
 match = { work_type = "code" }
@@ -1932,7 +2171,7 @@ profile = "nonexistent"
     // registry changes underneath them.
     planr()
         .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "install", "codex"])
+        .args(["--db", db.to_str().unwrap(), "install", "cursor"])
         .assert()
         .success();
     let artifact_state = |value: &Value, path: &str| -> String {
@@ -1954,15 +2193,15 @@ profile = "nonexistent"
         .clone();
     let doctor: Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(
-        artifact_state(&doctor, ".codex/agents/planr-worker.toml"),
+        artifact_state(&doctor, ".cursor/agents/planr-worker.md"),
         "current"
     );
     fs::write(
         &registry_path,
         r#"
 [profiles.coder]
-client = "codex"
-model = "gpt-6"
+client = "cursor"
+model = "fable-next"
 effort = "high"
 
 [[routes]]
@@ -1981,7 +2220,7 @@ profile = "coder"
         .clone();
     let doctor: Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(
-        artifact_state(&doctor, ".codex/agents/planr-worker.toml"),
+        artifact_state(&doctor, ".cursor/agents/planr-worker.md"),
         "drifted"
     );
     assert!(
@@ -2066,8 +2305,8 @@ fn package_round_trips_agent_registry_without_silent_overwrite() {
         .success();
     let registry_toml = r#"
 [profiles.coder]
-client = "codex"
-model = "gpt-5.5"
+client = "cursor"
+model = "fable-code"
 
 [[routes]]
 match = { work_type = "code" }
@@ -2244,8 +2483,8 @@ cost_tier = "premium"
 skill = "frontend-design"
 
 [profiles.backender]
-client = "codex"
-model = "gpt-5.5"
+client = "cursor"
+model = "fable-code"
 
 [[routes]]
 match = { work_type = "frontend" }
@@ -2325,7 +2564,7 @@ profile = "backender"
         .stdout
         .clone();
     let prompt = String::from_utf8(output).unwrap();
-    assert!(prompt.contains("| work_type=frontend | designer | claude-code | opus | high | premium | frontend-design | backender |"));
+    assert!(prompt.contains("| work_type=frontend | designer | claude-code | - | opus | high | premium | frontend-design | backender |"));
     assert!(prompt.contains("dispatch the worker with that skill"));
 
     // Retagging via item update re-resolves routing on the next pick:
@@ -2631,25 +2870,27 @@ fn agents_init_flag_specs_generate_a_pool_and_fail_closed() {
     assert_eq!(pick["routing"]["skill"], "frontend-design");
     assert_eq!(pick["routing"]["fallbacks"][0], "driver");
 
-    // A hand-written registry with render-unsafe values (quoted TOML keys
-    // parse fine but would corrupt rendered role files) keeps installs on
-    // the static role files instead of writing broken artifacts.
+    // A hand-written Cursor registry with render-unsafe values keeps its
+    // independent renderer on the static role instead of writing broken artifacts.
     fs::write(
         dir.path().join(".planr/agents.toml"),
-        "[profiles.\"evil\nid\"]\nclient = \"codex\"\nmodel = \"gpt-5.5\"\n\n[[routes]]\nmatch = { work_type = \"code\" }\nprofile = \"evil\nid\"\n",
+        "[profiles.\"evil\nid\"]\nclient = \"cursor\"\nmodel = \"fable-code\"\n\n[[routes]]\nmatch = { work_type = \"code\" }\nprofile = \"evil\nid\"\n",
     )
     .unwrap();
     planr()
         .current_dir(dir.path())
-        .args(["--db", &db_arg, "install", "codex", "--no-mcp", "--force"])
+        .args(["--db", &db_arg, "install", "cursor", "--no-mcp", "--force"])
         .assert()
         .success();
-    let worker = fs::read_to_string(dir.path().join(".codex/agents/planr-worker.toml")).unwrap();
+    let worker = fs::read_to_string(dir.path().join(".cursor/agents/planr-worker.md")).unwrap();
     assert!(
         !worker.contains("generated from"),
         "render-unsafe profile must fall back to the static role: {worker}"
     );
-    toml::from_str::<toml::Value>(&worker).expect("role file must stay parseable TOML");
+    assert!(
+        worker.starts_with("---\n"),
+        "role file must stay parseable markdown"
+    );
 
     // QA-3: spec flags never overwrite without --force either.
     planr()
@@ -2660,7 +2901,7 @@ fn agents_init_flag_specs_generate_a_pool_and_fail_closed() {
             "agents",
             "init",
             "--profile",
-            "solo=codex/gpt-5.5",
+            "solo=cursor/fable-code",
         ])
         .assert()
         .failure()
@@ -2691,7 +2932,7 @@ fn agents_init_flag_specs_generate_a_pool_and_fail_closed() {
             "init",
             "--interactive",
             "--profile",
-            "a=codex/m",
+            "a=cursor/m",
             "--force",
         ])
         .assert()
@@ -2711,7 +2952,7 @@ fn observed_client_lands_on_runs_and_flags_declared_client_deviation() {
     fs::create_dir_all(dir.path().join(".planr")).unwrap();
     fs::write(
         dir.path().join(".planr/agents.toml"),
-        "[profiles.coder]\nclient = \"cursor\"\nmodel = \"gpt-5.5\"\n\n[route_default]\nprofile = \"coder\"\n",
+        "[profiles.coder]\nclient = \"cursor\"\nmodel = \"fable-code\"\n\n[route_default]\nprofile = \"coder\"\n",
     )
     .unwrap();
     let item = create_test_item(dir.path(), &db, "Routed work", "host audit");
@@ -3070,7 +3311,7 @@ fn plan_work_type_annotations_seed_routed_items_without_retags() {
         .success();
     fs::write(
         dir.path().join(".planr/agents.toml"),
-        "[profiles.frontender]\nclient = \"cursor\"\nmodel = \"opus\"\n\n[profiles.backender]\nclient = \"cursor\"\nmodel = \"gpt-5.5-high\"\n\n[[routes]]\nmatch = { work_type = \"frontend\" }\nprofile = \"frontender\"\n\n[[routes]]\nmatch = { work_type = \"backend\" }\nprofile = \"backender\"\n",
+        "[profiles.frontender]\nclient = \"claude-code\"\nmodel = \"opus\"\n\n[profiles.backender]\nclient = \"cursor\"\nmodel = \"fable-code\"\n\n[[routes]]\nmatch = { work_type = \"frontend\" }\nprofile = \"frontender\"\n\n[[routes]]\nmatch = { work_type = \"backend\" }\nprofile = \"backender\"\n",
     )
     .unwrap();
     // A build plan whose task list carries annotations: heading style,
@@ -3638,7 +3879,7 @@ fn pick_peek_reads_the_packet_without_leasing() {
         .success();
     fs::write(
         dir.path().join(".planr/agents.toml"),
-        "[profiles.coder]\nclient = \"cursor\"\nmodel = \"gpt-5.5-high\"\n\n[route_default]\nprofile = \"coder\"\n",
+        "[profiles.coder]\nclient = \"cursor\"\nmodel = \"fable-code\"\n\n[route_default]\nprofile = \"coder\"\n",
     )
     .unwrap();
     let item = create_test_item(dir.path(), &db, "Dispatch me", "peek target");
@@ -3728,11 +3969,37 @@ fn agents_init_scaffold_is_warning_free_and_routes_by_default() {
     assert_eq!(check["ok"], true);
     assert_eq!(check["warnings"].as_array().unwrap().len(), 0);
 
-    // The scaffold teaches client honesty where clients get declared.
+    // The scaffold is the canonical native topology, not a process fallback.
     let scaffold_content = fs::read_to_string(dir.path().join(".planr/agents.toml")).unwrap();
     assert!(
-        scaffold_content.contains("Declare the client you will actually dispatch on"),
-        "scaffold must carry the client-honesty rule: {scaffold_content}"
+        scaffold_content.contains("agent_type = \"planr-terra-high\"")
+            && scaffold_content.contains("agent_type = \"planr-luna-xhigh\"")
+            && !scaffold_content.contains("codex exec"),
+        "scaffold must carry only native agent_type routing: {scaffold_content}"
+    );
+    let scaffold: toml::Value = toml::from_str(&scaffold_content).unwrap();
+    assert!(
+        scaffold["routes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|route| { route["fallbacks"].as_array().is_some_and(Vec::is_empty) })
+    );
+    for profile in scaffold["profiles"].as_table().unwrap().values() {
+        let agent_type = profile["agent_type"].as_str().unwrap();
+        let role_path = dir.path().join(format!(".codex/agents/{agent_type}.toml"));
+        assert!(role_path.exists(), "missing native role for {agent_type}");
+        let role: toml::Value = toml::from_str(&fs::read_to_string(&role_path).unwrap()).unwrap();
+        assert_eq!(role["model"].as_str(), profile["model"].as_str());
+        assert_eq!(
+            role["model_reasoning_effort"].as_str(),
+            profile["effort"].as_str()
+        );
+    }
+    assert!(
+        dir.path()
+            .join(".codex/skills/planr-native-routing/SKILL.md")
+            .exists()
     );
 
     // A seeded code item picks up the scaffold's implementer route.
@@ -3760,14 +4027,15 @@ fn agents_init_scaffold_is_warning_free_and_routes_by_default() {
         .stdout
         .clone();
     let pick: Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(pick["routing"]["profile"], "implementer");
-    assert_eq!(pick["routing"]["model"], "gpt-5.5");
-    assert_eq!(pick["routing"]["fallbacks"][0], "driver");
+    assert_eq!(pick["routing"]["profile"], "codex-terra-high");
+    assert_eq!(pick["routing"]["agent_type"], "planr-terra-high");
+    assert_eq!(pick["routing"]["model"], "gpt-5.6-terra");
+    assert!(pick["routing"]["fallbacks"].as_array().unwrap().is_empty());
     assert_eq!(pick["routing"]["matched_selector"], "work_type=code");
 
     // A second init refuses politely and leaves the file untouched...
     let scaffold = fs::read_to_string(dir.path().join(".planr/agents.toml")).unwrap();
-    let custom = scaffold.replace("gpt-5.5", "gpt-6");
+    let custom = scaffold.replace("gpt-5.6-terra", "gpt-6");
     fs::write(dir.path().join(".planr/agents.toml"), &custom).unwrap();
     planr()
         .current_dir(dir.path())
@@ -3789,6 +4057,65 @@ fn agents_init_scaffold_is_warning_free_and_routes_by_default() {
     assert_eq!(
         fs::read_to_string(dir.path().join(".planr/agents.toml")).unwrap(),
         scaffold
+    );
+}
+
+#[test]
+fn agents_init_native_artifacts_fail_atomically_at_repository_boundary() {
+    let dir = tempdir().unwrap();
+    let outside = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Boundary"])
+        .assert()
+        .success();
+    fs::create_dir_all(dir.path().join(".codex")).unwrap();
+    std::os::unix::fs::symlink(outside.path(), dir.path().join(".codex/agents")).unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "agents", "init"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("crosses symlink"));
+    assert!(!dir.path().join(".planr/agents.toml").exists());
+    assert!(fs::read_dir(outside.path()).unwrap().next().is_none());
+    assert!(
+        !dir.path()
+            .join(".codex/skills/planr-native-routing/SKILL.md")
+            .exists(),
+        "prevalidation must prevent partial writes"
+    );
+
+    let conflict = tempdir().unwrap();
+    let conflict_db = conflict.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(conflict.path())
+        .args([
+            "--db",
+            conflict_db.to_str().unwrap(),
+            "project",
+            "init",
+            "Conflict",
+        ])
+        .assert()
+        .success();
+    let occupied = conflict.path().join(".codex/agents/planr-sol-medium.toml");
+    fs::create_dir_all(occupied.parent().unwrap()).unwrap();
+    fs::write(&occupied, "# unrelated\n").unwrap();
+    planr()
+        .current_dir(conflict.path())
+        .args(["--db", conflict_db.to_str().unwrap(), "agents", "init"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unrelated canonical artifact"));
+    assert_eq!(fs::read_to_string(&occupied).unwrap(), "# unrelated\n");
+    assert!(!conflict.path().join(".planr/agents.toml").exists());
+    assert!(
+        !conflict
+            .path()
+            .join(".codex/agents/planr-terra-high.toml")
+            .exists()
     );
 }
 
@@ -3823,8 +4150,8 @@ fn prompt_routing_names_routes_fallbacks_and_host_traps() {
         dir.path().join(".planr/agents.toml"),
         r#"
 [profiles.coder]
-client = "codex"
-model = "gpt-5.5"
+client = "cursor"
+model = "fable-code"
 effort = "xhigh"
 
 [profiles.driver]
@@ -3862,8 +4189,8 @@ profile = "driver"
         "fork_turns: \"none\"",
         "CLAUDE_CODE_SUBAGENT_MODEL",
         "Max Mode can override",
-        // Process dispatch reuses the code route's pin as the example.
-        "codex exec --model gpt-5.5 -c model_reasoning_effort=\"xhigh\"",
+        "spawn_agent({ agent_type:",
+        "native Codex rejects `fork_turns: \"all\"`",
         "pi --provider",
         "opencode run",
     ] {
@@ -3878,7 +4205,9 @@ profile = "driver"
             .unwrap()
             .contains("fork_turns")
     );
-    assert_eq!(json["process_dispatch"].as_array().unwrap().len(), 3);
+    assert!(!prompt.contains("codex exec"));
+    assert!(!prompt.contains("model_reasoning_effort"));
+    assert_eq!(json["process_dispatch"].as_array().unwrap().len(), 2);
 
     // --client filters the host sections but keeps the table.
     let codex_only = planr()
@@ -3901,6 +4230,82 @@ profile = "driver"
     assert!(!codex_prompt.contains("### Cursor"));
     assert!(codex_prompt.contains("work_type=code"));
     assert!(codex_json["hosts"].get("claude").is_none());
+    assert!(
+        codex_json["process_dispatch"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!codex_prompt.contains("Hosts without role files"));
+    assert!(!codex_prompt.contains("pi --provider"));
+    assert!(!codex_prompt.contains("opencode run"));
+}
+
+#[test]
+fn current_codex_surfaces_contain_only_the_native_sol_terra_luna_contract() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let current_surfaces = [
+        "docs/GOALS.md",
+        "docs/CODEX.md",
+        "docs/PRESET_COMPOSITION.md",
+        "docs/MODEL_ROUTING.md",
+        "docs/EXAMPLE_WEBAPP.md",
+        "docs/CLI_REFERENCE.md",
+        "docs/PRESET_EVALUATION.md",
+        "presets/bindings/codex-openai.toml",
+        "plugins/planr/skills/planr-loop/SKILL.md",
+    ];
+    let mut combined = String::new();
+    for relative in current_surfaces {
+        let content = fs::read_to_string(root.join(relative)).unwrap();
+        for removed in [
+            "gpt-5.5",
+            "gpt-5.4-mini",
+            ".codex/agents/planr-worker.toml",
+            ".codex/agents/planr-reviewer.toml",
+            "fallback_roles =",
+            "codex exec",
+            "planr_worker",
+            "TOML templates in `agents/`",
+        ] {
+            assert!(
+                !content.contains(removed),
+                "current Codex surface {relative} resurrected removed contract `{removed}`"
+            );
+        }
+        combined.push_str(&content);
+    }
+    for required in [
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "agent_type",
+        "fork_turns: \"none\"",
+        ".codex/agents/planr-terra-high.toml",
+        ".codex/skills/planr-native-routing/SKILL.md",
+    ] {
+        assert!(
+            combined.contains(required),
+            "current Codex surfaces lack canonical contract `{required}`"
+        );
+    }
+    let loop_skill =
+        fs::read_to_string(root.join("plugins/planr/skills/planr-loop/SKILL.md")).unwrap();
+    for agent_type in [
+        "planr-sol-medium",
+        "planr-terra-medium",
+        "planr-terra-high",
+        "planr-luna-xhigh",
+        "planr-sol-high",
+        "planr-sol-ultra",
+    ] {
+        assert!(
+            loop_skill.contains(agent_type),
+            "loop skill does not dispatch generated Codex agent type `{agent_type}`"
+        );
+    }
+    assert!(loop_skill.contains("fork_turns: \"none\""));
+    assert!(loop_skill.contains("never `fork_turns: \"all\"`"));
 }
 
 #[test]
@@ -4059,56 +4464,7 @@ read_roots = ["src", "tests"]
 write_roots = ["src", "tests"]
 allow_overwrite = false
 "#;
-    let binding = r#"
-schema_version = 1
-id = "codex-test"
-version = "1.0.0"
-host = "codex"
-driver_role = "driver"
-default_role = "driver"
-capability_evidence = ["codex-0.138-cross-tier-smoke"]
-billing_assumptions = ["local subscription"]
-known_limitations = ["effective model requires host evidence"]
-
-[capabilities]
-model_override = true
-effort_override = true
-fork_none = true
-fork_all = true
-max_partial_fork_turns = 4
-
-[profiles.driver]
-profile = "sol"
-client = "codex"
-model = "gpt-5.5"
-effort = "xhigh"
-cost_tier = "premium"
-
-[profiles.worker]
-profile = "luna"
-client = "codex"
-model = "gpt-5.4-mini"
-effort = "high"
-cost_tier = "standard"
-skill = "planr-work"
-
-[[routes]]
-work_type = "code"
-role = "worker"
-fallback_roles = ["driver"]
-
-[verification]
-id = "verify-codex-test"
-verified_at_unix = 1900000000
-max_age_seconds = 86400
-
-[[artifacts]]
-path = ".codex/agents/luna.toml"
-kind = "codex_agent"
-content = '''model = "gpt-5.4-mini"
-model_reasoning_effort = "high"
-'''
-"#;
+    let binding = include_str!("../presets/bindings/codex-openai.toml");
     let prepare = |root: &Path| {
         let db = root.join(".planr/planr.sqlite");
         planr()
@@ -4124,18 +4480,20 @@ model_reasoning_effort = "high"
             .success();
         fs::write(root.join("portable-policy.toml"), policy).unwrap();
         fs::write(root.join("codex-binding.toml"), binding).unwrap();
-        db
+        let capability = SignedCodexCapabilityFixture::install(root);
+        (db, capability)
     };
     let deterministic = |command: &mut assert_cmd::Command| {
         command
-            .env("PLANR_PRESET_NOW_UNIX", "1900000100")
+            .env("PLANR_PRESET_NOW_UNIX", "1784160100")
             .env("PLANR_PRESET_APPLIED_AT", "2030-03-17T17:48:20Z");
     };
 
     let cli_dir = tempdir().unwrap();
-    let cli_db = prepare(cli_dir.path());
+    let (cli_db, cli_capability) = prepare(cli_dir.path());
     let mut preview_command = planr();
     deterministic(&mut preview_command);
+    cli_capability.configure(&mut preview_command);
     let preview = preview_command
         .current_dir(cli_dir.path())
         .args([
@@ -4150,6 +4508,7 @@ model_reasoning_effort = "high"
             "codex-binding.toml",
             "--preview",
         ])
+        .args(cli_capability.cli_args())
         .assert()
         .success()
         .get_output()
@@ -4180,7 +4539,7 @@ model_reasoning_effort = "high"
         preview["permission_diff"]["worker"]["write_roots"],
         json!(["src", "tests"])
     );
-    assert_eq!(preview["artifacts"].as_array().unwrap().len(), 4);
+    assert_eq!(preview["artifacts"].as_array().unwrap().len(), 10);
     let policy_diff = preview["artifacts"]
         .as_array()
         .unwrap()
@@ -4203,16 +4562,19 @@ model_reasoning_effort = "high"
         .find(|artifact| artifact["path"] == ".planr/agents.toml")
         .unwrap();
     assert_eq!(
-        registry_diff["config_diff"]["proposed"]["value"]["profiles"]["luna"]["client"],
+        registry_diff["config_diff"]["proposed"]["value"]["profiles"]["codex-terra-high"]["client"],
         "codex"
     );
     assert_eq!(
-        registry_diff["config_diff"]["proposed"]["value"]["profiles"]["luna"]["model"],
-        "gpt-5.4-mini"
+        registry_diff["config_diff"]["proposed"]["value"]["profiles"]["codex-terra-high"]["model"],
+        "gpt-5.6-terra"
     );
-    assert_eq!(
-        registry_diff["config_diff"]["proposed"]["value"]["routes"][0]["fallbacks"],
-        json!(["sol"])
+    assert!(
+        registry_diff["config_diff"]["proposed"]["value"]["routes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|route| route["fallbacks"].as_array().unwrap().is_empty())
     );
     assert!(
         preview["artifacts"]
@@ -4221,23 +4583,24 @@ model_reasoning_effort = "high"
             .iter()
             .all(|artifact| artifact["action"] == "create")
     );
-    for path in [
-        ".planr/policy.toml",
-        ".planr/agents.toml",
-        ".planr/preset.lock.toml",
-        ".codex/agents/luna.toml",
-    ] {
+    for path in preview["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|artifact| artifact["path"].as_str().unwrap())
+    {
         assert!(!cli_dir.path().join(path).exists(), "preview wrote {path}");
     }
 
     let mut mcp_preview_command = planr();
     deterministic(&mut mcp_preview_command);
+    cli_capability.configure(&mut mcp_preview_command);
     let mcp_preview = mcp_preview_command
         .current_dir(cli_dir.path())
         .args(["--db", cli_db.to_str().unwrap(), "mcp"])
         .write_stdin(format!(
             "{}\n",
-            json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"planr_preset_apply","arguments":{"policy":"portable-policy.toml","binding":"codex-binding.toml"}}})
+            json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"planr_preset_apply","arguments":cli_capability.mcp_arguments("portable-policy.toml", "codex-binding.toml", false)}})
         ))
         .assert()
         .success()
@@ -4256,14 +4619,15 @@ model_reasoning_effort = "high"
     let aws_secret = "AKIAEXAMPLE123";
     let embedded_secret = "xoxb-embedded-token";
     let secret_binding = binding.replace(
-        "model_reasoning_effort = \"high\"",
+        "model_reasoning_effort = \"ultra\"",
         &format!(
-            "model_reasoning_effort = \"high\"\naws_access_key_id = \"{aws_secret}\"\nnotes = \"rotate {embedded_secret} today\""
+            "model_reasoning_effort = \"ultra\"\naws_access_key_id = \"{aws_secret}\"\nnotes = \"rotate {embedded_secret} today\""
         ),
     );
     fs::write(cli_dir.path().join("secret-binding.toml"), secret_binding).unwrap();
     let mut secret_cli_command = planr();
     deterministic(&mut secret_cli_command);
+    cli_capability.configure(&mut secret_cli_command);
     let secret_cli = secret_cli_command
         .current_dir(cli_dir.path())
         .args([
@@ -4278,6 +4642,7 @@ model_reasoning_effort = "high"
             "secret-binding.toml",
             "--preview",
         ])
+        .args(cli_capability.cli_args())
         .assert()
         .success()
         .get_output()
@@ -4293,12 +4658,13 @@ model_reasoning_effort = "high"
 
     let mut secret_mcp_command = planr();
     deterministic(&mut secret_mcp_command);
+    cli_capability.configure(&mut secret_mcp_command);
     let secret_mcp = secret_mcp_command
         .current_dir(cli_dir.path())
         .args(["--db", cli_db.to_str().unwrap(), "mcp"])
         .write_stdin(format!(
             "{}\n",
-            json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"planr_preset_apply","arguments":{"policy":"portable-policy.toml","binding":"secret-binding.toml"}}})
+            json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"planr_preset_apply","arguments":cli_capability.mcp_arguments("portable-policy.toml", "secret-binding.toml", false)}})
         ))
         .assert()
         .success()
@@ -4322,15 +4688,15 @@ model_reasoning_effort = "high"
     let billing_secret = "ghp_billing_token";
     let metadata_binding = binding
         .replace(
-            "capability_evidence = [\"codex-0.138-cross-tier-smoke\"]",
+            "capability_evidence = [\"codex-0.144.0-native-v2-9ff47868eb\"]",
             &format!("capability_evidence = [\"{evidence_secret}\"]"),
         )
         .replace(
-            "billing_assumptions = [\"local subscription\"]",
+            "billing_assumptions = [\"Planr records declared tiers; Codex remains billing authority\"]",
             &format!("billing_assumptions = [\"account {billing_secret}\"]"),
         )
         .replace(
-            "known_limitations = [\"effective model requires host evidence\"]",
+            "known_limitations = [\"native multi-agent v2 and the requested model must be active on the current Codex backend\"]",
             &format!("known_limitations = [\"rotate {warning_secret} today\"]"),
         );
     fs::write(
@@ -4340,6 +4706,7 @@ model_reasoning_effort = "high"
     .unwrap();
     let mut metadata_cli_command = planr();
     deterministic(&mut metadata_cli_command);
+    cli_capability.configure(&mut metadata_cli_command);
     let metadata_cli = metadata_cli_command
         .current_dir(cli_dir.path())
         .args([
@@ -4354,6 +4721,7 @@ model_reasoning_effort = "high"
             "secret-metadata-binding.toml",
             "--confirm",
         ])
+        .args(cli_capability.cli_args())
         .assert()
         .failure()
         .get_output()
@@ -4369,12 +4737,12 @@ model_reasoning_effort = "high"
     assert!(metadata_cli_raw.contains("binding.capability_evidence[0]"));
     assert!(metadata_cli_raw.contains("binding.known_limitations[0]"));
     assert!(metadata_cli_raw.contains("binding.billing_assumptions[0]"));
-    for path in [
-        ".planr/policy.toml",
-        ".planr/agents.toml",
-        ".planr/preset.lock.toml",
-        ".codex/agents/luna.toml",
-    ] {
+    for path in preview["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|artifact| artifact["path"].as_str().unwrap())
+    {
         assert!(
             !cli_dir.path().join(path).exists(),
             "rejection wrote {path}"
@@ -4383,12 +4751,13 @@ model_reasoning_effort = "high"
 
     let mut metadata_mcp_command = planr();
     deterministic(&mut metadata_mcp_command);
+    cli_capability.configure(&mut metadata_mcp_command);
     let metadata_mcp = metadata_mcp_command
         .current_dir(cli_dir.path())
         .args(["--db", cli_db.to_str().unwrap(), "mcp"])
         .write_stdin(format!(
             "{}\n",
-            json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"planr_preset_apply","arguments":{"policy":"portable-policy.toml","binding":"secret-metadata-binding.toml","confirm":true}}})
+            json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"planr_preset_apply","arguments":cli_capability.mcp_arguments("portable-policy.toml", "secret-metadata-binding.toml", true)}})
         ))
         .assert()
         .success()
@@ -4408,7 +4777,7 @@ model_reasoning_effort = "high"
         ".planr/policy.toml",
         ".planr/agents.toml",
         ".planr/preset.lock.toml",
-        ".codex/agents/luna.toml",
+        ".codex/agents/planr-sol-medium.toml",
     ] {
         assert!(
             !cli_dir.path().join(path).exists(),
@@ -4418,6 +4787,7 @@ model_reasoning_effort = "high"
 
     let mut cli_apply_command = planr();
     deterministic(&mut cli_apply_command);
+    cli_capability.configure(&mut cli_apply_command);
     let cli_apply = cli_apply_command
         .current_dir(cli_dir.path())
         .args([
@@ -4432,6 +4802,7 @@ model_reasoning_effort = "high"
             "codex-binding.toml",
             "--confirm",
         ])
+        .args(cli_capability.cli_args())
         .assert()
         .success()
         .get_output()
@@ -4442,15 +4813,16 @@ model_reasoning_effort = "high"
     assert_eq!(cli_apply["mutation"], true);
 
     let mcp_dir = tempdir().unwrap();
-    let mcp_db = prepare(mcp_dir.path());
+    let (mcp_db, mcp_capability) = prepare(mcp_dir.path());
     let mut mcp_apply_command = planr();
     deterministic(&mut mcp_apply_command);
+    mcp_capability.configure(&mut mcp_apply_command);
     let mcp_apply = mcp_apply_command
         .current_dir(mcp_dir.path())
         .args(["--db", mcp_db.to_str().unwrap(), "mcp"])
         .write_stdin(format!(
             "{}\n",
-            json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"planr_preset_apply","arguments":{"policy":"portable-policy.toml","binding":"codex-binding.toml","confirm":true}}})
+            json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"planr_preset_apply","arguments":mcp_capability.mcp_arguments("portable-policy.toml", "codex-binding.toml", true)}})
         ))
         .assert()
         .success()
@@ -4465,7 +4837,7 @@ model_reasoning_effort = "high"
         ".planr/policy.toml",
         ".planr/agents.toml",
         ".planr/preset.lock.toml",
-        ".codex/agents/luna.toml",
+        ".codex/agents/planr-sol-medium.toml",
     ] {
         assert_eq!(
             fs::read(cli_dir.path().join(path)).unwrap(),
@@ -4475,7 +4847,7 @@ model_reasoning_effort = "high"
     }
     let lock = fs::read_to_string(cli_dir.path().join(".planr/preset.lock.toml")).unwrap();
     assert!(lock.contains("id = \"portable-balanced\""));
-    assert!(lock.contains("id = \"codex-test\""));
+    assert!(lock.contains("id = \"codex-openai\""));
     assert!(lock.contains("applied_at = \"2030-03-17T17:48:20Z\""));
 
     let policy_snapshot = fs::read(cli_dir.path().join(".planr/policy.toml")).unwrap();
@@ -4486,6 +4858,7 @@ model_reasoning_effort = "high"
     .unwrap();
     let mut conflict_preview_command = planr();
     deterministic(&mut conflict_preview_command);
+    cli_capability.configure(&mut conflict_preview_command);
     let conflict_preview = conflict_preview_command
         .current_dir(cli_dir.path())
         .args([
@@ -4499,6 +4872,7 @@ model_reasoning_effort = "high"
             "--binding",
             "codex-binding.toml",
         ])
+        .args(cli_capability.cli_args())
         .assert()
         .success()
         .get_output()
@@ -4514,11 +4888,12 @@ model_reasoning_effort = "high"
     assert_eq!(registry_conflict["action"], "conflict");
     assert!(registry_conflict["config_diff"]["current"].is_object());
     assert_eq!(
-        registry_conflict["config_diff"]["proposed"]["value"]["profiles"]["luna"]["effort"],
+        registry_conflict["config_diff"]["proposed"]["value"]["profiles"]["codex-terra-high"]["effort"],
         "high"
     );
     let mut conflict_command = planr();
     deterministic(&mut conflict_command);
+    cli_capability.configure(&mut conflict_command);
     conflict_command
         .current_dir(cli_dir.path())
         .args([
@@ -4532,6 +4907,7 @@ model_reasoning_effort = "high"
             "codex-binding.toml",
             "--confirm",
         ])
+        .args(cli_capability.cli_args())
         .assert()
         .failure()
         .stderr(predicate::str::contains(
@@ -4548,7 +4924,7 @@ model_reasoning_effort = "high"
     );
 
     let unsafe_dir = tempdir().unwrap();
-    let unsafe_db = prepare(unsafe_dir.path());
+    let (unsafe_db, unsafe_capability) = prepare(unsafe_dir.path());
     let absolute_target = unsafe_dir
         .path()
         .join("absolute-target.toml")
@@ -4568,18 +4944,21 @@ model_reasoning_effort = "high"
         (2, absolute_target, "must be repository-relative"),
         (
             3,
-            "~/.codex/agents/luna.toml".to_string(),
+            "~/.codex/agents/planr-sol-medium.toml".to_string(),
             "outside the repository artifact allowlist",
         ),
     ] {
         let file = format!("forbidden-binding-{index}.toml");
         fs::write(
             unsafe_dir.path().join(&file),
-            binding.replace(".codex/agents/luna.toml", &target),
+            format!(
+                "{binding}\n[[artifacts]]\npath = {target:?}\nkind = \"codex_skill\"\ncontent = \"boundary probe\"\n"
+            ),
         )
         .unwrap();
         let mut forbidden_command = planr();
         deterministic(&mut forbidden_command);
+        unsafe_capability.configure(&mut forbidden_command);
         forbidden_command
             .current_dir(unsafe_dir.path())
             .args([
@@ -4593,6 +4972,7 @@ model_reasoning_effort = "high"
                 &file,
                 "--confirm",
             ])
+            .args(unsafe_capability.cli_args())
             .assert()
             .failure()
             .stderr(predicate::str::contains(expected));
@@ -4601,15 +4981,15 @@ model_reasoning_effort = "high"
         assert!(!unsafe_dir.path().join(".planr/preset.lock.toml").exists());
     }
 
-    let all_fork = binding
-        .replace(
-            "skill = \"planr-work\"",
-            "skill = \"planr-work\"\nfork_turns = { mode = \"all\" }",
-        )
-        .replace("client = \"codex\"", "client = \"generic-mcp\"");
+    let all_fork = binding.replacen(
+        "fork_turns = { mode = \"none\" }",
+        "fork_turns = { mode = \"all\" }",
+        1,
+    );
     fs::write(unsafe_dir.path().join("all-fork-binding.toml"), all_fork).unwrap();
     let mut all_fork_command = planr();
     deterministic(&mut all_fork_command);
+    unsafe_capability.configure(&mut all_fork_command);
     all_fork_command
         .current_dir(unsafe_dir.path())
         .args([
@@ -4623,6 +5003,7 @@ model_reasoning_effort = "high"
             "all-fork-binding.toml",
             "--confirm",
         ])
+        .args(unsafe_capability.cli_args())
         .assert()
         .failure()
         .stderr(predicate::str::contains("cannot use fork_turns all"));
@@ -4632,12 +5013,13 @@ model_reasoning_effort = "high"
 
     let blank_partial = binding
         .replace(
-            "capability_evidence = [\"codex-0.138-cross-tier-smoke\"]",
+            "capability_evidence = [\"codex-0.144.0-native-v2-9ff47868eb\"]",
             "capability_evidence = [\"   \"]",
         )
-        .replace(
-            "skill = \"planr-work\"",
-            "skill = \"planr-work\"\nfork_turns = { mode = \"partial\", turns = 2 }",
+        .replacen(
+            "fork_turns = { mode = \"none\" }",
+            "fork_turns = { mode = \"partial\", turns = 2 }",
+            1,
         );
     fs::write(
         unsafe_dir.path().join("blank-partial-binding.toml"),
@@ -4646,12 +5028,13 @@ model_reasoning_effort = "high"
     .unwrap();
     let mut blank_partial_command = planr();
     deterministic(&mut blank_partial_command);
+    unsafe_capability.configure(&mut blank_partial_command);
     let blank_partial = blank_partial_command
         .current_dir(unsafe_dir.path())
         .args(["--db", unsafe_db.to_str().unwrap(), "mcp"])
         .write_stdin(format!(
             "{}\n",
-            json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"planr_preset_apply","arguments":{"policy":"portable-policy.toml","binding":"blank-partial-binding.toml","confirm":true}}})
+            json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"planr_preset_apply","arguments":unsafe_capability.mcp_arguments("portable-policy.toml", "blank-partial-binding.toml", true)}})
         ))
         .assert()
         .success()
@@ -4678,6 +5061,7 @@ model_reasoning_effort = "high"
         symlink(outside.path(), unsafe_dir.path().join(".codex/agents")).unwrap();
         let mut symlink_command = planr();
         deterministic(&mut symlink_command);
+        unsafe_capability.configure(&mut symlink_command);
         symlink_command
             .current_dir(unsafe_dir.path())
             .args([
@@ -4691,10 +5075,11 @@ model_reasoning_effort = "high"
                 "codex-binding.toml",
                 "--confirm",
             ])
+            .args(unsafe_capability.cli_args())
             .assert()
             .failure()
             .stderr(predicate::str::contains("crosses symlink"));
-        assert!(!outside.path().join("luna.toml").exists());
+        assert!(!outside.path().join("planr-sol-medium.toml").exists());
         assert!(!unsafe_dir.path().join(".planr/policy.toml").exists());
         assert!(!unsafe_dir.path().join(".planr/agents.toml").exists());
         assert!(!unsafe_dir.path().join(".planr/preset.lock.toml").exists());
@@ -4702,7 +5087,271 @@ model_reasoning_effort = "high"
 }
 
 #[test]
-fn builtin_preset_catalog_cli_mcp_safe_packs_and_repository_boundary() {
+fn codex_preset_requires_installed_version_and_signed_per_role_capabilities() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Native"])
+        .assert()
+        .success();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "agents", "init"])
+        .assert()
+        .success();
+
+    let bin = dir.path().join("bin");
+    fs::create_dir(&bin).unwrap();
+    let codex = bin.join("codex");
+    fs::write(&codex, "#!/bin/sh\nprintf 'codex-cli 0.144.0\\n'\n").unwrap();
+    fs::set_permissions(&codex, fs::Permissions::from_mode(0o700)).unwrap();
+    let adapter = dir.path().join("capability-adapter.sh");
+    fs::write(&adapter, r#"#!/bin/sh
+request=$(cat)
+candidate=$(printf '%s' "$request" | sed -n 's/.*"candidate":{"id":"\([^"]*\)".*/\1/p')
+task=$(printf '%s' "$request" | sed -n 's/.*"task":{"id":"\([^"]*\)".*/\1/p')
+input_sha=$(printf '%s' "$request" | sed -n 's/.*"input_sha256":"\([^"]*\)".*/\1/p')
+kind=$(printf '%s' "$request" | sed -n 's/.*"artifact_kind":"\([^"]*\)".*/\1/p')
+challenge=$(printf '%s' "$request" | sed -n 's/.*"challenge_path":"\([^"]*\)".*/\1/p')
+artifact=$(printf '%s' "$request" | sed -n 's/.*"artifact_path":"\([^"]*\)".*/\1/p')
+case "$task" in
+  planr-sol-medium) model=gpt-5.6-sol; effort=medium ;;
+  planr-terra-medium) model=gpt-5.6-terra; effort=medium ;;
+  planr-terra-high) model=gpt-5.6-terra; effort=high ;;
+  planr-luna-xhigh) model=gpt-5.6-luna; effort=xhigh ;;
+  planr-sol-high) model=gpt-5.6-sol; effort=high ;;
+  planr-sol-ultra) model=gpt-5.6-sol; effort=ultra ;;
+esac
+challenge_sha=$(shasum -a 256 "$challenge" | awk '{print $1}')
+printf '{"schema_version":1,"candidate_id":"%s","task_id":"%s","input_sha256":"%s","artifact_kind":"%s","challenge_sha256":"%s","output":"ok"}' "$candidate" "$task" "$input_sha" "$kind" "$challenge_sha" > "$artifact"
+artifact_sha=$(shasum -a 256 "$artifact" | awk '{print $1}')
+printf '{"schema_version":1,"host_id":"codex","host_version":"0.144.0","candidate_id":"%s","task_id":"%s","input_sha256":"%s","artifact_kind":"%s","artifact_sha256":"%s","output":"ok","effective_model":"%s","effective_effort":"%s","effective_context_fork":{"mode":"none"},"effective_agent_type":"%s","tool_calls":1,"tokens":1,"credits_micros":1,"retries":0,"availability_fallbacks":0,"quality_escalations":0,"corrections":0,"violations":0}\n' "$candidate" "$task" "$input_sha" "$kind" "$artifact_sha" "$model" "$effort" "$task"
+"#).unwrap();
+    fs::set_permissions(&adapter, fs::Permissions::from_mode(0o700)).unwrap();
+    let wrong_host_adapter = dir.path().join("wrong-host-adapter.sh");
+    fs::write(
+        &wrong_host_adapter,
+        fs::read_to_string(&adapter)
+            .unwrap()
+            .replace("\"host_id\":\"codex\"", "\"host_id\":\"cursor\""),
+    )
+    .unwrap();
+    fs::set_permissions(&wrong_host_adapter, fs::Permissions::from_mode(0o700)).unwrap();
+    let seed = dir.path().join("seed.hex");
+    fs::write(
+        &seed,
+        "0707070707070707070707070707070707070707070707070707070707070707",
+    )
+    .unwrap();
+    let planr_bin = assert_cmd::cargo::cargo_bin("planr");
+    let collector = dir.path().join("collector.sh");
+    fs::write(&collector, format!(r#"#!/bin/sh
+request=$(cat)
+task=$(printf '%s' "$request" | sed -n 's/.*"task_id":"\([^"]*\)".*/\1/p')
+case "$task" in
+  planr-sol-medium) model=gpt-5.6-sol; effort=medium ;;
+  planr-terra-medium) model=gpt-5.6-terra; effort=medium ;;
+  planr-terra-high) model=gpt-5.6-terra; effort=high ;;
+  planr-luna-xhigh) model=gpt-5.6-luna; effort=xhigh ;;
+  planr-sol-high) model=gpt-5.6-sol; effort=high ;;
+  planr-sol-ultra) model=gpt-5.6-sol; effort=ultra ;;
+esac
+payload=$(printf '%s' "$request" | sed 's/}}$/,"host_id":"codex","host_version":"0.144.0","effective_model":"'"$model"'","effective_effort":"'"$effort"'","effective_context_fork":{{"mode":"none"}},"effective_agent_type":"'"$task"'","tool_calls":1,"tokens":1,"credits_micros":1,"retries":0,"availability_fallbacks":0,"quality_escalations":0,"corrections":0,"violations":0}}/')
+printf '%s' "$payload" | "{}" --json agents preset telemetry-sign --private-key-file "{}"
+"#, planr_bin.display(), seed.display())).unwrap();
+    fs::set_permissions(&collector, fs::Permissions::from_mode(0o700)).unwrap();
+    let partial_collector = dir.path().join("partial-collector.sh");
+    fs::write(
+        &partial_collector,
+        fs::read_to_string(&collector).unwrap().replace(
+            "planr-luna-xhigh) model=gpt-5.6-luna",
+            "planr-luna-xhigh) model=gpt-5.6-terra",
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&partial_collector, fs::Permissions::from_mode(0o700)).unwrap();
+    let wrong_agent_type_collector = dir.path().join("wrong-agent-type-collector.sh");
+    fs::write(
+        &wrong_agent_type_collector,
+        fs::read_to_string(&collector).unwrap().replace(
+            "\"effective_agent_type\":\"'\"$task\"'\"",
+            "\"effective_agent_type\":\"planr-sol-medium\"",
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(
+        &wrong_agent_type_collector,
+        fs::Permissions::from_mode(0o700),
+    )
+    .unwrap();
+    let wrong_host_collector = dir.path().join("wrong-host-collector.sh");
+    fs::write(
+        &wrong_host_collector,
+        fs::read_to_string(&collector)
+            .unwrap()
+            .replace("\"host_id\":\"codex\"", "\"host_id\":\"cursor\""),
+    )
+    .unwrap();
+    fs::set_permissions(&wrong_host_collector, fs::Permissions::from_mode(0o700)).unwrap();
+    let key = SigningKey::from_bytes(&[7_u8; 32]);
+    let public = key
+        .verifying_key()
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let digest = format!("{:x}", Sha256::digest(fs::read(&collector).unwrap()));
+    let partial_digest = format!(
+        "{:x}",
+        Sha256::digest(fs::read(&partial_collector).unwrap())
+    );
+    let wrong_host_digest = format!(
+        "{:x}",
+        Sha256::digest(fs::read(&wrong_host_collector).unwrap())
+    );
+    let wrong_agent_type_digest = format!(
+        "{:x}",
+        Sha256::digest(fs::read(&wrong_agent_type_collector).unwrap())
+    );
+    fs::write(dir.path().join(".planr/trusted-telemetry.toml"), format!("schema_version = 1\n[[signers]]\nid = \"e2e\"\npublic_key_hex = \"{public}\"\ncollector_sha256 = \"{digest}\"\n[[signers]]\nid = \"partial\"\npublic_key_hex = \"{public}\"\ncollector_sha256 = \"{partial_digest}\"\n[[signers]]\nid = \"wrong-host\"\npublic_key_hex = \"{public}\"\ncollector_sha256 = \"{wrong_host_digest}\"\n[[signers]]\nid = \"wrong-agent-type\"\npublic_key_hex = \"{public}\"\ncollector_sha256 = \"{wrong_agent_type_digest}\"\n")).unwrap();
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    let base = vec![
+        "--db",
+        db.to_str().unwrap(),
+        "--json",
+        "agents",
+        "preset",
+        "apply",
+        "balanced",
+        "--binding",
+        "codex-openai",
+    ];
+    fs::write(&codex, "#!/bin/sh\nprintf 'codex-cli 0.143.9\\n'\n").unwrap();
+    planr()
+        .current_dir(dir.path())
+        .env("PATH", &path)
+        .args(&base)
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("upgrade to >= 0.144.0"));
+    fs::write(&codex, "#!/bin/sh\nprintf 'codex-cli 0.144.0\\n'\n").unwrap();
+    planr()
+        .current_dir(dir.path())
+        .env("PATH", &path)
+        .args(&base)
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("evidence is missing"));
+    let mut valid = base.clone();
+    valid.extend([
+        "--live-host-command",
+        "/bin/sh",
+        "--live-host-arg",
+        adapter.to_str().unwrap(),
+        "--trusted-telemetry-signer",
+        "e2e",
+        "--trusted-telemetry-collector",
+        collector.to_str().unwrap(),
+    ]);
+    let preview = planr()
+        .current_dir(dir.path())
+        .env("PATH", &path)
+        .args(&valid)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let preview: Value = serde_json::from_slice(&preview).unwrap();
+    assert!(preview["conflicts"].as_array().unwrap().is_empty());
+    assert_eq!(preview["provenance"]["schema_version"], 2);
+    assert_eq!(preview["provenance"]["host"], "codex");
+    assert_eq!(
+        preview["composition"]["dispatch"]["worker"]["agent_type"],
+        "planr-terra-high"
+    );
+    assert!(preview["composition"]["dispatch"]["worker"]["fork_turns"]["mode"] == "none");
+
+    let mcp_valid = planr()
+        .current_dir(dir.path())
+        .env("PATH", &path)
+        .args(["--db", db.to_str().unwrap(), "mcp"])
+        .write_stdin(format!("{}\n", json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"planr_preset_apply","arguments":{"policy":"balanced","binding":"codex-openai","live_host_command":"/bin/sh","live_host_args":[adapter],"trusted_telemetry_signer":"e2e","trusted_telemetry_collector":collector}}})))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let mcp_valid: Value = serde_json::from_slice(&mcp_valid).unwrap();
+    let mcp_valid: Value =
+        serde_json::from_str(mcp_valid["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(mcp_valid["composition"], preview["composition"]);
+
+    let mcp_partial = planr()
+        .current_dir(dir.path())
+        .env("PATH", &path)
+        .args(["--db", db.to_str().unwrap(), "mcp"])
+        .write_stdin(format!("{}\n", json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"planr_preset_apply","arguments":{"policy":"balanced","binding":"codex-openai","live_host_command":"/bin/sh","live_host_args":[adapter],"trusted_telemetry_signer":"partial","trusted_telemetry_collector":partial_collector}}})))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert!(
+        String::from_utf8(mcp_partial)
+            .unwrap()
+            .contains("active backend does not advertise `planr-luna-xhigh`")
+    );
+
+    let mcp_wrong_host = planr()
+        .current_dir(dir.path())
+        .env("PATH", &path)
+        .args(["--db", db.to_str().unwrap(), "mcp"])
+        .write_stdin(format!("{}\n", json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"planr_preset_apply","arguments":{"policy":"balanced","binding":"codex-openai","live_host_command":"/bin/sh","live_host_args":[wrong_host_adapter],"trusted_telemetry_signer":"wrong-host","trusted_telemetry_collector":wrong_host_collector}}})))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert!(
+        String::from_utf8(mcp_wrong_host)
+            .unwrap()
+            .contains("signed host_id `codex`")
+    );
+
+    let mcp_wrong_agent_type = planr()
+        .current_dir(dir.path())
+        .env("PATH", &path)
+        .args(["--db", db.to_str().unwrap(), "mcp"])
+        .write_stdin(format!("{}\n", json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"planr_preset_apply","arguments":{"policy":"balanced","binding":"codex-openai","live_host_command":"/bin/sh","live_host_args":[adapter],"trusted_telemetry_signer":"wrong-agent-type","trusted_telemetry_collector":wrong_agent_type_collector}}})))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert!(
+        String::from_utf8(mcp_wrong_agent_type)
+            .unwrap()
+            .contains("active backend does not advertise `planr-terra-medium`")
+    );
+
+    valid.push("--confirm");
+    planr()
+        .current_dir(dir.path())
+        .env("PATH", &path)
+        .args(&valid)
+        .assert()
+        .success();
+    let lock: toml::Value =
+        toml::from_str(&fs::read_to_string(dir.path().join(".planr/preset.lock.toml")).unwrap())
+            .unwrap();
+    assert_eq!(lock["schema_version"].as_integer(), Some(2));
+    assert_eq!(lock["host"].as_str(), Some("codex"));
+}
+
+#[test]
+fn builtin_non_codex_safe_packs_keep_cli_mcp_parity_and_repository_boundary() {
     let catalog_dir = tempdir().unwrap();
     let catalog_db = catalog_dir.path().join(".planr/planr.sqlite");
     planr()
@@ -4756,13 +5405,7 @@ fn builtin_preset_catalog_cli_mcp_safe_packs_and_repository_boundary() {
     .unwrap();
     assert_eq!(mcp_catalog, cli_catalog);
 
-    for binding in [
-        "codex-openai",
-        "cursor-openai",
-        "cursor-fable-grok",
-        "claude-native",
-        "mixed-host",
-    ] {
+    for binding in ["cursor-openai", "cursor-fable-grok", "claude-native"] {
         let dir = tempdir().unwrap();
         let home = tempdir().unwrap();
         let db = dir.path().join(".planr/planr.sqlite");
@@ -4806,19 +5449,20 @@ fn builtin_preset_catalog_cli_mcp_safe_packs_and_repository_boundary() {
         };
         let mut preview_command = planr();
         configure(&mut preview_command);
+        let preview_args = vec![
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "agents",
+            "preset",
+            "apply",
+            "balanced",
+            "--binding",
+            binding,
+        ];
         let preview = preview_command
             .current_dir(dir.path())
-            .args([
-                "--db",
-                db.to_str().unwrap(),
-                "--json",
-                "agents",
-                "preset",
-                "apply",
-                "balanced",
-                "--binding",
-                binding,
-            ])
+            .args(preview_args)
             .assert()
             .success()
             .get_output()
@@ -4831,15 +5475,23 @@ fn builtin_preset_catalog_cli_mcp_safe_packs_and_repository_boundary() {
         assert_eq!(preview["pack"]["binding"], binding);
         assert_eq!(preview["compatibility"]["ok"], true);
         assert!(preview["conflicts"].as_array().unwrap().is_empty());
+        for artifact in preview["artifacts"].as_array().unwrap() {
+            assert!(
+                !dir.path().join(artifact["path"].as_str().unwrap()).exists(),
+                "preview must not write {}",
+                artifact["path"].as_str().unwrap()
+            );
+        }
 
         let mut mcp_command = planr();
         configure(&mut mcp_command);
+        let mcp_arguments = json!({"policy":"balanced","binding":binding});
         let mcp_preview = mcp_command
             .current_dir(dir.path())
             .args(["--db", db.to_str().unwrap(), "mcp"])
             .write_stdin(format!(
                 "{}\n",
-                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"planr_preset_apply","arguments":{"policy":"balanced","binding":binding}}})
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"planr_preset_apply","arguments":mcp_arguments}})
             ))
             .assert()
             .success()
@@ -4857,20 +5509,21 @@ fn builtin_preset_catalog_cli_mcp_safe_packs_and_repository_boundary() {
 
         let mut apply_command = planr();
         configure(&mut apply_command);
+        let mut apply_args = vec![
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "agents",
+            "preset",
+            "apply",
+            "balanced",
+            "--binding",
+            binding,
+        ];
+        apply_args.push("--confirm");
         let applied = apply_command
             .current_dir(dir.path())
-            .args([
-                "--db",
-                db.to_str().unwrap(),
-                "--json",
-                "agents",
-                "preset",
-                "apply",
-                "balanced",
-                "--binding",
-                binding,
-                "--confirm",
-            ])
+            .args(apply_args)
             .assert()
             .success()
             .get_output()
@@ -4963,6 +5616,22 @@ fn builtin_preset_catalog_cli_mcp_safe_packs_and_repository_boundary() {
                         fields.get("effort").map(|effort| effort.trim()),
                     ));
                 }
+                "codex_skill" => {
+                    assert!(relative.starts_with(".codex/skills/"));
+                    assert!(content.contains("agent_type"));
+                    assert!(content.contains("fork_turns: \"none\""));
+                    assert!(content.contains("positive bounded integer"));
+                    assert!(
+                        content
+                            .to_ascii_lowercase()
+                            .contains("native codex rejects `fork_turns: \"all\"`")
+                    );
+                    assert!(!content.contains("--model"));
+                    assert!(!content.contains("model_reasoning_effort"));
+                    assert!(!content.contains("planr-worker.toml"));
+                    assert!(!content.contains("planr-reviewer.toml"));
+                    assert!(!content.contains("fallback_roles"));
+                }
                 _ => {}
             }
         }
@@ -5047,7 +5716,7 @@ fn preset_evaluation_reports_are_reproducible_threshold_gated_and_surface_identi
     );
     assert_eq!(
         report["candidates"][0]["model_versions"]["worker"]["model"],
-        "gpt-5.4-mini"
+        "gpt-5.6-terra"
     );
     assert!(
         report["candidates"]
@@ -5096,7 +5765,7 @@ fn preset_evaluation_reports_are_reproducible_threshold_gated_and_surface_identi
     assert_eq!(written, cli);
     let markdown = fs::read_to_string(&human_path).unwrap();
     assert!(markdown.contains("# Preset Evaluation Verification"));
-    assert!(markdown.contains("Codex Sol/Luna contract"));
+    assert!(markdown.contains("Codex Sol/Terra/Luna contract"));
     assert!(markdown.contains("balanced-codex-openai"));
 
     planr()
@@ -5175,11 +5844,11 @@ case "$task" in
   browser-report-smoke) suffix=browser-report-inspected ;;
   visual-report-regression) suffix=visual-contract-matched ;;
   security-safety-stop) suffix=unsafe-operation-stopped ;;
-  subagent-sol-luna-dispatch) suffix=sol-luna-dispatch-verified ;;
+  subagent-sol-terra-luna-dispatch) suffix=sol-terra-luna-dispatch-verified ;;
   *) suffix=unknown-task ;;
 esac
 result="$candidate:$task:$suffix"
-printf '{"schema_version":1,"host_id":"fake-host","host_version":"1.0.0","candidate_id":"%s","task_id":"%s","input_sha256":"%s","artifact_kind":"%s","output":"%s","effective_model":"gpt-5.4-mini","effective_effort":"high","effective_context_fork":{"mode":"none"},"tool_calls":1,"tokens":10,"credits_micros":100,"retries":1,"availability_fallbacks":1,"quality_escalations":1,"corrections":1,"violations":0}\n' "$candidate" "$task" "$input_sha" "$artifact" "$result"
+printf '{"schema_version":1,"host_id":"fake-host","host_version":"1.0.0","candidate_id":"%s","task_id":"%s","input_sha256":"%s","artifact_kind":"%s","output":"%s","effective_model":"gpt-5.6-terra","effective_effort":"high","effective_context_fork":{"mode":"none"},"effective_agent_type":"planr-terra-high","tool_calls":1,"tokens":10,"credits_micros":100,"retries":1,"availability_fallbacks":1,"quality_escalations":1,"corrections":1,"violations":0}\n' "$candidate" "$task" "$input_sha" "$artifact" "$result"
 "#,
         )
         .unwrap();
@@ -5264,14 +5933,14 @@ case "$task" in
   browser-report-smoke) suffix=browser-report-inspected ;;
   visual-report-regression) suffix=visual-contract-matched ;;
   security-safety-stop) suffix=unsafe-operation-stopped ;;
-  subagent-sol-luna-dispatch) suffix=sol-luna-dispatch-verified ;;
+  subagent-sol-terra-luna-dispatch) suffix=sol-terra-luna-dispatch-verified ;;
   *) suffix=unknown-task ;;
 esac
 result="$candidate:$task:$suffix"
 challenge_sha=$(hash_file "$challenge_path")
 printf '{"schema_version":1,"candidate_id":"%s","task_id":"%s","input_sha256":"%s","artifact_kind":"%s","challenge_sha256":"%s","output":"%s"}' "$candidate" "$task" "$input_sha" "$artifact" "$challenge_sha" "$result" > "$artifact_path"
 artifact_sha=$(hash_file "$artifact_path")
-printf '{"schema_version":1,"host_id":"artifact-host","host_version":"1.0.0","candidate_id":"%s","task_id":"%s","input_sha256":"%s","artifact_kind":"%s","artifact_sha256":"%s","output":"%s","effective_model":"gpt-5.4-mini","effective_effort":"high","effective_context_fork":{"mode":"none"},"tool_calls":1,"tokens":10,"credits_micros":100,"retries":1,"availability_fallbacks":1,"quality_escalations":1,"corrections":1,"violations":0}\n' "$candidate" "$task" "$input_sha" "$artifact" "$artifact_sha" "$result"
+printf '{"schema_version":1,"host_id":"artifact-host","host_version":"1.0.0","candidate_id":"%s","task_id":"%s","input_sha256":"%s","artifact_kind":"%s","artifact_sha256":"%s","output":"%s","effective_model":"gpt-5.6-terra","effective_effort":"high","effective_context_fork":{"mode":"none"},"effective_agent_type":"planr-terra-high","effective_role":"planr-terra-high","thread_id":"thread-terra-high","status":"completed","tool_calls":1,"tokens":10,"credits_micros":100,"retries":1,"availability_fallbacks":1,"quality_escalations":1,"corrections":1,"violations":0}\n' "$candidate" "$task" "$input_sha" "$artifact" "$artifact_sha" "$result"
 "#,
         )
         .unwrap();
@@ -5288,21 +5957,64 @@ printf '{"schema_version":1,"host_id":"artifact-host","host_version":"1.0.0","ca
         fs::write(&telemetry_seed_path, hex(&[7_u8; 32])).unwrap();
         let planr_bin = assert_cmd::cargo::cargo_bin("planr");
         let collector_path = dir.path().join("trusted-telemetry-collector.sh");
-        fs::write(
-            &collector_path,
-            format!(
-                r#"#!/bin/sh
+        let collector_script = format!(
+            r#"#!/bin/sh
 request=$(cat)
-payload=$(printf '%s' "$request" | sed 's/}}$/,"host_id":"artifact-host","host_version":"1.0.0","effective_model":"gpt-5.4-mini","effective_effort":"high","effective_context_fork":{{"mode":"none"}},"tool_calls":1,"tokens":10,"credits_micros":100,"retries":1,"availability_fallbacks":1,"quality_escalations":1,"corrections":1,"violations":0}}/')
+payload=$(printf '%s' "$request" | sed 's/}}$/,"host_id":"artifact-host","host_version":"1.0.0","effective_model":"gpt-5.6-terra","effective_effort":"high","effective_context_fork":{{"mode":"none"}},"effective_agent_type":"planr-terra-high","effective_role":"planr-terra-high","thread_id":"thread-terra-high","status":"completed","tool_calls":1,"tokens":10,"credits_micros":100,"retries":1,"availability_fallbacks":1,"quality_escalations":1,"corrections":1,"violations":0}}/')
 printf '%s' "$payload" | "{}" --json agents preset telemetry-sign --private-key-file "{}"
 "#,
-                planr_bin.display(),
-                telemetry_seed_path.display()
+            planr_bin.display(),
+            telemetry_seed_path.display()
+        );
+        fs::write(&collector_path, &collector_script).unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(&collector_path, fs::Permissions::from_mode(0o700)).unwrap();
+        let divergent_collector_path = dir.path().join("divergent-telemetry-collector.sh");
+        fs::write(
+            &divergent_collector_path,
+            collector_script.replace("gpt-5.6-terra", "gpt-5.6-sol"),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(&divergent_collector_path, fs::Permissions::from_mode(0o700)).unwrap();
+        let missing_agent_type_path = dir.path().join("missing-agent-type-collector.sh");
+        fs::write(
+            &missing_agent_type_path,
+            collector_script.replace(",\"effective_agent_type\":\"planr-terra-high\"", ""),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(&missing_agent_type_path, fs::Permissions::from_mode(0o700)).unwrap();
+        let mismatched_agent_type_path = dir.path().join("mismatched-agent-type-collector.sh");
+        fs::write(
+            &mismatched_agent_type_path,
+            collector_script.replace(
+                "\"effective_agent_type\":\"planr-terra-high\"",
+                "\"effective_agent_type\":\"planr-sol-high\"",
             ),
         )
         .unwrap();
         #[cfg(unix)]
-        fs::set_permissions(&collector_path, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(
+            &mismatched_agent_type_path,
+            fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+        let request_tamper_collector_path = dir.path().join("request-tamper-collector.sh");
+        fs::write(
+            &request_tamper_collector_path,
+            collector_script.replace(
+                "request=$(cat)",
+                r#"request=$(cat | sed 's/"model":"gpt-5.6-terra"/"model":"gpt-5.6-sol"/')"#,
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(
+            &request_tamper_collector_path,
+            fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
         let missing_collector_path = dir.path().join("missing-telemetry-collector.sh");
         fs::write(&missing_collector_path, "#!/bin/sh\nexit 0\n").unwrap();
         #[cfg(unix)]
@@ -5322,9 +6034,33 @@ collector_sha256 = "{}"
 id = "missing-e2e-collector"
 public_key_hex = "{telemetry_public_key}"
 collector_sha256 = "{}"
+
+[[signers]]
+id = "divergent-e2e-collector"
+public_key_hex = "{telemetry_public_key}"
+collector_sha256 = "{}"
+
+[[signers]]
+id = "request-tamper-e2e-collector"
+public_key_hex = "{telemetry_public_key}"
+collector_sha256 = "{}"
+
+[[signers]]
+id = "missing-agent-type"
+public_key_hex = "{telemetry_public_key}"
+collector_sha256 = "{}"
+
+[[signers]]
+id = "mismatched-agent-type"
+public_key_hex = "{telemetry_public_key}"
+collector_sha256 = "{}"
 "#,
                 sha256(&fs::read(&collector_path).unwrap()),
-                sha256(&fs::read(&missing_collector_path).unwrap())
+                sha256(&fs::read(&missing_collector_path).unwrap()),
+                sha256(&fs::read(&divergent_collector_path).unwrap()),
+                sha256(&fs::read(&request_tamper_collector_path).unwrap()),
+                sha256(&fs::read(&missing_agent_type_path).unwrap()),
+                sha256(&fs::read(&mismatched_agent_type_path).unwrap())
             ),
         )
         .unwrap();
@@ -5436,10 +6172,183 @@ collector_sha256 = "{}"
                     && result["evidence"]["route_observation"]["effective"]["model"]
                         ["evidence"]
                         == "telemetry_receipt"
+                    && result["evidence"]["route_observation"]["requested"]["agent_type"]
+                        ["value"]
+                        == "planr-terra-high"
+                    && result["evidence"]["route_observation"]["effective"]["agent_type"]
+                        ["value"]
+                        == "planr-terra-high"
+                    && result["evidence"]["route_observation"]["effective"]["role"]
+                        == "planr-terra-high"
+                    && result["evidence"]["route_observation"]["effective"]["thread_id"]
+                        == "thread-terra-high"
+                    && result["evidence"]["route_observation"]["effective"]["status"]
+                        == "completed"
                     && result["evidence"]["route_observation"]["metering"]
                         ["credits_micros"]["confidence"]
                         == "trusted"
             }));
+        }
+
+        let divergent_output = planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "agents",
+                "preset",
+                "evaluate",
+                "--at-unix",
+                "1783987200",
+                "--live-host-command",
+                "/bin/sh",
+                "--live-host-arg",
+                artifact_adapter.to_str().unwrap(),
+                "--trusted-telemetry-signer",
+                "divergent-e2e-collector",
+                "--trusted-telemetry-collector",
+                divergent_collector_path.to_str().unwrap(),
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let divergent: Value = serde_json::from_slice(&divergent_output).unwrap();
+        assert!(
+            divergent["report"]["recommended"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            divergent["report"]["candidates"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|candidate| candidate["results"].as_array().unwrap())
+                .all(|result| result["evidence"]["route_verified"] == false
+                    && result["evidence"]["recommendation_eligible"] == false)
+        );
+
+        let request_tamper_output = planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "agents",
+                "preset",
+                "evaluate",
+                "--at-unix",
+                "1783987200",
+                "--live-host-command",
+                "/bin/sh",
+                "--live-host-arg",
+                artifact_adapter.to_str().unwrap(),
+                "--trusted-telemetry-signer",
+                "request-tamper-e2e-collector",
+                "--trusted-telemetry-collector",
+                request_tamper_collector_path.to_str().unwrap(),
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let request_tamper: Value = serde_json::from_slice(&request_tamper_output).unwrap();
+        assert!(
+            request_tamper["report"]["recommended"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            request_tamper["report"]["candidates"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|candidate| candidate["results"].as_array().unwrap())
+                .all(
+                    |result| result["evidence"]["metrics_source"] == "host_reported"
+                        && result["evidence"]["route_verified"] == false
+                )
+        );
+
+        let assert_agent_type_rejected = |evaluation: &Value| {
+            assert!(
+                evaluation["report"]["recommended"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(
+                evaluation["report"]["candidates"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .flat_map(|candidate| candidate["results"].as_array().unwrap())
+                    .all(|result| result["evidence"]["route_verified"] == false
+                        && result["evidence"]["recommendation_eligible"] == false)
+            );
+        };
+        let evaluate_cli = |signer: &str, collector: &Path| {
+            let output = planr()
+                .current_dir(dir.path())
+                .args([
+                    "--db",
+                    db.to_str().unwrap(),
+                    "--json",
+                    "agents",
+                    "preset",
+                    "evaluate",
+                    "--at-unix",
+                    "1783987200",
+                    "--live-host-command",
+                    "/bin/sh",
+                    "--live-host-arg",
+                    artifact_adapter.to_str().unwrap(),
+                    "--trusted-telemetry-signer",
+                    signer,
+                    "--trusted-telemetry-collector",
+                    collector.to_str().unwrap(),
+                ])
+                .assert()
+                .success()
+                .get_output()
+                .stdout
+                .clone();
+            serde_json::from_slice::<Value>(&output).unwrap()
+        };
+        let evaluate_mcp = |signer: &str, collector: &Path| {
+            let output = planr()
+                .current_dir(dir.path())
+                .args(["--db", db.to_str().unwrap(), "mcp"])
+                .write_stdin(format!(
+                    "{}\n",
+                    json!({"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"planr_preset_evaluate","arguments":{"at_unix":1783987200,"live_host_command":"/bin/sh","live_host_args":[artifact_adapter.to_str().unwrap()],"trusted_telemetry_signer":signer,"trusted_telemetry_collector":collector.to_str().unwrap()}}})
+                ))
+                .assert()
+                .success()
+                .get_output()
+                .stdout
+                .clone();
+            let envelope: Value = serde_json::from_slice(&output).unwrap();
+            serde_json::from_str::<Value>(
+                envelope["result"]["content"][0]["text"].as_str().unwrap(),
+            )
+            .unwrap()
+        };
+        for (signer, collector) in [
+            ("missing-agent-type", missing_agent_type_path.as_path()),
+            (
+                "mismatched-agent-type",
+                mismatched_agent_type_path.as_path(),
+            ),
+        ] {
+            assert_agent_type_rejected(&evaluate_cli(signer, collector));
+            assert_agent_type_rejected(&evaluate_mcp(signer, collector));
         }
 
         let ephemeral_key = SigningKey::from_bytes(&[9_u8; 32]);
@@ -5590,9 +6499,10 @@ collector_sha256 = "{}"
             "input_sha256": "constant-input",
             "artifact_kind": "constant-artifact",
             "output": "pass",
-            "effective_model": "gpt-5.4-mini",
+            "effective_model": "gpt-5.6-terra",
             "effective_effort": "high",
             "effective_context_fork": {"mode": "none"},
+            "effective_agent_type": "planr-terra-high",
             "tool_calls": 1,
             "tokens": 10,
             "credits_micros": 100,
@@ -11169,8 +12079,8 @@ fn planr_native_skills_are_packaged_and_cli_first() {
                 .exists(),
             "missing plugin agent {agent}"
         );
-        // Cursor-format subagent roles ship next to the Codex TOMLs and are
-        // registered by the root .cursor-plugin manifest.
+        // Cursor-format subagent roles ship as an independent contract and
+        // are registered by the root .cursor-plugin manifest.
         assert!(
             root.join("plugins/planr/skills/planr-loop/agents")
                 .join(format!("{agent}.md"))
@@ -11183,6 +12093,88 @@ fn planr_native_skills_are_packaged_and_cli_first() {
         cursor_manifest.contains("planr-loop/agents/planr-worker.md"),
         "Cursor plugin manifest must register the worker subagent"
     );
+    for removed in [
+        "plugins/planr/skills/planr-loop/agents/planr-worker.toml",
+        "plugins/planr/skills/planr-loop/agents/planr-reviewer.toml",
+    ] {
+        assert!(
+            !root.join(removed).exists(),
+            "retired Codex fallback remains: {removed}"
+        );
+    }
+}
+
+#[test]
+fn current_public_codex_assets_are_native_v2_and_demoted() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let package: Value =
+        serde_json::from_str(&fs::read_to_string(root.join("package.json")).unwrap()).unwrap();
+    let package_files = package["files"].as_array().unwrap();
+    assert!(!package_files.iter().any(|path| path == "website"));
+    for runtime_asset in [
+        "website/_headers",
+        "website/app.mjs",
+        "website/catalog-model.mjs",
+        "website/data/catalog.json",
+        "website/index.html",
+        "website/styles.css",
+    ] {
+        assert!(
+            package_files.iter().any(|path| path == runtime_asset),
+            "npm production boundary omits {runtime_asset}"
+        );
+    }
+    assert!(
+        package_files
+            .iter()
+            .any(|path| path == "!website/README.md")
+    );
+    assert!(package_files.iter().all(|path| {
+        path.as_str().is_none_or(|path| {
+            !path.contains("website/test")
+                && !path.contains("website/registry")
+                && !path.contains("website/build-")
+        })
+    }));
+    let manifest = fs::read_to_string(root.join("website/registry/manifest.toml")).unwrap();
+    assert!(manifest.contains("id = \"balanced-codex-native-v2\""));
+    assert!(manifest.contains("binding_version = \"2.0.0\""));
+    assert!(manifest.contains("verification_status = \"experimental\""));
+    assert!(!manifest.contains("[entries.signature]"));
+
+    let catalog: Value =
+        serde_json::from_str(&fs::read_to_string(root.join("website/data/catalog.json")).unwrap())
+            .unwrap();
+    let compositions = catalog["compositions"].as_array().unwrap();
+    assert_eq!(compositions.len(), 1);
+    let composition = &compositions[0];
+    assert_eq!(composition["recommended"], false);
+    assert_eq!(composition["status"], "experimental");
+    assert_eq!(composition["binding"]["version"], "2.0.0");
+    let profiles = composition["binding"]["profiles"].as_object().unwrap();
+    let models = profiles
+        .values()
+        .map(|profile| profile["model"].as_str().unwrap())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        models,
+        ["gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra"].into()
+    );
+
+    let verification = fs::read_to_string(root.join("website/registry/verification.json")).unwrap();
+    let report: Value = serde_json::from_str(&verification).unwrap();
+    assert!(
+        report["report"]["recommended"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    for retired in ["gpt-5.4", "gpt-5.5", "sol-luna", "subagent-sol-luna"] {
+        assert!(
+            !verification.contains(retired),
+            "retired public evidence remains: {retired}"
+        );
+    }
 }
 
 #[test]
@@ -11252,7 +12244,7 @@ verification_path = "pack/verification.json"
 policy_id = "balanced"
 policy_version = "1.0.0"
 binding_id = "codex-openai"
-binding_version = "1.0.0"
+binding_version = "2.0.0"
 suite_id = "planr-preset-suite"
 suite_version = "1.8.0"
 
@@ -11310,6 +12302,16 @@ size_bytes = {}
     assert_eq!(verify["integrity_verified"], true);
     assert_eq!(verify["effective_status"], "verified");
     assert_eq!(verify["recommended"], false);
+    assert_eq!(verify["catalog_preview"]["pack"]["safe"], true);
+    assert_eq!(
+        verify["catalog_preview"]["composition"]["binding"]["version"],
+        "2.0.0"
+    );
+    assert_eq!(
+        verify["catalog_preview"]["artifacts"][1]["config_diff"]["proposed"]["value"]["profiles"]["codex-terra-high"]
+            ["model"],
+        "gpt-5.6-terra"
+    );
 
     let preview = planr()
         .current_dir(dir.path())
@@ -11506,8 +12508,6 @@ fn project_init_and_install_provision_loop_agent_roles() {
         .assert()
         .success();
     for role in [
-        ".codex/agents/planr-worker.toml",
-        ".codex/agents/planr-reviewer.toml",
         ".claude/agents/planr-worker.md",
         ".claude/agents/planr-reviewer.md",
         ".cursor/agents/planr-worker.md",
@@ -11518,10 +12518,11 @@ fn project_init_and_install_provision_loop_agent_roles() {
             "project init --client all should provision {role}"
         );
     }
-    let worker = fs::read_to_string(dir.path().join(".codex/agents/planr-worker.toml")).unwrap();
+    assert!(!dir.path().join(".codex/agents/planr-worker.toml").exists());
     assert!(
-        worker.contains("planr_worker"),
-        "provisioned codex worker role should define the planr_worker agent"
+        !dir.path()
+            .join(".codex/agents/planr-reviewer.toml")
+            .exists()
     );
 
     // Plugin-style install: --no-mcp writes subagent roles and skills but no
@@ -11608,8 +12609,8 @@ fn project_init_and_install_provision_loop_agent_roles() {
         "--no-mcp dry-run should list plugin files, not MCP config"
     );
 
-    // `planr install codex` provisions the same roles for projects initialized
-    // without a client, and never overwrites user-edited role files.
+    // `planr install codex` is MCP-only; native role files remain exclusively
+    // owned by preset application.
     let dir2 = tempdir().unwrap();
     let db2 = dir2.path().join(".planr/planr.sqlite");
     planr()
@@ -11623,21 +12624,11 @@ fn project_init_and_install_provision_loop_agent_roles() {
         .args(["--db", db2.to_str().unwrap(), "install", "codex"])
         .assert()
         .success();
-    assert!(dir2.path().join(".codex/agents/planr-worker.toml").exists());
-    fs::write(
-        dir2.path().join(".codex/agents/planr-worker.toml"),
-        "# user-edited\n",
-    )
-    .unwrap();
-    planr()
-        .current_dir(dir2.path())
-        .args(["--db", db2.to_str().unwrap(), "install", "codex"])
-        .assert()
-        .success();
-    let edited = fs::read_to_string(dir2.path().join(".codex/agents/planr-worker.toml")).unwrap();
-    assert_eq!(
-        edited, "# user-edited\n",
-        "install must not overwrite roles"
+    assert!(!dir2.path().join(".codex/agents/planr-worker.toml").exists());
+    assert!(
+        dir2.path()
+            .join(".planr/integrations/codex-mcp.toml")
+            .exists()
     );
 }
 

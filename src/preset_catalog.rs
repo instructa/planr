@@ -50,8 +50,8 @@ const POLICIES: [BuiltinSource; 4] = [
 const BINDINGS: [BuiltinSource; 5] = [
     BuiltinSource {
         id: "codex-openai",
-        version: "1.0.0",
-        description: "Codex driver/worker binding with a none-by-default cross-tier fork.",
+        version: "2.0.0",
+        description: "Native Codex Sol/Terra/Luna roles with bounded cross-role forks.",
         content: include_str!("../presets/bindings/codex-openai.toml"),
     },
     BuiltinSource {
@@ -74,8 +74,8 @@ const BINDINGS: [BuiltinSource; 5] = [
     },
     BuiltinSource {
         id: "mixed-host",
-        version: "1.0.0",
-        description: "Explicit Cursor driver and Codex worker cross-client binding.",
+        version: "2.0.0",
+        description: "Cursor Fable orchestration with native Codex Terra/Luna/Sol workers.",
         content: include_str!("../presets/bindings/mixed-host.toml"),
     },
 ];
@@ -270,6 +270,7 @@ fn validate_safe_artifact(
     }
     match artifact.kind.as_str() {
         "codex_agent" => validate_codex_agent(binding, artifact, errors),
+        "codex_skill" => validate_codex_skill(artifact, errors),
         "claude_agent" => validate_markdown_agent(
             binding,
             artifact,
@@ -290,6 +291,84 @@ fn validate_safe_artifact(
             "artifact `{}` uses executable or unsupported kind `{kind}`",
             artifact.path
         )),
+    }
+}
+
+fn validate_codex_skill(artifact: &BindingArtifact, errors: &mut Vec<String>) {
+    if !artifact.path.starts_with(".codex/skills/") || !artifact.path.ends_with("/SKILL.md") {
+        errors.push(format!(
+            "Codex skill artifact `{}` is outside the repository skill surface",
+            artifact.path
+        ));
+        return;
+    }
+    let Some(rest) = artifact.content.strip_prefix("---\n") else {
+        errors.push(format!(
+            "Codex skill artifact `{}` lacks frontmatter",
+            artifact.path
+        ));
+        return;
+    };
+    let Some((frontmatter, body)) = rest.split_once("\n---\n") else {
+        errors.push(format!(
+            "Codex skill artifact `{}` lacks a body",
+            artifact.path
+        ));
+        return;
+    };
+    for field in ["name:", "description:"] {
+        if !frontmatter.lines().any(|line| {
+            line.strip_prefix(field)
+                .is_some_and(|value| !value.trim().is_empty())
+        }) {
+            errors.push(format!(
+                "Codex skill artifact `{}` requires non-empty `{}` frontmatter",
+                artifact.path,
+                field.trim_end_matches(':')
+            ));
+        }
+    }
+    if body.trim().is_empty() {
+        errors.push(format!(
+            "Codex skill artifact `{}` has an empty body",
+            artifact.path
+        ));
+    }
+    for required in ["agent_type", "fork_turns"] {
+        if !body.contains(required) {
+            errors.push(format!(
+                "Codex skill artifact `{}` lacks native `{required}` dispatch instructions",
+                artifact.path
+            ));
+        }
+    }
+    if !body
+        .to_ascii_lowercase()
+        .contains("native codex rejects `fork_turns: \"all\"`")
+    {
+        errors.push(format!(
+            "Codex skill artifact `{}` must state the native fork_turns all rejection",
+            artifact.path
+        ));
+    }
+    let compact_body = body
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    for forbidden in [
+        "--model",
+        "model_reasoning_effort",
+        "reasoning_effort:",
+        "reasoning_effort=",
+        "model:\"",
+        "model=\"",
+    ] {
+        if compact_body.contains(forbidden) {
+            errors.push(format!(
+                "Codex skill artifact `{}` contains unsafe call-site model or reasoning-effort override syntax `{forbidden}`; repository role TOMLs are the sole owner",
+                artifact.path
+            ));
+        }
     }
 }
 
@@ -495,6 +574,7 @@ pub(crate) fn catalog_value() -> Value {
 mod tests {
     use super::*;
     use crate::preset::{compose_preset, parse_host_binding};
+    use crate::route_audit::ContextForkMode;
     use crate::usage_policy::parse_policy;
 
     #[test]
@@ -529,6 +609,57 @@ mod tests {
             }
         }
         assert_eq!(catalog_value()["safe_packs"].as_array().unwrap().len(), 20);
+    }
+
+    #[test]
+    fn codex_catalog_has_one_native_sol_terra_luna_topology() {
+        let source = builtin_binding(Path::new("codex-openai")).unwrap();
+        let binding = parse_host_binding(source.content).unwrap();
+
+        assert_eq!(binding.version, "2.0.0");
+        assert_eq!(binding.driver_role, "driver");
+        assert_eq!(binding.default_role.as_deref(), Some("driver"));
+        assert_eq!(binding.profiles.len(), 6);
+        assert_eq!(binding.profiles["driver"].profile, "codex-sol-medium");
+        assert_eq!(binding.profiles["explorer"].profile, "codex-terra-medium");
+        assert_eq!(binding.profiles["worker"].profile, "codex-terra-high");
+        assert_eq!(binding.profiles["mechanical"].profile, "codex-luna-xhigh");
+        assert_eq!(binding.profiles["reviewer"].profile, "codex-sol-high");
+        assert_eq!(binding.profiles["moonshot"].profile, "codex-sol-ultra");
+        assert!(
+            binding
+                .routes
+                .iter()
+                .all(|route| route.fallback_roles.is_empty())
+        );
+        assert!(SAFE_PACKS.contains(&("balanced", "codex-openai")));
+        assert!(SAFE_PACKS.contains(&("max-quality", "codex-openai")));
+    }
+
+    #[test]
+    fn mixed_host_preserves_cursor_driver_with_canonical_codex_workers() {
+        let source = builtin_binding(Path::new("mixed-host")).unwrap();
+        let mut binding = parse_host_binding(source.content).unwrap();
+
+        assert_eq!(binding.version, "2.0.0");
+        assert_eq!(binding.profiles["driver"].client, "cursor");
+        assert_eq!(binding.profiles["driver"].model, "fable-5");
+        assert_eq!(binding.profiles["worker"].model, "gpt-5.6-terra");
+        assert_eq!(binding.profiles["mechanical"].model, "gpt-5.6-luna");
+        assert_eq!(binding.profiles["reviewer"].model, "gpt-5.6-sol");
+        assert!(
+            binding
+                .routes
+                .iter()
+                .all(|route| route.fallback_roles.is_empty())
+        );
+        assert!(SAFE_PACKS.contains(&("balanced", "mixed-host")));
+
+        binding.profiles.get_mut("worker").unwrap().fork_turns =
+            Some(ContextForkMode::Partial { turns: 128 });
+        let policy = parse_policy(builtin_policy(Path::new("balanced")).unwrap().content).unwrap();
+        let composed = compose_preset(&policy, &binding, binding.verification.verified_at_unix);
+        assert!(composed.compatibility.ok, "{:?}", composed.compatibility);
     }
 
     #[test]
@@ -589,26 +720,72 @@ mod tests {
         assert!(!validate(&with_secret, &binding).safe);
 
         let mut executable_artifact = binding.clone();
-        executable_artifact.artifacts[0].kind = "shell_script".to_string();
-        executable_artifact.artifacts[0].content = "#!/bin/sh\necho unsafe\n".to_string();
+        executable_artifact.artifacts.push(BindingArtifact {
+            path: ".codex/agents/unsafe.toml".to_string(),
+            kind: "shell_script".to_string(),
+            content: "#!/bin/sh\necho unsafe\n".to_string(),
+        });
         assert!(!validate(&policy, &executable_artifact).safe);
 
         let mut hidden_permission = binding.clone();
-        hidden_permission.artifacts[0]
-            .content
-            .push_str("\napproval_policy = \"never\"\n");
+        hidden_permission.artifacts.push(BindingArtifact {
+            path: ".codex/agents/terra.toml".to_string(),
+            kind: "codex_agent".to_string(),
+            content: r#"name = "terra"
+description = "worker"
+model = "gpt-5.6-terra"
+model_reasoning_effort = "high"
+sandbox_mode = "workspace-write"
+developer_instructions = "Use planr-work."
+approval_policy = "never"
+"#
+            .to_string(),
+        });
         assert!(!validate(&policy, &hidden_permission).safe);
 
         let mut missing_instructions = binding.clone();
-        missing_instructions.artifacts[0].content = r#"name = "planr_preset_worker"
+        missing_instructions.artifacts.push(BindingArtifact {
+            path: ".codex/agents/terra.toml".to_string(),
+            kind: "codex_agent".to_string(),
+            content: r#"name = "planr_preset_worker"
 description = "worker"
-model = "gpt-5.4-mini"
+model = "gpt-5.6-terra"
 model_reasoning_effort = "high"
 sandbox_mode = "workspace-write"
 "#
-        .to_string();
+            .to_string(),
+        });
         let validation = validate(&policy, &missing_instructions);
         assert!(!validation.safe);
         assert!(validation.warnings[0].contains("developer_instructions"));
+
+        let mut unsafe_dispatch = binding.clone();
+        unsafe_dispatch.artifacts.push(BindingArtifact {
+            path: ".codex/skills/planr-native-routing/SKILL.md".to_string(),
+            kind: "codex_skill".to_string(),
+            content: "---\nname: routing\ndescription: routing\n---\nDispatch without a native contract.\n"
+                .to_string(),
+        });
+        let validation = validate(&policy, &unsafe_dispatch);
+        assert!(!validation.safe);
+        assert!(validation.warnings[0].contains("agent_type"));
+
+        let routing_skill = binding
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.kind == "codex_skill")
+            .unwrap();
+        for override_syntax in [
+            "spawn_agent({ agent_type: \"planr-terra-high\", model: \"gpt-5.6-terra\", fork_turns: \"none\" })",
+            "spawn_agent({ agent_type: \"planr-terra-high\", model_reasoning_effort: \"high\", fork_turns: \"none\" })",
+        ] {
+            let mut unsafe_override = binding.clone();
+            let mut artifact = routing_skill.clone();
+            artifact.content.push_str(override_syntax);
+            unsafe_override.artifacts.push(artifact);
+            let validation = validate(&policy, &unsafe_override);
+            assert!(!validation.safe);
+            assert!(validation.warnings[0].contains("sole owner"));
+        }
     }
 }

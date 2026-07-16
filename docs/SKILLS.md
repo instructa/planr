@@ -2,7 +2,7 @@
 
 Planr ships agent-facing skill templates under `plugins/planr/skills/`.
 
-The repository ships an installable plugin under `plugins/planr` for Codex, Claude Code, and Cursor, so the skills can be installed as one package instead of copied by hand. Marketplace manifests at the repo root (`.agents/plugins/marketplace.json`, `.claude-plugin/marketplace.json`) point at that subdirectory — Codex silently ignores marketplaces whose plugin source is the repo root itself. The plugin only carries skills and agent roles; the `planr` CLI must be installed separately (`brew install instructa/tap/planr`).
+The repository ships an installable plugin under `plugins/planr` for Codex and Claude Code, while Cursor receives the same skills through `planr install cursor`. Marketplace manifests at the repo root (`.agents/plugins/marketplace.json`, `.claude-plugin/marketplace.json`) point at that subdirectory — Codex silently ignores marketplaces whose plugin source is the repo root itself. The shared package carries skills and Claude's independent agent roles; Codex role TOMLs are generated repository-locally from the native preset, never shipped as static worker/reviewer fallbacks. The `planr` CLI must be installed separately (`brew install instructa/tap/planr`).
 
 ## Install As Plugin (preferred)
 
@@ -165,10 +165,12 @@ The CLI provisions the role files automatically — no manual copying:
 
 ```bash
 planr project init "My Product" --client all   # writes .codex/agents/*.toml, .claude/agents/*.md, and .cursor/agents/*.md
-planr install codex                            # provisions roles for an existing project (same for claude and cursor)
+planr agents init                              # generates canonical native Codex roles in an existing project
+planr install claude                           # provisions Claude's independent roles
+planr install cursor                           # provisions Cursor's independent roles and skills
 ```
 
-Codex needs these project-scoped files because its plugin system carries skills only; the Claude Code and Cursor plugins register the same roles automatically, so the provisioned `.claude/agents/` and `.cursor/agents/` copies only matter for standalone (non-plugin) installs. Existing role files are never overwritten.
+Codex needs its project-scoped files because its plugin system carries skills only; they are generated from the single native Sol/Terra/Luna preset rather than static worker/reviewer fallbacks. Claude Code and Cursor keep their independent role contracts. Existing role files are never overwritten.
 
 Dispatches stay one line: `Use $planr-work on item <id>` and `Use $planr-review on item <id>`. The map and logs are the loop memory, so any iteration can resume from zero context.
 

@@ -1508,7 +1508,7 @@ mod tests {
                     policy_id: "balanced".into(),
                     policy_version: "1.0.0".into(),
                     binding_id: "codex-openai".into(),
-                    binding_version: "1.0.0".into(),
+                    binding_version: "2.0.0".into(),
                     suite_id: "planr-preset-suite".into(),
                     suite_version: "1.8.0".into(),
                 }),

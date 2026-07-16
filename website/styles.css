@@ -102,7 +102,6 @@ h3 { letter-spacing: -.025em; }
 .catalog-stats dt { color: var(--muted); }
 .catalog-stats dd { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 
-.fixture-banner { margin-bottom: 1rem; padding: .9rem 1.1rem; border: 1px solid var(--amber); background: rgb(255 199 106 / 8%); color: var(--amber); border-radius: 12px; }
 .authority-note {
   display: grid;
   grid-template-columns: auto 1fr;

@@ -22,15 +22,14 @@ $planr-goal <your goal>
 
 The stop condition lives in Planr (`--tag goal-contract`), so a dead session resumes with the same starter line from zero chat context.
 
-Run the driver session on your strongest tier (e.g. `gpt-5.5` at `model_reasoning_effort = "high"` in `~/.codex/config.toml`). The provisioned worker role pins a cheaper tier; the reviewer deliberately inherits the session model:
+Apply the native Codex preset in the repository before starting the driver:
 
-```toml
-# .codex/agents/planr-worker.toml
-model = "gpt-5.5"
-model_reasoning_effort = "medium"
+```bash
+planr agents preset apply balanced --binding codex-openai --live-host-command /absolute/codex-adapter --trusted-telemetry-signer codex --trusted-telemetry-collector /absolute/collector --preview --json
+planr agents preset apply balanced --binding codex-openai --live-host-command /absolute/codex-adapter --trusted-telemetry-signer codex --trusted-telemetry-collector /absolute/collector --confirm --json
 ```
 
-Verify the pin once: some Codex versions ignore custom agent files on spawn ([openai/codex#26868](https://github.com/openai/codex/issues/26868)) and the child silently inherits the parent model. Spawn `planr_worker` on a trivial item and confirm the child metadata shows the pinned model and effort with a non-null `agent_path`. Full workflow, recovery, per-host variants, and the tiering rationale: [Long-Running Goals](GOALS.md).
+The preset generates repository-local Sol Medium, Terra Medium/High, Luna xHigh, Sol High, and Sol Ultra role TOMLs plus `.codex/skills/planr-native-routing/SKILL.md`. Dispatch the table's role with an explicit `agent_type` and `fork_turns: "none"` (or an evidenced positive bounded count); never repeat model or effort at the call site. Native Codex rejects `fork_turns: "all"` for these overridden roles. Restart after applying changed roles, then confirm child metadata reports the expected model/effort and a non-null `agent_path`. Full workflow and tiering rationale: [Long-Running Goals](GOALS.md).
 
 ## MCP
 

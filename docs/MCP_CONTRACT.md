@@ -67,7 +67,7 @@ HTTP mirrors the same rule: `GET /v1/reviews/:id/artifact` is read-only; `POST /
 
 `planr install <client> --dry-run` prints project-scoped configuration for Codex, Claude Code, and Cursor. Non-dry install writes only repository-local files:
 
-- Codex: `.planr/integrations/codex-mcp.toml` plus `.codex/agents/` roles
+- Codex: `.planr/integrations/codex-mcp.toml`; canonical `.codex/agents/` roles are owned separately by `agents init` and native preset apply
 - Claude Code: `.mcp.json` plus `.claude/agents/` roles
 - Cursor: `.cursor/mcp.json` plus `.cursor/agents/` roles and `.cursor/skills/` skill copies
 

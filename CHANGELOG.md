@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- Hard-cut the current Codex preset, evaluation fixtures, registry publication, website catalog, package assets, documentation, and tests to one repository-owned GPT-5.6 Sol/Terra/Luna native-v2 topology. Retired Codex models, fallback bindings, and static worker/reviewer TOMLs are absent from current/public artifacts; independent Claude Code and Cursor role contracts remain unchanged.
+- Regenerate the public preset evaluation, manifest hashes, report, and catalog through `npm run catalog:regenerate`. The replacement Codex entry is intentionally unsigned, experimental, and unrecommended until the separate fresh trusted live oracle produces valid telemetry and an offline release signer promotes it; no prior recommendation or signature is carried forward.
+
 ## [1.4.0] - 2026-07-16
 
 Verified presets turn model routing from a hand-authored host configuration into an inspectable, policy-driven workflow. This release adds safe built-in policy/binding pairs, reproducible evaluation and signed registry evidence, and a public catalog deployed from repository-owned infrastructure.

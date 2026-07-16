@@ -10,7 +10,7 @@ use crate::agents::{
 };
 use crate::cli::{AgentsCommand, ClientArg, ItemRouteArgs};
 use crate::rolefiles::{
-    GENERATED_FROM_HEADER, agent_roles, render_claude_role, render_codex_role, render_cursor_role,
+    GENERATED_FROM_HEADER, agent_roles, render_claude_role, render_cursor_role,
 };
 use anyhow::{Result, bail};
 use rusqlite::params;
@@ -161,7 +161,7 @@ impl App {
 
     /// Advisory declared-vs-actual check at evidence time: every host has
     /// a silent override path (env preemption, plan/admin policy, org
-    /// allowlists, full-history forks), so the recorded profile is the
+    /// allowlists, unavailable role models), so the recorded profile is the
     /// only trustworthy signal. A mismatch emits exactly one
     /// `route_mismatch_observed` event — it never blocks logging, review,
     /// or closure. No declared route (no registry, nothing resolves)
@@ -534,13 +534,14 @@ impl App {
         ))
     }
 
-    /// Role file contents for `planr install <client>`: when the registry
+    /// Claude/Cursor role file contents for `planr install <client>`: when the registry
     /// loads and a role's route resolves to a profile whose `client`
     /// matches the install target, the static role text is re-rendered
     /// with that profile's model pin; in every other case (no registry,
     /// degraded registry, no route, no client-matching profile in the
     /// chain, unrenderable content) the shipped static text is used
-    /// byte-identically. Worker roles follow the `work_type=code` route,
+    /// byte-identically. Native Codex role files are exclusively preset-owned
+    /// and never pass through this legacy renderer. Worker roles follow the `work_type=code` route,
     /// reviewer roles the `work_type=review` route.
     pub(crate) fn agent_role_contents(&self, client: &str) -> Vec<(&'static str, String)> {
         let registry = match load_registry(&self.root) {
@@ -625,17 +626,18 @@ impl App {
             .and_then(|routing| routing.effort)
             .unwrap_or("<effort>")
             .to_string();
-        let process_dispatch = vec![
-            format!(
-                "codex exec --model {example_model} -c model_reasoning_effort=\"{example_effort}\" \"<task>\""
-            ),
-            format!(
-                "pi --provider <provider> --model {example_model} --thinking {example_effort} -p \"<task>\""
-            ),
-            format!(
-                "opencode run --model \"<provider>/{example_model}\" \"<task>\"  # quote the provider/model pair"
-            ),
-        ];
+        let process_dispatch = if client == "all" {
+            vec![
+                format!(
+                    "pi --provider <provider> --model {example_model} --thinking {example_effort} -p \"<task>\""
+                ),
+                format!(
+                    "opencode run --model \"<provider>/{example_model}\" \"<task>\"  # quote the provider/model pair"
+                ),
+            ]
+        } else {
+            Vec::new()
+        };
 
         let mut prompt = String::from("## Model routing\n\n");
         match registry_status {
@@ -644,14 +646,15 @@ impl App {
             ),
             "ok" => {
                 prompt.push_str("Dispatch priority from .planr/agents.toml (first match wins; per-item `planr item route` pins beat all of it):\n\n");
-                prompt.push_str("| match | profile | client | model | effort | tier | skill | fallbacks |\n");
-                prompt.push_str("|---|---|---|---|---|---|---|---|\n");
+                prompt.push_str("| match | profile | client | agent_type | model | effort | tier | skill | fallbacks |\n");
+                prompt.push_str("|---|---|---|---|---|---|---|---|---|\n");
                 for row in &routes {
                     prompt.push_str(&format!(
-                        "| {} | {} | {} | {} | {} | {} | {} | {} |\n",
+                        "| {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
                         row["match"].as_str().unwrap_or("-"),
                         row["profile"].as_str().unwrap_or("-"),
                         row["client"].as_str().unwrap_or("unknown profile"),
+                        row["agent_type"].as_str().unwrap_or("-"),
                         row["model"].as_str().unwrap_or("-"),
                         row["effort"].as_str().unwrap_or("-"),
                         row["cost_tier"].as_str().unwrap_or("-"),
@@ -697,9 +700,11 @@ impl App {
             }
             hosts.insert(host.to_string(), json!(lines));
         }
-        prompt.push_str("\n### Hosts without role files (process dispatch)\n");
-        for line in &process_dispatch {
-            prompt.push_str(&format!("- `{line}`\n"));
+        if !process_dispatch.is_empty() {
+            prompt.push_str("\n### Hosts without role files (process dispatch)\n");
+            for line in &process_dispatch {
+                prompt.push_str(&format!("- `{line}`\n"));
+            }
         }
         self.emit(
             json!({
@@ -755,8 +760,8 @@ fn render_role(
     let routing = resolve_route(&facts, registry)?;
     // A role file can only pin models its own host dispatches, so scan
     // the resolved chain for the first profile whose client matches the
-    // install target — e.g. a review route pointing at a Cursor profile
-    // must not write `fable-5` into a Codex TOML.
+    // install target — e.g. a review route pointing at a Claude profile
+    // must not write that model into a Cursor role file.
     let (profile_id, profile) = std::iter::once(routing.profile)
         .chain(routing.fallbacks.iter().copied())
         .find_map(|id| {
@@ -786,7 +791,6 @@ fn render_role(
     });
     let evidence_note = evidence_note.as_deref();
     match client {
-        "codex" => render_codex_role(static_content, profile_id, profile, evidence_note),
         "claude" => render_claude_role(static_content, profile_id, profile, evidence_note),
         "cursor" => render_cursor_role(static_content, profile_id, profile, evidence_note),
         _ => None,
@@ -807,6 +811,7 @@ fn route_table_row(
         "match": selector,
         "profile": profile_id,
         "client": profile.map(|profile| profile.client.clone()),
+        "agent_type": profile.and_then(|profile| profile.agent_type.clone()),
         "model": profile.map(|profile| profile.model.clone()),
         "effort": profile.and_then(|profile| profile.effort.clone()),
         "cost_tier": profile.and_then(|profile| profile.cost_tier.clone()),
@@ -824,9 +829,9 @@ fn host_dispatch_sections() -> [(&'static str, &'static str, [&'static str; 3]);
             "codex",
             "Codex",
             [
-                "Dispatch through the rendered role files (`.codex/agents/planr-worker.toml`, `planr-reviewer.toml`); re-render after registry edits with `planr install codex --force`.",
-                "Subagent dispatch must use `fork_turns: \"none\"` — a full-history fork (`fork_turns = \"all\"`) intentionally drops `agent_type` and `model`, silently unpinning the role.",
-                "Codex loads the agent role registry at session start; restart the session after re-rendering or the old pins stay live.",
+                "Apply a Codex preset, then use its repository routing table to call `spawn_agent({ agent_type: \"<generated .codex/agents/*.toml role>\", fork_turns: \"none\", ... })`; the role TOML alone owns model and effort.",
+                "Every role, model, or effort change must use `fork_turns: \"none\"` or an evidenced positive bounded count; native Codex rejects `fork_turns: \"all\"` when `agent_type` selects a role with model or effort overrides.",
+                "Codex loads repository agent definitions at session start; restart the session after applying a changed preset so the generated pins are live.",
             ],
         ),
         (

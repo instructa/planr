@@ -63,8 +63,11 @@ function recommendationMatches(report, policyId, bindingId) {
 }
 
 export function projectComposition({ verified, preview, verificationEnvelope }) {
-  if (!verified?.integrity_verified || !verified?.signature_verified || !verified?.trusted_maintainer) {
-    throw new Error("website projection requires an integrity-verified entry signed by a trusted maintainer");
+  if (!verified?.integrity_verified) {
+    throw new Error("website projection requires an integrity-verified registry entry");
+  }
+  if (verified.recommended && (!verified.signature_verified || !verified.trusted_maintainer)) {
+    throw new Error("website recommendation requires a trusted maintainer signature");
   }
   if (!verified.compatible) {
     throw new Error("website projection requires a compatible registry entry");
@@ -166,8 +169,8 @@ export function projectComposition({ verified, preview, verificationEnvelope }) 
       version: verified.registry_version,
       manifestSha256: verified.manifest_sha256,
       signer: entry.signature?.signer,
-      signatureVerified: true,
-      trustedMaintainer: true,
+      signatureVerified: verified.signature_verified,
+      trustedMaintainer: verified.trusted_maintainer,
       artifacts: [policyArtifact, bindingArtifact, verificationArtifact].map((artifact) => ({
         path: artifact.path,
         kind: artifact.kind,

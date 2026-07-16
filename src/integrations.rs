@@ -222,7 +222,7 @@ pub fn mcp_tools() -> Vec<Value> {
         tool(
             "planr_preset_apply",
             "Preview or explicitly apply a provider-neutral policy plus versioned host binding",
-            json!({"policy": prop("string", "Usage Policy v1 TOML path or built-in id"), "binding": prop("string", "Host-binding TOML path or built-in id"), "confirm": prop("boolean", "Apply the conflict-free preview (default false)")}),
+            json!({"policy": prop("string", "Usage Policy v1 TOML path or built-in id"), "binding": prop("string", "Host-binding TOML path or built-in id"), "live_host_command": prop("string", "Absolute challenge-bound adapter required for Codex capability verification"), "live_host_args": {"type": "array", "items": {"type": "string"}, "description": "Arguments for the live-host adapter"}, "trusted_telemetry_signer": prop("string", "Signer id pinned in .planr/trusted-telemetry.toml"), "trusted_telemetry_collector": prop("string", "Absolute hash-pinned telemetry collector"), "confirm": prop("boolean", "Apply the conflict-free preview (default false)")}),
             &["policy", "binding"],
         ),
         tool(

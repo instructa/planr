@@ -4,12 +4,13 @@
 //! metric, domain check, route proof, result artifact, and result hash from
 //! production composition, transition, and route-audit functions.
 
-use crate::preset::{HostBindingV1, compose_preset, parse_host_binding, sha256};
+use crate::preset::{BoundProfile, HostBindingV1, compose_preset, parse_host_binding, sha256};
 use crate::preset_catalog::{builtin_binding, builtin_policy};
 use crate::route_audit::{
     ContextForkMode, EnforcementState, EvidenceSource, ForkDimension, MeteredDimension,
     RouteMetering, RouteObservation, RouteStage, RouteTransition, RouteTransitionKind,
-    StringDimension, VersionReference, validate_route_observation,
+    StringDimension, VersionReference, effective_route_matches_requested,
+    validate_route_observation,
 };
 use crate::usage_policy::{
     AvailabilityTrigger, MeteringMode, QualityTrigger, QuotaTrigger, RetryTrigger, RiskLevel,
@@ -28,7 +29,7 @@ use std::time::Instant;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const SUITE_SOURCE: &str = include_str!("../evaluations/preset-suite-v1.toml");
-const SOL_LUNA_SOURCE: &str = include_str!("../evaluations/sol-luna-codex-v1.toml");
+const SOL_TERRA_LUNA_SOURCE: &str = include_str!("../evaluations/sol-terra-luna-codex-v2.toml");
 const MAX_LIVE_ARTIFACT_BYTES: u64 = 1_048_576;
 static LIVE_WORKSPACE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -158,7 +159,7 @@ pub(crate) struct SuiteProvenance {
     expires_at_unix: u64,
     evaluated_at_unix: u64,
     fixture_sha256: String,
-    sol_luna_fixture_sha256: String,
+    sol_terra_luna_fixture_sha256: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -365,6 +366,7 @@ struct LiveHostRequest {
     binding: VersionReference,
     task: VersionReference,
     task_kind: TaskKind,
+    requested_route: RequestedRoute,
     input: String,
     input_sha256: String,
     artifact_kind: String,
@@ -389,6 +391,13 @@ struct LiveHostResponse {
     effective_model: String,
     effective_effort: Option<String>,
     effective_context_fork: ContextForkMode,
+    effective_agent_type: String,
+    #[serde(default)]
+    effective_role: Option<String>,
+    #[serde(default)]
+    thread_id: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
     tool_calls: u64,
     tokens: u64,
     credits_micros: u64,
@@ -436,11 +445,19 @@ struct TrustedTelemetryPayload {
     artifact_kind: String,
     artifact_sha256: String,
     challenge_nonce: String,
+    requested_route: RequestedRoute,
     host_id: String,
     host_version: String,
     effective_model: String,
     effective_effort: Option<String>,
     effective_context_fork: ContextForkMode,
+    effective_agent_type: String,
+    #[serde(default)]
+    effective_role: Option<String>,
+    #[serde(default)]
+    thread_id: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
     tool_calls: u64,
     tokens: u64,
     credits_micros: u64,
@@ -487,6 +504,27 @@ struct TelemetryCollectorRequest {
     artifact_kind: String,
     artifact_sha256: String,
     challenge_nonce: String,
+    requested_route: RequestedRoute,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RequestedRoute {
+    role: String,
+    agent_type: Option<String>,
+    model: String,
+    effort: Option<String>,
+    context_fork: ContextForkMode,
+}
+
+fn requested_route(role: &str, profile: &BoundProfile) -> RequestedRoute {
+    RequestedRoute {
+        role: role.to_string(),
+        agent_type: profile.agent_type.clone(),
+        model: profile.model.clone(),
+        effort: profile.effort.clone(),
+        context_fork: profile.fork_turns.clone().unwrap_or(ContextForkMode::None),
+    }
 }
 
 struct VerifiedTelemetryCollector {
@@ -669,6 +707,7 @@ impl VerifiedTelemetryCollector {
             && payload.artifact_kind == request.artifact_kind
             && payload.artifact_sha256 == request.artifact_sha256
             && payload.challenge_nonce == request.challenge_nonce
+            && payload.requested_route == request.requested_route
             && !payload.host_id.trim().is_empty()
             && !payload.host_version.trim().is_empty();
         (identity_matches && self.public_key.verify(&message, &signature).is_ok())
@@ -804,6 +843,145 @@ impl LiveHostAdapter for ProcessLiveHostAdapter<'_> {
     }
 }
 
+/// Challenge every native Codex agent type through the same independently
+/// signed telemetry boundary used by live preset evaluation. A caller cannot
+/// assert native-v2 or backend support: the hash-pinned collector must bind
+/// each requested agent type to its observed model, effort, and none-fork.
+pub(crate) fn verify_codex_binding_capabilities(
+    binding: &HostBindingV1,
+    live_host: &LiveHostCommand,
+    telemetry: &TrustedTelemetryCommand,
+    installed_version_output: &str,
+) -> Result<(), String> {
+    let adapter = ProcessLiveHostAdapter { command: live_host };
+    let collector = VerifiedTelemetryCollector::load(telemetry)?;
+    let evaluated_at_unix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let run_id = uuid::Uuid::new_v4().to_string();
+    let candidate_id = format!("{}-native-capability", binding.id);
+    for (role, profile) in binding
+        .profiles
+        .iter()
+        .filter(|(_, profile)| profile.client == "codex")
+    {
+        let agent_type = profile
+            .agent_type
+            .as_deref()
+            .ok_or_else(|| format!("binding role `{role}` has no native Codex agent_type"))?;
+        let effort = profile
+            .effort
+            .as_deref()
+            .ok_or_else(|| format!("binding role `{role}` has no explicit reasoning effort"))?;
+        let input = serde_json::to_string(&serde_json::json!({
+            "agent_type": agent_type,
+            "model": profile.model,
+            "effort": effort,
+            "fork_turns": {"mode": "none"},
+        }))
+        .map_err(|error| format!("failed to serialize capability challenge: {error}"))?;
+        let input_sha256 = sha256(input.as_bytes());
+        let artifact_kind = "codex_native_capability";
+        let workspace = LiveExecutionWorkspace::create(
+            &candidate_id,
+            agent_type,
+            &input_sha256,
+            artifact_kind,
+        )?;
+        let request = LiveHostRequest {
+            schema_version: 1,
+            suite: VersionReference {
+                id: "planr-codex-capability".to_string(),
+                version: "1.0.0".to_string(),
+            },
+            candidate: VersionReference {
+                id: candidate_id.clone(),
+                version: binding.version.clone(),
+            },
+            policy: VersionReference {
+                id: "capability-probe".to_string(),
+                version: "1.0.0".to_string(),
+            },
+            binding: VersionReference {
+                id: binding.id.clone(),
+                version: binding.version.clone(),
+            },
+            task: VersionReference {
+                id: agent_type.to_string(),
+                version: "1.0.0".to_string(),
+            },
+            task_kind: TaskKind::Subagent,
+            requested_route: requested_route(role, profile),
+            input,
+            input_sha256: input_sha256.clone(),
+            artifact_kind: artifact_kind.to_string(),
+            workspace_path: workspace.root.display().to_string(),
+            challenge_path: workspace.challenge_path.display().to_string(),
+            artifact_path: workspace.artifact_path.display().to_string(),
+        };
+        let live = adapter.run(&request)?;
+        let (artifact, artifact_sha256) = workspace.read_artifact().ok_or_else(|| {
+            format!("native-v2 probe for `{agent_type}` produced no challenge-bound artifact")
+        })?;
+        if artifact.schema_version != 1
+            || artifact.candidate_id != candidate_id
+            || artifact.task_id != agent_type
+            || artifact.input_sha256 != input_sha256
+            || artifact.artifact_kind != artifact_kind
+            || artifact.challenge_sha256 != workspace.challenge_sha256
+            || live.response.artifact_sha256 != artifact_sha256
+        {
+            return Err(format!(
+                "native-v2 probe for `{agent_type}` was not bound to Planr's challenge"
+            ));
+        }
+        let receipt = collector
+            .collect(&TelemetryCollectorRequest {
+                schema_version: 1,
+                run_id: run_id.clone(),
+                evaluated_at_unix,
+                suite_id: request.suite.id.clone(),
+                suite_version: request.suite.version.clone(),
+                candidate_id: candidate_id.clone(),
+                task_id: agent_type.to_string(),
+                input_sha256: input_sha256.clone(),
+                artifact_kind: artifact_kind.to_string(),
+                artifact_sha256,
+                challenge_nonce: workspace.challenge_nonce.clone(),
+                requested_route: request.requested_route.clone(),
+            })
+            .ok_or_else(|| {
+                format!("native-v2 probe for `{agent_type}` lacks a valid signed telemetry receipt")
+            })?;
+        if receipt.host_id != "codex"
+            || receipt.host_id != live.response.host_id
+            || receipt.host_version != live.response.host_version
+            || !installed_version_output
+                .split_whitespace()
+                .last()
+                .is_some_and(|version| {
+                    version.trim_start_matches('v') == receipt.host_version.trim_start_matches('v')
+                })
+        {
+            return Err(format!(
+                "native-v2 probe for `{agent_type}` must carry signed host_id `codex` and match the installed Codex version"
+            ));
+        }
+        if receipt.effective_model != profile.model
+            || receipt.effective_effort.as_deref() != Some(effort)
+            || receipt.effective_context_fork != ContextForkMode::None
+            || receipt.effective_agent_type != agent_type
+        {
+            return Err(format!(
+                "active backend does not advertise `{agent_type}` as {}/{effort} with fork_turns none (observed {}/{:?})",
+                profile.model, receipt.effective_model, receipt.effective_effort
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn evaluate_embedded_suite(
     options: &EvaluationOptions,
 ) -> Result<PresetEvaluationReport, String> {
@@ -850,8 +1028,8 @@ pub(crate) fn validate_registry_evaluation(
     )?;
     require_json_string(
         report_suite,
-        "sol_luna_fixture_sha256",
-        &sha256(SOL_LUNA_SOURCE.as_bytes()),
+        "sol_terra_luna_fixture_sha256",
+        &sha256(SOL_TERRA_LUNA_SOURCE.as_bytes()),
     )?;
     require_json_u64(report_suite, "verified_at_unix", suite.verified_at_unix)?;
     require_json_u64(report_suite, "expires_at_unix", suite.expires_at_unix)?;
@@ -917,7 +1095,7 @@ pub(crate) fn validate_registry_evaluation(
             "preset evaluation report does not contain complete reproducible evidence".into(),
         );
     }
-    let expected_dispatch_contract = serde_json::to_value(evaluate_sol_luna_contract()?)
+    let expected_dispatch_contract = serde_json::to_value(evaluate_sol_terra_luna_contract()?)
         .map_err(|error| format!("failed to serialize canonical dispatch contract: {error}"))?;
     if report.get("codex_dispatch_contract") != Some(&expected_dispatch_contract) {
         return Err(
@@ -1177,7 +1355,9 @@ fn route_is_trusted_telemetry(observation: &RouteObservation) -> bool {
             && dimension.evidence == Some(EvidenceSource::TelemetryReceipt)
             && dimension.value.is_some()
     };
-    trusted_string(&observation.effective.model)
+    effective_route_matches_requested(observation)
+        && trusted_string(&observation.effective.agent_type)
+        && trusted_string(&observation.effective.model)
         && trusted_string(&observation.effective.effort)
         && observation.effective.context_fork.enforcement == EnforcementState::Verified
         && observation.effective.context_fork.evidence == Some(EvidenceSource::TelemetryReceipt)
@@ -1263,7 +1443,7 @@ fn evaluate_embedded_suite_with_adapter(
     let telemetry_run_id = trusted_telemetry
         .as_ref()
         .map(|_| uuid::Uuid::new_v4().to_string());
-    let codex_dispatch_contract = evaluate_sol_luna_contract()?;
+    let codex_dispatch_contract = evaluate_sol_terra_luna_contract()?;
     let task_fixtures = suite
         .tasks
         .iter()
@@ -1344,7 +1524,7 @@ fn evaluate_embedded_suite_with_adapter(
             expires_at_unix: suite.expires_at_unix,
             evaluated_at_unix,
             fixture_sha256,
-            sol_luna_fixture_sha256: sha256(SOL_LUNA_SOURCE.as_bytes()),
+            sol_terra_luna_fixture_sha256: sha256(SOL_TERRA_LUNA_SOURCE.as_bytes()),
         },
         environment: EnvironmentProvenance {
             runner: if trusted_telemetry.is_some() {
@@ -1737,6 +1917,10 @@ fn generate_live_result(
     telemetry_run_id: Option<&str>,
     evaluated_at_unix: u64,
 ) -> Result<ResultArtifact, String> {
+    let worker = binding
+        .profiles
+        .get("worker")
+        .ok_or_else(|| format!("binding `{}` has no worker profile", binding.id))?;
     let input_sha256 = hash_json(task)?;
     let workspace = LiveExecutionWorkspace::create(
         &candidate.id,
@@ -1764,6 +1948,7 @@ fn generate_live_result(
             version: task.version.clone(),
         },
         task_kind: task.kind,
+        requested_route: requested_route("worker", worker),
         input: task.input.clone(),
         input_sha256: input_sha256.clone(),
         artifact_kind: task.artifact_kind.clone(),
@@ -1788,6 +1973,7 @@ fn generate_live_result(
             artifact_kind: task.artifact_kind.clone(),
             artifact_sha256: artifact_sha256.clone(),
             challenge_nonce: workspace.challenge_nonce.clone(),
+            requested_route: request.requested_route.clone(),
         })
     });
     let telemetry_bound = trusted_telemetry.as_ref().is_some_and(|receipt| {
@@ -1825,6 +2011,22 @@ fn generate_live_result(
         || live.response.effective_context_fork.clone(),
         |value| value.effective_context_fork.clone(),
     );
+    let effective_agent_type = trusted_telemetry.map_or_else(
+        || live.response.effective_agent_type.clone(),
+        |value| value.effective_agent_type.clone(),
+    );
+    let effective_role = trusted_telemetry.map_or_else(
+        || live.response.effective_role.clone(),
+        |value| value.effective_role.clone(),
+    );
+    let thread_id = trusted_telemetry.map_or_else(
+        || live.response.thread_id.clone(),
+        |value| value.thread_id.clone(),
+    );
+    let status = trusted_telemetry.map_or_else(
+        || live.response.status.clone(),
+        |value| value.status.clone(),
+    );
     let observed = ProjectedMetrics {
         tool_calls,
         tokens,
@@ -1859,12 +2061,12 @@ fn generate_live_result(
         &effective_model,
         effective_effort.as_deref(),
         effective_context_fork.clone(),
+        &effective_agent_type,
+        effective_role.as_deref(),
+        thread_id.as_deref(),
+        status.as_deref(),
         trusted_telemetry.is_some(),
     )?;
-    let worker = binding
-        .profiles
-        .get("worker")
-        .ok_or_else(|| format!("binding `{}` has no worker profile", binding.id))?;
     let expected_fork = worker.fork_turns.clone().unwrap_or(ContextForkMode::None);
     let request_bound = live.response.candidate_id == candidate.id
         && live.response.task_id == task.id
@@ -1872,9 +2074,12 @@ fn generate_live_result(
     let artifact_kind_matches = live.response.artifact_kind == task.artifact_kind;
     let effective_matches_binding = effective_model == worker.model
         && effective_effort == worker.effort
-        && effective_context_fork == expected_fork;
-    let route_claim_well_formed =
-        request_bound && effective_matches_binding && validate_route_observation(&route).is_ok();
+        && effective_context_fork == expected_fork
+        && worker.agent_type.as_deref() == Some(effective_agent_type.as_str());
+    let route_claim_well_formed = request_bound
+        && effective_matches_binding
+        && effective_route_matches_requested(&route)
+        && validate_route_observation(&route).is_ok();
     let route_verified = route_claim_well_formed && route_is_verified(&route);
     let expected_output = format!("{}:{}:{}", candidate.id, task.id, task.expected_output);
     let expected_sha256 = sha256(expected_output.as_bytes());
@@ -2377,6 +2582,7 @@ fn route_observation(
         binding,
         worker.profile.as_str(),
         worker.client.as_str(),
+        worker.agent_type.as_deref(),
         worker.model.as_str(),
         worker.effort.as_deref(),
         fork,
@@ -2397,6 +2603,10 @@ fn live_route_observation(
     effective_model: &str,
     effective_effort: Option<&str>,
     effective_context_fork: ContextForkMode,
+    effective_agent_type: &str,
+    effective_role: Option<&str>,
+    thread_id: Option<&str>,
+    status: Option<&str>,
     trusted_telemetry: bool,
 ) -> Result<RouteObservation, String> {
     let worker = binding
@@ -2418,13 +2628,17 @@ fn live_route_observation(
         )
     };
     observation.effective = route_stage(
+        effective_role,
         worker.profile.as_str(),
         worker.client.as_str(),
+        Some(effective_agent_type),
         effective_model,
         effective_effort,
         effective_context_fork,
         enforcement,
         evidence,
+        thread_id,
+        status,
     );
     observation.transition.reason = format!("executed live task fixture {task_id}");
     observation.transition.evidence = vec![if trusted_telemetry {
@@ -2447,6 +2661,7 @@ fn route_observation_for(
     binding: &HostBindingV1,
     profile: &str,
     client: &str,
+    agent_type: Option<&str>,
     model: &str,
     effort: Option<&str>,
     fork: ContextForkMode,
@@ -2456,38 +2671,51 @@ fn route_observation_for(
     metrics: &ProjectedMetrics,
 ) -> RouteObservation {
     let requested = route_stage(
+        Some("worker"),
         profile,
         client,
+        agent_type,
         model,
         effort,
         fork.clone(),
         EnforcementState::RequestedOnly,
         EvidenceSource::Binding,
+        None,
+        None,
     );
     let resolved = route_stage(
+        Some("worker"),
         profile,
         client,
+        agent_type,
         model,
         effort,
         fork.clone(),
         EnforcementState::Verified,
         EvidenceSource::Binding,
+        None,
+        None,
     );
     let effective = if process_evidence {
         route_stage(
+            Some("worker"),
             profile,
             client,
+            agent_type,
             model,
             effort,
             fork,
             EnforcementState::Verified,
             EvidenceSource::ProcessExit,
+            None,
+            None,
         )
     } else {
         RouteStage {
             role: Some("worker".to_string()),
             profile: Some(profile.to_string()),
             client: Some(client.to_string()),
+            agent_type: unavailable_string(),
             model: unavailable_string(),
             effort: unavailable_string(),
             context_fork: ForkDimension {
@@ -2495,6 +2723,8 @@ fn route_observation_for(
                 enforcement: EnforcementState::Unavailable,
                 evidence: None,
             },
+            thread_id: None,
+            status: None,
         }
     };
     RouteObservation {
@@ -2523,19 +2753,33 @@ fn route_observation_for(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn route_stage(
+    role: Option<&str>,
     profile: &str,
     client: &str,
+    agent_type: Option<&str>,
     model: &str,
     effort: Option<&str>,
     fork: ContextForkMode,
     enforcement: EnforcementState,
     evidence: EvidenceSource,
+    thread_id: Option<&str>,
+    status: Option<&str>,
 ) -> RouteStage {
     RouteStage {
-        role: Some("worker".to_string()),
+        role: role.map(ToOwned::to_owned),
         profile: Some(profile.to_string()),
         client: Some(client.to_string()),
+        agent_type: StringDimension {
+            value: agent_type.map(ToOwned::to_owned),
+            enforcement: if agent_type.is_some() {
+                enforcement
+            } else {
+                EnforcementState::Unavailable
+            },
+            evidence: agent_type.map(|_| evidence),
+        },
         model: StringDimension {
             value: Some(model.to_string()),
             enforcement,
@@ -2555,6 +2799,8 @@ fn route_stage(
             enforcement,
             evidence: Some(evidence),
         },
+        thread_id: thread_id.map(ToOwned::to_owned),
+        status: status.map(ToOwned::to_owned),
     }
 }
 
@@ -2578,7 +2824,9 @@ fn metered_with(value: u64, confidence: MeteringMode) -> MeteredDimension {
 }
 
 fn route_is_verified(observation: &RouteObservation) -> bool {
-    verified_string(&observation.effective.model)
+    effective_route_matches_requested(observation)
+        && verified_string(&observation.effective.agent_type)
+        && verified_string(&observation.effective.model)
         && verified_string(&observation.effective.effort)
         && matches!(
             observation.effective.context_fork,
@@ -2609,11 +2857,11 @@ fn verified_string(dimension: &StringDimension) -> bool {
     )
 }
 
-fn evaluate_sol_luna_contract() -> Result<CodexDispatchContract, String> {
+fn evaluate_sol_terra_luna_contract() -> Result<CodexDispatchContract, String> {
     let policy_source = builtin_policy(Path::new("balanced"))
         .ok_or_else(|| "missing balanced policy".to_string())?;
     let policy = parse_policy(policy_source.content).map_err(|error| error.to_string())?;
-    let binding = parse_host_binding(SOL_LUNA_SOURCE)?;
+    let binding = parse_host_binding(SOL_TERRA_LUNA_SOURCE)?;
     let mut errors = Vec::new();
     let composed = compose_preset(&policy, &binding, binding.verification.verified_at_unix);
     let none_fork_parameters_verified = composed.compatibility.ok
@@ -2624,12 +2872,12 @@ fn evaluate_sol_luna_contract() -> Result<CodexDispatchContract, String> {
         && composed
             .registry
             .profiles
-            .get("luna")
+            .get("codex-terra-high")
             .is_some_and(|profile| {
-                profile.model == "gpt-5.4-mini" && profile.effort.as_deref() == Some("high")
+                profile.model == "gpt-5.6-terra" && profile.effort.as_deref() == Some("high")
             });
     if !none_fork_parameters_verified {
-        errors.push("none-fork Sol/Luna dispatch parameters did not compose".to_string());
+        errors.push("none-fork Sol/Terra/Luna dispatch parameters did not compose".to_string());
     }
     let mut all_binding = binding.clone();
     all_binding.profiles.get_mut("worker").unwrap().fork_turns = Some(ContextForkMode::All);
@@ -2644,7 +2892,7 @@ fn evaluate_sol_luna_contract() -> Result<CodexDispatchContract, String> {
                 error.contains("Codex cross-tier") && error.contains("fork_turns all")
             });
     if !all_fork_rejected {
-        errors.push("Sol/Luna fork_turns=all was not rejected".to_string());
+        errors.push("Sol/Terra/Luna fork_turns=all was not rejected".to_string());
     }
     let metrics = ProjectedMetrics {
         tool_calls: 1,
@@ -2655,14 +2903,15 @@ fn evaluate_sol_luna_contract() -> Result<CodexDispatchContract, String> {
     let missing = route_observation_for(
         &policy,
         &binding,
-        "luna",
+        "codex-terra-high",
         "codex",
-        "gpt-5.4-mini",
+        Some("planr-terra-high"),
+        "gpt-5.6-terra",
         Some("high"),
         ContextForkMode::None,
         false,
         FixtureTransition::AvailabilityFallback,
-        "sol-luna-route-proof",
+        "sol-terra-luna-route-proof",
         &metrics,
     );
     let missing_effective_evidence_cannot_verify =
@@ -2674,20 +2923,21 @@ fn evaluate_sol_luna_contract() -> Result<CodexDispatchContract, String> {
     let verified = route_observation_for(
         &policy,
         &binding,
-        "luna",
+        "codex-terra-high",
         "codex",
-        "gpt-5.4-mini",
+        Some("planr-terra-high"),
+        "gpt-5.6-terra",
         Some("high"),
         ContextForkMode::None,
         true,
         FixtureTransition::AvailabilityFallback,
-        "sol-luna-route-proof",
+        "sol-terra-luna-route-proof",
         &metrics,
     );
     let verified_effective_evidence_passes =
         validate_route_observation(&verified).is_ok() && route_is_verified(&verified);
     if !verified_effective_evidence_passes {
-        errors.push("locally evidenced Sol/Luna route did not verify".to_string());
+        errors.push("locally evidenced Sol/Terra/Luna route did not verify".to_string());
     }
     let pass = errors.is_empty();
     Ok(CodexDispatchContract {
@@ -2794,7 +3044,7 @@ pub(crate) fn render_markdown(report: &PresetEvaluationReport) -> String {
             task.kind, task.id, task.version, task.input_sha256
         ));
     }
-    markdown.push_str("\n## Codex Sol/Luna contract\n\n");
+    markdown.push_str("\n## Codex Sol/Terra/Luna contract\n\n");
     markdown.push_str(&format!(
         "- [{}] `fork_turns = all` rejected\n- [{}] `fork_turns = none` parameters verified\n- [{}] missing effective model/effort cannot verify\n- [{}] process-exit effective route evidence verifies\n",
         check(report.codex_dispatch_contract.all_fork_rejected),
@@ -2834,7 +3084,7 @@ mod tests {
                 "browser-report-smoke" => "browser-report-inspected",
                 "visual-report-regression" => "visual-contract-matched",
                 "security-safety-stop" => "unsafe-operation-stopped",
-                "subagent-sol-luna-dispatch" => "sol-luna-dispatch-verified",
+                "subagent-sol-terra-luna-dispatch" => "sol-terra-luna-dispatch-verified",
                 _ => "unknown-task",
             };
             let (candidate_id, task_id, input_sha256, artifact_kind, output) = if self.request_bound
@@ -2883,9 +3133,13 @@ mod tests {
                     artifact_kind,
                     artifact_sha256,
                     output,
-                    effective_model: "gpt-5.4-mini".to_string(),
+                    effective_model: "gpt-5.6-terra".to_string(),
                     effective_effort: Some("high".to_string()),
                     effective_context_fork: ContextForkMode::None,
+                    effective_agent_type: "planr-terra-high".to_string(),
+                    effective_role: Some("planr-terra-high".to_string()),
+                    thread_id: Some("thread-terra-high".to_string()),
+                    status: Some("completed".to_string()),
                     tool_calls: 1,
                     tokens: 10,
                     credits_micros: 100,
@@ -3117,8 +3371,8 @@ mod tests {
     }
 
     #[test]
-    fn sol_luna_contract_fails_all_and_requires_effective_evidence() {
-        let report = evaluate_sol_luna_contract().unwrap();
+    fn sol_terra_luna_contract_fails_all_and_requires_effective_evidence() {
+        let report = evaluate_sol_terra_luna_contract().unwrap();
         assert!(report.pass, "{:?}", report.errors);
         assert!(report.all_fork_rejected);
         assert!(report.none_fork_parameters_verified);
@@ -3142,7 +3396,7 @@ mod tests {
         );
         assert_eq!(
             machine["candidates"][0]["model_versions"]["worker"]["model"],
-            "gpt-5.4-mini"
+            "gpt-5.6-terra"
         );
         assert_eq!(
             machine["candidates"][0]["threshold_results"]
@@ -3162,5 +3416,42 @@ mod tests {
         assert!(markdown.contains("# Preset Evaluation Verification"));
         assert!(markdown.contains("offline policy simulation"));
         assert!(markdown.contains("Versioned task inputs"));
+    }
+
+    #[test]
+    fn route_verified_requires_exact_effective_agent_type() {
+        let policy = parse_policy(builtin_policy(Path::new("balanced")).unwrap().content).unwrap();
+        let binding =
+            parse_host_binding(builtin_binding(Path::new("codex-openai")).unwrap().content)
+                .unwrap();
+        let metrics = ProjectedMetrics {
+            tool_calls: 1,
+            tokens: 1,
+            credits_micros: 1,
+            latency_ms: 1,
+        };
+        let route = route_observation_for(
+            &policy,
+            &binding,
+            "codex-terra-high",
+            "codex",
+            Some("planr-terra-high"),
+            "gpt-5.6-terra",
+            Some("high"),
+            ContextForkMode::None,
+            true,
+            FixtureTransition::AvailabilityFallback,
+            "agent-type-proof",
+            &metrics,
+        );
+        assert!(route_is_verified(&route));
+
+        let mut missing = route.clone();
+        missing.effective.agent_type = unavailable_string();
+        assert!(!route_is_verified(&missing));
+
+        let mut mismatched = route;
+        mismatched.effective.agent_type.value = Some("planr-sol-high".to_string());
+        assert!(!route_is_verified(&mismatched));
     }
 }

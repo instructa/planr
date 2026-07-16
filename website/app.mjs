@@ -14,16 +14,9 @@ const nodes = {
   trust: document.querySelector("#stat-trust"),
   generated: document.querySelector("#generated-at"),
   copyStatus: document.querySelector("#copy-status"),
-  fixtureBanner: document.querySelector("#fixture-banner"),
 };
 
 function catalogLocation() {
-  const local = ["127.0.0.1", "localhost"].includes(location.hostname);
-  const fixture = new URLSearchParams(location.search).get("fixture");
-  if (local && fixture === "recommended") {
-    nodes.fixtureBanner.hidden = false;
-    return "./test-fixtures/recommended.json";
-  }
   return "./data/catalog.json";
 }
 
@@ -145,7 +138,14 @@ function renderCard(card, entry) {
   text(evidence, "p", `${entry.evaluation.suiteId} ${entry.evaluation.suiteVersion} · evaluated ${formatDate(entry.evaluation.evaluatedAtUnix)} · review ${formatDate(entry.evaluation.reviewAtUnix)}`, "meta-line");
   text(evidence, "p", `Quality ${formatBasisPoints(entry.evaluation.metrics?.average_quality_score_bps)} · runs ${formatNumber(entry.evaluation.metrics?.runs)} · oracle passes ${formatNumber(entry.evaluation.metrics?.oracle_passes)}`, "meta-line");
   text(evidence, "p", `Manifest ${entry.registry.manifestSha256}`, "hash");
-  text(evidence, "p", `Signer ${entry.registry.signer} · signature verified · trusted maintainer`, "meta-line");
+  text(
+    evidence,
+    "p",
+    entry.registry.signatureVerified
+      ? `Signer ${entry.registry.signer} · signature verified · trusted maintainer`
+      : "Unsigned experimental publication · recommendation disabled",
+    "meta-line",
+  );
 
   const commandSection = section(card, "Preview safely");
   const commandBlock = document.createElement("div");
@@ -177,10 +177,11 @@ function render(catalog) {
   const entries = visibleCompositions(catalog, nodes.filter.checked);
   nodes.published.textContent = formatNumber(catalog.compositions.length);
   nodes.recommended.textContent = formatNumber(catalog.compositions.filter((entry) => entry.recommended).length);
-  nodes.trust.textContent = catalog.source?.state === "verified_registry_projection" ? "Signed registry" : "Publication gated";
+  const signed = catalog.compositions.some((entry) => entry.registry?.signatureVerified);
+  nodes.trust.textContent = signed ? "Signed registry" : "Integrity verified";
   nodes.generated.textContent = Number.isFinite(catalog.generatedAtUnix)
     ? `Projection generated ${formatDate(catalog.generatedAtUnix)} · ${catalog.source.trust}`
-    : "No signed registry projection published.";
+    : "No verified registry projection published.";
   fillSelect(nodes.selectA, entries, 0);
   fillSelect(nodes.selectB, entries, 1);
   const empty = entries.length === 0;

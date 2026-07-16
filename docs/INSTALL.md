@@ -72,7 +72,7 @@ planr prompt cli --client codex
 planr prompt http
 ```
 
-`planr install claude` writes a project `.mcp.json`; `planr install cursor` writes `.cursor/mcp.json` plus the Planr skills under `.cursor/skills/` and prints a one-click user-level MCP deeplink; `planr install codex` writes a project MCP snippet. All install commands also provision the `planr-worker` and `planr-reviewer` subagent role files (`.codex/agents/`, `.claude/agents/`, `.cursor/agents/`) without overwriting existing edits; `planr project init --client <client|all>` does the same at init time. Dry-runs print the exact config and scope notes first.
+`planr install claude` writes a project `.mcp.json` plus Claude's independent worker/reviewer roles. `planr install cursor` writes `.cursor/mcp.json`, Cursor's independent roles, and the Planr skills under `.cursor/skills/`, then prints a one-click user-level MCP deeplink. `planr install codex` writes only the project MCP snippet: Codex role ownership belongs exclusively to `planr agents init` and confirmed `codex-openai` preset application, which generate the canonical repository-local Sol/Terra/Luna role set. Dry-runs print the exact config and scope notes first; no path touches global user configuration.
 
 Skills-and-agents-only setups (no MCP) use `--no-mcp`: `planr install cursor --no-mcp` writes the subagents and skills but no MCP config — the skills drive the `planr` CLI directly, so nothing is lost except MCP tool access.
 
@@ -87,7 +87,7 @@ Open `http://127.0.0.1:7526/review` after `planr serve` for the local browser re
 
 ## Agent Skills And Plugin
 
-The repository ships a plugin under `plugins/planr` for Codex, Claude Code, and Cursor that bundles the Planr skills (`$planr`, `$planr-loop`, stage and capability skills) and the subagent roles. The plugin carries skills and roles only; the CLI above must be installed separately. See [Skills](SKILLS.md) for plugin install commands and the skill workflow.
+The repository ships a plugin under `plugins/planr` for Codex and Claude Code that bundles the Planr skills (`$planr`, `$planr-loop`, stage and capability skills); Claude Code additionally registers its independent role files. Cursor receives the same skills and its own roles through `planr install cursor`. Codex role TOMLs are not static plugin assets: the selected native preset generates them inside the repository. The CLI above must be installed separately. See [Skills](SKILLS.md) for plugin install commands and the skill workflow.
 
 ## From Source
 

@@ -47,6 +47,10 @@ For each run, Planr creates a Planr-controlled temporary workspace containing `c
   "effective_model": "model-id",
   "effective_effort": "high",
   "effective_context_fork": { "mode": "none" },
+  "effective_agent_type": "planr-terra-high",
+  "effective_role": "planr-terra-high",
+  "thread_id": "spawned-thread-id",
+  "status": "completed",
   "tool_calls": 1,
   "tokens": 10,
   "credits_micros": 100,
@@ -91,11 +95,11 @@ public_key_hex = "<64-hex-character-ed25519-public-key>"
 collector_sha256 = "<64-hex-character-executable-sha256>"
 ```
 
-Planr creates a fresh run UUID before evaluation and a fresh challenge nonce for every task. Only after the live adapter exits and Planr reads and hashes the workspace artifact does it invoke the hash-pinned collector. The collector receives a strict JSON identity request containing the Planr-owned run id, evaluation and suite identity, candidate/task/input/artifact identity, exact artifact SHA-256, and challenge nonce. It independently adds host route, usage, transition, correction, and violation measurements, then returns `{ "payload": ..., "signature_hex": "..." }`. The adapter never receives a signing key, and pre-run receipts cannot know the fresh run/challenge/artifact tuple.
+Planr creates a fresh run UUID before evaluation and a fresh challenge nonce for every task. Only after the live adapter exits and Planr reads and hashes the workspace artifact does it invoke the hash-pinned collector. The collector receives a strict JSON identity request containing the Planr-owned run id, evaluation and suite identity, candidate/task/input/artifact identity, exact artifact SHA-256, challenge nonce, and the requested role, `agent_type`, model, effort, and fork policy derived from the selected binding. It independently adds host route, usage, transition, correction, and violation measurements, then returns `{ "payload": ..., "signature_hex": "..." }`. The adapter never receives a signing key, and pre-run receipts cannot know the fresh run/challenge/artifact tuple.
 
 Before invocation Planr verifies that the collector is a regular absolute-path file whose SHA-256 matches the selected registry entry, and it rechecks the digest for every task. It rejects the trust upgrade for a failed collector, malformed response, bad signature, wrong run/suite/time, wrong task/input/artifact/challenge binding, blank host identity, or host identity mismatch with the live adapter response. Missing or rejected receipts do not abort artifact evaluation: that result falls back to `host_reported`/`estimated`, gets zero verified route credit, and is recommendation-ineligible. Registry, signer, and collector configuration errors fail the evaluation before execution.
 
-For a verified post-run receipt, Planr uses only signed route, usage, transition, correction, and violation values. Effective route dimensions carry `evidence = "telemetry_receipt"` and `enforcement = "verified"`; tool/token/credit dimensions and result `metering_confidence` are `trusted`; process latency remains Planr-observed. These results use `metrics_source = "trusted_telemetry"` and may satisfy recommendation gates.
+For a verified post-run receipt, Planr uses only signed route, usage, transition, correction, and violation values. The existing route observation records requested/resolved/effective `agent_type`, model, effort, and fork dimensions, plus effective role, thread id, and status when the spawn-end event supplies them. Effective route dimensions carry `evidence = "telemetry_receipt"` and `enforcement = "verified"`; tool/token/credit dimensions and result `metering_confidence` are `trusted`; process latency remains Planr-observed. Missing effective model/effort/fork values or any divergence from the signed requested route makes `route_verified = false` and prevents recommendation eligibility.
 
 ## Lifecycle and thresholds
 
@@ -113,6 +117,6 @@ Only independently instrumented live task evidence can set `recommendation_evide
 
 The report includes suite/Planr/configured-model provenance. Live results additionally include host id/version, Planr-read workspace artifact and oracle hashes, host route/usage evidence with explicit estimated or trusted provenance, observed process latency, corrections/transitions/violations, policy-capability checks, and result hashes.
 
-## Sol/Luna Codex contract
+## Sol/Terra/Luna Codex contract
 
-`evaluations/sol-luna-codex-v1.toml` independently proves that cross-tier `fork_turns = "all"` is rejected, `none` preserves Luna parameters, missing effective evidence cannot route-verify, and process-evidenced effective model/effort/fork values can verify.
+`evaluations/sol-terra-luna-codex-v2.toml` independently proves the canonical Sol Medium, Terra Medium/High, Luna xHigh, Sol High, and explicit Sol Ultra topology; native rejection of cross-role `fork_turns = "all"`; explicit none-or-positive bounded forks; no route fallbacks; and effective model/effort/fork evidence requirements.

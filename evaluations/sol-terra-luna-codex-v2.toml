@@ -1,0 +1,142 @@
+schema_version = 1
+id = "sol-terra-luna-codex"
+version = "2.0.0"
+host = "codex"
+driver_role = "driver"
+default_role = "driver"
+capability_evidence = ["fixture-codex-0.144.0-native-v2"]
+billing_assumptions = ["deterministic evaluation fixture; no provider call"]
+known_limitations = ["effective model and effort require host evidence"]
+
+[capabilities]
+model_override = true
+effort_override = true
+fork_none = true
+fork_all = true
+
+[profiles.driver]
+profile = "codex-sol-medium"
+client = "codex"
+model = "gpt-5.6-sol"
+agent_type = "planr-sol-medium"
+effort = "medium"
+cost_tier = "standard"
+
+[profiles.explorer]
+profile = "codex-terra-medium"
+client = "codex"
+model = "gpt-5.6-terra"
+agent_type = "planr-terra-medium"
+effort = "medium"
+cost_tier = "standard"
+fork_turns = { mode = "none" }
+
+[profiles.worker]
+profile = "codex-terra-high"
+client = "codex"
+model = "gpt-5.6-terra"
+agent_type = "planr-terra-high"
+effort = "high"
+cost_tier = "standard"
+skill = "planr-work"
+fork_turns = { mode = "none" }
+
+[profiles.mechanical]
+profile = "codex-luna-xhigh"
+client = "codex"
+model = "gpt-5.6-luna"
+agent_type = "planr-luna-xhigh"
+effort = "xhigh"
+cost_tier = "premium"
+skill = "planr-work"
+fork_turns = { mode = "none" }
+
+[profiles.reviewer]
+profile = "codex-sol-high"
+client = "codex"
+model = "gpt-5.6-sol"
+agent_type = "planr-sol-high"
+effort = "high"
+cost_tier = "premium"
+skill = "planr-review"
+fork_turns = { mode = "none" }
+
+[profiles.moonshot]
+profile = "codex-sol-ultra"
+client = "codex"
+model = "gpt-5.6-sol"
+agent_type = "planr-sol-ultra"
+effort = "ultra"
+cost_tier = "premium"
+fork_turns = { mode = "none" }
+
+[[routes]]
+work_type = "exploration"
+role = "explorer"
+
+[[routes]]
+work_type = "research"
+role = "explorer"
+
+[[routes]]
+work_type = "code"
+role = "worker"
+
+[[routes]]
+work_type = "mechanical"
+role = "mechanical"
+
+[[routes]]
+work_type = "review"
+role = "reviewer"
+
+[[routes]]
+work_type = "moonshot"
+role = "moonshot"
+
+[verification]
+id = "fixture-sol-terra-luna-v2"
+verified_at_unix = 1784160000
+max_age_seconds = 31536000
+
+[[artifacts]]
+path = ".codex/agents/planr-sol-medium.toml"
+kind = "codex_agent"
+content = '''model = "gpt-5.6-sol"
+model_reasoning_effort = "medium"
+'''
+
+[[artifacts]]
+path = ".codex/agents/planr-terra-medium.toml"
+kind = "codex_agent"
+content = '''model = "gpt-5.6-terra"
+model_reasoning_effort = "medium"
+'''
+
+[[artifacts]]
+path = ".codex/agents/planr-terra-high.toml"
+kind = "codex_agent"
+content = '''model = "gpt-5.6-terra"
+model_reasoning_effort = "high"
+'''
+
+[[artifacts]]
+path = ".codex/agents/planr-luna-xhigh.toml"
+kind = "codex_agent"
+content = '''model = "gpt-5.6-luna"
+model_reasoning_effort = "xhigh"
+'''
+
+[[artifacts]]
+path = ".codex/agents/planr-sol-high.toml"
+kind = "codex_agent"
+content = '''model = "gpt-5.6-sol"
+model_reasoning_effort = "high"
+'''
+
+[[artifacts]]
+path = ".codex/agents/planr-sol-ultra.toml"
+kind = "codex_agent"
+content = '''model = "gpt-5.6-sol"
+model_reasoning_effort = "ultra"
+'''

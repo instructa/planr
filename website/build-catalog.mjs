@@ -107,11 +107,8 @@ try {
     const verificationPath = artifactPath(verified, "verification", contentRoot);
     const policyId = safeIdentifier(verified.entry.evaluation?.policy_id, "policy id");
     const bindingId = safeIdentifier(verified.entry.evaluation?.binding_id, "binding id");
-    const preview = runJson(
-      planrBin,
-      ["--json", "agents", "preset", "apply", policyId, "--binding", bindingId],
-      scratch,
-    );
+    const preview = verified.catalog_preview;
+    if (!preview) throw new Error(`entry ${id} verification did not return a catalog preview`);
     const verificationEnvelope = JSON.parse(readFileSync(verificationPath, "utf8"));
     return projectComposition({ verified, preview, verificationEnvelope });
   });

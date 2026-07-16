@@ -17,7 +17,13 @@
     "plugins",
     "presets",
     "evaluations",
-    "website",
+    "website/_headers",
+    "website/app.mjs",
+    "website/catalog-model.mjs",
+    "website/data/catalog.json",
+    "website/index.html",
+    "website/styles.css",
+    "!website/README.md",
     "README.md",
     "LICENSE.md",
     "docs"
@@ -25,6 +31,7 @@
   "scripts": {
     "alchemy:check-runtime": "node scripts/check-alchemy-runtime.mjs",
     "build:native": "cargo build --release",
+    "catalog:regenerate": "node scripts/regenerate-preset-catalog.mjs",
     "test": "cargo test",
     "pack:check": "npm pack --dry-run",
     "deploy:test": "node scripts/cloudflare-test.mjs deploy",

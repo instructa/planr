@@ -28,7 +28,84 @@ use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub(crate) const MINIMUM_CODEX_VERSION: &str = "0.144.0";
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct CodexCapabilityProbe {
+    pub(crate) live_host: Option<crate::preset_eval::LiveHostCommand>,
+    pub(crate) trusted_telemetry: Option<crate::preset_eval::TrustedTelemetryCommand>,
+}
+
 impl App {
+    pub(crate) fn initialize_canonical_codex_agents(&self, force_registry: bool) -> Result<String> {
+        let content = canonical_codex_registry_content()?;
+        let binding_source =
+            builtin_binding(Path::new("codex-openai")).expect("built-in codex-openai binding");
+        let binding = parse_host_binding(binding_source.content).map_err(anyhow::Error::msg)?;
+        let mut artifacts = binding
+            .artifacts
+            .iter()
+            .map(ProposedArtifact::from_binding)
+            .collect::<Vec<_>>();
+        artifacts.push(ProposedArtifact::new(
+            ACTIVE_REGISTRY_PATH,
+            "agent_registry",
+            content.clone(),
+        ));
+        reject_duplicate_targets(&artifacts)?;
+        let previews = preview_artifacts(&self.root, &artifacts)?;
+        let registry_conflict = previews.iter().any(|preview| {
+            preview.path == ACTIVE_REGISTRY_PATH && preview.action == ArtifactAction::Conflict
+        });
+        let conflicts = previews
+            .iter()
+            .filter(|preview| {
+                preview.action == ArtifactAction::Conflict
+                    && (preview.path != ACTIVE_REGISTRY_PATH || !force_registry)
+            })
+            .map(|preview| preview.path.clone())
+            .collect::<Vec<_>>();
+        if !conflicts.is_empty() {
+            bail!(
+                "agents init refused existing unrelated canonical artifact(s): {}",
+                conflicts.join(", ")
+            );
+        }
+        let creates = artifacts
+            .iter()
+            .zip(&previews)
+            .filter(|(_, preview)| preview.action == ArtifactAction::Create)
+            .map(|(artifact, _)| ResolvedArtifact {
+                target: validated_target(&self.root, &artifact.path)
+                    .expect("preview validated repository target"),
+                content: artifact.content.clone(),
+            })
+            .collect::<Vec<_>>();
+        apply_artifacts(&creates)?;
+        if registry_conflict {
+            let registry = validated_target(&self.root, ACTIVE_REGISTRY_PATH)?;
+            let temporary = registry.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
+            let replace = (|| -> Result<()> {
+                let mut file = OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&temporary)?;
+                file.write_all(content.as_bytes())?;
+                file.sync_all()?;
+                fs::rename(&temporary, &registry)?;
+                Ok(())
+            })();
+            if let Err(error) = replace {
+                let _ = fs::remove_file(&temporary);
+                for artifact in &creates {
+                    let _ = fs::remove_file(&artifact.target);
+                }
+                return Err(error);
+            }
+        }
+        Ok(content)
+    }
+
     pub(crate) fn preset(&self, command: PresetCommand) -> Result<()> {
         match command {
             PresetCommand::List(_) => {
@@ -40,7 +117,15 @@ impl App {
             }
             PresetCommand::Apply(args) => {
                 debug_assert!(!(args.preview && args.confirm));
-                let value = self.preset_apply_value(&args.policy, &args.binding, args.confirm)?;
+                let probe = codex_capability_probe(
+                    &self.root,
+                    args.live_host_command,
+                    args.live_host_arg,
+                    args.trusted_telemetry_signer,
+                    args.trusted_telemetry_collector,
+                )?;
+                let value =
+                    self.preset_apply_value(&args.policy, &args.binding, args.confirm, probe)?;
                 let action = value["action"].as_str().unwrap_or("previewed").to_string();
                 let artifact_count = value["artifacts"].as_array().map_or(0, Vec::len);
                 self.emit(
@@ -148,7 +233,10 @@ impl App {
             args.host.as_deref(),
         )
         .map_err(anyhow::Error::msg)?;
-        serde_json::to_value(verified).map_err(Into::into)
+        let catalog_preview = registry_catalog_preview(&verified.entry, &args.content_root)?;
+        let mut value = serde_json::to_value(verified)?;
+        value["catalog_preview"] = catalog_preview;
+        Ok(value)
     }
 
     pub(crate) fn preset_registry_import_value(
@@ -263,8 +351,9 @@ impl App {
         policy_path: &Path,
         binding_path: &Path,
         confirm: bool,
+        codex_probe: CodexCapabilityProbe,
     ) -> Result<Value> {
-        match self.build_preset_application(policy_path, binding_path, confirm) {
+        match self.build_preset_application(policy_path, binding_path, confirm, &codex_probe) {
             Ok((mut value, application)) => {
                 if confirm {
                     apply_artifacts(&application.artifacts)?;
@@ -300,12 +389,14 @@ impl App {
         policy_path: &Path,
         binding_path: &Path,
         confirm: bool,
+        codex_probe: &CodexCapabilityProbe,
     ) -> Result<(Value, PresetApplication)> {
         let policy_source = load_policy_source(&self.root, policy_path)?;
         let policy = parse_policy(&policy_source.content)
             .map_err(|error| anyhow!("policy preset parse/validation failed: {error}"))?;
         let binding_source = load_binding_source(&self.root, binding_path)?;
         let binding = parse_host_binding(&binding_source.content).map_err(anyhow::Error::msg)?;
+        validate_codex_runtime(&binding, codex_probe)?;
         let now_unix = env::var("PLANR_PRESET_NOW_UNIX")
             .ok()
             .and_then(|value| value.parse().ok())
@@ -364,6 +455,7 @@ impl App {
                 version: binding.version.clone(),
                 sha256: sha256(binding_source.content.as_bytes()),
             },
+            host: binding.host.clone(),
             planr_version: env!("CARGO_PKG_VERSION").to_string(),
             verification_id: binding.verification.id.clone(),
             verification_status: composed.verification_age.status,
@@ -378,12 +470,18 @@ impl App {
         ));
         reject_duplicate_targets(&artifacts)?;
         let previews = preview_artifacts(&self.root, &artifacts)?;
+        let installed_lock = inspect_installed_lock(&self.root, &binding)?;
         let conflicts = previews
             .iter()
             .filter(|artifact| artifact.action == ArtifactAction::Conflict)
             .map(|artifact| artifact.path.clone())
             .collect::<Vec<_>>();
         if confirm && !conflicts.is_empty() {
+            if installed_lock["status"] == "fresh_apply_required" {
+                bail!(
+                    "installed preset lock is incompatible with the native Codex contract; no translation or legacy fallback is available. Remove the old generated preset artifacts, then run an explicit fresh preview and apply"
+                );
+            }
             bail!(
                 "preset apply refused existing unrelated configuration: {}",
                 conflicts.join(", ")
@@ -408,6 +506,7 @@ impl App {
             "pack": pack,
             "verification_age": composed.verification_age,
             "provenance": lock,
+            "installed_lock": installed_lock,
             "artifacts": previews,
             "conflicts": conflicts,
             "mutation": false,
@@ -422,6 +521,238 @@ impl App {
             },
         ))
     }
+}
+
+fn registry_catalog_preview(
+    entry: &crate::preset_registry::RegistryEntry,
+    content_root: &Path,
+) -> Result<Value> {
+    let evaluation = entry
+        .evaluation
+        .as_ref()
+        .ok_or_else(|| anyhow!("registry catalog projection requires evaluation metadata"))?;
+    let artifact_path = |kind| {
+        let mut matches = entry
+            .artifacts
+            .iter()
+            .filter(|artifact| artifact.kind == kind);
+        let artifact = matches
+            .next()
+            .ok_or_else(|| anyhow!("registry catalog projection requires one {kind:?} artifact"))?;
+        if matches.next().is_some() {
+            bail!("registry catalog projection requires one {kind:?} artifact");
+        }
+        Ok(content_root.join(&artifact.path))
+    };
+    let policy_raw = fs::read_to_string(artifact_path(
+        crate::preset_registry::RegistryArtifactKind::Policy,
+    )?)?;
+    let binding_raw = fs::read_to_string(artifact_path(
+        crate::preset_registry::RegistryArtifactKind::HostBinding,
+    )?)?;
+    let policy = parse_policy(&policy_raw).map_err(anyhow::Error::msg)?;
+    let binding = parse_host_binding(&binding_raw).map_err(anyhow::Error::msg)?;
+    let composed = compose_preset(&policy, &binding, entry.verified_at_unix);
+    let pack = validate_pack(
+        &policy,
+        &binding,
+        Some(&evaluation.policy_id),
+        Some(&evaluation.binding_id),
+    );
+    Ok(json!({
+        "pack": pack,
+        "composition": composition_value(&composed),
+        "artifacts": [
+            {
+                "kind": "active_policy",
+                "config_diff": {"proposed": {"value": policy}},
+            },
+            {
+                "kind": "agent_registry",
+                "config_diff": {"proposed": {"value": composed.registry}},
+            },
+        ],
+    }))
+}
+
+pub(crate) fn canonical_codex_registry_content() -> Result<String> {
+    let policy_source = builtin_policy(Path::new("balanced")).expect("built-in balanced policy");
+    let binding_source =
+        builtin_binding(Path::new("codex-openai")).expect("built-in codex-openai binding");
+    let policy = parse_policy(policy_source.content)
+        .map_err(|error| anyhow!("built-in balanced policy is invalid: {error}"))?;
+    let binding = parse_host_binding(binding_source.content).map_err(anyhow::Error::msg)?;
+    let composed = compose_preset(&policy, &binding, binding.verification.verified_at_unix);
+    if !composed.compatibility.ok {
+        bail!(
+            "built-in Codex registry does not compose: {}",
+            composed.compatibility.errors.join("; ")
+        );
+    }
+    toml::to_string_pretty(&composed.registry).map_err(Into::into)
+}
+
+fn validate_codex_runtime(
+    binding: &crate::preset::HostBindingV1,
+    probe: &CodexCapabilityProbe,
+) -> Result<()> {
+    if !binding
+        .profiles
+        .values()
+        .any(|profile| profile.client == "codex")
+    {
+        return Ok(());
+    }
+    let output = std::process::Command::new("codex")
+        .arg("--version")
+        .output()
+        .map_err(|error| anyhow!("Codex capability check failed: cannot execute `codex --version` ({error}); install Codex >= {MINIMUM_CODEX_VERSION} and ensure it is on PATH"))?;
+    if !output.status.success() {
+        bail!(
+            "Codex capability check failed: `codex --version` exited with {}; upgrade or repair the installed Codex executable",
+            output.status
+        );
+    }
+    let version_output = String::from_utf8(output.stdout)
+        .map_err(|_| anyhow!("Codex capability check failed: `codex --version` was not UTF-8"))?;
+    let version = version_output.trim();
+    let parsed = parse_version(version).ok_or_else(|| {
+        anyhow!(
+            "Codex capability check failed: `{version}` is not a supported semantic version; Codex >= {MINIMUM_CODEX_VERSION} is required"
+        )
+    })?;
+    if parsed < (0, 144, 0) {
+        bail!(
+            "Codex capability check failed: host {version} is unsupported; upgrade to >= {MINIMUM_CODEX_VERSION}"
+        );
+    }
+    let live_host = probe.live_host.as_ref().ok_or_else(|| anyhow!(
+        "Codex capability check failed: native-v2 and active-backend evidence is missing; provide --live-host-command with a challenge-bound adapter plus --trusted-telemetry-signer and --trusted-telemetry-collector"
+    ))?;
+    let telemetry = probe.trusted_telemetry.as_ref().ok_or_else(|| anyhow!(
+        "Codex capability check failed: unsigned host assertions are not accepted; configure .planr/trusted-telemetry.toml and provide its signer and hash-pinned collector"
+    ))?;
+    crate::preset_eval::verify_codex_binding_capabilities(binding, live_host, telemetry, version)
+        .map_err(|error| anyhow!("Codex capability check failed: {error}"))?;
+    Ok(())
+}
+
+fn parse_version(value: &str) -> Option<(u64, u64, u64)> {
+    let candidate = value.split_whitespace().last()?.trim_start_matches('v');
+    let version = candidate
+        .split_once('-')
+        .map_or(candidate, |(base, _)| base);
+    let mut parts = version.split('.');
+    let parsed = (
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+    );
+    parts.next().is_none().then_some(parsed)
+}
+
+pub(crate) fn codex_capability_probe(
+    root: &Path,
+    executable: Option<PathBuf>,
+    args: Vec<String>,
+    signer: Option<String>,
+    collector: Option<PathBuf>,
+) -> Result<CodexCapabilityProbe> {
+    match (executable, signer, collector) {
+        (None, None, None) => Ok(CodexCapabilityProbe::default()),
+        (Some(executable), Some(signer_id), Some(collector)) => Ok(CodexCapabilityProbe {
+            live_host: Some(crate::preset_eval::LiveHostCommand { executable, args }),
+            trusted_telemetry: Some(crate::preset_eval::TrustedTelemetryCommand {
+                registry: root.join(".planr/trusted-telemetry.toml"),
+                signer_id,
+                collector,
+            }),
+        }),
+        _ => bail!(
+            "Codex capability evidence requires --live-host-command, --trusted-telemetry-signer, and --trusted-telemetry-collector together"
+        ),
+    }
+}
+
+pub(crate) fn codex_capability_probe_mcp(
+    root: &Path,
+    args: &Value,
+) -> Result<CodexCapabilityProbe> {
+    let string = |field: &str| -> Result<Option<String>> {
+        args.get(field)
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(ToOwned::to_owned)
+                    .ok_or_else(|| anyhow!("{field} must be a string"))
+            })
+            .transpose()
+    };
+    let live_args = args
+        .get("live_host_args")
+        .map(|value| {
+            value
+                .as_array()
+                .ok_or_else(|| anyhow!("live_host_args must be an array"))?
+                .iter()
+                .map(|value| {
+                    value
+                        .as_str()
+                        .map(ToOwned::to_owned)
+                        .ok_or_else(|| anyhow!("live_host_args entries must be strings"))
+                })
+                .collect::<Result<Vec<_>>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
+    codex_capability_probe(
+        root,
+        string("live_host_command")?.map(PathBuf::from),
+        live_args,
+        string("trusted_telemetry_signer")?,
+        string("trusted_telemetry_collector")?.map(PathBuf::from),
+    )
+}
+
+fn inspect_installed_lock(root: &Path, binding: &crate::preset::HostBindingV1) -> Result<Value> {
+    let path = root.join(PRESET_LOCK_PATH);
+    let raw = match fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(json!({"status": "absent"}));
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let parsed = toml::from_str::<toml::Value>(&raw).ok();
+    let schema = parsed
+        .as_ref()
+        .and_then(|value| value.get("schema_version"))
+        .and_then(toml::Value::as_integer);
+    let installed_binding = parsed
+        .as_ref()
+        .and_then(|value| value.get("binding"))
+        .and_then(|value| value.get("version"))
+        .and_then(toml::Value::as_str);
+    let contains_codex = binding
+        .profiles
+        .values()
+        .any(|profile| profile.client == "codex");
+    if contains_codex
+        && (schema != Some(PRESET_LOCK_SCHEMA_VERSION.into())
+            || installed_binding != Some(binding.version.as_str()))
+    {
+        return Ok(json!({
+            "status": "fresh_apply_required",
+            "reason": "installed lock predates or differs from the native Codex contract; it is not translated or emulated",
+            "schema_version": schema,
+            "binding_version": installed_binding,
+        }));
+    }
+    Ok(json!({
+        "status": "current",
+        "schema_version": schema,
+        "binding_version": installed_binding,
+    }))
 }
 
 fn load_registry_trust_store(

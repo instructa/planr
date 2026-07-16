@@ -30,9 +30,14 @@ pub struct RouteStage {
     pub profile: Option<String>,
     #[serde(default)]
     pub client: Option<String>,
+    pub agent_type: StringDimension,
     pub model: StringDimension,
     pub effort: StringDimension,
     pub context_fork: ForkDimension,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -169,6 +174,11 @@ pub fn validate_route_observation(observation: &RouteObservation) -> Result<(), 
     validate_stage(RouteStageKind::Requested, &observation.requested)?;
     validate_stage(RouteStageKind::Resolved, &observation.resolved)?;
     validate_stage(RouteStageKind::Effective, &observation.effective)?;
+    if observation.requested.client.as_deref() == Some("codex")
+        && observation.requested.agent_type.value.is_none()
+    {
+        return Err("requested.agent_type is required for Codex routing".to_string());
+    }
     for (field, dimension) in [
         (
             "metering.wall_time_seconds",
@@ -264,11 +274,20 @@ fn validate_stage(kind: RouteStageKind, stage: &RouteStage) -> Result<(), String
         ("role", stage.role.as_deref()),
         ("profile", stage.profile.as_deref()),
         ("client", stage.client.as_deref()),
+        ("thread_id", stage.thread_id.as_deref()),
+        ("status", stage.status.as_deref()),
     ] {
         if value.is_some_and(|value| value.trim().is_empty()) {
             return Err(format!("{field}.{name} must not be blank"));
         }
     }
+    validate_dimension(
+        &format!("{field}.agent_type"),
+        stage.agent_type.value.as_deref(),
+        stage.agent_type.enforcement,
+        stage.agent_type.evidence,
+        kind,
+    )?;
     validate_dimension(
         &format!("{field}.model"),
         stage.model.value.as_deref(),
@@ -298,6 +317,31 @@ fn validate_stage(kind: RouteStageKind, stage: &RouteStage) -> Result<(), String
         stage.context_fork.evidence,
         kind,
     )
+}
+
+/// Whether the single durable route observation proves that the effective
+/// native route matched what Planr requested. Missing effective dimensions do
+/// not make the observation unparsable, but they can never verify a route.
+pub(crate) fn effective_route_matches_requested(observation: &RouteObservation) -> bool {
+    let requested = &observation.requested;
+    let resolved = &observation.resolved;
+    let effective = &observation.effective;
+    let requested_values_resolved = requested.role == resolved.role
+        && requested.profile == resolved.profile
+        && requested.client == resolved.client
+        && requested.agent_type.value == resolved.agent_type.value
+        && requested.model.value == resolved.model.value
+        && requested.effort.value == resolved.effort.value
+        && requested.context_fork.value == resolved.context_fork.value;
+    let effective_role_matches = effective.role.as_ref().is_none_or(|role| {
+        requested.role.as_ref() == Some(role) || requested.agent_type.value.as_ref() == Some(role)
+    });
+    let effective_values_match = requested.model.value == effective.model.value
+        && requested.effort.value == effective.effort.value
+        && requested.context_fork.value == effective.context_fork.value
+        && requested.agent_type.value == effective.agent_type.value
+        && effective_role_matches;
+    requested_values_resolved && effective_values_match
 }
 
 fn validate_dimension(
@@ -368,7 +412,8 @@ mod tests {
             role: Some("worker".to_string()),
             profile: Some("coder".to_string()),
             client: Some("codex".to_string()),
-            model: field(Some("gpt-5.5"), enforcement),
+            agent_type: field(Some("planr-terra-high"), enforcement),
+            model: field(Some("gpt-5.6-terra"), enforcement),
             effort: field(Some("high"), enforcement),
             context_fork: ForkDimension {
                 value: Some(ContextForkMode::None),
@@ -376,6 +421,8 @@ mod tests {
                 evidence: (enforcement == EnforcementState::Verified)
                     .then_some(EvidenceSource::HostReport),
             },
+            thread_id: None,
+            status: None,
         }
     }
 
@@ -395,7 +442,7 @@ mod tests {
             },
             binding: VersionReference {
                 id: "codex-openai".to_string(),
-                version: "1.0.0".to_string(),
+                version: "2.0.0".to_string(),
             },
             metering: RouteMetering {
                 wall_time_seconds: MeteredDimension {
@@ -422,8 +469,39 @@ mod tests {
     fn verified_observation_round_trips() {
         let observation = fixture();
         validate_route_observation(&observation).unwrap();
+        assert!(effective_route_matches_requested(&observation));
         let value = serde_json::to_value(&observation).unwrap();
         assert_eq!(parse_route_observation(value).unwrap(), observation);
+    }
+
+    #[test]
+    fn codex_route_verification_requires_requested_and_effective_values_to_match() {
+        let mut observation = fixture();
+        observation.effective.model.value = Some("gpt-5.6-sol".to_string());
+        assert!(!effective_route_matches_requested(&observation));
+
+        let mut observation = fixture();
+        observation.effective.effort = field(None, EnforcementState::Unavailable);
+        assert!(!effective_route_matches_requested(&observation));
+
+        let mut observation = fixture();
+        observation.effective.agent_type.value = Some("planr-sol-high".to_string());
+        assert!(!effective_route_matches_requested(&observation));
+
+        let mut observation = fixture();
+        observation.effective.agent_type = field(None, EnforcementState::Unavailable);
+        assert!(!effective_route_matches_requested(&observation));
+
+        let mut observation = fixture();
+        observation.effective.role = Some("planr-sol-high".to_string());
+        assert!(!effective_route_matches_requested(&observation));
+
+        let mut observation = fixture();
+        observation.requested.agent_type = field(None, EnforcementState::Unavailable);
+        assert_eq!(
+            validate_route_observation(&observation).unwrap_err(),
+            "requested.agent_type is required for Codex routing"
+        );
     }
 
     #[test]
@@ -437,7 +515,7 @@ mod tests {
     #[test]
     fn requested_values_cannot_masquerade_as_effective_proof() {
         let mut observation = fixture();
-        observation.effective.model = field(Some("gpt-5.5"), EnforcementState::RequestedOnly);
+        observation.effective.model = field(Some("gpt-5.6-terra"), EnforcementState::RequestedOnly);
         assert!(
             validate_route_observation(&observation)
                 .unwrap_err()
@@ -475,7 +553,7 @@ mod tests {
         }
 
         let mut observation = fixture();
-        observation.effective.model = field(Some("gpt-5.5"), EnforcementState::Estimated);
+        observation.effective.model = field(Some("gpt-5.6-terra"), EnforcementState::Estimated);
         assert!(
             validate_route_observation(&observation)
                 .unwrap_err()

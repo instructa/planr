@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const HOST_BINDING_SCHEMA_VERSION: u32 = 1;
-pub const PRESET_LOCK_SCHEMA_VERSION: u32 = 1;
+pub const PRESET_LOCK_SCHEMA_VERSION: u32 = 2;
 pub const ACTIVE_POLICY_PATH: &str = ".planr/policy.toml";
 pub const ACTIVE_REGISTRY_PATH: &str = ".planr/agents.toml";
 pub const PRESET_LOCK_PATH: &str = ".planr/preset.lock.toml";
@@ -52,8 +52,6 @@ pub struct HostCapabilities {
     pub effort_override: bool,
     pub fork_none: bool,
     pub fork_all: bool,
-    #[serde(default)]
-    pub max_partial_fork_turns: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -62,6 +60,8 @@ pub struct BoundProfile {
     pub profile: String,
     pub client: String,
     pub model: String,
+    #[serde(default)]
+    pub agent_type: Option<String>,
     #[serde(default)]
     pub effort: Option<String>,
     #[serde(default)]
@@ -117,6 +117,7 @@ pub struct ComposedPreset {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct DispatchContext {
+    pub agent_type: Option<String>,
     pub model_override: bool,
     pub effort_override: bool,
     pub fork_turns: ContextForkMode,
@@ -189,6 +190,7 @@ pub struct PresetLock {
     pub schema_version: u32,
     pub policy: LockedSource,
     pub binding: LockedSource,
+    pub host: String,
     pub planr_version: String,
     pub verification_id: String,
     pub verification_status: VerificationStatus,
@@ -251,6 +253,7 @@ pub fn compose_preset(
             AgentProfile {
                 client: profile.client.clone(),
                 model: profile.model.clone(),
+                agent_type: profile.agent_type.clone(),
                 effort: profile.effort.clone(),
                 cost_tier: profile.cost_tier.clone(),
                 capabilities: profile.capabilities.clone(),
@@ -283,6 +286,7 @@ pub fn compose_preset(
         dispatch.insert(
             role.clone(),
             DispatchContext {
+                agent_type: profile.agent_type.clone(),
                 model_override,
                 effort_override,
                 fork_turns,
@@ -520,8 +524,25 @@ fn validate_binding(binding: &HostBindingV1) -> Vec<String> {
         }
         if binding.host != "mixed-host" && profile.client != binding.host {
             errors.push(format!(
-                "binding.profiles.{role}.client `{}` must match host `{}`; use host `mixed-host` for explicit cross-client bindings",
+                "binding.profiles.{role}.client `{}` must match host `{}`; use host `mixed-host` for an explicit supported cross-client binding",
                 profile.client, binding.host
+            ));
+        }
+        if profile.client == "codex" {
+            match profile.agent_type.as_deref() {
+                Some(agent_type) if valid_id(agent_type) => {}
+                _ => errors.push(format!(
+                    "binding.profiles.{role}.agent_type must name a native Codex role"
+                )),
+            }
+            if profile.effort.as_deref().is_none_or(str::is_empty) {
+                errors.push(format!(
+                    "binding.profiles.{role}.effort must be explicit for native Codex roles"
+                ));
+            }
+        } else if profile.agent_type.is_some() {
+            errors.push(format!(
+                "binding.profiles.{role}.agent_type is only supported for native Codex profiles"
             ));
         }
     }
@@ -541,6 +562,17 @@ fn validate_binding(binding: &HostBindingV1) -> Vec<String> {
                 errors.push(format!("binding route references unknown role `{role}`"));
             }
         }
+        if binding
+            .profiles
+            .get(&route.role)
+            .is_some_and(|profile| profile.client == "codex")
+            && !route.fallback_roles.is_empty()
+        {
+            errors.push(format!(
+                "binding route `{}` targets native Codex and must not declare fallback_roles",
+                route.work_type
+            ));
+        }
     }
     if let Some(role) = &binding.default_role
         && !binding.profiles.contains_key(role)
@@ -548,6 +580,48 @@ fn validate_binding(binding: &HostBindingV1) -> Vec<String> {
         errors.push(format!(
             "binding default_role references unknown role `{role}`"
         ));
+    }
+    for (role, profile) in binding
+        .profiles
+        .iter()
+        .filter(|(_, profile)| profile.client == "codex")
+    {
+        let Some(agent_type) = profile.agent_type.as_deref() else {
+            continue;
+        };
+        let expected_path = format!(".codex/agents/{agent_type}.toml");
+        let Some(artifact) = binding
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.kind == "codex_agent" && artifact.path == expected_path)
+        else {
+            errors.push(format!(
+                "binding.profiles.{role}.agent_type `{agent_type}` requires codex_agent artifact `{expected_path}`"
+            ));
+            continue;
+        };
+        match toml::from_str::<toml::Value>(&artifact.content) {
+            Ok(value) => {
+                if value.get("model").and_then(toml::Value::as_str) != Some(profile.model.as_str())
+                {
+                    errors.push(format!(
+                        "codex_agent artifact `{expected_path}` model must match binding.profiles.{role}.model"
+                    ));
+                }
+                if value
+                    .get("model_reasoning_effort")
+                    .and_then(toml::Value::as_str)
+                    != profile.effort.as_deref()
+                {
+                    errors.push(format!(
+                        "codex_agent artifact `{expected_path}` model_reasoning_effort must match binding.profiles.{role}.effort"
+                    ));
+                }
+            }
+            Err(error) => errors.push(format!(
+                "codex_agent artifact `{expected_path}` is invalid TOML: {error}"
+            )),
+        }
     }
     errors
 }
@@ -567,21 +641,12 @@ fn validate_fork(
             "binding role `{role}` requests fork_turns all but the host does not support it"
         )),
         ContextForkMode::All if binding.host == "codex" && cross_tier => errors.push(format!(
-            "Codex cross-tier role `{role}` cannot use fork_turns all because it defeats model/effort overrides; use none or an evidenced positive partial fork"
+            "Codex cross-tier role `{role}` cannot use fork_turns all: native Codex rejects it when agent_type selects a role with model or effort overrides; use none or an evidenced positive partial fork"
         )),
         ContextForkMode::Partial { turns } => {
             if *turns == 0 {
                 errors.push(format!(
                     "binding role `{role}` partial fork turns must be positive"
-                ));
-            }
-            if binding
-                .capabilities
-                .max_partial_fork_turns
-                .is_none_or(|maximum| *turns > maximum)
-            {
-                errors.push(format!(
-                    "binding role `{role}` partial fork exceeds the host capability"
                 ));
             }
             if !binding
@@ -743,18 +808,18 @@ mod tests {
                 effort_override: true,
                 fork_none: true,
                 fork_all: true,
-                max_partial_fork_turns: Some(4),
             },
-            capability_evidence: vec!["codex-0.138-smoke".to_string()],
+            capability_evidence: vec!["codex-0.144.0-native-v2".to_string()],
             profiles: BTreeMap::from([
                 (
                     "driver".to_string(),
                     BoundProfile {
                         profile: "sol".to_string(),
                         client: "codex".to_string(),
-                        model: "gpt-5.5".to_string(),
-                        effort: Some("xhigh".to_string()),
-                        cost_tier: Some("premium".to_string()),
+                        model: "gpt-5.6-sol".to_string(),
+                        agent_type: Some("planr-sol-medium".to_string()),
+                        effort: Some("medium".to_string()),
+                        cost_tier: Some("standard".to_string()),
                         capabilities: Vec::new(),
                         skill: None,
                         notes: None,
@@ -766,7 +831,8 @@ mod tests {
                     BoundProfile {
                         profile: "luna".to_string(),
                         client: "codex".to_string(),
-                        model: "gpt-5.4-mini".to_string(),
+                        model: "gpt-5.6-terra".to_string(),
+                        agent_type: Some("planr-terra-high".to_string()),
                         effort: Some("high".to_string()),
                         cost_tier: Some("standard".to_string()),
                         capabilities: Vec::new(),
@@ -779,7 +845,7 @@ mod tests {
             routes: vec![BindingRoute {
                 work_type: "code".to_string(),
                 role: "worker".to_string(),
-                fallback_roles: vec!["driver".to_string()],
+                fallback_roles: Vec::new(),
             }],
             default_role: Some("driver".to_string()),
             billing_assumptions: Vec::new(),
@@ -789,7 +855,20 @@ mod tests {
                 verified_at_unix: 100,
                 max_age_seconds: 100,
             },
-            artifacts: Vec::new(),
+            artifacts: vec![
+                BindingArtifact {
+                    path: ".codex/agents/planr-sol-medium.toml".to_string(),
+                    kind: "codex_agent".to_string(),
+                    content: "model = \"gpt-5.6-sol\"\nmodel_reasoning_effort = \"medium\"\n"
+                        .to_string(),
+                },
+                BindingArtifact {
+                    path: ".codex/agents/planr-terra-high.toml".to_string(),
+                    kind: "codex_agent".to_string(),
+                    content: "model = \"gpt-5.6-terra\"\nmodel_reasoning_effort = \"high\"\n"
+                        .to_string(),
+                },
+            ],
         }
     }
 
@@ -814,7 +893,7 @@ mod tests {
     }
 
     #[test]
-    fn partial_fork_requires_positive_supported_evidenced_turns() {
+    fn partial_fork_accepts_any_positive_evidenced_turn_count() {
         let composed = compose_preset(
             &policy(),
             &binding(Some(ContextForkMode::Partial { turns: 2 })),
@@ -822,11 +901,26 @@ mod tests {
         );
         assert!(composed.compatibility.ok);
 
-        let mut unsupported = binding(Some(ContextForkMode::Partial { turns: 5 }));
-        unsupported.capability_evidence.clear();
-        let composed = compose_preset(&policy(), &unsupported, 150);
+        let composed = compose_preset(
+            &policy(),
+            &binding(Some(ContextForkMode::Partial { turns: 128 })),
+            150,
+        );
+        assert!(composed.compatibility.ok, "{:?}", composed.compatibility);
+
+        let composed = compose_preset(
+            &policy(),
+            &binding(Some(ContextForkMode::Partial { turns: 0 })),
+            150,
+        );
         assert!(!composed.compatibility.ok);
-        assert_eq!(composed.compatibility.errors.len(), 2);
+        assert!(
+            composed
+                .compatibility
+                .errors
+                .iter()
+                .any(|error| error.contains("must be positive"))
+        );
     }
 
     #[test]

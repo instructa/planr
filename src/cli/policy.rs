@@ -110,6 +110,18 @@ pub(crate) struct PresetApplyArgs {
     /// Versioned host-binding TOML path or built-in id.
     #[arg(long)]
     pub(crate) binding: PathBuf,
+    /// Absolute live-host adapter used for challenge-bound Codex capability probes.
+    #[arg(long)]
+    pub(crate) live_host_command: Option<PathBuf>,
+    /// Argument passed to the live-host adapter; repeat as needed.
+    #[arg(long, requires = "live_host_command")]
+    pub(crate) live_host_arg: Vec<String>,
+    /// Signer id pinned in .planr/trusted-telemetry.toml.
+    #[arg(long, requires_all = ["live_host_command", "trusted_telemetry_collector"])]
+    pub(crate) trusted_telemetry_signer: Option<String>,
+    /// Absolute hash-pinned telemetry collector executable.
+    #[arg(long, requires_all = ["live_host_command", "trusted_telemetry_signer"])]
+    pub(crate) trusted_telemetry_collector: Option<PathBuf>,
     /// Explicitly spell the default non-mutating mode.
     #[arg(long, conflicts_with = "confirm")]
     pub(crate) preview: bool,
