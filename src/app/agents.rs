@@ -50,6 +50,7 @@ impl App {
                 }
             },
             AgentsCommand::Init(args) => self.agents_init(args),
+            AgentsCommand::Preset(args) => self.preset(args.command),
             // Discoverability alias: `agents routing` is where people
             // guess the dispatch block lives (dogfood finding F6).
             AgentsCommand::Routing(args) => self.prompt_routing(args.client),
@@ -245,7 +246,10 @@ impl App {
         let declared = self.routing_value_for_item(item_id)?;
         let runs = self.item_runs(item_id)?;
         let any_profiled = runs.iter().any(|run| run["profile"].is_string());
-        if declared.is_none() && !any_profiled {
+        let any_observed = runs
+            .iter()
+            .any(|run| run.get("route_observation").is_some());
+        if declared.is_none() && !any_profiled && !any_observed {
             return Ok(None);
         }
         let declared_profile = declared

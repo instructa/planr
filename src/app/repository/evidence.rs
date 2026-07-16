@@ -7,14 +7,14 @@ use serde_json::Value;
 
 impl App {
     pub(crate) fn get_log(&self, id: &str) -> Result<Value> {
-        self.conn.query_row("SELECT id, item_id, kind, summary, files, commands, tests, review_findings, created_at FROM logs WHERE id = ?1", params![id], row_to_log).optional()?.ok_or_else(|| anyhow!("log not found: {id}"))
+        self.conn.query_row("SELECT logs.id, logs.item_id, logs.kind, logs.summary, logs.files, logs.commands, logs.tests, logs.review_findings, logs.created_at, runs.metadata FROM logs LEFT JOIN runs ON runs.id = logs.run_id WHERE logs.id = ?1", params![id], row_to_log).optional()?.ok_or_else(|| anyhow!("log not found: {id}"))
     }
 
     pub(crate) fn list_logs(&self, item: Option<&str>) -> Result<Vec<Value>> {
         let sql = if item.is_some() {
-            "SELECT id, item_id, kind, summary, files, commands, tests, review_findings, created_at FROM logs WHERE item_id = ?1 ORDER BY created_at DESC"
+            "SELECT logs.id, logs.item_id, logs.kind, logs.summary, logs.files, logs.commands, logs.tests, logs.review_findings, logs.created_at, runs.metadata FROM logs LEFT JOIN runs ON runs.id = logs.run_id WHERE logs.item_id = ?1 ORDER BY logs.created_at DESC"
         } else {
-            "SELECT id, item_id, kind, summary, files, commands, tests, review_findings, created_at FROM logs ORDER BY created_at DESC"
+            "SELECT logs.id, logs.item_id, logs.kind, logs.summary, logs.files, logs.commands, logs.tests, logs.review_findings, logs.created_at, runs.metadata FROM logs LEFT JOIN runs ON runs.id = logs.run_id ORDER BY logs.created_at DESC"
         };
         let mut stmt = self.conn.prepare(sql)?;
         let rows = if let Some(item) = item {

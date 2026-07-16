@@ -48,7 +48,7 @@ pub fn row_to_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<Item> {
 }
 
 pub fn row_to_log(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
-    Ok(json!({
+    let mut log = json!({
         "id": row.get::<_, String>(0)?,
         "item_id": row.get::<_, String>(1)?,
         "kind": row.get::<_, String>(2)?,
@@ -58,7 +58,12 @@ pub fn row_to_log(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
         "tests": parse_list_cell(row.get::<_, Option<String>>(6)?),
         "review_findings": parse_list_cell(row.get::<_, Option<String>>(7)?),
         "created_at": row.get::<_, String>(8)?,
-    }))
+    });
+    let metadata = parse_json_cell(row.get::<_, Option<String>>(9)?);
+    if let Some(observation) = metadata.get("route_observation") {
+        log["route_observation"] = observation.clone();
+    }
+    Ok(log)
 }
 
 pub fn row_to_context(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {

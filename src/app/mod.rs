@@ -18,6 +18,8 @@ mod inspection;
 mod lease;
 mod mcp;
 mod packages;
+mod policy;
+mod presets;
 mod prime;
 mod recall;
 mod recovery;
@@ -95,6 +97,7 @@ impl App {
     pub(crate) fn dispatch(&self, command: Command) -> Result<()> {
         match command {
             Command::Agents(args) => self.agents(args.command),
+            Command::Policy { command } => self.policy(command),
             Command::Project(args) => self.project(args.command),
             Command::Plan(args) => self.plan(args.command),
             Command::Map(args) => self.map(args.command),

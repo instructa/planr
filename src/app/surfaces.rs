@@ -106,6 +106,37 @@ impl App {
                         (false, false) => "",
                     },
                 ));
+                if let Some(observation) = run.get("route_observation") {
+                    for stage in ["requested", "resolved", "effective"] {
+                        let route = &observation[stage];
+                        out.push_str(&format!(
+                            "\n    {stage}: model {} ({}) effort {} ({}) fork {} ({})",
+                            route["model"]["value"].as_str().unwrap_or("unknown"),
+                            route["model"]["enforcement"]
+                                .as_str()
+                                .unwrap_or("unavailable"),
+                            route["effort"]["value"].as_str().unwrap_or("unknown"),
+                            route["effort"]["enforcement"]
+                                .as_str()
+                                .unwrap_or("unavailable"),
+                            route["context_fork"]["value"]["mode"]
+                                .as_str()
+                                .unwrap_or("unknown"),
+                            route["context_fork"]["enforcement"]
+                                .as_str()
+                                .unwrap_or("unavailable"),
+                        ));
+                    }
+                    out.push_str(&format!(
+                        "\n    transition {}: {}",
+                        observation["transition"]["kind"]
+                            .as_str()
+                            .unwrap_or("unknown"),
+                        observation["transition"]["reason"]
+                            .as_str()
+                            .unwrap_or("unknown"),
+                    ));
+                }
             }
         }
         if let Some(target) = trace.get("target") {

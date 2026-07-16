@@ -1,6 +1,6 @@
 use super::App;
 use crate::cli::DoneArgs;
-use crate::model::Item;
+use crate::route_audit::{RouteObservation, load_route_observation};
 use crate::util::{short_id, worker_id};
 use anyhow::{Result, anyhow, bail};
 use rusqlite::params;
@@ -34,6 +34,7 @@ pub(crate) struct LogInput<'a> {
     /// Registry profile the work actually executed on, when the worker
     /// knows it (`--profile` flag; `PLANR_PROFILE` env is the fallback).
     pub(crate) profile: Option<&'a str>,
+    pub(crate) route_observation: Option<&'a RouteObservation>,
 }
 
 /// Owner of the compound work flow: evidence logging, the close transition,
@@ -44,12 +45,22 @@ impl App {
     /// also refreshes the runtime heartbeat: evidence is a liveness signal,
     /// so agents do not need a separate `pick heartbeat` call.
     pub(crate) fn add_log_entry(&self, input: LogInput<'_>) -> Result<String> {
+        if input.route_observation.is_some() && input.commands.is_empty() && input.tests.is_empty()
+        {
+            bail!("route audit requires a recorded run with at least one command or test");
+        }
         let id = short_id("log");
         let profile = effective_profile(input.profile);
         let run_id = if input.commands.is_empty() && input.tests.is_empty() {
             None
         } else {
-            Some(self.record_run(input.item_id, input.commands, "closed", profile.as_deref())?)
+            Some(self.record_run(
+                input.item_id,
+                input.commands,
+                "closed",
+                profile.as_deref(),
+                input.route_observation,
+            )?)
         };
         if let Some(run_id) = run_id.as_deref() {
             if let Some(actual_profile) = profile.as_deref() {
@@ -59,6 +70,9 @@ impl App {
             // from the environment, so it also audits runs whose worker
             // never reported a profile.
             self.observe_client_compliance(input.item_id, run_id, input.kind)?;
+            if let Some(observation) = input.route_observation {
+                self.record_route_observation_events(input.item_id, run_id, observation)?;
+            }
         }
         self.conn.execute(
             "INSERT INTO logs(id, project_id, item_id, run_id, kind, summary, files, commands, tests, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, datetime('now'))",
@@ -115,6 +129,7 @@ impl App {
                 tests: &[],
                 source: None,
                 profile: None,
+                route_observation: None,
             })?)
         } else {
             None
@@ -126,48 +141,6 @@ impl App {
             json!({"log_id": log_id, "summary": summary}),
         )?;
         Ok(log_id)
-    }
-
-    /// Single owner for creating a review gate on an item. Reviews are
-    /// gates: they attach to any unsettled target (pre-attached gates on
-    /// pending/blocked work are legal and hold the close later), but a
-    /// settled target is rejected — there is nothing left to gate. Only a
-    /// picked or running target moves to `in_review` (work done, waiting on
-    /// the gate, ownership kept); ready targets keep their status so they
-    /// stay pickable. `done --review` adopts never-picked items first, so
-    /// that path always transitions and always has a maker.
-    pub(crate) fn request_review_for(&self, item_id: &str) -> Result<Item> {
-        let target = self.get_item(item_id)?;
-        if matches!(
-            target.status.as_str(),
-            "closed" | "closed_partial" | "cancelled" | "failed"
-        ) {
-            bail!(
-                "invalid_transition: cannot request review on item {} from status {}; the item is settled, create a follow-up with `planr item create` instead",
-                target.id,
-                target.status
-            );
-        }
-        let review = self.create_item(
-            None,
-            &format!("Review {}", target.title),
-            "Review item against plan, logs, diff, and verification.",
-            "review",
-            target.plan_path.as_deref(),
-        )?;
-        self.add_link(&review.id, &target.id, "reviews")?;
-        self.conn.execute(
-            "UPDATE items SET status = 'in_review', updated_at = datetime('now') WHERE id = ?1 AND status IN ('picked','running')",
-            params![target.id],
-        )?;
-        self.promote_ready()?;
-        let review = self.get_item(&review.id)?;
-        self.record_event(
-            "review_requested",
-            Some(&target.id),
-            json!({"review_id": review.id.clone()}),
-        )?;
-        Ok(review)
     }
 
     /// Completion-time context shared by `done` and `close`: what the
@@ -223,6 +196,11 @@ impl App {
     /// `planr done`: completion log, then review request or close, then an
     /// optional next pick — one command instead of three, same evidence.
     pub(crate) fn done(&self, args: DoneArgs) -> Result<()> {
+        let route_observation = args
+            .route_audit
+            .as_deref()
+            .map(load_route_observation)
+            .transpose()?;
         let item_id = if let Some(id) = args.item_id {
             id
         } else {
@@ -243,6 +221,7 @@ impl App {
             tests: &args.tests,
             source: None,
             profile: args.profile.as_deref(),
+            route_observation: route_observation.as_ref(),
         })?;
         let review = if args.review {
             Some(self.request_review_for(&item_id)?)

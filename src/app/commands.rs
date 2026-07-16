@@ -644,6 +644,11 @@ impl App {
     pub(crate) fn log(&self, command: LogCommand) -> Result<()> {
         match command {
             LogCommand::Add(args) => {
+                let route_observation = args
+                    .route_audit
+                    .as_deref()
+                    .map(crate::route_audit::load_route_observation)
+                    .transpose()?;
                 let id = self.add_log_entry(super::LogInput {
                     item_id: &args.item,
                     kind: &args.kind,
@@ -653,6 +658,7 @@ impl App {
                     tests: &args.tests,
                     source: None,
                     profile: args.profile.as_deref(),
+                    route_observation: route_observation.as_ref(),
                 })?;
                 self.emit(
                     json!({"log": self.get_log(&id)?}),

@@ -1,5 +1,6 @@
 use super::App;
 use super::lease::PickFilter;
+use crate::secrets::looks_secret_like;
 use crate::storage::row_to_item;
 use crate::util::collect_rows;
 use anyhow::Result;
@@ -370,12 +371,6 @@ fn recall_score(tokens: &[String], text: &str) -> usize {
         .iter()
         .map(|token| haystack.matches(token).count())
         .sum()
-}
-
-fn looks_secret_like(text: &str) -> bool {
-    ["sk-", "ghp_", "BEGIN PRIVATE KEY", "AKIA"]
-        .iter()
-        .any(|pattern| text.contains(pattern))
 }
 
 /// Truncates at a word boundary so handoff summaries never cut a token in

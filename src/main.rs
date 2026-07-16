@@ -10,11 +10,19 @@ use util::{infer_error_code, print_json};
 mod agents;
 mod app;
 mod cli;
+pub mod execution_policy;
 mod integrations;
 mod model;
 mod planpack;
+mod preset;
+mod preset_catalog;
+mod preset_eval;
+mod preset_registry;
 mod rolefiles;
+mod route_audit;
+mod secrets;
 mod storage;
+pub mod usage_policy;
 mod util;
 
 fn main() {

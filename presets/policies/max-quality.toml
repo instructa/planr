@@ -1,0 +1,50 @@
+schema_version = 1
+id = "max-quality"
+version = "1.0.0"
+
+[usage]
+max_active_agents = 4
+max_parallel_readers = 3
+max_parallel_writers = 1
+max_depth = 1
+max_attempts = 5
+max_wall_time_seconds = 7200
+max_tool_calls = 240
+review_reserve_percent = 40
+budget_exhaustion = "stop"
+metering = "estimated"
+
+[transitions.retry]
+max_same_route_retries = 1
+
+[transitions.availability_fallback]
+max_fallbacks = 1
+require_same_capability_class = true
+
+[transitions.quality_escalation]
+max_escalations = 2
+require_verification_evidence = true
+
+[transitions.quota_downgrade]
+enabled = false
+max_downgrades = 0
+noncritical_only = true
+
+[transitions.safety_stop]
+enabled = true
+
+[materiality]
+changed_files_threshold = 5
+changed_lines_threshold = 200
+
+[execution]
+max_read_scope_entries = 12
+max_write_scope_entries = 6
+
+[execution.roles.worker]
+tools = ["cargo", "git", "rg"]
+
+[execution.roles.worker.filesystem]
+read_roots = ["src", "tests", "docs"]
+write_roots = ["src", "tests", "docs"]
+allow_overwrite = false

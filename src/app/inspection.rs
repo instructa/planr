@@ -4,51 +4,14 @@ use crate::planpack::{
     BUILD_PLAN_REQUIRED_SECTIONS, PRODUCT_PLAN_REQUIRED_SECTIONS, parse_plan_metadata,
     unfilled_required_sections,
 };
+use crate::route_audit::RouteObservation;
+use crate::secrets::redact_secrets;
 use crate::util::{collect_rows, detect_client, now_string, short_id, worker_id};
 use anyhow::Result;
 use rusqlite::params;
 use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
-
-/// Replace secret-like tokens with `[REDACTED]` markers. Returns `None` when
-/// nothing matched. Token patterns only match at word boundaries so ordinary
-/// words like "risk-free" are not flagged.
-pub(crate) fn redact_secrets(text: &str) -> Option<String> {
-    if text.contains("BEGIN PRIVATE KEY") {
-        return Some("[REDACTED:private-key]".to_string());
-    }
-    const REDACTED: &str = "[REDACTED]";
-    let mut result = text.to_string();
-    let mut changed = false;
-    for pattern in ["sk-", "ghp_", "AKIA"] {
-        let mut from = 0;
-        while let Some(start) = find_token(&result, pattern, from) {
-            let end = result[start..]
-                .char_indices()
-                .find(|(_, c)| !(c.is_ascii_alphanumeric() || *c == '-' || *c == '_'))
-                .map(|(offset, _)| start + offset)
-                .unwrap_or(result.len());
-            result.replace_range(start..end, REDACTED);
-            changed = true;
-            from = start + REDACTED.len();
-        }
-    }
-    changed.then_some(result)
-}
-
-fn find_token(text: &str, pattern: &str, from: usize) -> Option<usize> {
-    let mut search_from = from;
-    while let Some(relative) = text.get(search_from..)?.find(pattern) {
-        let start = search_from + relative;
-        let at_boundary = start == 0 || !text.as_bytes()[start - 1].is_ascii_alphanumeric();
-        if at_boundary {
-            return Some(start);
-        }
-        search_from = start + pattern.len();
-    }
-    None
-}
 
 impl App {
     /// Shared plan-check logic for CLI and MCP: path, frontmatter, and
@@ -416,8 +379,13 @@ impl App {
         commands: &[String],
         status: &str,
         profile: Option<&str>,
+        route_observation: Option<&RouteObservation>,
     ) -> Result<String> {
         let id = short_id("run");
+        let mut metadata = json!({"recorded_from": "log"});
+        if let Some(observation) = route_observation {
+            metadata["route_observation"] = json!(observation);
+        }
         self.conn.execute(
             "INSERT INTO runs(id, project_id, item_id, worker_id, client, profile, observed_client, command, cwd, status, started_at, ended_at, metadata) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, datetime('now'), datetime('now'), ?11)",
             params![
@@ -431,7 +399,7 @@ impl App {
                 commands.join(" && "),
                 self.root.to_string_lossy(),
                 status,
-                json!({"recorded_from": "log"}).to_string(),
+                metadata.to_string(),
             ],
         )?;
         Ok(id)

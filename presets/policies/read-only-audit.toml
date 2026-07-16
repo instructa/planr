@@ -1,0 +1,50 @@
+schema_version = 1
+id = "read-only-audit"
+version = "1.0.0"
+
+[usage]
+max_active_agents = 3
+max_parallel_readers = 3
+max_parallel_writers = 0
+max_depth = 1
+max_attempts = 2
+max_wall_time_seconds = 1800
+max_tool_calls = 80
+review_reserve_percent = 20
+budget_exhaustion = "stop"
+metering = "estimated"
+
+[transitions.retry]
+max_same_route_retries = 0
+
+[transitions.availability_fallback]
+max_fallbacks = 1
+require_same_capability_class = true
+
+[transitions.quality_escalation]
+max_escalations = 0
+require_verification_evidence = true
+
+[transitions.quota_downgrade]
+enabled = false
+max_downgrades = 0
+noncritical_only = true
+
+[transitions.safety_stop]
+enabled = true
+
+[materiality]
+changed_files_threshold = 1
+changed_lines_threshold = 1
+
+[execution]
+max_read_scope_entries = 12
+max_write_scope_entries = 1
+
+[execution.roles.worker]
+tools = ["git", "rg"]
+
+[execution.roles.worker.filesystem]
+read_roots = ["src", "tests", "docs"]
+write_roots = []
+allow_overwrite = false

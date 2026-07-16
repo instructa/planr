@@ -99,6 +99,12 @@ pub fn mcp_tools() -> Vec<Value> {
             &[],
         ),
         tool(
+            "planr_trace_item",
+            "Show an item trace including durable requested, resolved, and effective route observations",
+            json!({"item_id": prop("string", "Item id")}),
+            &["item_id"],
+        ),
+        tool(
             "planr_map_show",
             "Show Planr map (optionally scoped to one plan)",
             json!({"plan": prop("string", "Only show items and links of this plan id")}),
@@ -200,6 +206,60 @@ pub fn mcp_tools() -> Vec<Value> {
             "Show the agent profile registry: profiles, routes, and validation warnings",
             json!({}),
             &[],
+        ),
+        tool(
+            "planr_presets_list",
+            "List embedded policies, host bindings, and declared safe packs",
+            json!({}),
+            &[],
+        ),
+        tool(
+            "planr_preset_evaluate",
+            "Simulate offline or explicitly execute the versioned preset suite through a live-host adapter, returning scoped evidence, provenance, lifecycle status, and threshold gates",
+            json!({"at_unix": prop("integer", "Unix timestamp used for lifecycle expiry status"), "host": prop("string", "Host compatibility requirement"), "live_host_command": prop("string", "Absolute path of the explicit live-host adapter executable"), "live_host_args": {"type": "array", "items": {"type": "string"}, "description": "Arguments for the explicit live-host adapter"}, "trusted_telemetry_signer": prop("string", "Signer id pinned in .planr/trusted-telemetry.toml"), "trusted_telemetry_collector": prop("string", "Absolute path to the hash-pinned post-run telemetry collector")}),
+            &[],
+        ),
+        tool(
+            "planr_preset_apply",
+            "Preview or explicitly apply a provider-neutral policy plus versioned host binding",
+            json!({"policy": prop("string", "Usage Policy v1 TOML path or built-in id"), "binding": prop("string", "Host-binding TOML path or built-in id"), "confirm": prop("boolean", "Apply the conflict-free preview (default false)")}),
+            &["policy", "binding"],
+        ),
+        tool(
+            "planr_preset_registry_verify",
+            "Verify a declarative registry entry's checksums, compatibility, lifecycle, and pinned maintainer signature without importing it",
+            json!({"manifest": prop("string", "Registry manifest TOML path"), "entry": prop("string", "Entry id"), "content_root": prop("string", "Directory containing declared artifacts"), "trust_store": prop("string", "Optional separately provisioned maintainer trust store"), "at_unix": prop("integer", "Unix timestamp for freshness"), "host": prop("string", "Required compatible host")}),
+            &["manifest", "entry", "content_root"],
+        ),
+        tool(
+            "planr_preset_registry_import",
+            "Preview by default or confirm a content-minimized immutable offline-cache import after registry verification",
+            json!({"manifest": prop("string", "Registry manifest TOML path"), "entry": prop("string", "Entry id"), "content_root": prop("string", "Directory containing declared artifacts"), "trust_store": prop("string", "Optional separately provisioned maintainer trust store"), "at_unix": prop("integer", "Unix timestamp for freshness"), "host": prop("string", "Required compatible host"), "confirm": prop("boolean", "Write the verified cache entry; default false")}),
+            &["manifest", "entry", "content_root"],
+        ),
+        tool(
+            "planr_preset_registry_list",
+            "List immutable offline registry cache entries with visible current or stale freshness",
+            json!({"at_unix": prop("integer", "Unix timestamp for freshness")}),
+            &[],
+        ),
+        tool(
+            "planr_policy_show",
+            "Show the parsed provider-neutral Usage Policy v1 or its missing/degraded state",
+            json!({}),
+            &[],
+        ),
+        tool(
+            "planr_policy_check",
+            "Validate .planr/policy.toml; missing preserves advisory routing and malformed policy fails closed",
+            json!({}),
+            &[],
+        ),
+        tool(
+            "planr_policy_admit",
+            "Evaluate a bounded task contract and execution permission request before delegation",
+            json!({"request": prop("object", "ExecutionAdmissionRequest object")}),
+            &["request"],
         ),
         tool(
             "planr_item_route",
@@ -318,7 +378,7 @@ pub fn mcp_tools() -> Vec<Value> {
         tool(
             "planr_log_add",
             "Add evidence log to an item",
-            json!({"item": prop("string", "Item id"), "summary": prop("string", "What was done"), "kind": prop("string", "Log kind (default completion)"), "files": string_array("Changed file paths"), "commands": string_array("Commands run"), "tests": string_array("Tests run with results"), "profile": prop("string", "Registry profile the run actually executed on (advisory mismatch check)")}),
+            json!({"item": prop("string", "Item id"), "summary": prop("string", "What was done"), "kind": prop("string", "Log kind (default completion)"), "files": string_array("Changed file paths"), "commands": string_array("Commands run"), "tests": string_array("Tests run with results"), "profile": prop("string", "Registry profile the run actually executed on (advisory mismatch check)"), "route_observation": prop("object", "Requested/resolved/effective route, transition, policy/binding provenance, and metering")}),
             &["item", "summary"],
         ),
         tool(

@@ -15,14 +15,27 @@
     "npm/bin/planr.js",
     "npm/native",
     "plugins",
+    "presets",
+    "evaluations",
+    "website",
     "README.md",
     "LICENSE.md",
     "docs"
   ],
   "scripts": {
+    "alchemy:check-runtime": "node scripts/check-alchemy-runtime.mjs",
     "build:native": "cargo build --release",
     "test": "cargo test",
-    "pack:check": "npm pack --dry-run"
+    "pack:check": "npm pack --dry-run",
+    "deploy:test": "node scripts/cloudflare-test.mjs deploy",
+    "destroy:test": "node scripts/cloudflare-test.mjs destroy",
+    "site:build": "node scripts/build-site.mjs",
+    "site:check": "pnpm site:test && pnpm site:build",
+    "site:test": "node --test website/*.test.mjs",
+    "site:serve": "node website/serve.mjs"
+  },
+  "devDependencies": {
+    "alchemy": "0.93.7"
   },
   "engines": {
     "node": ">=18"
