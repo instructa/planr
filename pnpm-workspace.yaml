@@ -1,0 +1,10 @@
+packages:
+  - "."
+
+enableGlobalVirtualStore: false
+verifyDepsBeforeRun: error
+
+allowBuilds:
+  esbuild: true
+  sharp: false
+  workerd: true

@@ -1,0 +1,50 @@
+schema_version = 1
+id = "low-usage"
+version = "1.0.0"
+
+[usage]
+max_active_agents = 2
+max_parallel_readers = 1
+max_parallel_writers = 1
+max_depth = 1
+max_attempts = 3
+max_wall_time_seconds = 1800
+max_tool_calls = 60
+review_reserve_percent = 25
+budget_exhaustion = "downgrade_noncritical"
+metering = "estimated"
+
+[transitions.retry]
+max_same_route_retries = 0
+
+[transitions.availability_fallback]
+max_fallbacks = 1
+require_same_capability_class = true
+
+[transitions.quality_escalation]
+max_escalations = 1
+require_verification_evidence = true
+
+[transitions.quota_downgrade]
+enabled = true
+max_downgrades = 1
+noncritical_only = true
+
+[transitions.safety_stop]
+enabled = true
+
+[materiality]
+changed_files_threshold = 6
+changed_lines_threshold = 250
+
+[execution]
+max_read_scope_entries = 6
+max_write_scope_entries = 3
+
+[execution.roles.worker]
+tools = ["cargo", "git", "rg"]
+
+[execution.roles.worker.filesystem]
+read_roots = ["src", "tests", "docs"]
+write_roots = ["src", "tests", "docs"]
+allow_overwrite = false

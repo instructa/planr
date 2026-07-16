@@ -1,6 +1,12 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
+mod policy;
+pub(crate) use policy::{
+    PolicyCommand, PresetArgs, PresetCommand, PresetRegistryCommand, PresetRegistryImportArgs,
+    PresetRegistryVerifyArgs,
+};
+
 #[derive(Parser, Debug)]
 #[command(
     name = "planr",
@@ -23,6 +29,10 @@ pub(crate) enum Command {
     /// Inspect the agent profile registry (.planr/agents.toml) that
     /// drives advisory model routing in pick packets.
     Agents(AgentsArgs),
+    Policy {
+        #[command(subcommand)]
+        command: PolicyCommand,
+    },
     Project(ProjectArgs),
     Plan(PlanArgs),
     Map(MapArgs),
@@ -70,6 +80,8 @@ pub(crate) enum AgentsCommand {
     Check,
     /// Write a commented starter registry with cost-tiering defaults.
     Init(AgentsInitArgs),
+    /// Compose a provider-neutral policy with a versioned host binding.
+    Preset(PresetArgs),
     /// The driver dispatch block (alias for `planr prompt routing`).
     Routing(PromptPrintArgs),
 }
@@ -579,10 +591,10 @@ pub(crate) struct LogAddArgs {
     /// (live-verify evidence; `plan audit` checks for it).
     #[arg(long, default_value = "completion")]
     pub(crate) kind: String,
-    /// Registry profile this run actually executed on (fallback:
-    /// PLANR_PROFILE env). Mismatches with the declared route are advisory.
     #[arg(long)]
     pub(crate) profile: Option<String>,
+    #[arg(long, value_name = "PATH")]
+    pub(crate) route_audit: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]
@@ -618,10 +630,10 @@ pub(crate) struct DoneArgs {
     /// Pick the next ready item after finishing this step.
     #[arg(long)]
     pub(crate) next: bool,
-    /// Registry profile this run actually executed on (fallback:
-    /// PLANR_PROFILE env). Mismatches with the declared route are advisory.
     #[arg(long)]
     pub(crate) profile: Option<String>,
+    #[arg(long, value_name = "PATH")]
+    pub(crate) route_audit: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]

@@ -5,6 +5,7 @@
 //! profile per item. A missing registry means "no routing", and a
 //! malformed one degrades with a diagnostic instead of failing commands.
 
+use crate::secrets::looks_secret_like;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -224,12 +225,6 @@ fn profile_strings(profile: &AgentProfile) -> impl Iterator<Item = &str> {
     .into_iter()
     .flatten()
     .chain(profile.capabilities.iter().map(String::as_str))
-}
-
-fn looks_secret_like(text: &str) -> bool {
-    ["sk-", "ghp_", "BEGIN PRIVATE KEY", "AKIA"]
-        .iter()
-        .any(|pattern| text.contains(pattern))
 }
 
 /// The facts about a map item that routing may select on. The caller

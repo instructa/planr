@@ -223,6 +223,9 @@ impl App {
                         .unwrap_or(false);
                     serde_json::to_string(&self.recovery_sweep_value(older_than_seconds, apply)?)?
                 }
+                ("POST", "/v1/policy/admit") => {
+                    serde_json::to_string(&self.policy_admit_value(body_json.clone())?)?
+                }
                 ("POST", p) if p.ends_with("/insert") => {
                     let after = path_item_id(p)
                         .ok_or_else(|| anyhow!("missing item id in insert route"))?;
@@ -479,6 +482,11 @@ impl App {
                     let files = json_string_array(&body_json, "files");
                     let commands = json_string_array(&body_json, "commands");
                     let tests = json_string_array(&body_json, "tests");
+                    let route_observation = body_json
+                        .get("route_observation")
+                        .cloned()
+                        .map(crate::route_audit::parse_route_observation)
+                        .transpose()?;
                     serde_json::to_string(&json!({"log": self.add_log_value(LogInput {
                         item_id,
                         kind: body_json.get("kind").and_then(Value::as_str).unwrap_or("completion"),
@@ -488,6 +496,7 @@ impl App {
                         tests: &tests,
                         source: Some("http"),
                         profile: body_json.get("profile").and_then(Value::as_str),
+                        route_observation: route_observation.as_ref(),
                     })?}))?
                 }
                 ("POST", p) if p.starts_with("/v1/reviews/") && p.ends_with("/close") => {

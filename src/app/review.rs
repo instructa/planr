@@ -34,6 +34,48 @@ impl<'a> ReviewArtifactInput<'a> {
 }
 
 impl App {
+    /// Single owner for creating a review gate on an item. Reviews are
+    /// gates: they attach to any unsettled target (pre-attached gates on
+    /// pending/blocked work are legal and hold the close later), but a
+    /// settled target is rejected — there is nothing left to gate. Only a
+    /// picked or running target moves to `in_review` (work done, waiting on
+    /// the gate, ownership kept); ready targets keep their status so they
+    /// stay pickable. `done --review` adopts never-picked items first, so
+    /// that path always transitions and always has a maker.
+    pub(crate) fn request_review_for(&self, item_id: &str) -> Result<Item> {
+        let target = self.get_item(item_id)?;
+        if matches!(
+            target.status.as_str(),
+            "closed" | "closed_partial" | "cancelled" | "failed"
+        ) {
+            bail!(
+                "invalid_transition: cannot request review on item {} from status {}; the item is settled, create a follow-up with `planr item create` instead",
+                target.id,
+                target.status
+            );
+        }
+        let review = self.create_item(
+            None,
+            &format!("Review {}", target.title),
+            "Review item against plan, logs, diff, and verification.",
+            "review",
+            target.plan_path.as_deref(),
+        )?;
+        self.add_link(&review.id, &target.id, "reviews")?;
+        self.conn.execute(
+            "UPDATE items SET status = 'in_review', updated_at = datetime('now') WHERE id = ?1 AND status IN ('picked','running')",
+            params![target.id],
+        )?;
+        self.promote_ready()?;
+        let review = self.get_item(&review.id)?;
+        self.record_event(
+            "review_requested",
+            Some(&target.id),
+            json!({"review_id": review.id.clone()}),
+        )?;
+        Ok(review)
+    }
+
     pub(crate) fn add_review_annotation(&self, input: ReviewAnnotationInput<'_>) -> Result<Value> {
         self.get_item(input.item_id)?;
         let severity = match input.severity {

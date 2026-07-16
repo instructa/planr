@@ -1,0 +1,127 @@
+schema_version = 1
+id = "planr-preset-suite"
+version = "1.8.0"
+verified_at_unix = 1783987200
+expires_at_unix = 1815523200
+
+[thresholds]
+minimum_runs = 7
+minimum_quality_score_bps = 8500
+minimum_reliability_bps = 9000
+maximum_average_credits_micros = 1200000
+maximum_p95_latency_ms = 5000
+maximum_transition_contract_failures = 0
+maximum_safety_stop_failures = 0
+require_verified_routes = true
+require_result_hashes = true
+
+[[candidates]]
+id = "balanced-codex-openai"
+policy = "balanced"
+binding = "codex-openai"
+
+[[candidates]]
+id = "low-usage-codex-openai"
+policy = "low-usage"
+binding = "codex-openai"
+
+[[candidates]]
+id = "max-quality-codex-openai"
+policy = "max-quality"
+binding = "codex-openai"
+
+[[candidates]]
+id = "read-only-audit-codex-openai"
+policy = "read-only-audit"
+binding = "codex-openai"
+
+[[tasks]]
+id = "explore-routing-boundaries"
+version = "1.0.0"
+kind = "exploration"
+objective = "Inspect policy and host routing boundaries without mutation."
+input = "inspect-routing-boundaries"
+artifact_kind = "inspection_manifest"
+expected_output = "routing-boundaries-inspected"
+work_units = 8
+transition = "retry"
+requires_write = false
+minimum_tool_budget = 1
+
+[[tasks]]
+id = "implement-bounded-policy-change"
+version = "1.0.0"
+kind = "implementation"
+objective = "Implement a bounded policy change and preserve verification evidence."
+input = "implement-bounded-policy-change"
+artifact_kind = "patch_manifest"
+expected_output = "bounded-policy-change-implemented"
+work_units = 14
+transition = "quality_escalation"
+requires_write = true
+minimum_tool_budget = 80
+
+[[tasks]]
+id = "mechanical-schema-rewrite"
+version = "1.0.0"
+kind = "mechanical"
+objective = "Apply a deterministic schema rewrite across owned files."
+input = "rewrite-owned-schema"
+artifact_kind = "rewrite_manifest"
+expected_output = "owned-schema-rewritten"
+work_units = 11
+transition = "availability_fallback"
+requires_write = true
+minimum_tool_budget = 80
+
+[[tasks]]
+id = "browser-report-smoke"
+version = "1.0.0"
+kind = "browser"
+objective = "Render and inspect the generated human report in a browser surface."
+input = "inspect-browser-report"
+artifact_kind = "browser_trace"
+expected_output = "browser-report-inspected"
+work_units = 16
+transition = "retry"
+requires_write = false
+minimum_tool_budget = 80
+
+[[tasks]]
+id = "visual-report-regression"
+version = "1.0.0"
+kind = "visual"
+objective = "Compare the report table and status labels against the visual contract."
+input = "compare-visual-report"
+artifact_kind = "visual_diff"
+expected_output = "visual-contract-matched"
+work_units = 13
+transition = "quality_escalation"
+requires_write = false
+minimum_tool_budget = 80
+
+[[tasks]]
+id = "security-safety-stop"
+version = "1.0.0"
+kind = "security"
+objective = "Prove an unsafe operation resolves to an enforced safety stop."
+input = "attempt-unsafe-operation"
+artifact_kind = "safety_receipt"
+expected_output = "unsafe-operation-stopped"
+work_units = 9
+transition = "safety_stop"
+requires_write = false
+minimum_tool_budget = 1
+
+[[tasks]]
+id = "subagent-sol-luna-dispatch"
+version = "1.0.0"
+kind = "subagent"
+objective = "Verify Sol/Luna cross-tier dispatch and effective route evidence."
+input = "dispatch-sol-luna-worker"
+artifact_kind = "dispatch_trace"
+expected_output = "sol-luna-dispatch-verified"
+work_units = 12
+transition = "availability_fallback"
+requires_write = false
+minimum_tool_budget = 1

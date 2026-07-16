@@ -4,7 +4,7 @@ use crate::storage::row_to_item;
 use crate::util::{collect_rows, item_id};
 use anyhow::{Result, anyhow};
 use rusqlite::{OptionalExtension, params};
-use serde_json::json;
+use serde_json::{Value, json};
 
 impl App {
     pub(crate) fn create_item(
@@ -62,7 +62,7 @@ impl App {
     /// section; runs were write-only before declared-vs-actual auditing.
     pub(crate) fn item_runs(&self, item_id: &str) -> Result<Vec<serde_json::Value>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, client, profile, status, started_at, observed_client FROM runs WHERE item_id = ?1 ORDER BY started_at, rowid",
+            "SELECT id, client, profile, status, started_at, observed_client, metadata FROM runs WHERE item_id = ?1 ORDER BY started_at, rowid",
         )?;
         let rows = stmt.query_map(params![item_id], |row| {
             let mut run = json!({
@@ -76,6 +76,13 @@ impl App {
             // byte-identical.
             if let Some(observed) = row.get::<_, Option<String>>(5)? {
                 run["observed_client"] = json!(observed);
+            }
+            if let Some(observation) = row
+                .get::<_, Option<String>>(6)?
+                .and_then(|metadata| serde_json::from_str::<Value>(&metadata).ok())
+                .and_then(|metadata| metadata.get("route_observation").cloned())
+            {
+                run["route_observation"] = observation;
             }
             Ok(run)
         })?;

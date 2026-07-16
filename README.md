@@ -22,6 +22,18 @@ Flat todo lists break down the moment real work has structure. Planr models work
 
 Three layers make that work: **Plans** (reviewable Markdown packages), the **Map** (live dependency graph with picks, reviews, logs), and **Agent loops** (skills, CLI, and MCP workflows for every major coding agent). Full model: [Task Graph Model](docs/TASK_GRAPH_MODEL.md) and [Operating Model](docs/OPERATING_MODEL.md).
 
+## New in 1.4.0: Verified Presets & Catalog
+
+Planr now ships a verified preset system for composing a provider-neutral usage policy with a host binding, previewing every repository-local change, and applying the result only after confirmation:
+
+```bash
+planr agents preset list
+planr agents preset apply balanced --binding codex-openai --preview
+planr agents preset apply balanced --binding codex-openai --confirm
+```
+
+The built-in catalog includes four policies, five host bindings, and 20 declared safe pairs. Reproducible evaluation, signed registry verification, and the public [Planr Preset Catalog](https://planr-test-catalog.office-35d.workers.dev/) keep recommendation evidence inspectable without making the registry a runtime dependency. Full guides: [Preset Composition](docs/PRESET_COMPOSITION.md) · [Preset Evaluation](docs/PRESET_EVALUATION.md) · [Preset Registry](docs/PRESET_REGISTRY.md).
+
 ## New in 1.3.0: Native Host Hooks
 
 `planr install codex|claude|cursor` now wires Planr into the host's native hook system by default — every new session (including post-compaction restarts) gets one compact state block injected automatically:

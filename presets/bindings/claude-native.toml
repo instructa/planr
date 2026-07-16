@@ -1,0 +1,52 @@
+schema_version = 1
+id = "claude-native"
+version = "1.0.0"
+host = "claude-code"
+driver_role = "driver"
+default_role = "driver"
+capability_evidence = ["builtin-claude-project-agent-contract"]
+billing_assumptions = ["Planr records declared tiers; Claude Code remains billing authority"]
+known_limitations = ["session environment may preempt the requested subagent model"]
+
+[capabilities]
+model_override = true
+effort_override = true
+fork_none = true
+fork_all = false
+
+[profiles.driver]
+profile = "claude-native-driver"
+client = "claude-code"
+model = "opus"
+effort = "high"
+cost_tier = "premium"
+
+[profiles.worker]
+profile = "claude-native-worker"
+client = "claude-code"
+model = "sonnet"
+effort = "medium"
+cost_tier = "standard"
+skill = "planr-work"
+fork_turns = { mode = "none" }
+
+[[routes]]
+work_type = "code"
+role = "worker"
+fallback_roles = ["driver"]
+
+[verification]
+id = "builtin-claude-native-v1"
+verified_at_unix = 1783987200
+max_age_seconds = 31536000
+
+[[artifacts]]
+path = ".claude/agents/planr-preset-worker.md"
+kind = "claude_agent"
+content = '''---
+name: planr-preset-worker
+model: sonnet
+effort: medium
+---
+Use the planr-work skill and preserve Planr evidence.
+'''

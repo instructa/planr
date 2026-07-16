@@ -1,0 +1,64 @@
+schema_version = 1
+id = "mixed-host"
+version = "1.0.0"
+host = "mixed-host"
+driver_role = "driver"
+default_role = "driver"
+capability_evidence = ["builtin-explicit-cross-client-contract"]
+billing_assumptions = ["Each host remains authoritative for its own billing and availability"]
+known_limitations = ["effective model evidence must be collected independently from each host"]
+
+[capabilities]
+model_override = true
+effort_override = true
+fork_none = true
+fork_all = false
+
+[profiles.driver]
+profile = "mixed-cursor-driver"
+client = "cursor"
+model = "fable-5"
+cost_tier = "premium"
+
+[profiles.worker]
+profile = "mixed-codex-worker"
+client = "codex"
+model = "gpt-5.4-mini"
+effort = "high"
+cost_tier = "standard"
+skill = "planr-work"
+fork_turns = { mode = "none" }
+
+[[routes]]
+work_type = "code"
+role = "worker"
+fallback_roles = ["driver"]
+
+[verification]
+id = "builtin-mixed-host-v1"
+verified_at_unix = 1783987200
+max_age_seconds = 31536000
+
+[[artifacts]]
+path = ".cursor/agents/planr-preset-driver.md"
+kind = "cursor_agent"
+content = '''---
+name: planr-preset-driver
+model: fable-5
+---
+Drive the Planr map and keep final verdict ownership.
+'''
+
+[[artifacts]]
+path = ".codex/agents/planr-preset-worker.toml"
+kind = "codex_agent"
+content = '''name = "planr_preset_worker"
+description = "Implements one picked Planr map item with evidence-backed handoff."
+model = "gpt-5.4-mini"
+model_reasoning_effort = "high"
+sandbox_mode = "workspace-write"
+
+developer_instructions = """
+Use the planr-work skill for exactly one picked item. Preserve the task scope, record changed files and real verification commands, request review, and stop.
+"""
+'''

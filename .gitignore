@@ -8,9 +8,8 @@ dist/
 
 # Node/package outputs
 node_modules/
+.pnpm-store/
 *.tgz
-pnpm-workspace.yaml
-pnpm-lock.yaml
 
 # Local frontend experiments/scaffolds
 apps/web/
@@ -25,6 +24,7 @@ tmp/
 temp/
 
 # Local agent/runtime state
+.alchemy/
 .codex/
 .planr/
 docs/planr-spec.zip

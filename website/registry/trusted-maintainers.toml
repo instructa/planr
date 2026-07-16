@@ -1,0 +1,6 @@
+schema_version = 1
+
+[[maintainers]]
+id = "planr-release-2026"
+public_key = "e8631493d6da6ea3983f17585270f558e7757da5bb08bd228756da318d0a6b14"
+revoked = false

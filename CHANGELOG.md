@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-07-16
+
+Verified presets turn model routing from a hand-authored host configuration into an inspectable, policy-driven workflow. This release adds safe built-in policy/binding pairs, reproducible evaluation and signed registry evidence, and a public catalog deployed from repository-owned infrastructure.
+
+### Added
+
+- Usage Policy v1 and execution-policy enforcement: provider-neutral budgets, role capabilities, transitions, write boundaries, requested/resolved/effective route evidence, and correction or violation audit records are shared across CLI, MCP, and HTTP execution paths.
+- Preset composition through `planr agents preset list` and `planr agents preset apply`: four embedded policies, five host bindings, and 20 declared safe pairs can be resolved by id, previewed as deterministic repository-local artifact diffs, and confirmed without touching user or global configuration. Explicit file inputs remain supported but are clearly marked custom rather than inheriting safe status by name.
+- Reproducible preset evaluation through `planr agents preset evaluate`: versioned challenge tasks, Planr-read artifact hashes, task-bound outcome oracles, lifecycle thresholds, optional live-host execution, and independently pinned Ed25519 telemetry receipts. Recommendations require complete, current, trusted route and usage evidence; offline estimates and incomplete runs cannot recommend.
+- Optional signed preset registry commands (`verify`, preview-first `import`, and offline `list`) with immutable manifest-hash-addressed caching, lifecycle and compatibility checks, separately provisioned maintainer trust, and re-verification of cached content. Active projects and previously imported packs continue working when the registry is unavailable.
+- Public [Planr Preset Catalog](https://planr-test-catalog.office-35d.workers.dev/) generated from the canonical verifier and evaluation report. Repository-owned Alchemy/Cloudflare tooling builds an allowlisted static publication, deploys an isolated `test` stage, and ships restrictive response headers without storing private signing keys in the site or deployment environment.
+- Detailed guides for [preset composition](docs/PRESET_COMPOSITION.md), [evaluation](docs/PRESET_EVALUATION.md), and the [registry](docs/PRESET_REGISTRY.md), plus CLI, MCP-contract, architecture, and deployment documentation.
+
+### Security
+
+- Preset application and registry publication fail closed on incompatible hosts, unsafe permissions, traversal or symlink escapes, overwrite conflicts, executable or binary content, secret-like values, invalid signatures, revoked or stale evidence, checksum mismatches, and untrusted telemetry. Diagnostics redact sensitive values, and confirmed writes are restricted to allowlisted paths inside the repository.
+
 ## [1.3.0] - 2026-07-14
 
 Native host hooks: loop state that survives sessions becomes mechanism instead of discipline. Hardened through a three-round independent GPT-5.5 review (verdict: complete) and two dogfood runs — a full routed loop on a Cloud Agent VM and a local hook-execution run — before this stable release. Includes everything previewed in 1.3.0-alpha.1.
@@ -385,7 +402,8 @@ Initial Planr product release.
 - Tag-driven release pipeline with multi-target builds (darwin/linux, arm64/x86_64) and Homebrew tap automation.
 - Skill workflow documentation for Codex, Claude Code, Cursor, and MCP-only clients.
 
-[Unreleased]: https://github.com/instructa/planr/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/instructa/planr/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/instructa/planr/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/instructa/planr/compare/v1.3.0-alpha.1...v1.3.0
 [1.3.0-alpha.1]: https://github.com/instructa/planr/compare/v1.2.0...v1.3.0-alpha.1
 [1.2.0]: https://github.com/instructa/planr/compare/v1.2.0-alpha.1...v1.2.0

@@ -1,6 +1,7 @@
 {
   "tools": [
     "planr_project_show",
+    "planr_trace_item",
     "planr_map_show",
     "planr_map_status",
     "planr_map_preview",
@@ -19,6 +20,15 @@
     "planr_item_amend",
     "planr_item_replan",
     "planr_agents_list",
+    "planr_presets_list",
+    "planr_preset_evaluate",
+    "planr_preset_apply",
+    "planr_preset_registry_verify",
+    "planr_preset_registry_import",
+    "planr_preset_registry_list",
+    "planr_policy_show",
+    "planr_policy_check",
+    "planr_policy_admit",
     "planr_item_route",
     "planr_item_route_set",
     "planr_item_route_clear",
@@ -99,7 +109,13 @@
     "planr recover sweep",
     "planr agents list",
     "planr agents check",
+    "planr agents preset list",
+    "planr agents preset apply",
+    "planr agents preset registry verify",
+    "planr agents preset registry import",
+    "planr agents preset registry list",
     "planr item route",
+    "planr trace item",
     "planr serve --port"
   ]
 }

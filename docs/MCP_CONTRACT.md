@@ -41,7 +41,11 @@ Required groups:
 - approval request, approve, deny, and list
 - artifact add, list, and show
 - event list and debug bundle preview
-- log add and read
+- trace item, log add, and log read (including three-stage route observations)
+- built-in policy/binding catalog listing plus safe-pack/custom composition status
+- declarative registry verification with canonical evaluation/safe-binding gates, preview-first immutable import, and manifest-anchored integrity/signature/freshness-checked offline cache listing
+- policy preset preview/apply by path or built-in id with repository-only target validation and deterministic provenance lock
+- deterministic offline preset simulation plus explicit opt-in live-host execution with Planr-controlled challenge workspaces, strict task artifacts read and hashed by Planr, candidate/task outcome oracles, failed-live-attempt `unverified`/incomplete lifecycle semantics, production policy-capability checks, estimated arbitrary-process claims, optional Ed25519-verified run/suite/time/task/challenge-bound telemetry that alone can promote effective route and usage evidence to trusted/recommendation-eligible, observed process latency, transition/correction/violation counts, result hashes, and deterministic lifecycle thresholds
 - review annotate, ingest, artifact, evidence, and close
 - item close, context create, and search
 
