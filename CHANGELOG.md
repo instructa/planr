@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-07-17
+
+Routing policy becomes an optional package instead of a responsibility compiled into Planr Core. Planr keeps the provider-neutral declaration, evidence, and safe repository transaction boundary; `planr-routing` owns volatile model and host knowledge.
+
 ### Changed
 
 - Hard-cut opinionated model routing out of Planr Core. Core now owns only the provider-neutral registry, route resolution and evidence, plus strict RoutingBundle v1 inspect/preview/apply. The independently buildable `planr-routing` workspace package owns named policies, exact models and effort, Codex/Claude Code/Cursor/mixed-host bindings, generated roles and skills, evaluation, signing, registry data, and catalog publication.
@@ -409,7 +413,8 @@ Initial Planr product release.
 - Tag-driven release pipeline with multi-target builds (darwin/linux, arm64/x86_64) and Homebrew tap automation.
 - Skill workflow documentation for Codex, Claude Code, Cursor, and MCP-only clients.
 
-[Unreleased]: https://github.com/instructa/planr/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/instructa/planr/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/instructa/planr/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/instructa/planr/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/instructa/planr/compare/v1.3.0-alpha.1...v1.3.0
 [1.3.0-alpha.1]: https://github.com/instructa/planr/compare/v1.2.0...v1.3.0-alpha.1

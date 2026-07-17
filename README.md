@@ -133,7 +133,7 @@ Mid-project work (a new feature, refactor, or fix on an existing project) works 
 
 ## What's new
 
-- **Planned for 1.5.0 — Optional routing policies:** Planr Core stays provider-neutral while the independently buildable `planr-routing` package owns model policies and host bindings for Codex, Claude Code, Cursor, and mixed-host setups. Start with [Routing Bundles](docs/ROUTING_BUNDLES.md) and the [`planr-routing` guide](planr-routing/docs/MODEL_ROUTING_POLICY.md).
+- **1.5.0 — Optional routing policies:** Planr Core stays provider-neutral while the independently buildable `planr-routing` package owns model policies and host bindings for Codex, Claude Code, Cursor, and mixed-host setups. Start with [Routing Bundles](docs/ROUTING_BUNDLES.md), the [`planr-routing` guide](planr-routing/docs/MODEL_ROUTING_POLICY.md), and the [1.5.0 release notes](https://github.com/instructa/planr/releases/tag/v1.5.0).
 - **1.4.0 — Verified presets:** Added policy-driven composition, evaluation, signed registry evidence, and the public catalog. See the [1.4.0 release notes](https://github.com/instructa/planr/releases/tag/v1.4.0).
 - **1.3.0 — Native host hooks:** Added automatic session-state injection and loop recovery for supported hosts. See the [Hooks guide](docs/HOOKS.md) and [1.3.0 release notes](https://github.com/instructa/planr/releases/tag/v1.3.0).
 
