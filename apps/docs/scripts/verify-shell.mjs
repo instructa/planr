@@ -26,7 +26,7 @@ const chrome = spawn(chromePath, [
   '--disable-extensions',
   '--disable-sync',
   '--hide-scrollbars',
-  `${baseUrl}/`,
+  'about:blank',
 ], { stdio: 'ignore' });
 
 const results = {
@@ -243,11 +243,21 @@ try {
   const homeContract = await evaluate(`({
     nav: [...document.querySelectorAll('header a')].map((link) => link.textContent.trim()),
     paths: [...document.querySelectorAll('.path-card')].length,
+    agents: [...document.querySelectorAll('.agent-card')].map((card) => ({
+      label: card.querySelector('strong')?.textContent?.trim(),
+      logo: card.querySelector('img')?.getAttribute('alt'),
+      href: card.getAttribute('href')
+    })),
     lifecycle: [...document.querySelectorAll('.lifecycle-preview li')].length,
     copyButton: document.querySelector('[data-testid="copy-command"]')?.getAttribute('aria-label')
   })`);
   assert(homeContract.nav.some((label) => label.includes('Docs')), 'Global Docs navigation is missing');
   assert(homeContract.paths === 3, 'Homepage must expose three audience paths');
+  assert(JSON.stringify(homeContract.agents) === JSON.stringify([
+    { label: 'Codex', logo: 'Codex logo', href: '/docs/integrations/codex' },
+    { label: 'Claude Code', logo: 'Claude logo', href: '/docs/integrations/claude-code' },
+    { label: 'Cursor', logo: 'Cursor logo', href: '/docs/integrations/cursor' },
+  ]), 'Homepage coding-agent integrations or official logo labels are incomplete');
   assert(homeContract.lifecycle === 4, 'Homepage lifecycle preview is incomplete');
   assert(homeContract.copyButton === 'Copy command', 'Copy control has no accessible name');
   await screenshot('homepage-desktop');
@@ -410,9 +420,9 @@ try {
     ['/docs/contributing/security-and-privacy', 'Security and Privacy', ['local-first boundary', '127.0.0.1', 'Sensitive evidence']],
     ['/docs/operations/release', 'Release Planr', ['only supported release entry point', 'SHA256SUMS', 'Pre-releases']],
     ['/docs/operations/versioning-and-migrations', 'Versioning and Migrations', ['additive, idempotent', 'no documented guarantee', 'Migration change checklist']],
-    ['/docs/operations/docs-deployment', 'Deploy the Documentation', ['Node.js 22', 'Alchemy v2', 'docs.planr.so', 'pnpm docs:deploy', 'NEXT_PUBLIC_SITE_URL', 'Pre-traffic health check']],
+    ['/docs/operations/docs-deployment', 'Deploy the Documentation', ['Node.js 22', 'Alchemy v2', 'planr.so', 'pnpm docs:deploy', 'NEXT_PUBLIC_SITE_URL', 'Pre-traffic health check']],
     ['/docs/operations/health-and-diagnostics', 'Health and Diagnostics', ['no dedicated /health endpoint', 'Diagnostic ladder', 'Do not edit production content in place']],
-    ['/docs/operations/rollback', 'Rollback', ['previously verified artifact', 'custom 404', 'binary downgrade']],
+    ['/docs/operations/rollback', 'Rollback', ['previously verified commit', 'custom 404', 'binary downgrade']],
     ['/docs/operations/documentation-governance', 'Documentation Governance', ['Freshness triggers', 'Generated pages are never hand-edited', 'Page review contract']],
   ];
   for (const [path, heading, phrases] of maintenanceRoutes) {
@@ -466,6 +476,17 @@ try {
     deviceScaleFactor: 2,
     mobile: true,
   });
+  await navigate('/');
+  const mobileHome = await evaluate(`({
+    agents: document.querySelectorAll('.agent-card').length,
+    horizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+    agentSectionVisible: Boolean(document.querySelector('.agent-shell')?.getBoundingClientRect().height)
+  })`);
+  assert(mobileHome.agents === 3 && mobileHome.agentSectionVisible, 'Mobile homepage coding-agent section is incomplete');
+  assert(!mobileHome.horizontalOverflow, 'Mobile homepage overflows horizontally');
+  results.interactions.push({ name: 'mobile-homepage-agents', viewport: '390x844@2x', status: 'passed' });
+  await screenshot('homepage-mobile');
+
   await navigate('/docs/getting-started/installation');
   const mobileButton = await evaluate(`(() => {
     const button = document.querySelector('button[aria-label="Open Sidebar"]');

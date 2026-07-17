@@ -3,7 +3,7 @@ import * as AdoptPolicy from "alchemy/AdoptPolicy";
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Effect from "effect/Effect";
 
-const productionDomain = "docs.planr.so";
+const productionDomain = "planr.so";
 
 const Website = Cloudflare.Website.StaticSite(
   "Website",

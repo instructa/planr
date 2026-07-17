@@ -1,9 +1,9 @@
 ---
 title: Deploy the Documentation
-description: Deploy Planr documentation to docs.planr.so with Alchemy v2, OpenNext, and Cloudflare Workers.
+description: Deploy Planr documentation to planr.so with Alchemy v2, OpenNext, and Cloudflare Workers.
 ---
 
-The documentation site is a Next.js App Router application that reads local MDX at build time. Its canonical deployment is Cloudflare Workers through an Alchemy v2 Effect stack and OpenNext. Builds require Node.js 22, the root-pinned pnpm version, and the frozen lockfile. Production binds `https://docs.planr.so`; development and preview stages use generated URLs and never claim the production hostname.
+The documentation site is a Next.js App Router application that reads local MDX at build time. Its canonical deployment is Cloudflare Workers through an Alchemy v2 Effect stack and OpenNext. Builds require Node.js 22, the root-pinned pnpm version, and the frozen lockfile. Production binds `https://planr.so`; development and preview stages use generated URLs and never claim the production hostname.
 
 ## Build
 
@@ -13,15 +13,15 @@ The documentation site is a Next.js App Router application that reads local MDX 
 
 <CommandBlock command="pnpm docs:verify-deployment" label="Build the OpenNext Worker artifact" />
 
-Local deployment credentials belong in the Alchemy profile created by OAuth; do not copy Cloudflare tokens into `.env.local`. CI instead supplies `CLOUDFLARE_ACCOUNT_ID` and a scoped `CLOUDFLARE_API_TOKEN`. The production Alchemy build sets `NEXT_PUBLIC_SITE_URL=https://docs.planr.so` so canonical metadata matches the attached hostname. Archive the commit SHA, stage, Node and pnpm versions, build log, Worker identity, and deployed URL.
+Local deployment credentials belong in the Alchemy profile created by OAuth; do not copy Cloudflare tokens into `.env.local`. CI instead supplies `CLOUDFLARE_ACCOUNT_ID` and a scoped `CLOUDFLARE_API_TOKEN`. The production Alchemy build sets `NEXT_PUBLIC_SITE_URL=https://planr.so` so canonical metadata matches the attached hostname. Archive the commit SHA, stage, Node and pnpm versions, build log, Worker identity, and deployed URL.
 
 ## Deploy with Alchemy
 
 <CommandBlock command="pnpm --filter @planr/docs exec alchemy login --configure" label="Authenticate interactively" />
 
-<CommandBlock command="pnpm docs:deploy" label="Deploy docs.planr.so" />
+<CommandBlock command="pnpm docs:deploy" label="Deploy planr.so" />
 
-`apps/docs/alchemy.run.ts` is authoritative. `Cloudflare.Website.StaticSite` runs OpenNext, uploads `.open-next/worker.js` byte-for-byte with `bundle: false`, and serves `.open-next/assets`. It adopts the named `planr-docs-prod` Worker when present and passes `domain: 'docs.planr.so'` only for the `prod` stage. The `planr.so` zone must already be available in the authenticated Cloudflare account; Cloudflare provisions the Worker custom-domain record and certificate. `Cloudflare.state()` keeps stack state remotely available to local and CI deploys.
+`apps/docs/alchemy.run.ts` is authoritative. `Cloudflare.Website.StaticSite` runs OpenNext, uploads `.open-next/worker.js` byte-for-byte with `bundle: false`, and serves `.open-next/assets`. It adopts the named `planr-docs-prod` Worker when present and passes `domain: 'planr.so'` only for the `prod` stage. The `planr.so` zone must already be available in the authenticated Cloudflare account; Cloudflare provisions the Worker custom-domain record and certificate. `Cloudflare.state()` keeps stack state remotely available to local and CI deploys.
 
 For Cloudflare-local development, use `pnpm docs:alchemy:dev`. Normal content work can continue to use `pnpm docs:dev` without cloud credentials.
 
@@ -29,7 +29,7 @@ For Cloudflare-local development, use `pnpm docs:alchemy:dev`. Normal content wo
 
 Require successful HTTP responses and expected content from `/`, `/docs`, a representative deep route such as `/docs/getting-started/installation`, and `/api/search?query=installation`. Confirm canonical metadata uses the configured origin, an unknown route renders the recovery 404, and static assets load without browser errors.
 
-Run `PLANR_DOCS_URL=https://docs.planr.so pnpm docs:verify-release-live` and `PLANR_DOCS_URL=https://docs.planr.so pnpm docs:verify-shell` after deployment. The verifier produces a JSON report and screenshots under `.planr/artifacts/docs-shell/`.
+Run `PLANR_DOCS_URL=https://planr.so pnpm docs:verify-release-live` and `PLANR_DOCS_URL=https://planr.so pnpm docs:verify-shell` after deployment. The verifier produces a JSON report and screenshots under `.planr/artifacts/docs-shell/`.
 
 ## Promote
 

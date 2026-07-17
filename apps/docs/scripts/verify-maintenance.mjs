@@ -96,8 +96,8 @@ requireMarkers(security, 'security guide', [
 const deployment = await readPage('operations', 'docs-deployment');
 requireMarkers(deployment, 'deployment runbook', [
   'Node.js 22', 'pnpm install --frozen-lockfile', 'NEXT_PUBLIC_SITE_URL',
-  'Alchemy v2', 'OpenNext', 'docs.planr.so', 'pnpm docs:deploy',
-  '/api/search?query=installation', 'PLANR_DOCS_URL=https://docs.planr.so pnpm docs:verify-shell',
+  'Alchemy v2', 'OpenNext', 'planr.so', 'pnpm docs:deploy',
+  '/api/search?query=installation', 'PLANR_DOCS_URL=https://planr.so pnpm docs:verify-shell',
 ]);
 
 const rollback = await readPage('operations', 'rollback');
@@ -195,7 +195,7 @@ const alchemyConfig = await read('apps/docs/alchemy.run.ts');
 requireMarkers(alchemyConfig, 'Alchemy deployment wiring', [
   'Alchemy.Stack(', 'Cloudflare.providers()', 'Cloudflare.state()',
   'Cloudflare.Website.StaticSite(', 'planr-docs-${stage}',
-  'stage === "prod"', 'docs.planr.so', 'AdoptPolicy.adopt(true)',
+  'stage === "prod"', 'planr.so', 'AdoptPolicy.adopt(true)',
   'main: ".open-next/worker.js"', 'bundle: false', 'NEXT_PUBLIC_SITE_URL',
 ]);
 requireMarkers(await read('apps/docs/open-next.config.ts'), 'OpenNext configuration', [
@@ -210,9 +210,14 @@ assert(
 assert(!/^git tag "v\$version"$/m.test(releaseScript), 'release script still contains a lightweight tag invocation');
 
 const sourceChecks = [
-  ['apps/docs/README.md', ['Node.js 22', 'pnpm install --frozen-lockfile', 'NEXT_PUBLIC_SITE_URL', 'docs.planr.so', 'pnpm docs:deploy', 'Alchemy v2']],
-  ['apps/docs/.env.example', ['NEXT_PUBLIC_SITE_URL=https://docs.planr.so']],
-  ['apps/docs/alchemy.run.ts', ['docs.planr.so', 'Cloudflare.Website.StaticSite', 'AdoptPolicy.adopt(true)', 'bundle: false']],
+  ['apps/docs/README.md', ['Node.js 22', 'pnpm install --frozen-lockfile', 'NEXT_PUBLIC_SITE_URL', 'planr.so', 'pnpm docs:deploy', 'Alchemy v2']],
+  ['apps/docs/.env.example', ['NEXT_PUBLIC_SITE_URL=https://planr.so']],
+  ['apps/docs/alchemy.run.ts', ['planr.so', 'Cloudflare.Website.StaticSite', 'AdoptPolicy.adopt(true)', 'bundle: false']],
+  ['apps/docs/app/page.tsx', ['Works with your coding agent', '/agents/codex.svg', '/agents/claude.svg', '/agents/cursor.svg']],
+  ['apps/docs/public/agents/README.md', ['developers.openai.com/assets/OpenAI-black-monoblossom.svg', 'anthropic.com/press-kit', 'cursor.com/brand']],
+  ['apps/docs/public/agents/codex.svg', ['<svg', 'fill="black"']],
+  ['apps/docs/public/agents/claude.svg', ['<svg', 'fill="#D97757"']],
+  ['apps/docs/public/agents/cursor.svg', ['<svg', 'fill: #26251e']],
   ['apps/docs/open-next.config.ts', ['defineCloudflareConfig']],
   ['.github/workflows/ci.yml', ['Build Cloudflare Worker deployment artifact', 'pnpm docs:verify-deployment']],
   ['scripts/release.sh', ['The only supported release path', 'cargo test', 'scripts/security-local.sh', 'git tag -a']],

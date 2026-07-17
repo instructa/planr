@@ -16,7 +16,7 @@ pnpm destroy             # destructive; explicitly targets prod
 ## Deployment contract
 
 - `alchemy.run.ts` is the infrastructure source of truth.
-- `docs.planr.so` belongs only to stage `prod`.
+- `planr.so` belongs only to stage `prod`.
 - Local credentials live in the Alchemy `default` profile created by `alchemy login`; no `.env` deployment secrets are required.
 - CI uses `CLOUDFLARE_ACCOUNT_ID` plus a scoped `CLOUDFLARE_API_TOKEN`.
 - The `planr.so` Cloudflare zone must already exist in the authenticated account.

@@ -8,6 +8,7 @@ import {
   TerminalSquare,
   UsersRound,
 } from 'lucide-react';
+import Image from 'next/image';
 import Link from 'next/link';
 import { HomeLayout } from 'fumadocs-ui/layouts/home';
 import { CommandBlock } from '@/components/command-block';
@@ -60,6 +61,37 @@ export default function HomePage() {
             <li><span>03</span><strong>Work</strong><small>Lease one ready item at a time</small></li>
             <li><span>04</span><strong>Verify</strong><small>Close with replayable evidence</small></li>
           </ol>
+        </div>
+      </section>
+
+      <section className="agent-shell" aria-labelledby="agent-title">
+        <div className="agent-heading">
+          <p>Works with your coding agent</p>
+          <h2 id="agent-title">Keep the tool you already trust.</h2>
+          <span>Planr gives every client the same durable plan, task graph, and evidence trail.</span>
+        </div>
+        <div className="agent-grid">
+          <Link className="agent-card" href="/docs/integrations/codex">
+            <span className="agent-card__mark">
+              <Image src="/agents/codex.svg" width={80} height={80} alt="Codex logo" />
+            </span>
+            <span><strong>Codex</strong><small>Plugin, MCP, hooks, and roles</small></span>
+            <ArrowRight aria-hidden="true" />
+          </Link>
+          <Link className="agent-card" href="/docs/integrations/claude-code">
+            <span className="agent-card__mark">
+              <Image src="/agents/claude.svg" width={80} height={80} alt="Claude logo" />
+            </span>
+            <span><strong>Claude Code</strong><small>Plugin and project-scoped MCP</small></span>
+            <ArrowRight aria-hidden="true" />
+          </Link>
+          <Link className="agent-card" href="/docs/integrations/cursor">
+            <span className="agent-card__mark">
+              <Image src="/agents/cursor.svg" width={80} height={80} alt="Cursor logo" />
+            </span>
+            <span><strong>Cursor</strong><small>MCP, agents, skills, and hooks</small></span>
+            <ArrowRight aria-hidden="true" />
+          </Link>
         </div>
       </section>
 
