@@ -9,9 +9,7 @@ use crate::agents::{
     resolve_route, validation_warnings,
 };
 use crate::cli::{AgentsCommand, ClientArg, ItemRouteArgs};
-use crate::rolefiles::{
-    GENERATED_FROM_HEADER, agent_roles, render_claude_role, render_cursor_role,
-};
+use crate::rolefiles::agent_roles;
 use anyhow::{Result, bail};
 use rusqlite::params;
 use serde_json::{Value, json};
@@ -50,7 +48,6 @@ impl App {
                 }
             },
             AgentsCommand::Init(args) => self.agents_init(args),
-            AgentsCommand::Preset(args) => self.preset(args.command),
             // Discoverability alias: `agents routing` is where people
             // guess the dispatch block lives (dogfood finding F6).
             AgentsCommand::Routing(args) => self.prompt_routing(args.client),
@@ -290,10 +287,7 @@ impl App {
     /// The `doctor` registry block. Never fails the command: absent is
     /// informational, a parse failure is a warning with the parser's line
     /// context, and a loaded registry reports counts, validation
-    /// warnings, and drift of rendered role files (a file whose
-    /// generated-from header no longer matches what the current registry
-    /// would render). Files without the header are the user's and are
-    /// reported as `manual`, never flagged.
+    /// warnings. Host artifacts are owned and verified by routing bundles.
     pub(crate) fn registry_doctor_value(&self) -> Result<Value> {
         let registry = match load_registry(&self.root) {
             RegistryLoad::Missing => {
@@ -313,27 +307,6 @@ impl App {
             }
             RegistryLoad::Loaded(registry) => registry,
         };
-        let mut artifacts = Vec::new();
-        for client in ["codex", "claude", "cursor"] {
-            for (relative, expected) in self.agent_role_contents(client) {
-                let Ok(actual) = std::fs::read_to_string(self.root.join(relative)) else {
-                    continue;
-                };
-                let state = if !actual.contains(GENERATED_FROM_HEADER) {
-                    "manual"
-                } else if actual == expected {
-                    "current"
-                } else {
-                    "drifted"
-                };
-                artifacts.push(json!({"path": relative, "state": state}));
-            }
-        }
-        let drifted: Vec<&str> = artifacts
-            .iter()
-            .filter(|artifact| artifact["state"] == "drifted")
-            .filter_map(|artifact| artifact["path"].as_str())
-            .collect();
         Ok(json!({
             "path": REGISTRY_RELATIVE_PATH,
             "status": "ok",
@@ -341,11 +314,6 @@ impl App {
             "routes": registry.routes.len(),
             "default_route": registry.route_default.is_some(),
             "warnings": validation_warnings(&registry),
-            "artifacts": artifacts,
-            "drift_hint": (!drifted.is_empty()).then(|| format!(
-                "rendered role file(s) out of date with the registry: {}; re-render with `planr install <client> --force`",
-                drifted.join(", ")
-            )),
         }))
     }
 
@@ -534,40 +502,19 @@ impl App {
         ))
     }
 
-    /// Claude/Cursor role file contents for `planr install <client>`: when the registry
-    /// loads and a role's route resolves to a profile whose `client`
-    /// matches the install target, the static role text is re-rendered
-    /// with that profile's model pin; in every other case (no registry,
-    /// degraded registry, no route, no client-matching profile in the
-    /// chain, unrenderable content) the shipped static text is used
-    /// byte-identically. Native Codex role files are exclusively preset-owned
-    /// and never pass through this legacy renderer. Worker roles follow the `work_type=code` route,
-    /// reviewer roles the `work_type=review` route.
+    /// Static workflow role files for `planr install <client>`. Model and
+    /// effort pins belong to routing bundles, never to Planr Core.
     pub(crate) fn agent_role_contents(&self, client: &str) -> Vec<(&'static str, String)> {
-        let registry = match load_registry(&self.root) {
-            RegistryLoad::Loaded(registry) => Some(registry),
-            _ => None,
-        };
         agent_roles(client)
             .iter()
-            .map(|(relative, static_content)| {
-                let rendered = registry
-                    .as_ref()
-                    .and_then(|registry| render_role(client, relative, static_content, registry));
-                (
-                    *relative,
-                    rendered.unwrap_or_else(|| (*static_content).to_string()),
-                )
-            })
+            .map(|(relative, content)| (*relative, (*content).to_string()))
             .collect()
     }
 
     /// `planr prompt routing [--client ...]`: a paste-ready markdown block
     /// for the driver session — the route prioritization table from the
-    /// registry, per-host dispatch guidance with the known traps (Codex
-    /// fork_turns + session restart, Claude env preemption, Cursor silent
-    /// overrides), and process-dispatch snippets for hosts without role
-    /// files. Advisory output only: a missing or degraded registry still
+    /// registry plus provider-neutral dispatch and evidence guidance.
+    /// Advisory output only: a missing or degraded registry still
     /// prints the host guidance with a pointer instead of failing.
     pub(crate) fn prompt_routing(&self, client: Option<ClientArg>) -> Result<()> {
         let client = client
@@ -690,16 +637,16 @@ impl App {
             prompt.push('\n');
         }
         let mut hosts = serde_json::Map::new();
-        for (host, title, lines) in host_dispatch_sections() {
-            if client != "all" && client != host {
-                continue;
-            }
-            prompt.push_str(&format!("\n### {title}\n"));
-            for line in lines {
-                prompt.push_str(&format!("- {line}\n"));
-            }
-            hosts.insert(host.to_string(), json!(lines));
+        let generic_guidance = [
+            "Dispatch the selected repository profile through the active host.",
+            "Treat declared model and effort as requested until effective run evidence confirms them.",
+            "Apply host-specific roles and skills only through a validated repository-local routing bundle.",
+        ];
+        prompt.push_str("\n### Host dispatch\n");
+        for line in generic_guidance {
+            prompt.push_str(&format!("- {line}\n"));
         }
+        hosts.insert("generic".to_string(), json!(generic_guidance));
         if !process_dispatch.is_empty() {
             prompt.push_str("\n### Hosts without role files (process dispatch)\n");
             for line in &process_dispatch {
@@ -741,62 +688,6 @@ impl App {
     }
 }
 
-fn render_role(
-    client: &str,
-    relative: &str,
-    static_content: &str,
-    registry: &AgentRegistry,
-) -> Option<String> {
-    let work_type = if relative.contains("worker") {
-        "code"
-    } else {
-        "review"
-    };
-    let facts = RoutingFacts {
-        work_type,
-        plan_id: None,
-        route_override: None,
-    };
-    let routing = resolve_route(&facts, registry)?;
-    // A role file can only pin models its own host dispatches, so scan
-    // the resolved chain for the first profile whose client matches the
-    // install target — e.g. a review route pointing at a Claude profile
-    // must not write that model into a Cursor role file.
-    let (profile_id, profile) = std::iter::once(routing.profile)
-        .chain(routing.fallbacks.iter().copied())
-        .find_map(|id| {
-            let profile = registry.profiles.get(id)?;
-            client_matches(client, &profile.client).then_some((id, profile))
-        })?;
-    // A hand-written registry can carry values that would break the
-    // rendered artifact (TOML keys are quotable, so newlines or a `"""`
-    // sequence parse fine but escape the rendered developer_instructions
-    // block or markdown frontmatter). Such profiles keep the static
-    // role file instead of producing a corrupt render.
-    let render_unsafe =
-        |value: &str| value.chars().any(char::is_control) || value.contains("\"\"\"");
-    if render_unsafe(profile_id)
-        || render_unsafe(&profile.model)
-        || profile.effort.as_deref().is_some_and(render_unsafe)
-    {
-        return None;
-    }
-    // Bake the audit report into the worker's own definition so profile
-    // reporting never depends on worker memory; reviewer roles carry
-    // their explicit --reviewer instruction in the static body already.
-    let evidence_note = (work_type == "code").then(|| {
-        format!(
-            "Report the profile this role runs on: pass `--profile {profile_id}` on every `planr done` and `planr log add`."
-        )
-    });
-    let evidence_note = evidence_note.as_deref();
-    match client {
-        "claude" => render_claude_role(static_content, profile_id, profile, evidence_note),
-        "cursor" => render_cursor_role(static_content, profile_id, profile, evidence_note),
-        _ => None,
-    }
-}
-
 /// One prioritization-table row. Unknown profiles keep their declared id
 /// with null details so the table still names every route, matching the
 /// `agents check` warnings instead of hiding the typo.
@@ -823,47 +714,6 @@ fn route_table_row(
 /// Host-native dispatch guidance with the traps from the July 2026
 /// research (context ctx-bfa610fd): each pin has a host-side mechanism
 /// that can silently defeat it, and the driver prompt must name them.
-fn host_dispatch_sections() -> [(&'static str, &'static str, [&'static str; 3]); 3] {
-    [
-        (
-            "codex",
-            "Codex",
-            [
-                "Apply a Codex preset, then use its repository routing table to call `spawn_agent({ agent_type: \"<generated .codex/agents/*.toml role>\", fork_turns: \"none\", ... })`; the role TOML alone owns model and effort.",
-                "Every role, model, or effort change must use `fork_turns: \"none\"` or an evidenced positive bounded count; native Codex rejects `fork_turns: \"all\"` when `agent_type` selects a role with model or effort overrides.",
-                "Codex loads repository agent definitions at session start; restart the session after applying a changed preset so the generated pins are live.",
-            ],
-        ),
-        (
-            "claude",
-            "Claude Code",
-            [
-                "Dispatch the `planr-worker` subagent; the pin lives in `.claude/agents/planr-worker.md` frontmatter (`model:`, `effort:`).",
-                "The `CLAUDE_CODE_SUBAGENT_MODEL` env var preempts every frontmatter pin (since v2.1.196 `inherit` means unset) — check it before trusting a pin.",
-                "An org model allowlist falls back silently; smoke-test the child run's actual model once (docs/GOALS.md Cost Tiering).",
-            ],
-        ),
-        (
-            "cursor",
-            "Cursor",
-            [
-                "Dispatch the `planr-worker` subagent; the pin lives in `.cursor/agents/planr-worker.md` frontmatter (`model:` only, no effort field).",
-                "Plan mode, admin model policy, and Max Mode can override the pin silently; confirm the dispatched model in the child run metadata.",
-                "Re-render pins after registry edits with `planr install cursor --force`.",
-            ],
-        ),
-    ]
-}
-
-/// Install targets vs registry `client` vocabulary: the install command
-/// says `claude`, the registry documents `claude-code`.
-fn client_matches(install_target: &str, profile_client: &str) -> bool {
-    match install_target {
-        "claude" => matches!(profile_client, "claude" | "claude-code"),
-        other => profile_client == other,
-    }
-}
-
 /// Registry client vocabulary comparison for the run audit: `claude`
 /// and `claude-code` are the same host.
 fn client_vocab_matches(declared: &str, observed: &str) -> bool {

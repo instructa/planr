@@ -6,7 +6,9 @@ settings:
 
 importers:
 
-  .:
+  .: {}
+
+  planr-routing:
     devDependencies:
       alchemy:
         specifier: 0.93.7

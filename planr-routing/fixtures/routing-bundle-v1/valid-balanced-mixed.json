@@ -1,0 +1,137 @@
+{
+  "schema_version": 1,
+  "bundle_id": "balanced-mixed-host@1.0.0+2.0.0",
+  "policy_id": "balanced",
+  "policy_version": "1.0.0",
+  "generated_at": "2026-07-16T00:00:00Z",
+  "source": {
+    "package": "planr-routing",
+    "package_version": "0.1.0"
+  },
+  "requirements": [
+    {
+      "host": "mixed-host",
+      "capabilities": [
+        "model_override",
+        "reasoning_effort",
+        "fork_none",
+        "bounded_context_fork"
+      ]
+    }
+  ],
+  "profiles": {
+    "mixed-codex-luna-xhigh": {
+      "client": "codex",
+      "model": "gpt-5.6-luna",
+      "agent_type": "planr_luna_xhigh",
+      "effort": "xhigh",
+      "cost_tier": "premium",
+      "skill": "planr-work"
+    },
+    "mixed-codex-sol-high": {
+      "client": "codex",
+      "model": "gpt-5.6-sol",
+      "agent_type": "planr_sol_high",
+      "effort": "high",
+      "cost_tier": "premium",
+      "skill": "planr-review"
+    },
+    "mixed-codex-terra-high": {
+      "client": "codex",
+      "model": "gpt-5.6-terra",
+      "agent_type": "planr_terra_high",
+      "effort": "high",
+      "cost_tier": "standard",
+      "skill": "planr-work"
+    },
+    "mixed-cursor-fable-driver": {
+      "client": "cursor",
+      "model": "fable-5",
+      "cost_tier": "premium"
+    }
+  },
+  "routes": [
+    {
+      "match": {
+        "work_type": "code"
+      },
+      "profile": "mixed-codex-terra-high",
+      "fallbacks": []
+    },
+    {
+      "match": {
+        "work_type": "mechanical"
+      },
+      "profile": "mixed-codex-luna-xhigh",
+      "fallbacks": []
+    },
+    {
+      "match": {
+        "work_type": "review"
+      },
+      "profile": "mixed-codex-sol-high",
+      "fallbacks": []
+    }
+  ],
+  "route_default": {
+    "profile": "mixed-cursor-fable-driver",
+    "fallbacks": []
+  },
+  "artifacts": [
+    {
+      "path": ".codex/agents/planr-luna-xhigh.toml",
+      "media_type": "application/toml",
+      "mode": "create",
+      "content": "name = \"planr_luna_xhigh\"\ndescription = \"Bounded checklist-driven and mechanical implementation.\"\nmodel = \"gpt-5.6-luna\"\nmodel_reasoning_effort = \"xhigh\"\nsandbox_mode = \"workspace-write\"\n\ndeveloper_instructions = \"\"\"\nUse the planr-work skill for one tightly bounded item, follow the checklist exactly, verify the result, and stop.\n\"\"\"\n",
+      "sha256": "6603b60e840c68fbcc0ab2f79e633d3a45d8f4904cea434deebbc4fe5e6b8050"
+    },
+    {
+      "path": ".codex/agents/planr-sol-high.toml",
+      "media_type": "application/toml",
+      "mode": "create",
+      "content": "name = \"planr_sol_high\"\ndescription = \"Independent final review.\"\nmodel = \"gpt-5.6-sol\"\nmodel_reasoning_effort = \"high\"\nsandbox_mode = \"read-only\"\n\ndeveloper_instructions = \"\"\"\nUse the planr-review skill, independently verify acceptance criteria and evidence, and report findings before the verdict.\n\"\"\"\n",
+      "sha256": "6b3647e93df124bd6f03a095af4c1f81a66c33ee2c5b1230196c180ebeff08de"
+    },
+    {
+      "path": ".codex/agents/planr-terra-high.toml",
+      "media_type": "application/toml",
+      "mode": "create",
+      "content": "name = \"planr_terra_high\"\ndescription = \"Normal implementation and testing.\"\nmodel = \"gpt-5.6-terra\"\nmodel_reasoning_effort = \"high\"\nsandbox_mode = \"workspace-write\"\n\ndeveloper_instructions = \"\"\"\nUse the planr-work skill for one picked item, implement the smallest correct slice, and record real verification evidence.\n\"\"\"\n",
+      "sha256": "0cbde7c2bc86584a82cb0d8a56247381efdea589c2dd747c6cca1ff447a351b8"
+    },
+    {
+      "path": ".codex/skills/planr-native-routing/SKILL.md",
+      "media_type": "text/markdown",
+      "mode": "create",
+      "content": "---\nname: planr-native-routing\ndescription: Dispatch mixed-host Planr work from the Cursor driver through repository-owned native Codex worker roles.\n---\n# Planr mixed-host native routing\n\nThe Cursor `planr-fable-driver` remains the driver. Dispatch Codex work through these generated repository roles; each role file owns its model and reasoning effort.\n\n| Work type | Native dispatch |\n| --- | --- |\n| code | `spawn_agent({ agent_type: \"planr_terra_high\", fork_turns: \"none\", ... })` |\n| mechanical | `spawn_agent({ agent_type: \"planr_luna_xhigh\", fork_turns: \"none\", ... })` |\n| review | `spawn_agent({ agent_type: \"planr_sol_high\", fork_turns: \"none\", ... })` |\n\nEvery dispatch that changes role, model, or reasoning effort must name `agent_type` and use `fork_turns: \"none\"` or an evidenced positive bounded integer. Native Codex rejects `fork_turns: \"all\"` when `agent_type` selects a role with model or effort overrides. Global Codex CLI `-m` or `-c model_reasoning_effort=...` flags also override spawned role files, so leave those flags unset when role-local child routing is required. Do not use implicit model inheritance or a fallback role.\n",
+      "sha256": "32ab3e53fe474ac6a44c12f018d5ce286f7ac5de19b32d1a08b3f96574aef166"
+    },
+    {
+      "path": ".cursor/agents/planr-fable-driver.md",
+      "media_type": "text/markdown",
+      "mode": "create",
+      "content": "---\nname: planr-fable-driver\nmodel: fable-5\n---\nOrchestrate the Planr map and dispatch bounded Codex worker roles.\n",
+      "sha256": "a42adaf2e90c655f33e5f6b13cd864bcfeda1bd762992c6fa2c2eda79fe487d1"
+    },
+    {
+      "path": ".planr/agents.toml",
+      "media_type": "application/toml",
+      "mode": "replace",
+      "content": "[profiles.mixed-codex-luna-xhigh]\nclient = \"codex\"\nmodel = \"gpt-5.6-luna\"\nagent_type = \"planr_luna_xhigh\"\neffort = \"xhigh\"\ncost_tier = \"premium\"\nskill = \"planr-work\"\n\n[profiles.mixed-codex-sol-high]\nclient = \"codex\"\nmodel = \"gpt-5.6-sol\"\nagent_type = \"planr_sol_high\"\neffort = \"high\"\ncost_tier = \"premium\"\nskill = \"planr-review\"\n\n[profiles.mixed-codex-terra-high]\nclient = \"codex\"\nmodel = \"gpt-5.6-terra\"\nagent_type = \"planr_terra_high\"\neffort = \"high\"\ncost_tier = \"standard\"\nskill = \"planr-work\"\n\n[profiles.mixed-cursor-fable-driver]\nclient = \"cursor\"\nmodel = \"fable-5\"\ncost_tier = \"premium\"\n\n[[routes]]\nprofile = \"mixed-codex-terra-high\"\nfallbacks = []\n\n[routes.match]\nwork_type = \"code\"\n\n[[routes]]\nprofile = \"mixed-codex-luna-xhigh\"\nfallbacks = []\n\n[routes.match]\nwork_type = \"mechanical\"\n\n[[routes]]\nprofile = \"mixed-codex-sol-high\"\nfallbacks = []\n\n[routes.match]\nwork_type = \"review\"\n\n[route_default]\nprofile = \"mixed-cursor-fable-driver\"\nfallbacks = []\n",
+      "sha256": "a25f1dac1964f65ac833d467b89bd68b1d2ca4bd77aef5b00d237618f7418934"
+    },
+    {
+      "path": ".planr/policy.toml",
+      "media_type": "application/toml",
+      "mode": "replace",
+      "content": "schema_version = 1\nid = \"balanced\"\nversion = \"1.0.0\"\n\n[usage]\nmax_active_agents = 3\nmax_parallel_readers = 2\nmax_parallel_writers = 1\nmax_depth = 1\nmax_attempts = 4\nmax_wall_time_seconds = 3600\nmax_tool_calls = 120\nreview_reserve_percent = 20\nbudget_exhaustion = \"stop\"\nmetering = \"estimated\"\n\n[transitions.retry]\nmax_same_route_retries = 1\n\n[transitions.availability_fallback]\nmax_fallbacks = 1\nrequire_same_capability_class = true\n\n[transitions.quality_escalation]\nmax_escalations = 1\nrequire_verification_evidence = true\n\n[transitions.quota_downgrade]\nenabled = false\nmax_downgrades = 0\nnoncritical_only = true\n\n[transitions.safety_stop]\nenabled = true\n\n[materiality]\nchanged_files_threshold = 10\nchanged_lines_threshold = 500\n\n[execution]\nmax_read_scope_entries = 8\nmax_write_scope_entries = 4\n\n[execution.roles.worker]\ntools = [\"cargo\", \"git\", \"rg\"]\n\n[execution.roles.worker.filesystem]\nread_roots = [\"src\", \"tests\", \"docs\"]\nwrite_roots = [\"src\", \"tests\", \"docs\"]\nallow_overwrite = false\n",
+      "sha256": "827667b678224f6b09f7c3faab188ede4c7bad49cd2fc9fa8e46f01d61147080"
+    }
+  ],
+  "evidence": {
+    "evaluation_ids": [
+      "builtin-mixed-host-native-v2"
+    ],
+    "status": "experimental"
+  }
+}

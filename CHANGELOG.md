@@ -8,8 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
-- Hard-cut the current Codex preset, evaluation fixtures, registry publication, website catalog, package assets, documentation, and tests to one repository-owned GPT-5.6 Sol/Terra/Luna native-v2 topology. Retired Codex models, fallback bindings, and static worker/reviewer TOMLs are absent from current/public artifacts; independent Claude Code and Cursor role contracts remain unchanged.
-- Regenerate the public preset evaluation, manifest hashes, report, and catalog through `npm run catalog:regenerate`. The replacement Codex entry is intentionally unsigned, experimental, and unrecommended until the separate fresh trusted live oracle produces valid telemetry and an offline release signer promotes it; no prior recommendation or signature is carried forward.
+- Hard-cut opinionated model routing out of Planr Core. Core now owns only the provider-neutral registry, route resolution and evidence, plus strict RoutingBundle v1 inspect/preview/apply. The independently buildable `planr-routing` workspace package owns named policies, exact models and effort, Codex/Claude Code/Cursor/mixed-host bindings, generated roles and skills, evaluation, signing, registry data, and catalog publication.
+- Removed the legacy preset CLI, MCP tools, Rust modules, root policy fixtures, and root website ownership without aliases or compatibility layers. The replacement flow compiles a bundle with `planr-routing` and applies it through `planr routing bundle`; no command edits user configuration.
+- Catalog entries remain deterministic, experimental, and unrecommended. Offline or caller-asserted evidence cannot promote them. Detached signatures and signed bundles require an independently supplied trusted signer and Ed25519 public key.
+- Hardened repository application against parent/child artifact collisions and rollback residue. Global Codex, Claude Code, Cursor, shell, keychain, credential, and XDG sentinels remain unchanged across bundle application.
 
 ## [1.4.0] - 2026-07-16
 
@@ -22,7 +24,7 @@ Verified presets turn model routing from a hand-authored host configuration into
 - Reproducible preset evaluation through `planr agents preset evaluate`: versioned challenge tasks, Planr-read artifact hashes, task-bound outcome oracles, lifecycle thresholds, optional live-host execution, and independently pinned Ed25519 telemetry receipts. Recommendations require complete, current, trusted route and usage evidence; offline estimates and incomplete runs cannot recommend.
 - Optional signed preset registry commands (`verify`, preview-first `import`, and offline `list`) with immutable manifest-hash-addressed caching, lifecycle and compatibility checks, separately provisioned maintainer trust, and re-verification of cached content. Active projects and previously imported packs continue working when the registry is unavailable.
 - Public [Planr Preset Catalog](https://planr-test-catalog.office-35d.workers.dev/) generated from the canonical verifier and evaluation report. Repository-owned Alchemy/Cloudflare tooling builds an allowlisted static publication, deploys an isolated `test` stage, and ships restrictive response headers without storing private signing keys in the site or deployment environment.
-- Detailed guides for [preset composition](docs/PRESET_COMPOSITION.md), [evaluation](docs/PRESET_EVALUATION.md), and the [registry](docs/PRESET_REGISTRY.md), plus CLI, MCP-contract, architecture, and deployment documentation.
+- Detailed guides for [preset composition](planr-routing/docs/PRESET_COMPOSITION.md), [evaluation](planr-routing/docs/PRESET_EVALUATION.md), and the [registry](planr-routing/docs/PRESET_REGISTRY.md), plus CLI, MCP-contract, architecture, and deployment documentation.
 
 ### Security
 

@@ -8,7 +8,7 @@ export function safeIdentifier(value, label = "identifier") {
 }
 
 export function previewCommand(policyId, bindingId) {
-  return `planr agents preset apply ${safeIdentifier(policyId, "policy id")} --binding ${safeIdentifier(bindingId, "binding id")}`;
+  return `planr-routing compile ${safeIdentifier(policyId, "policy id")} --host ${safeIdentifier(bindingId, "binding id")} --output routing-bundle.json && planr routing bundle preview routing-bundle.json`;
 }
 
 export function statusLabel(status) {

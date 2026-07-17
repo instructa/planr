@@ -322,6 +322,7 @@ fn validate_stage(kind: RouteStageKind, stage: &RouteStage) -> Result<(), String
 /// Whether the single durable route observation proves that the effective
 /// native route matched what Planr requested. Missing effective dimensions do
 /// not make the observation unparsable, but they can never verify a route.
+#[cfg(test)]
 pub(crate) fn effective_route_matches_requested(observation: &RouteObservation) -> bool {
     let requested = &observation.requested;
     let resolved = &observation.resolved;
@@ -413,7 +414,7 @@ mod tests {
             profile: Some("coder".to_string()),
             client: Some("codex".to_string()),
             agent_type: field(Some("planr-terra-high"), enforcement),
-            model: field(Some("gpt-5.6-terra"), enforcement),
+            model: field(Some("model-primary"), enforcement),
             effort: field(Some("high"), enforcement),
             context_fork: ForkDimension {
                 value: Some(ContextForkMode::None),
@@ -437,11 +438,11 @@ mod tests {
                 evidence: vec![EvidenceSource::Policy],
             },
             policy: VersionReference {
-                id: "balanced".to_string(),
+                id: "policy-a".to_string(),
                 version: "1.0.0".to_string(),
             },
             binding: VersionReference {
-                id: "codex-openai".to_string(),
+                id: "binding-a".to_string(),
                 version: "2.0.0".to_string(),
             },
             metering: RouteMetering {
@@ -477,7 +478,7 @@ mod tests {
     #[test]
     fn codex_route_verification_requires_requested_and_effective_values_to_match() {
         let mut observation = fixture();
-        observation.effective.model.value = Some("gpt-5.6-sol".to_string());
+        observation.effective.model.value = Some("model-driver".to_string());
         assert!(!effective_route_matches_requested(&observation));
 
         let mut observation = fixture();
@@ -515,7 +516,7 @@ mod tests {
     #[test]
     fn requested_values_cannot_masquerade_as_effective_proof() {
         let mut observation = fixture();
-        observation.effective.model = field(Some("gpt-5.6-terra"), EnforcementState::RequestedOnly);
+        observation.effective.model = field(Some("model-primary"), EnforcementState::RequestedOnly);
         assert!(
             validate_route_observation(&observation)
                 .unwrap_err()
@@ -553,7 +554,7 @@ mod tests {
         }
 
         let mut observation = fixture();
-        observation.effective.model = field(Some("gpt-5.6-terra"), EnforcementState::Estimated);
+        observation.effective.model = field(Some("model-primary"), EnforcementState::Estimated);
         assert!(
             validate_route_observation(&observation)
                 .unwrap_err()

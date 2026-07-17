@@ -680,6 +680,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "planr-routing"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "ed25519-dalek",
+ "serde",
+ "serde_json",
+ "sha2",
+ "toml",
+]
+
+[[package]]
 name = "portable-atomic"
 version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

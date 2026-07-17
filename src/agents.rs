@@ -21,8 +21,7 @@ pub struct AgentProfile {
     /// Model alias or full id, passed through verbatim — Planr does not
     /// validate ids against provider catalogs.
     pub model: String,
-    /// Native host role selector. Canonical Codex preset profiles always
-    /// declare this; other hosts may omit it.
+    /// Optional host role selector, passed through without host-specific validation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_type: Option<String>,
     #[serde(default)]
@@ -119,17 +118,9 @@ pub fn parse_registry(text: &str) -> RegistryLoad {
 }
 
 /// Problems a parseable registry can still have. `agents check` surfaces
-/// them without making the file unreadable; route resolution independently
-/// fails closed for unusable current-host shapes.
+/// them without making the file unreadable.
 pub fn validation_warnings(registry: &AgentRegistry) -> Vec<String> {
     let mut warnings = Vec::new();
-    for (id, profile) in &registry.profiles {
-        if is_codex(profile) && !has_agent_type(profile) {
-            warnings.push(format!(
-                "profile `{id}` uses Codex but does not declare a nonblank `agent_type`; current Codex routing requires a preset-generated role"
-            ));
-        }
-    }
     for (route_label, profile, fallbacks) in route_targets(registry) {
         for referenced in std::iter::once(profile).chain(fallbacks.iter().map(String::as_str)) {
             if !registry.profiles.contains_key(referenced) {
@@ -137,16 +128,6 @@ pub fn validation_warnings(registry: &AgentRegistry) -> Vec<String> {
                     "{route_label} references unknown profile `{referenced}`"
                 ));
             }
-        }
-        if !fallbacks.is_empty()
-            && std::iter::once(profile)
-                .chain(fallbacks.iter().map(String::as_str))
-                .filter_map(|id| registry.profiles.get(id))
-                .any(is_codex)
-        {
-            warnings.push(format!(
-                "{route_label} declares a fallback chain involving Codex; current Codex `agent_type` routes cannot use fallbacks"
-            ));
         }
     }
     for (index, route) in registry.routes.iter().enumerate() {
@@ -159,13 +140,6 @@ pub fn validation_warnings(registry: &AgentRegistry) -> Vec<String> {
                 "{label} sets both `work_type` and `plan`; only one selector per route is supported and `work_type` wins"
             )),
             _ => {}
-        }
-        if route.selector.work_type.as_deref() == Some("review")
-            && first_known_tier(registry, &route.profile, &route.fallbacks) == Some("budget")
-        {
-            warnings.push(format!(
-                "{label} routes review work to a budget-tier profile; verdicts should stay on the strongest tier"
-            ));
         }
     }
     let mut seen: BTreeMap<String, usize> = BTreeMap::new();
@@ -225,17 +199,6 @@ fn selector_key(selector: &RouteSelector) -> Option<String> {
     }
 }
 
-fn first_known_tier<'a>(
-    registry: &'a AgentRegistry,
-    profile: &str,
-    fallbacks: &[String],
-) -> Option<&'a str> {
-    std::iter::once(profile)
-        .chain(fallbacks.iter().map(String::as_str))
-        .find_map(|id| registry.profiles.get(id))
-        .and_then(|profile| profile.cost_tier.as_deref())
-}
-
 fn profile_strings(profile: &AgentProfile) -> impl Iterator<Item = &str> {
     [
         Some(profile.client.as_str()),
@@ -248,17 +211,6 @@ fn profile_strings(profile: &AgentProfile) -> impl Iterator<Item = &str> {
     .into_iter()
     .flatten()
     .chain(profile.capabilities.iter().map(String::as_str))
-}
-
-fn is_codex(profile: &AgentProfile) -> bool {
-    profile.client.trim().eq_ignore_ascii_case("codex")
-}
-
-fn has_agent_type(profile: &AgentProfile) -> bool {
-    profile
-        .agent_type
-        .as_deref()
-        .is_some_and(|agent_type| !agent_type.trim().is_empty())
 }
 
 /// The facts about a map item that routing may select on. The caller
@@ -357,16 +309,6 @@ fn routing_for_chain<'a>(
     profile: &str,
     fallbacks: &[String],
 ) -> Option<Routing<'a>> {
-    let known_profiles = std::iter::once(profile)
-        .chain(fallbacks.iter().map(String::as_str))
-        .filter_map(|id| registry.profiles.get(id));
-    if known_profiles
-        .clone()
-        .any(|profile| is_codex(profile) && !has_agent_type(profile))
-        || (!fallbacks.is_empty() && known_profiles.clone().any(is_codex))
-    {
-        return None;
-    }
     let mut known = std::iter::once(profile)
         .chain(fallbacks.iter().map(String::as_str))
         .filter_map(|id| registry.profiles.get_key_value(id));

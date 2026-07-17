@@ -1,12 +1,12 @@
 # Planr Preset Catalog
 
-This directory is a dependency-free static website. Production catalog data is never authored by hand: the repository regeneration script runs Planr's canonical evaluator and registry verifier, rewrites the report and manifest hashes, projects the verified policy/binding content, and writes `data/catalog.json`.
+This directory is a dependency-free static website owned by `planr-routing`. Production catalog data is never authored by hand: the package compiler reads the canonical usage policies, host bindings, and evaluation suite, then writes all 20 policy/binding compositions to `data/catalog.json`.
 
-The committed native-v2 catalog is generated from the included `registry/manifest.toml` and canonical `registry/verification.json`. Private release and telemetry signing keys are intentionally not committed. The current Sol/Terra/Luna entry is unsigned, experimental, and unrecommended because only offline evidence exists; regeneration preserves that demotion instead of inventing or retaining a recommendation. A release operator may promote it only after a fresh trusted live oracle passes and the resulting manifest is signed offline.
+Private signing keys are intentionally never committed. Generated entries remain unsigned, experimental, and unrecommended while only offline evidence exists. A release operator may promote an entry only after a fresh authenticated live-host oracle proves every required effective-routing dimension and the catalog is signed offline.
 
 ```sh
-cargo build --release
-npm run catalog:regenerate -- --planr-bin target/release/planr --at-unix 1784160000
+cargo build --release --manifest-path Cargo.toml
+pnpm catalog:regenerate -- --routing-bin ../target/release/planr-routing
 
 npm run site:test
 npm run site:serve
@@ -66,8 +66,8 @@ After Node 22+ is active, `pnpm destroy:test` is an equivalent convenience alias
 Never add private registry or telemetry signing keys to the deployment environment. The
 site deploy consumes only the already verified public `website/data/catalog.json`.
 
-Release operators must regenerate recommendation-capable evidence through `planr agents preset evaluate` with an independently pinned telemetry collector, then use the offline maintainer signing workflow before changing the manifest status. The public `registry/report.md` summarizes the currently shipped evidence; the machine report and, when present, signature remain the verification source of truth.
+Release operators must first capture authenticated effective model, effort, native-subagent, and bounded-fork evidence. `planr-routing evaluate` fails closed to `experimental` when any dimension is absent. Offline signatures are produced with `planr-routing registry sign`; private key files stay outside the repository.
 
-The report-wide `reproducible_evidence` flag summarizes the entire candidate matrix. Registry publication independently requires the selected candidate's complete reproducible evidence, passing thresholds, verified route receipts, and matching entry in `report.recommended`; candidates that fail those gates are not published as recommendations.
+The checked-in catalog is reproducible with `planr-routing catalog build` and verified byte-for-byte with `planr-routing catalog verify`.
 
 Recommendation-state rendering is covered only by clearly synthetic, non-provider in-memory unit data. The runtime website has one data source, `data/catalog.json`; no file-backed recommendation fixture, alternate query path, or fabricated provider evidence is shipped.

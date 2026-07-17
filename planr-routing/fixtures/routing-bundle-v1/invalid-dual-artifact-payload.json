@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "bundle_id": "dual-payload@1",
+  "policy_id": "dual-payload",
+  "policy_version": "1.0.0",
+  "generated_at": "2026-07-16T00:00:00Z",
+  "source": {
+    "package": "planr-routing",
+    "package_version": "0.1.0"
+  },
+  "profiles": {},
+  "routes": [],
+  "artifacts": [
+    {
+      "path": ".planr/generated.txt",
+      "media_type": "text/plain",
+      "mode": "create",
+      "content": "",
+      "content_ref": "registry://dual-payload/generated.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ]
+}

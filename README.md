@@ -22,17 +22,17 @@ Flat todo lists break down the moment real work has structure. Planr models work
 
 Three layers make that work: **Plans** (reviewable Markdown packages), the **Map** (live dependency graph with picks, reviews, logs), and **Agent loops** (skills, CLI, and MCP workflows for every major coding agent). Full model: [Task Graph Model](docs/TASK_GRAPH_MODEL.md) and [Operating Model](docs/OPERATING_MODEL.md).
 
-## New in 1.4.0: Verified Presets & Catalog
+## New in 1.5.0: Optional Routing Policies
 
-Planr now ships a verified preset system for composing a provider-neutral usage policy with a host binding, previewing every repository-local change, and applying the result only after confirmation:
+Planr Core now consumes a strict provider-neutral RoutingBundle v1. The independently buildable `planr-routing` workspace package owns model policies, host bindings, evaluation, signing, and the public catalog:
 
 ```bash
-planr agents preset list
-planr agents preset apply balanced --binding codex-openai --live-host-command /absolute/codex-adapter --trusted-telemetry-signer codex --trusted-telemetry-collector /absolute/collector --preview
-planr agents preset apply balanced --binding codex-openai --live-host-command /absolute/codex-adapter --trusted-telemetry-signer codex --trusted-telemetry-collector /absolute/collector --confirm
+planr-routing compile balanced --host codex-openai --output routing-bundle.json
+planr routing bundle preview routing-bundle.json
+planr routing bundle apply routing-bundle.json
 ```
 
-The built-in catalog includes four policies, five host bindings, and 20 declared safe pairs. Codex has one current topology: repository-owned GPT-5.6 Sol, Terra, and Luna roles selected through native `agent_type` dispatch. Reproducible evaluation and the public [Planr Preset Catalog](https://planr-test-catalog.office-35d.workers.dev/) keep evidence inspectable without making the registry a runtime dependency. The native Codex entry remains visibly experimental and unrecommended until a fresh independently signed live oracle passes every objective gate. Full guides: [Preset Composition](docs/PRESET_COMPOSITION.md) · [Preset Evaluation](docs/PRESET_EVALUATION.md) · [Preset Registry](docs/PRESET_REGISTRY.md).
+Core validates hashes, externally anchored optional signatures, paths, conflicts, symlinks, and atomic repository-local application. It never edits user configuration such as `~/.codex/config.toml`. The optional package supports Codex, Claude Code, Cursor, and mixed-host bundles without coupling their model vocabulary to Planr releases. See [Routing Bundles](docs/ROUTING_BUNDLES.md) and [planr-routing](planr-routing/docs/MODEL_ROUTING_POLICY.md).
 
 ## New in 1.3.0: Native Host Hooks
 
@@ -61,8 +61,8 @@ Declare once which model handles which work — every task then carries its own 
 # .planr/agents.toml  (write it with `planr agents init`)
 [profiles.worker]
 client = "codex"
-model = "gpt-5.6-terra"
-agent_type = "planr-terra-high"
+model = "model-id"
+agent_type = "repository-role"
 effort = "high"
 skill = "planr-work"
 
@@ -72,7 +72,7 @@ profile = "worker"
 ```
 
 - **Routing travels in the pick packet** — `planr pick --json` hands the worker its profile, model, and paired skill; `planr pick --peek` lets dispatching drivers read it without taking the lease.
-- **Rendered into native config** — the default `agents init` atomically writes the canonical repository-local Codex roles; verified preset apply owns subsequent policy composition. `planr install claude|cursor` retains independent role rendering.
+- **Optional native artifacts** — a routing bundle may add repository-local host roles and skills. Core never invents model policy or changes user configuration.
 - **Declared vs. actual, with receipts** — workers report the profile they ran on, runs record the observed host, and `planr trace item` shows deviations as advisory markers.
 - **Use-case pools** — free-form work types (`frontend`, `backend`, ...) declared right in the plan's task list (`### TASK-001 (backend): ...`), plus per-item pins via `planr item route`.
 
@@ -106,7 +106,7 @@ Manual downloads, from-source builds, and client wiring details: [Install Guide]
 
 ## Install The Plugin (Skills)
 
-The plugin under `plugins/planr` carries the ten Planr skills. Claude Code also consumes its independent `planr-worker` and `planr-reviewer` roles; Cursor receives its own roles through `planr install cursor`. Codex roles are generated only from the canonical native preset into the repository. The `planr` CLI (above) is required separately.
+The plugin under `plugins/planr` carries the ten Planr workflow skills. Optional model-routing roles come from repository-local routing bundles. The `planr` CLI (above) is required separately.
 
 <a id="install-plugin-codex"></a>
 <details>

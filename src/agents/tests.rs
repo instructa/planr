@@ -3,7 +3,7 @@ use super::*;
 const VALID: &str = r#"
 [profiles.cursor-implementer]
 client = "cursor"
-model = "fable-code"
+model = "model-standard"
 effort = "medium"
 cost_tier = "standard"
 capabilities = ["code", "steerable"]
@@ -11,7 +11,7 @@ notes = "Primary implementation model."
 
 [profiles.cursor-fable-driver]
 client = "cursor"
-model = "fable-5"
+model = "model-premium"
 effort = "high"
 cost_tier = "premium"
 
@@ -32,7 +32,7 @@ fn parses_profiles_routes_and_default() {
     assert_eq!(registry.profiles.len(), 2);
     let implementer = &registry.profiles["cursor-implementer"];
     assert_eq!(implementer.client, "cursor");
-    assert_eq!(implementer.model, "fable-code");
+    assert_eq!(implementer.model, "model-standard");
     assert_eq!(implementer.effort.as_deref(), Some("medium"));
     assert_eq!(implementer.cost_tier.as_deref(), Some("standard"));
     assert_eq!(implementer.capabilities, ["code", "steerable"]);
@@ -67,7 +67,7 @@ fn malformed_toml_degrades_with_line_context() {
 
 #[test]
 fn unknown_field_degrades_with_typo_context() {
-    let text = "[profiles.a]\nclient = \"cursor\"\nmodel = \"fable-code\"\nefort = \"high\"\n";
+    let text = "[profiles.a]\nclient = \"cursor\"\nmodel = \"model-standard\"\nefort = \"high\"\n";
     let RegistryLoad::Degraded { error } = parse_registry(text) else {
         panic!("expected degraded registry");
     };
@@ -88,7 +88,7 @@ fn warns_on_unknown_profile_references() {
     let text = r#"
 [profiles.a]
 client = "cursor"
-model = "fable-code"
+model = "model-standard"
 
 [[routes]]
 match = { work_type = "code" }
@@ -113,7 +113,7 @@ fn warns_on_empty_and_double_selectors_and_duplicates() {
     let text = r#"
 [profiles.a]
 client = "cursor"
-model = "fable-code"
+model = "model-standard"
 
 [[routes]]
 match = {}
@@ -145,7 +145,7 @@ profile = "a"
 }
 
 #[test]
-fn warns_when_review_routes_to_budget_tier() {
+fn core_does_not_impose_tier_policy_on_routes() {
     let text = r#"
 [profiles.cheap]
 client = "cursor"
@@ -160,16 +160,12 @@ profile = "cheap"
         panic!("expected loaded registry");
     };
     let warnings = validation_warnings(&registry);
-    assert!(
-        warnings.iter().any(|w| w.contains("budget-tier")),
-        "{warnings:?}"
-    );
+    assert!(warnings.is_empty(), "{warnings:?}");
 }
 
 #[test]
 fn warns_on_secret_like_profile_values() {
-    let text =
-        "[profiles.a]\nclient = \"cursor\"\nmodel = \"fable-code\"\nnotes = \"key sk-abc123\"\n";
+    let text = "[profiles.a]\nclient = \"cursor\"\nmodel = \"model-standard\"\nnotes = \"key sk-abc123\"\n";
     let RegistryLoad::Loaded(registry) = parse_registry(text) else {
         panic!("expected loaded registry");
     };
@@ -190,13 +186,13 @@ fn registry(text: &str) -> AgentRegistry {
 const ROUTING: &str = r#"
 [profiles.implementer]
 client = "cursor"
-model = "fable-code"
+model = "model-standard"
 effort = "medium"
 cost_tier = "standard"
 
 [profiles.driver]
 client = "cursor"
-model = "fable-5"
+model = "model-premium"
 effort = "high"
 cost_tier = "premium"
 
@@ -245,7 +241,7 @@ fn resolves_work_type_route_with_fallbacks() {
     let routing = resolve_route(&facts("code", None), &registry).unwrap();
     assert_eq!(routing.profile, "implementer");
     assert_eq!(routing.client, "cursor");
-    assert_eq!(routing.model, "fable-code");
+    assert_eq!(routing.model, "model-standard");
     assert_eq!(routing.effort, Some("medium"));
     assert_eq!(routing.cost_tier, Some("standard"));
     assert_eq!(routing.fallbacks, ["driver"]);
@@ -280,7 +276,7 @@ fn default_route_catches_unmatched_items() {
 #[test]
 fn skill_pairs_through_resolution_and_skips_serialization_when_absent() {
     let pool = registry(
-        "[profiles.designer]\nclient = \"claude-code\"\nmodel = \"opus\"\nskill = \"frontend-design\"\n\n[[routes]]\nmatch = { work_type = \"frontend\" }\nprofile = \"designer\"\n",
+        "[profiles.designer]\nclient = \"claude-code\"\nmodel = \"model-review\"\nskill = \"frontend-design\"\n\n[[routes]]\nmatch = { work_type = \"frontend\" }\nprofile = \"designer\"\n",
     );
     let routing = resolve_route(&facts("frontend", None), &pool).unwrap();
     assert_eq!(routing.skill, Some("frontend-design"));
@@ -297,7 +293,7 @@ fn skill_pairs_through_resolution_and_skips_serialization_when_absent() {
 
 #[test]
 fn no_routes_and_no_default_resolves_none() {
-    let registry = registry("[profiles.a]\nclient = \"cursor\"\nmodel = \"fable-code\"\n");
+    let registry = registry("[profiles.a]\nclient = \"cursor\"\nmodel = \"model-standard\"\n");
     assert!(resolve_route(&facts("code", None), &registry).is_none());
 }
 
@@ -306,7 +302,7 @@ fn unknown_primary_promotes_first_known_fallback() {
     let text = r#"
 [profiles.driver]
 client = "cursor"
-model = "fable-5"
+model = "model-premium"
 
 [[routes]]
 match = { work_type = "code" }
@@ -325,7 +321,7 @@ fn fully_unknown_chain_falls_through_to_next_precedence() {
     let text = r#"
 [profiles.driver]
 client = "cursor"
-model = "fable-5"
+model = "model-premium"
 
 [[routes]]
 match = { work_type = "code" }
@@ -345,11 +341,11 @@ fn first_declared_route_wins_within_a_level() {
     let text = r#"
 [profiles.a]
 client = "cursor"
-model = "fable-code"
+model = "model-standard"
 
 [profiles.b]
 client = "cursor"
-model = "fable-5"
+model = "model-premium"
 
 [[routes]]
 match = { work_type = "code" }
@@ -369,7 +365,7 @@ fn double_selector_route_matches_on_work_type_only() {
     let text = r#"
 [profiles.a]
 client = "cursor"
-model = "fable-code"
+model = "model-standard"
 
 [[routes]]
 match = { work_type = "code", plan = "pln-x" }
@@ -389,7 +385,7 @@ fn override_beats_work_type_route() {
     let routing = resolve_route(&facts_with_override("code", "driver"), &registry).unwrap();
     assert_eq!(routing.profile, "driver");
     assert_eq!(routing.client, "cursor");
-    assert_eq!(routing.model, "fable-5");
+    assert_eq!(routing.model, "model-premium");
     assert!(routing.fallbacks.is_empty());
     assert_eq!(routing.matched_selector, "override");
 }
@@ -404,37 +400,29 @@ fn unknown_override_falls_through_to_policy() {
 
 #[test]
 fn override_with_no_matching_profile_and_no_routes_resolves_nothing() {
-    let registry = registry("[profiles.a]\nclient = \"cursor\"\nmodel = \"fable-code\"\n");
+    let registry = registry("[profiles.a]\nclient = \"cursor\"\nmodel = \"model-standard\"\n");
     assert!(resolve_route(&facts_with_override("code", "ghost"), &registry).is_none());
 }
 
 #[test]
-fn codex_profiles_require_agent_type_and_never_resolve_through_fallback_chains() {
+fn host_specific_fields_and_fallbacks_are_opaque_to_core() {
     let missing_agent_type = registry(
-        "[profiles.worker]\nclient = \"codex\"\nmodel = \"gpt-5.6-terra\"\nagent_type = \"  \"\n",
+        "[profiles.worker]\nclient = \"codex\"\nmodel = \"model-primary\"\nagent_type = \"  \"\n",
     );
     let warnings = validation_warnings(&missing_agent_type);
-    assert!(
-        warnings
-            .iter()
-            .any(|warning| warning.contains("nonblank `agent_type`")),
-        "{warnings:?}"
-    );
-    assert!(
-        resolve_route(&facts_with_override("code", "worker"), &missing_agent_type).is_none(),
-        "an override cannot make a non-current Codex profile usable"
-    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(resolve_route(&facts_with_override("code", "worker"), &missing_agent_type).is_some());
 
     let current = registry(
         r#"
 [profiles.worker]
 client = "codex"
-model = "gpt-5.6-terra"
+model = "model-primary"
 agent_type = "planr-terra-high"
 
 [profiles.driver]
 client = "cursor"
-model = "fable-5"
+model = "model-premium"
 
 [[routes]]
 match = { work_type = "code" }
@@ -447,19 +435,14 @@ fallbacks = ["worker"]
 "#,
     );
     let warnings = validation_warnings(&current);
-    assert_eq!(
-        warnings
-            .iter()
-            .filter(|warning| warning.contains("fallback chain involving Codex"))
-            .count(),
-        2,
-        "{warnings:?}"
-    );
-    assert!(resolve_route(&facts("code", None), &current).is_none());
-    assert!(resolve_route(&facts("docs", None), &current).is_none());
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let code_route = resolve_route(&facts("code", None), &current).unwrap();
+    assert_eq!(code_route.fallbacks, ["driver"]);
+    let default_route = resolve_route(&facts("docs", None), &current).unwrap();
+    assert_eq!(default_route.fallbacks, ["worker"]);
 
     let override_route = resolve_route(&facts_with_override("code", "worker"), &current)
-        .expect("a direct current Codex override has no fallback chain");
+        .expect("a known profile resolves regardless of host vocabulary");
     assert_eq!(override_route.agent_type, Some("planr-terra-high"));
     assert!(override_route.fallbacks.is_empty());
 }

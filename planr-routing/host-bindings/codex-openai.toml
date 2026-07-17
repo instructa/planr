@@ -18,7 +18,7 @@ fork_all = true
 profile = "codex-sol-medium"
 client = "codex"
 model = "gpt-5.6-sol"
-agent_type = "planr-sol-medium"
+agent_type = "planr_sol_medium"
 effort = "medium"
 cost_tier = "standard"
 
@@ -26,7 +26,7 @@ cost_tier = "standard"
 profile = "codex-terra-medium"
 client = "codex"
 model = "gpt-5.6-terra"
-agent_type = "planr-terra-medium"
+agent_type = "planr_terra_medium"
 effort = "medium"
 cost_tier = "standard"
 fork_turns = { mode = "none" }
@@ -35,7 +35,7 @@ fork_turns = { mode = "none" }
 profile = "codex-terra-high"
 client = "codex"
 model = "gpt-5.6-terra"
-agent_type = "planr-terra-high"
+agent_type = "planr_terra_high"
 effort = "high"
 cost_tier = "standard"
 skill = "planr-work"
@@ -45,7 +45,7 @@ fork_turns = { mode = "none" }
 profile = "codex-luna-xhigh"
 client = "codex"
 model = "gpt-5.6-luna"
-agent_type = "planr-luna-xhigh"
+agent_type = "planr_luna_xhigh"
 effort = "xhigh"
 cost_tier = "premium"
 skill = "planr-work"
@@ -55,7 +55,7 @@ fork_turns = { mode = "none" }
 profile = "codex-sol-high"
 client = "codex"
 model = "gpt-5.6-sol"
-agent_type = "planr-sol-high"
+agent_type = "planr_sol_high"
 effort = "high"
 cost_tier = "premium"
 skill = "planr-review"
@@ -65,7 +65,7 @@ fork_turns = { mode = "none" }
 profile = "codex-sol-ultra"
 client = "codex"
 model = "gpt-5.6-sol"
-agent_type = "planr-sol-ultra"
+agent_type = "planr_sol_ultra"
 effort = "ultra"
 cost_tier = "premium"
 fork_turns = { mode = "none" }
@@ -196,11 +196,11 @@ Use the generated repository roles directly. The role file owns its model and re
 
 | Work type | Native dispatch |
 | --- | --- |
-| exploration or research | `spawn_agent({ agent_type: "planr-terra-medium", fork_turns: "none", ... })` |
-| code | `spawn_agent({ agent_type: "planr-terra-high", fork_turns: "none", ... })` |
-| mechanical | `spawn_agent({ agent_type: "planr-luna-xhigh", fork_turns: "none", ... })` |
-| review | `spawn_agent({ agent_type: "planr-sol-high", fork_turns: "none", ... })` |
-| explicitly selected moonshot planning | `spawn_agent({ agent_type: "planr-sol-ultra", fork_turns: "none", ... })` |
+| exploration or research | `spawn_agent({ agent_type: "planr_terra_medium", fork_turns: "none", ... })` |
+| code | `spawn_agent({ agent_type: "planr_terra_high", fork_turns: "none", ... })` |
+| mechanical | `spawn_agent({ agent_type: "planr_luna_xhigh", fork_turns: "none", ... })` |
+| review | `spawn_agent({ agent_type: "planr_sol_high", fork_turns: "none", ... })` |
+| explicitly selected moonshot planning | `spawn_agent({ agent_type: "planr_sol_ultra", fork_turns: "none", ... })` |
 
-The parent remains the generated `planr-sol-medium` driver. Every dispatch that changes role, model, or reasoning effort must name `agent_type` and use `fork_turns: "none"` or an evidenced positive bounded integer. Native Codex rejects `fork_turns: "all"` when `agent_type` selects a role with model or effort overrides. Do not use implicit model inheritance or a fallback role.
+The parent remains the generated `planr_sol_medium` driver. Every dispatch that changes role, model, or reasoning effort must name `agent_type` and use `fork_turns: "none"` or an evidenced positive bounded integer. Native Codex rejects `fork_turns: "all"` when `agent_type` selects a role with model or effort overrides. Global Codex CLI `-m` or `-c model_reasoning_effort=...` flags also override spawned role files, so leave those flags unset when role-local child routing is required. Do not use implicit model inheritance or a fallback role.
 '''

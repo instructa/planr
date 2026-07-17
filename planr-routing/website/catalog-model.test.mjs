@@ -80,7 +80,7 @@ test("projects only trusted, safe, evidence-bound registry entries", () => {
   assert.equal(projected.status, "recommended");
   assert.equal(projected.registry.signatureVerified, true);
   assert.equal(projected.enforcement.at(-1).state, "verified");
-  assert.equal(projected.command, "planr agents preset apply ui-test-policy --binding ui-test-binding");
+  assert.equal(projected.command, "planr-routing compile ui-test-policy --host ui-test-binding --output routing-bundle.json && planr routing bundle preview routing-bundle.json");
 });
 
 test("refuses unsigned metadata and recommendation drift", () => {
@@ -130,7 +130,7 @@ test("publishes lifecycle-demoted recommendations with visible replacement metad
 });
 
 test("copy commands accept identifiers only and filtering is deterministic", () => {
-  assert.equal(previewCommand("ui-test-policy", "ui-test-binding"), "planr agents preset apply ui-test-policy --binding ui-test-binding");
+  assert.equal(previewCommand("ui-test-policy", "ui-test-binding"), "planr-routing compile ui-test-policy --host ui-test-binding --output routing-bundle.json && planr routing bundle preview routing-bundle.json");
   assert.throws(() => safeIdentifier("ui-test; curl invalid"), /safe registry identifier/);
   assert.deepEqual(
     visibleCompositions({ compositions: [{ recommended: true }, { recommended: false }] }, true),

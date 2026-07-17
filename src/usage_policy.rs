@@ -1219,7 +1219,7 @@ mod tests {
     fn policy() -> UsagePolicyV1 {
         UsagePolicyV1 {
             schema_version: 1,
-            id: "balanced".to_string(),
+            id: "policy-a".to_string(),
             version: "1.0.0".to_string(),
             usage: UsageLimits {
                 max_active_agents: 3,

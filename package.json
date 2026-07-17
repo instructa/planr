@@ -15,34 +15,15 @@
     "npm/bin/planr.js",
     "npm/native",
     "plugins",
-    "presets",
-    "evaluations",
-    "website/_headers",
-    "website/app.mjs",
-    "website/catalog-model.mjs",
-    "website/data/catalog.json",
-    "website/index.html",
-    "website/styles.css",
-    "!website/README.md",
     "README.md",
     "LICENSE.md",
     "docs"
   ],
   "scripts": {
-    "alchemy:check-runtime": "node scripts/check-alchemy-runtime.mjs",
     "build:native": "cargo build --release",
-    "catalog:regenerate": "node scripts/regenerate-preset-catalog.mjs",
     "test": "cargo test",
     "pack:check": "npm pack --dry-run",
-    "deploy:test": "node scripts/cloudflare-test.mjs deploy",
-    "destroy:test": "node scripts/cloudflare-test.mjs destroy",
-    "site:build": "node scripts/build-site.mjs",
-    "site:check": "pnpm site:test && pnpm site:build",
-    "site:test": "node --test website/*.test.mjs",
-    "site:serve": "node website/serve.mjs"
-  },
-  "devDependencies": {
-    "alchemy": "0.93.7"
+    "routing": "cargo run --manifest-path planr-routing/Cargo.toml --"
   },
   "engines": {
     "node": ">=18"

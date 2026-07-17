@@ -24,7 +24,7 @@ cost_tier = "premium"
 profile = "mixed-codex-terra-high"
 client = "codex"
 model = "gpt-5.6-terra"
-agent_type = "planr-terra-high"
+agent_type = "planr_terra_high"
 effort = "high"
 cost_tier = "standard"
 skill = "planr-work"
@@ -34,7 +34,7 @@ fork_turns = { mode = "none" }
 profile = "mixed-codex-luna-xhigh"
 client = "codex"
 model = "gpt-5.6-luna"
-agent_type = "planr-luna-xhigh"
+agent_type = "planr_luna_xhigh"
 effort = "xhigh"
 cost_tier = "premium"
 skill = "planr-work"
@@ -44,7 +44,7 @@ fork_turns = { mode = "none" }
 profile = "mixed-codex-sol-high"
 client = "codex"
 model = "gpt-5.6-sol"
-agent_type = "planr-sol-high"
+agent_type = "planr_sol_high"
 effort = "high"
 cost_tier = "premium"
 skill = "planr-review"
@@ -132,9 +132,9 @@ The Cursor `planr-fable-driver` remains the driver. Dispatch Codex work through 
 
 | Work type | Native dispatch |
 | --- | --- |
-| code | `spawn_agent({ agent_type: "planr-terra-high", fork_turns: "none", ... })` |
-| mechanical | `spawn_agent({ agent_type: "planr-luna-xhigh", fork_turns: "none", ... })` |
-| review | `spawn_agent({ agent_type: "planr-sol-high", fork_turns: "none", ... })` |
+| code | `spawn_agent({ agent_type: "planr_terra_high", fork_turns: "none", ... })` |
+| mechanical | `spawn_agent({ agent_type: "planr_luna_xhigh", fork_turns: "none", ... })` |
+| review | `spawn_agent({ agent_type: "planr_sol_high", fork_turns: "none", ... })` |
 
-Every dispatch that changes role, model, or reasoning effort must name `agent_type` and use `fork_turns: "none"` or an evidenced positive bounded integer. Native Codex rejects `fork_turns: "all"` when `agent_type` selects a role with model or effort overrides. Do not use implicit model inheritance or a fallback role.
+Every dispatch that changes role, model, or reasoning effort must name `agent_type` and use `fork_turns: "none"` or an evidenced positive bounded integer. Native Codex rejects `fork_turns: "all"` when `agent_type` selects a role with model or effort overrides. Global Codex CLI `-m` or `-c model_reasoning_effort=...` flags also override spawned role files, so leave those flags unset when role-local child routing is required. Do not use implicit model inheritance or a fallback role.
 '''

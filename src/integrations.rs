@@ -208,42 +208,6 @@ pub fn mcp_tools() -> Vec<Value> {
             &[],
         ),
         tool(
-            "planr_presets_list",
-            "List embedded policies, host bindings, and declared safe packs",
-            json!({}),
-            &[],
-        ),
-        tool(
-            "planr_preset_evaluate",
-            "Simulate offline or explicitly execute the versioned preset suite through a live-host adapter, returning scoped evidence, provenance, lifecycle status, and threshold gates",
-            json!({"at_unix": prop("integer", "Unix timestamp used for lifecycle expiry status"), "host": prop("string", "Host compatibility requirement"), "live_host_command": prop("string", "Absolute path of the explicit live-host adapter executable"), "live_host_args": {"type": "array", "items": {"type": "string"}, "description": "Arguments for the explicit live-host adapter"}, "trusted_telemetry_signer": prop("string", "Signer id pinned in .planr/trusted-telemetry.toml"), "trusted_telemetry_collector": prop("string", "Absolute path to the hash-pinned post-run telemetry collector")}),
-            &[],
-        ),
-        tool(
-            "planr_preset_apply",
-            "Preview or explicitly apply a provider-neutral policy plus versioned host binding",
-            json!({"policy": prop("string", "Usage Policy v1 TOML path or built-in id"), "binding": prop("string", "Host-binding TOML path or built-in id"), "live_host_command": prop("string", "Absolute challenge-bound adapter required for Codex capability verification"), "live_host_args": {"type": "array", "items": {"type": "string"}, "description": "Arguments for the live-host adapter"}, "trusted_telemetry_signer": prop("string", "Signer id pinned in .planr/trusted-telemetry.toml"), "trusted_telemetry_collector": prop("string", "Absolute hash-pinned telemetry collector"), "confirm": prop("boolean", "Apply the conflict-free preview (default false)")}),
-            &["policy", "binding"],
-        ),
-        tool(
-            "planr_preset_registry_verify",
-            "Verify a declarative registry entry's checksums, compatibility, lifecycle, and pinned maintainer signature without importing it",
-            json!({"manifest": prop("string", "Registry manifest TOML path"), "entry": prop("string", "Entry id"), "content_root": prop("string", "Directory containing declared artifacts"), "trust_store": prop("string", "Optional separately provisioned maintainer trust store"), "at_unix": prop("integer", "Unix timestamp for freshness"), "host": prop("string", "Required compatible host")}),
-            &["manifest", "entry", "content_root"],
-        ),
-        tool(
-            "planr_preset_registry_import",
-            "Preview by default or confirm a content-minimized immutable offline-cache import after registry verification",
-            json!({"manifest": prop("string", "Registry manifest TOML path"), "entry": prop("string", "Entry id"), "content_root": prop("string", "Directory containing declared artifacts"), "trust_store": prop("string", "Optional separately provisioned maintainer trust store"), "at_unix": prop("integer", "Unix timestamp for freshness"), "host": prop("string", "Required compatible host"), "confirm": prop("boolean", "Write the verified cache entry; default false")}),
-            &["manifest", "entry", "content_root"],
-        ),
-        tool(
-            "planr_preset_registry_list",
-            "List immutable offline registry cache entries with visible current or stale freshness",
-            json!({"at_unix": prop("integer", "Unix timestamp for freshness")}),
-            &[],
-        ),
-        tool(
             "planr_policy_show",
             "Show the parsed provider-neutral Usage Policy v1 or its missing/degraded state",
             json!({}),

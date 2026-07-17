@@ -22,14 +22,15 @@ $planr-goal <your goal>
 
 The stop condition lives in Planr (`--tag goal-contract`), so a dead session resumes with the same starter line from zero chat context.
 
-Apply the native Codex preset in the repository before starting the driver:
+Optionally compile and apply a repository-local Codex routing bundle before starting the driver:
 
 ```bash
-planr agents preset apply balanced --binding codex-openai --live-host-command /absolute/codex-adapter --trusted-telemetry-signer codex --trusted-telemetry-collector /absolute/collector --preview --json
-planr agents preset apply balanced --binding codex-openai --live-host-command /absolute/codex-adapter --trusted-telemetry-signer codex --trusted-telemetry-collector /absolute/collector --confirm --json
+planr-routing compile balanced --host codex-openai --output routing-bundle.json
+planr routing bundle preview routing-bundle.json
+planr routing bundle apply routing-bundle.json
 ```
 
-The preset generates repository-local Sol Medium, Terra Medium/High, Luna xHigh, Sol High, and Sol Ultra role TOMLs plus `.codex/skills/planr-native-routing/SKILL.md`. Dispatch the table's role with an explicit `agent_type` and `fork_turns: "none"` (or an evidenced positive bounded count); never repeat model or effort at the call site. Native Codex rejects `fork_turns: "all"` for these overridden roles. Restart after applying changed roles, then confirm child metadata reports the expected model/effort and a non-null `agent_path`. Full workflow and tiering rationale: [Long-Running Goals](GOALS.md).
+The bundle generates repository-local roles and a routing skill. Follow that generated skill exactly, restart after role changes, and confirm child metadata reports the expected model, effort, role path, and context-fork behavior. Full workflow: [Long-Running Goals](GOALS.md).
 
 ## MCP
 
