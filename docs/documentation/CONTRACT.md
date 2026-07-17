@@ -72,8 +72,9 @@ Evidence captured from official upstream sources:
 - Fumadocs UI themes and Tailwind 4 contract: <https://www.fumadocs.dev/docs/ui/theme>
 - Fumadocs layout API: <https://www.fumadocs.dev/docs/ui/layouts/docs>
 - Fumadocs deployment constraints: <https://www.fumadocs.dev/docs/deploying>
-- Alchemy Next.js on Cloudflare: <https://alchemy.run/guides/cloudflare-nextjs/>
-- Alchemy custom domains: <https://alchemy.run/providers/cloudflare/custom-domain/>
+- Alchemy v2 Cloudflare setup: <https://alchemy.run/cloudflare/setup/>
+- Alchemy v2 frontend resources: <https://alchemy.run/cloudflare/frontend/frontends/>
+- Alchemy v2 domains and DNS: <https://alchemy.run/cloudflare/networking/domains/>
 - Stable package versions and peer ranges were replayed from the npm registry with `npm view <package>@latest version peerDependencies --json` on the audit date. The selected Core/UI/MDX/Next.js set satisfies every declared peer range.
 
 Do not use `latest`, caret, tilde, or wildcard ranges for direct docs dependencies. A later upgrade is an explicit, reviewed dependency change with build, search, and browser verification.
@@ -95,7 +96,7 @@ Rejected for this scope:
 
 ### DOC-ADR-003: Deploy with Alchemy and OpenNext on Cloudflare Workers
 
-Use Alchemy's `Nextjs` resource and OpenNext as the committed deployment owner. Bind `docs.planr.so` only when the Alchemy stage is `prod`; development and preview stages use generated URLs. The Cloudflare zone must already exist in the authenticated account. Keep credentials and local Alchemy state outside Git, and verify the OpenNext Worker artifact in CI without deploying it.
+Use an Alchemy v2 Effect stack and OpenNext as the committed deployment owner. `Cloudflare.Website.StaticSite` runs the OpenNext build, uploads its prebuilt Worker with `bundle: false`, and serves the generated assets. Bind `docs.planr.so` only when the Alchemy stage is `prod`; development and preview stages use generated URLs. The Cloudflare zone must already exist in the authenticated account. Local credentials live in the Alchemy profile, shared state uses `Cloudflare.state()`, and CI verifies the OpenNext Worker artifact without deploying it.
 
 ### DOC-ADR-004: Use Fumadocs primitives before copying components
 

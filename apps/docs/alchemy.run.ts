@@ -1,44 +1,72 @@
-import alchemy from "alchemy";
-import { Nextjs } from "alchemy/cloudflare";
-
-const stage = process.env.STAGE || "dev";
-const alchemyPassword = process.env.ALCHEMY_PASSWORD;
-
-if (!alchemyPassword) {
-  throw new Error(
-    "Missing ALCHEMY_PASSWORD. Set it in apps/docs/.env.local (any strong random string works).",
-  );
-}
-
-const app = await alchemy("planr-docs", {
-  stage,
-  password: alchemyPassword,
-});
+import * as Alchemy from "alchemy";
+import * as AdoptPolicy from "alchemy/AdoptPolicy";
+import * as Cloudflare from "alchemy/Cloudflare";
+import * as Effect from "effect/Effect";
 
 const productionDomain = "docs.planr.so";
-const siteUrl =
-  app.stage === "prod"
-    ? `https://${productionDomain}`
-    : (process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000");
 
-export const website = await Nextjs("website", {
-  name: `planr-docs-${app.stage}`,
-  domains: app.stage === "prod" ? [productionDomain] : undefined,
-  adopt: true,
-  build: {
-    env: {
-      NEXT_PUBLIC_SITE_URL: siteUrl,
-    },
+const Website = Cloudflare.Website.StaticSite(
+  "Website",
+  Alchemy.Stack.useSync(({ stage }) => {
+    const siteUrl =
+      stage === "prod"
+        ? `https://${productionDomain}`
+        : (process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000");
+
+    return {
+      name: `planr-docs-${stage}`,
+      command: "pnpm run build:worker",
+      outdir: ".open-next/assets",
+      main: ".open-next/worker.js",
+      bundle: false,
+      domain: stage === "prod" ? productionDomain : undefined,
+      compatibility: {
+        date: "2026-04-24",
+        flags: ["nodejs_compat", "global_fetch_strictly_public"],
+      },
+      assets: {
+        htmlHandling: "auto-trailing-slash",
+      },
+      env: {
+        NEXT_PUBLIC_SITE_URL: siteUrl,
+      },
+      dev: {
+        command: "pnpm dev",
+        url: "http://localhost:3000",
+        env: {
+          NEXT_PUBLIC_SITE_URL: siteUrl,
+        },
+      },
+      memo: {
+        include: [
+          "app/**",
+          "components/**",
+          "content/**",
+          "lib/**",
+          "public/**",
+          "scripts/**",
+          "*.ts",
+          "*.tsx",
+          "*.mjs",
+          "package.json",
+          "../../pnpm-lock.yaml",
+        ],
+      },
+    };
+  }),
+).pipe(AdoptPolicy.adopt(true));
+
+export default Alchemy.Stack(
+  "PlanrDocs",
+  {
+    providers: Cloudflare.providers(),
+    state: Cloudflare.state(),
   },
-  dev: {
-    command: "pnpm dev",
-    domain: "localhost:3000",
-    env: {
-      NEXT_PUBLIC_SITE_URL: siteUrl,
-    },
-  },
-});
+  Effect.gen(function* () {
+    const website = yield* Website;
 
-console.log({ url: website.url });
-
-await app.finalize();
+    return {
+      url: website.url,
+    };
+  }),
+);

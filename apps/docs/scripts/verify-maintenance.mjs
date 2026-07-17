@@ -96,13 +96,13 @@ requireMarkers(security, 'security guide', [
 const deployment = await readPage('operations', 'docs-deployment');
 requireMarkers(deployment, 'deployment runbook', [
   'Node.js 22', 'pnpm install --frozen-lockfile', 'NEXT_PUBLIC_SITE_URL',
-  'Alchemy', 'OpenNext', 'docs.planr.so', 'STAGE=prod pnpm docs:deploy',
+  'Alchemy v2', 'OpenNext', 'docs.planr.so', 'pnpm docs:deploy',
   '/api/search?query=installation', 'PLANR_DOCS_URL=https://docs.planr.so pnpm docs:verify-shell',
 ]);
 
 const rollback = await readPage('operations', 'rollback');
 requireMarkers(rollback, 'rollback runbook', [
-  'last known-good commit', 'STAGE=prod pnpm docs:deploy', '/api/search?query=installation', 'custom 404',
+  'last known-good commit', 'pnpm docs:deploy', '/api/search?query=installation', 'custom 404',
   'pnpm docs:destroy', 'does not touch user `.planr` data', 'Do not assume a binary downgrade is safe',
 ]);
 
@@ -124,10 +124,14 @@ for (const [name, version] of Object.entries({ ...packageJson.dependencies, ...p
   assert(!version.startsWith('^') && !version.startsWith('~'), `apps/docs dependency ${name} must use an exact version`);
 }
 assert(packageJson.engines.node === '>=22', 'apps/docs must require Node.js 22 or newer');
-assert(packageJson.scripts.deploy === 'alchemy deploy', 'apps/docs deploy must use Alchemy');
-assert(packageJson.scripts.destroy === 'alchemy destroy', 'apps/docs destroy must use Alchemy');
-assert(packageJson.scripts['verify:deployment'] === 'opennextjs-cloudflare build --skipWranglerConfigCheck', 'deployment verification must build the OpenNext Worker artifact');
-assert(packageJson.devDependencies.alchemy === '0.93.12', 'Alchemy must stay exactly pinned');
+assert(packageJson.scripts.deploy === 'alchemy deploy --stage prod', 'apps/docs deploy must target the Alchemy prod stage explicitly');
+assert(packageJson.scripts.destroy === 'alchemy destroy --stage prod', 'apps/docs destroy must target the Alchemy prod stage explicitly');
+assert(packageJson.scripts['build:worker'] === 'opennextjs-cloudflare build --skipWranglerConfigCheck', 'worker build must use OpenNext');
+assert(packageJson.scripts['verify:deployment'] === 'pnpm run build:worker', 'deployment verification must build the OpenNext Worker artifact');
+assert(packageJson.devDependencies.alchemy === '2.0.0-beta.63', 'Alchemy v2 must stay exactly pinned');
+assert(packageJson.devDependencies.effect === '4.0.0-beta.98', 'Effect v4 must stay exactly pinned');
+assert(packageJson.devDependencies['@effect/platform-node'] === '4.0.0-beta.98', 'Effect Node platform must stay exactly pinned');
+assert(packageJson.devDependencies['@effect/platform-bun'] === '4.0.0-beta.98', 'Effect Bun platform must stay exactly pinned');
 assert(packageJson.devDependencies['@opennextjs/cloudflare'] === '1.20.1', 'OpenNext must stay exactly pinned');
 
 const pages = await collectPages(contentRoot);
@@ -189,8 +193,10 @@ requireMarkers(nextConfig, 'Next.js redirect wiring', [
 
 const alchemyConfig = await read('apps/docs/alchemy.run.ts');
 requireMarkers(alchemyConfig, 'Alchemy deployment wiring', [
-  'alchemy("planr-docs"', 'Nextjs("website"', 'planr-docs-${app.stage}',
-  'app.stage === "prod"', 'docs.planr.so', 'adopt: true', 'NEXT_PUBLIC_SITE_URL',
+  'Alchemy.Stack(', 'Cloudflare.providers()', 'Cloudflare.state()',
+  'Cloudflare.Website.StaticSite(', 'planr-docs-${stage}',
+  'stage === "prod"', 'docs.planr.so', 'AdoptPolicy.adopt(true)',
+  'main: ".open-next/worker.js"', 'bundle: false', 'NEXT_PUBLIC_SITE_URL',
 ]);
 requireMarkers(await read('apps/docs/open-next.config.ts'), 'OpenNext configuration', [
   'defineCloudflareConfig', 'export default',
@@ -204,9 +210,9 @@ assert(
 assert(!/^git tag "v\$version"$/m.test(releaseScript), 'release script still contains a lightweight tag invocation');
 
 const sourceChecks = [
-  ['apps/docs/README.md', ['Node.js 22', 'pnpm install --frozen-lockfile', 'NEXT_PUBLIC_SITE_URL', 'docs.planr.so', 'STAGE=prod pnpm docs:deploy']],
-  ['apps/docs/.env.example', ['NEXT_PUBLIC_SITE_URL=https://docs.planr.so', 'ALCHEMY_PASSWORD=', 'CLOUDFLARE_API_TOKEN=', 'CLOUDFLARE_ACCOUNT_ID=', 'STAGE=dev']],
-  ['apps/docs/alchemy.run.ts', ['docs.planr.so', 'Nextjs', 'adopt: true']],
+  ['apps/docs/README.md', ['Node.js 22', 'pnpm install --frozen-lockfile', 'NEXT_PUBLIC_SITE_URL', 'docs.planr.so', 'pnpm docs:deploy', 'Alchemy v2']],
+  ['apps/docs/.env.example', ['NEXT_PUBLIC_SITE_URL=https://docs.planr.so']],
+  ['apps/docs/alchemy.run.ts', ['docs.planr.so', 'Cloudflare.Website.StaticSite', 'AdoptPolicy.adopt(true)', 'bundle: false']],
   ['apps/docs/open-next.config.ts', ['defineCloudflareConfig']],
   ['.github/workflows/ci.yml', ['Build Cloudflare Worker deployment artifact', 'pnpm docs:verify-deployment']],
   ['scripts/release.sh', ['The only supported release path', 'cargo test', 'scripts/security-local.sh', 'git tag -a']],

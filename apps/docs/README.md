@@ -50,7 +50,7 @@ All commands run through the root workspace scripts; no global Fumadocs or Next.
 
 `docs:verify-maintenance` checks the contributor and operations page tree, authoring and test instructions, local-first/security boundaries, exact docs dependency pins, deployment and rollback contracts, governance triggers, and their canonical repository sources.
 
-`docs:verify-deployment` runs the OpenNext Cloudflare transform without contacting Cloudflare and must produce `.open-next/worker.js`. Alchemy generates `wrangler.jsonc` before the same build during a real deploy; the standalone gate skips only that preflight file check.
+`docs:verify-deployment` runs the OpenNext Cloudflare transform without contacting Cloudflare and must produce `.open-next/worker.js`. Alchemy v2 consumes that prebuilt entrypoint and `.open-next/assets` directly, with bundling disabled so the OpenNext module graph is uploaded byte-for-byte.
 
 `docs:verify-release` checks every current route, explicit navigation entry, internal link and anchor, redirect target, coverage entry, duplicate heading, unfinished marker, and root entry point. With the production server running, `PLANR_DOCS_URL=http://localhost:3000 pnpm docs:verify-release-live` also renders all 55 MDX routes and verifies every redirect, representative search results, the sitemap, and the custom 404.
 
@@ -70,14 +70,14 @@ All commands run through the root workspace scripts; no global Fumadocs or Next.
 
 ## Deployment contract
 
-The canonical deployment is a Next.js application on Cloudflare Workers through Alchemy and OpenNext. Production owns `https://docs.planr.so`; non-production stages keep their generated Workers URL and never attach the production hostname.
+The canonical deployment is a Next.js application on Cloudflare Workers through Alchemy v2 and OpenNext. Production owns `https://docs.planr.so`; non-production stages keep their generated Workers URL and never attach the production hostname.
 
-1. copy `.env.example` to `apps/docs/.env.local` and set `ALCHEMY_PASSWORD`, `CLOUDFLARE_API_TOKEN`, and `CLOUDFLARE_ACCOUNT_ID`;
-2. authenticate the Cloudflare account with `pnpm --filter @planr/docs exec alchemy login` when not using an API token;
+1. authenticate the Cloudflare account with `pnpm --filter @planr/docs exec alchemy login --configure`; Alchemy stores local OAuth credentials in its profile, not in `.env`;
+2. use `.env.example` only when overriding the public canonical origin for a local build;
 3. validate locally with `pnpm docs:build` and optionally `pnpm docs:alchemy:dev`;
-4. deploy production with `STAGE=prod pnpm docs:deploy` from the repository root;
+4. deploy production with `pnpm docs:deploy` from the repository root; the package script pins `--stage prod` explicitly;
 5. verify the emitted URL and `https://docs.planr.so` with the release-live and browser gates.
 
-`apps/docs/alchemy.run.ts` is the infrastructure source of truth. It uses Alchemy's `Nextjs` Cloudflare resource, adopts the named Worker when it already exists, builds through OpenNext, and binds `docs.planr.so` only for `prod`. `NEXT_PUBLIC_SITE_URL` is set to the canonical production origin during that build.
+`apps/docs/alchemy.run.ts` is the infrastructure source of truth. It uses the Alchemy v2 Effect stack and Cloudflare remote state. `Cloudflare.Website.StaticSite` runs the OpenNext build and deploys its prebuilt Worker with `bundle: false`, adopts the named Worker when it already exists, and binds `docs.planr.so` only for `prod`. `NEXT_PUBLIC_SITE_URL` is set to the canonical production origin during that build.
 
-Use `pnpm docs:destroy` only with an explicit stage and after confirming the target; it removes Alchemy-managed infrastructure and is not part of normal rollback. Credentials and `.alchemy` state remain uncommitted.
+Use `pnpm docs:destroy` only after confirming the production target; it removes Alchemy-managed infrastructure and is not part of normal rollback. Local credentials remain in `~/.alchemy/profiles.json`, while stack state is stored through `Cloudflare.state()`.

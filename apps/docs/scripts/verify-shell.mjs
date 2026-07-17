@@ -410,7 +410,7 @@ try {
     ['/docs/contributing/security-and-privacy', 'Security and Privacy', ['local-first boundary', '127.0.0.1', 'Sensitive evidence']],
     ['/docs/operations/release', 'Release Planr', ['only supported release entry point', 'SHA256SUMS', 'Pre-releases']],
     ['/docs/operations/versioning-and-migrations', 'Versioning and Migrations', ['additive, idempotent', 'no documented guarantee', 'Migration change checklist']],
-    ['/docs/operations/docs-deployment', 'Deploy the Documentation', ['Node.js 22', 'Alchemy', 'docs.planr.so', 'STAGE=prod', 'NEXT_PUBLIC_SITE_URL', 'Pre-traffic health check']],
+    ['/docs/operations/docs-deployment', 'Deploy the Documentation', ['Node.js 22', 'Alchemy v2', 'docs.planr.so', 'pnpm docs:deploy', 'NEXT_PUBLIC_SITE_URL', 'Pre-traffic health check']],
     ['/docs/operations/health-and-diagnostics', 'Health and Diagnostics', ['no dedicated /health endpoint', 'Diagnostic ladder', 'Do not edit production content in place']],
     ['/docs/operations/rollback', 'Rollback', ['previously verified artifact', 'custom 404', 'binary downgrade']],
     ['/docs/operations/documentation-governance', 'Documentation Governance', ['Freshness triggers', 'Generated pages are never hand-edited', 'Page review contract']],
