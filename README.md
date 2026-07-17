@@ -22,61 +22,6 @@ Flat todo lists break down the moment real work has structure. Planr models work
 
 Three layers make that work: **Plans** (reviewable Markdown packages), the **Map** (live dependency graph with picks, reviews, logs), and **Agent loops** (skills, CLI, and MCP workflows for every major coding agent). Full model: [Task Graph Model](docs/TASK_GRAPH_MODEL.md) and [Operating Model](docs/OPERATING_MODEL.md).
 
-## New in 1.4.0: Verified Presets & Catalog
-
-Planr now ships a verified preset system for composing a provider-neutral usage policy with a host binding, previewing every repository-local change, and applying the result only after confirmation:
-
-```bash
-planr agents preset list
-planr agents preset apply balanced --binding codex-openai --preview
-planr agents preset apply balanced --binding codex-openai --confirm
-```
-
-The built-in catalog includes four policies, five host bindings, and 20 declared safe pairs. Reproducible evaluation, signed registry verification, and the public [Planr Preset Catalog](https://planr-test-catalog.office-35d.workers.dev/) keep recommendation evidence inspectable without making the registry a runtime dependency. Full guides: [Preset Composition](docs/PRESET_COMPOSITION.md) · [Preset Evaluation](docs/PRESET_EVALUATION.md) · [Preset Registry](docs/PRESET_REGISTRY.md).
-
-## New in 1.3.0: Native Host Hooks
-
-`planr install codex|claude|cursor` now wires Planr into the host's native hook system by default — every new session (including post-compaction restarts) gets one compact state block injected automatically:
-
-```text
-## planr state
-project: Hookboard | map: 5/5 settled | 0 ready, 0 picked, 0 in_review
-goal contract: DONE when every in-scope map item is closed with log evidence, ...
-routing: registry active (3 profiles; pick packets carry model routing)
-next: planr plan audit pln-fc584c28 --json
-```
-
-- **`planr prime`** — the state block behind the hooks: project, map counts, held items with log status, goal contract, and the next command. Silent in repos without a Planr database.
-- **Loop recovery becomes mechanism, not discipline** — an agent that restarts or compacts mid-loop picks up exactly where the map says it left off.
-- **Evidence guard (Cursor)** — a subagent that stops while its own pick has no completion log gets one advisory reminder naming the item and the two ways out.
-- **Fail-open and additive** — hooks never block a session (10s timeout, always exit 0), existing hook files are merged, `--no-hooks` opts out.
-
-Full guide: [Hooks](docs/HOOKS.md) · [Release notes](https://github.com/instructa/planr/releases/tag/v1.3.0).
-
-## Model Routing (1.2.0)
-
-Declare once which model handles which work — every task then carries its own routing, and your agents delegate automatically:
-
-```toml
-# .planr/agents.toml  (write it with `planr agents init`)
-[profiles.frontender]
-client = "cursor"
-model = "opus"
-skill = "frontend-design"
-
-[[routes]]
-match = { work_type = "frontend" }
-profile = "frontender"
-fallbacks = ["driver"]
-```
-
-- **Routing travels in the pick packet** — `planr pick --json` hands the worker its profile, model, and paired skill; `planr pick --peek` lets dispatching drivers read it without taking the lease.
-- **Rendered into your hosts' native config** — `planr install codex|claude|cursor` writes the subagent role files with model pins from the registry, in each host's exact vocabulary.
-- **Declared vs. actual, with receipts** — workers report the profile they ran on, runs record the observed host, and `planr trace item` shows deviations as advisory markers.
-- **Use-case pools** — free-form work types (`frontend`, `backend`, ...) declared right in the plan's task list (`### TASK-001 (backend): ...`), plus per-item pins via `planr item route`.
-
-Routing is advisory by design: Planr never dispatches models and never blocks a pick — hosts stay the authority. Full guide: [Model Routing](docs/MODEL_ROUTING.md) · replayable walkthrough: [Worked Example: Web App](docs/EXAMPLE_WEBAPP.md) · [Release notes](https://github.com/instructa/planr/releases/tag/v1.2.0).
-
 ## Install
 
 ```bash
@@ -105,7 +50,7 @@ Manual downloads, from-source builds, and client wiring details: [Install Guide]
 
 ## Install The Plugin (Skills)
 
-The plugin under `plugins/planr` carries the nine Planr skills plus the `planr-worker` and `planr-reviewer` subagent roles. The `planr` CLI (above) is required separately.
+The plugin under `plugins/planr` carries the ten Planr workflow skills. Optional model-routing roles come from repository-local routing bundles. The `planr` CLI (above) is required separately.
 
 <a id="install-plugin-codex"></a>
 <details>
@@ -185,6 +130,14 @@ the feature working in the browser. Iteration budget: 10.
 ```
 
 Mid-project work (a new feature, refactor, or fix on an existing project) works the same — it gets its own feature-scoped plan and extends the existing map. Both journeys with example prompts: [Two Journeys](docs/SKILLS.md#two-journeys-new-project-vs-existing-project). Watch progress anytime with `planr map show`.
+
+## What's new
+
+- **Planned for 1.5.0 — Optional routing policies:** Planr Core stays provider-neutral while the independently buildable `planr-routing` package owns model policies and host bindings for Codex, Claude Code, Cursor, and mixed-host setups. Start with [Routing Bundles](docs/ROUTING_BUNDLES.md) and the [`planr-routing` guide](planr-routing/docs/MODEL_ROUTING_POLICY.md).
+- **1.4.0 — Verified presets:** Added policy-driven composition, evaluation, signed registry evidence, and the public catalog. See the [1.4.0 release notes](https://github.com/instructa/planr/releases/tag/v1.4.0).
+- **1.3.0 — Native host hooks:** Added automatic session-state injection and loop recovery for supported hosts. See the [Hooks guide](docs/HOOKS.md) and [1.3.0 release notes](https://github.com/instructa/planr/releases/tag/v1.3.0).
+
+For the complete release history, see the [Changelog](CHANGELOG.md).
 
 ## Docs
 

@@ -22,15 +22,15 @@ $planr-goal <your goal>
 
 The stop condition lives in Planr (`--tag goal-contract`), so a dead session resumes with the same starter line from zero chat context.
 
-Run the driver session on your strongest tier (e.g. `gpt-5.5` at `model_reasoning_effort = "high"` in `~/.codex/config.toml`). The provisioned worker role pins a cheaper tier; the reviewer deliberately inherits the session model:
+Optionally compile and apply a repository-local Codex routing bundle before starting the driver:
 
-```toml
-# .codex/agents/planr-worker.toml
-model = "gpt-5.5"
-model_reasoning_effort = "medium"
+```bash
+planr-routing compile balanced --host codex-openai --output routing-bundle.json
+planr routing bundle preview routing-bundle.json
+planr routing bundle apply routing-bundle.json
 ```
 
-Verify the pin once: some Codex versions ignore custom agent files on spawn ([openai/codex#26868](https://github.com/openai/codex/issues/26868)) and the child silently inherits the parent model. Spawn `planr_worker` on a trivial item and confirm the child metadata shows the pinned model and effort with a non-null `agent_path`. Full workflow, recovery, per-host variants, and the tiering rationale: [Long-Running Goals](GOALS.md).
+The bundle generates repository-local roles and a routing skill. Follow that generated skill exactly, restart after role changes, and confirm child metadata reports the expected model, effort, role path, and context-fork behavior. Full workflow: [Long-Running Goals](GOALS.md).
 
 ## MCP
 

@@ -67,7 +67,7 @@ A worker subagent may take several items sequentially instead of being respawned
 
 Host wiring:
 
-- Codex: project agents in `.codex/agents/*.toml` preload the skill via `[[skills.config]]` (TOML templates in `agents/` next to this skill). Spawn explicitly: "spawn the planr_worker agent for item X". Keep `[agents] max_depth = 1`.
+- When a repository routing bundle supplies host roles, follow its generated routing skill exactly. Otherwise treat the profile in the pick packet as advisory and use the host's current dispatch contract. Never infer effective model or effort from a declaration alone.
 - Claude Code: subagents preload via the `skills:` frontmatter field. The Planr plugin registers `planr-worker` and `planr-reviewer` automatically from its `agents/` directory; standalone installs copy them to `.claude/agents/`. The reviewer subagent is read-only except for `planr review` commands.
 - Cursor: project subagents in `.cursor/agents/*.md` (Markdown templates in `agents/` next to this skill; `planr install cursor` provisions them). Dispatch explicitly: `/planr-worker implement item X`, `/planr-reviewer review item X`. Parallel dispatches are safe — the map's pick lease keeps one owner per item.
 - Single-agent hosts: run worker and checker as separate sequential dispatches with a fresh read of map state in between; never carry the worker's self-assessment into the review step. The mode is recorded automatically: `review close` derives `review_mode` (`single_agent`/`independent`) from worker identity.

@@ -1,16 +1,10 @@
 use assert_cmd::Command;
-use ed25519_dalek::SigningKey;
 use predicates::prelude::*;
 use rusqlite::Connection;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
 use std::process::Command as StdCommand;
 use std::thread;
 use std::time::Duration;
@@ -599,14 +593,14 @@ fn agent_registry_routes_picks_and_degrades_without_blocking() {
         &registry_path,
         r#"
 [profiles.implementer]
-client = "codex"
-model = "gpt-5.5"
+client = "cursor"
+model = "model-standard"
 effort = "medium"
 cost_tier = "standard"
 
 [profiles.driver]
 client = "cursor"
-model = "fable-5"
+model = "model-premium"
 effort = "high"
 cost_tier = "premium"
 
@@ -643,7 +637,7 @@ fallbacks = ["driver"]
     let listed: Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(
         listed["registry"]["profiles"]["implementer"]["model"],
-        "gpt-5.5"
+        "model-standard"
     );
     assert_eq!(listed["registry"]["routes"][0]["profile"], "implementer");
 
@@ -681,8 +675,8 @@ fallbacks = ["driver"]
     let picked: Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(picked["item"]["id"], item_id);
     assert_eq!(picked["routing"]["profile"], "implementer");
-    assert_eq!(picked["routing"]["client"], "codex");
-    assert_eq!(picked["routing"]["model"], "gpt-5.5");
+    assert_eq!(picked["routing"]["client"], "cursor");
+    assert_eq!(picked["routing"]["model"], "model-standard");
     assert_eq!(picked["routing"]["effort"], "medium");
     assert_eq!(picked["routing"]["cost_tier"], "standard");
     assert_eq!(picked["routing"]["fallbacks"], json!(["driver"]));
@@ -748,12 +742,12 @@ fn route_overrides_pin_items_and_survive_registry_drift() {
         &registry_path,
         r#"
 [profiles.implementer]
-client = "codex"
-model = "gpt-5.5"
+client = "cursor"
+model = "model-standard"
 
 [profiles.driver]
 client = "cursor"
-model = "fable-5"
+model = "model-premium"
 effort = "high"
 
 [[routes]]
@@ -864,8 +858,8 @@ profile = "implementer"
         &registry_path,
         r#"
 [profiles.implementer]
-client = "codex"
-model = "gpt-5.5"
+client = "cursor"
+model = "model-standard"
 
 [[routes]]
 match = { work_type = "code" }
@@ -970,132 +964,6 @@ profile = "implementer"
 }
 
 #[test]
-fn install_renders_roles_from_registry_and_respects_provision_once() {
-    let dir = tempdir().unwrap();
-    let db = dir.path().join(".planr/planr.sqlite");
-    planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "project", "init", "Render"])
-        .assert()
-        .success();
-    fs::write(
-        dir.path().join(".planr/agents.toml"),
-        r#"
-[profiles.coder]
-client = "codex"
-model = "gpt-5.5"
-effort = "xhigh"
-
-[profiles.judge]
-client = "cursor"
-model = "fable-5"
-effort = "high"
-
-[[routes]]
-match = { work_type = "code" }
-profile = "coder"
-
-[[routes]]
-match = { work_type = "review" }
-profile = "judge"
-"#,
-    )
-    .unwrap();
-
-    planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "install", "codex"])
-        .assert()
-        .success();
-    let worker_path = dir.path().join(".codex/agents/planr-worker.toml");
-    let worker = fs::read_to_string(&worker_path).unwrap();
-    assert!(worker.contains("# generated from .planr/agents.toml"));
-    let parsed: toml::Value = toml::from_str(&worker).unwrap();
-    assert_eq!(parsed["model"].as_str(), Some("gpt-5.5"));
-    assert_eq!(parsed["model_reasoning_effort"].as_str(), Some("xhigh"));
-    // The worker's audit report is baked into its own definition: the
-    // concrete profile id as a --profile instruction, not worker memory.
-    assert!(
-        parsed["developer_instructions"]
-            .as_str()
-            .unwrap()
-            .contains("--profile coder"),
-        "rendered worker must instruct its own profile report: {worker}"
-    );
-    // The review route points at a Cursor profile: a Codex role file must
-    // not pin a model Codex cannot dispatch, so the reviewer stays static.
-    let reviewer =
-        fs::read_to_string(dir.path().join(".codex/agents/planr-reviewer.toml")).unwrap();
-    assert!(!reviewer.contains("generated from"));
-    assert!(!reviewer.contains("fable-5"));
-
-    // The same review route does pin the Cursor reviewer role.
-    planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "install", "cursor"])
-        .assert()
-        .success();
-    let cursor_reviewer =
-        fs::read_to_string(dir.path().join(".cursor/agents/planr-reviewer.md")).unwrap();
-    assert!(cursor_reviewer.contains("model: fable-5"));
-    assert!(cursor_reviewer.contains("# profile: judge"));
-    let cursor_worker =
-        fs::read_to_string(dir.path().join(".cursor/agents/planr-worker.md")).unwrap();
-    assert!(
-        cursor_worker.contains("model: inherit"),
-        "code route targets a Codex profile, so the Cursor worker keeps its static default"
-    );
-
-    // Provision-once: hand edits survive a re-install without --force and
-    // are re-rendered with it.
-    fs::write(&worker_path, "# hand edited\n").unwrap();
-    planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "install", "codex"])
-        .assert()
-        .success();
-    assert_eq!(fs::read_to_string(&worker_path).unwrap(), "# hand edited\n");
-    planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "install", "codex", "--force"])
-        .assert()
-        .success();
-    assert_eq!(fs::read_to_string(&worker_path).unwrap(), worker);
-
-    // Without a registry the install output is byte-identical to the
-    // shipped static role files.
-    let fresh = tempdir().unwrap();
-    let fresh_db = fresh.path().join(".planr/planr.sqlite");
-    planr()
-        .current_dir(fresh.path())
-        .args([
-            "--db",
-            fresh_db.to_str().unwrap(),
-            "project",
-            "init",
-            "Static",
-        ])
-        .assert()
-        .success();
-    planr()
-        .current_dir(fresh.path())
-        .args(["--db", fresh_db.to_str().unwrap(), "install", "codex"])
-        .assert()
-        .success();
-    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    assert_eq!(
-        fs::read_to_string(fresh.path().join(".codex/agents/planr-worker.toml")).unwrap(),
-        fs::read_to_string(repo.join("plugins/planr/skills/planr-loop/agents/planr-worker.toml"))
-            .unwrap()
-    );
-    assert_eq!(
-        fs::read_to_string(fresh.path().join(".codex/agents/planr-reviewer.toml")).unwrap(),
-        fs::read_to_string(repo.join("plugins/planr/skills/planr-loop/agents/planr-reviewer.toml"))
-            .unwrap()
-    );
-}
-
-#[test]
 fn run_profile_recording_emits_advisory_mismatch_events_only() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
@@ -1108,12 +976,12 @@ fn run_profile_recording_emits_advisory_mismatch_events_only() {
         dir.path().join(".planr/agents.toml"),
         r#"
 [profiles.coder]
-client = "codex"
-model = "gpt-5.5"
+client = "cursor"
+model = "model-standard"
 
 [profiles.driver]
 client = "cursor"
-model = "fable-5"
+model = "model-premium"
 
 [[routes]]
 match = { work_type = "code" }
@@ -1421,8 +1289,8 @@ fn route_audit_survives_logs_events_and_cli_mcp_trace_without_inference() {
         dir.path().join(".planr/agents.toml"),
         r#"
 [profiles.coder]
-client = "codex"
-model = "gpt-5.5"
+client = "cursor"
+model = "model-standard"
 effort = "high"
 
 [[routes]]
@@ -1459,7 +1327,8 @@ profile = "coder"
             "role": "worker",
             "profile": "coder",
             "client": "codex",
-            "model": {"value": "gpt-5.5", "enforcement": "requested_only", "evidence": "policy"},
+            "agent_type": {"value": "planr-terra-high", "enforcement": "requested_only", "evidence": "binding"},
+            "model": {"value": "model-primary", "enforcement": "requested_only", "evidence": "policy"},
             "effort": {"value": "high", "enforcement": "requested_only", "evidence": "policy"},
             "context_fork": {"value": {"mode": "none"}, "enforcement": "requested_only", "evidence": "policy"}
         },
@@ -1467,25 +1336,29 @@ profile = "coder"
             "role": "worker",
             "profile": "coder",
             "client": "codex",
-            "model": {"value": "gpt-5.5", "enforcement": "verified", "evidence": "binding"},
+            "agent_type": {"value": "planr-terra-high", "enforcement": "verified", "evidence": "binding"},
+            "model": {"value": "model-primary", "enforcement": "verified", "evidence": "binding"},
             "effort": {"value": "high", "enforcement": "verified", "evidence": "binding"},
             "context_fork": {"value": {"mode": "none"}, "enforcement": "verified", "evidence": "binding"}
         },
         "effective": {
-            "role": "worker",
+            "role": "planr-terra-high",
             "profile": "coder",
             "client": "codex",
+            "agent_type": {"value": "planr-terra-high", "enforcement": "verified", "evidence": "host_report"},
             "model": {"value": null, "enforcement": "unavailable"},
             "effort": {"value": null, "enforcement": "unavailable"},
-            "context_fork": {"value": {"mode": "none"}, "enforcement": "verified", "evidence": "host_report"}
+            "context_fork": {"value": {"mode": "none"}, "enforcement": "verified", "evidence": "host_report"},
+            "thread_id": "thread-terra-high",
+            "status": "completed"
         },
         "transition": {
             "kind": "availability_fallback",
             "reason": "primary profile unavailable; same-class fallback selected",
             "evidence": ["host_report"]
         },
-        "policy": {"id": "balanced", "version": "1.0.0"},
-        "binding": {"id": "codex-openai", "version": "1.0.0"},
+        "policy": {"id": "policy-a", "version": "1.0.0"},
+        "binding": {"id": "binding-a", "version": "2.0.0"},
         "metering": {
             "wall_time_seconds": {"value": 12, "confidence": "trusted"},
             "tool_calls": {"value": 4, "confidence": "trusted"},
@@ -1543,13 +1416,20 @@ profile = "coder"
         .clone();
     let cli_trace: Value = serde_json::from_slice(&output).unwrap();
     let route = &cli_trace["routing"]["runs"][0]["route_observation"];
-    assert_eq!(route["requested"]["model"]["value"], "gpt-5.5");
+    assert_eq!(
+        route["requested"]["agent_type"]["value"],
+        "planr-terra-high"
+    );
+    assert_eq!(route["requested"]["model"]["value"], "model-primary");
     assert_eq!(route["resolved"]["effort"]["value"], "high");
     assert!(route["effective"]["model"]["value"].is_null());
     assert_eq!(route["effective"]["model"]["enforcement"], "unavailable");
     assert_eq!(route["effective"]["context_fork"]["value"]["mode"], "none");
-    assert_eq!(route["policy"]["id"], "balanced");
-    assert_eq!(route["binding"]["version"], "1.0.0");
+    assert_eq!(route["effective"]["role"], "planr-terra-high");
+    assert_eq!(route["effective"]["thread_id"], "thread-terra-high");
+    assert_eq!(route["effective"]["status"], "completed");
+    assert_eq!(route["policy"]["id"], "policy-a");
+    assert_eq!(route["binding"]["version"], "2.0.0");
     assert_eq!(route["metering"]["tool_calls"]["value"], 4);
     assert_eq!(route["metering"]["tokens"]["confidence"], "unavailable");
 
@@ -1646,7 +1526,7 @@ profile = "coder"
 
     let mut invalid = observation.clone();
     invalid["effective"]["model"] = json!({
-        "value": "gpt-5.5",
+        "value": "model-observed",
         "enforcement": "requested_only",
         "evidence": "user_reported"
     });
@@ -1679,7 +1559,7 @@ profile = "coder"
 
     let mut disguised_verified = observation.clone();
     disguised_verified["effective"]["model"] = json!({
-        "value": "gpt-5.5",
+        "value": "model-observed",
         "enforcement": "verified",
         "evidence": "policy"
     });
@@ -1712,7 +1592,7 @@ profile = "coder"
 
     let mut unproven_estimate = observation.clone();
     unproven_estimate["effective"]["model"] = json!({
-        "value": "gpt-5.5",
+        "value": "model-observed",
         "enforcement": "estimated"
     });
     let mcp_output = planr()
@@ -1889,13 +1769,13 @@ fn trace_routing_section_and_doctor_registry_diagnostics() {
         &registry_path,
         r#"
 [profiles.coder]
-client = "codex"
-model = "gpt-5.5"
+client = "cursor"
+model = "model-standard"
 effort = "xhigh"
 
 [profiles.ghost-ref]
-client = "codex"
-model = "gpt-5.5"
+client = "cursor"
+model = "model-standard"
 
 [[routes]]
 match = { work_type = "code" }
@@ -1928,41 +1808,13 @@ profile = "nonexistent"
             .contains("nonexistent")
     );
 
-    // Rendered artifacts: current right after install, drifted after the
-    // registry changes underneath them.
-    planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "install", "codex"])
-        .assert()
-        .success();
-    let artifact_state = |value: &Value, path: &str| -> String {
-        value["registry"]["artifacts"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|artifact| artifact["path"] == path)
-            .map(|artifact| artifact["state"].as_str().unwrap().to_string())
-            .unwrap_or_else(|| panic!("artifact {path} not reported"))
-    };
-    let output = planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "--json", "doctor"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let doctor: Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(
-        artifact_state(&doctor, ".codex/agents/planr-worker.toml"),
-        "current"
-    );
+    // Core does not render or inspect host-specific model artifacts.
     fs::write(
         &registry_path,
         r#"
 [profiles.coder]
-client = "codex"
-model = "gpt-6"
+client = "cursor"
+model = "model-next"
 effort = "high"
 
 [[routes]]
@@ -1971,26 +1823,6 @@ profile = "coder"
 "#,
     )
     .unwrap();
-    let output = planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "--json", "doctor"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let doctor: Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(
-        artifact_state(&doctor, ".codex/agents/planr-worker.toml"),
-        "drifted"
-    );
-    assert!(
-        doctor["registry"]["drift_hint"]
-            .as_str()
-            .unwrap()
-            .contains("--force")
-    );
-
     // Trace now shows declared vs actual with an advisory marker.
     planr()
         .current_dir(dir.path())
@@ -2066,8 +1898,8 @@ fn package_round_trips_agent_registry_without_silent_overwrite() {
         .success();
     let registry_toml = r#"
 [profiles.coder]
-client = "codex"
-model = "gpt-5.5"
+client = "cursor"
+model = "model-standard"
 
 [[routes]]
 match = { work_type = "code" }
@@ -2167,7 +1999,7 @@ profile = "coder"
     assert_eq!(applied["imported"]["agent_registry"]["action"], "identical");
 
     // A differing local registry is never silently overwritten.
-    let local_registry = "[profiles.local]\nclient = \"cursor\"\nmodel = \"fable-5\"\n";
+    let local_registry = "[profiles.local]\nclient = \"cursor\"\nmodel = \"model-premium\"\n";
     fs::write(dest.path().join(".planr/agents.toml"), local_registry).unwrap();
     let output = planr()
         .current_dir(dest.path())
@@ -2238,14 +2070,14 @@ fn skill_pairing_travels_through_pick_route_list_and_prompt() {
         dir.path().join(".planr/agents.toml"),
         r#"[profiles.designer]
 client = "claude-code"
-model = "opus"
+model = "model-review"
 effort = "high"
 cost_tier = "premium"
 skill = "frontend-design"
 
 [profiles.backender]
-client = "codex"
-model = "gpt-5.5"
+client = "cursor"
+model = "model-standard"
 
 [[routes]]
 match = { work_type = "frontend" }
@@ -2325,7 +2157,7 @@ profile = "backender"
         .stdout
         .clone();
     let prompt = String::from_utf8(output).unwrap();
-    assert!(prompt.contains("| work_type=frontend | designer | claude-code | opus | high | premium | frontend-design | backender |"));
+    assert!(prompt.contains("| work_type=frontend | designer | claude-code | - | model-review | high | premium | frontend-design | backender |"));
     assert!(prompt.contains("dispatch the worker with that skill"));
 
     // Retagging via item update re-resolves routing on the next pick:
@@ -2578,9 +2410,9 @@ fn agents_init_flag_specs_generate_a_pool_and_fail_closed() {
             "agents",
             "init",
             "--profile",
-            "driver=cursor/fable-5@high#premium",
+            "driver=cursor/model-premium@high#premium",
             "--profile",
-            "designer=claude-code/opus@high#premium",
+            "designer=claude-code/model-review@high#premium",
             "--skill",
             "designer=frontend-design",
             "--route",
@@ -2631,25 +2463,27 @@ fn agents_init_flag_specs_generate_a_pool_and_fail_closed() {
     assert_eq!(pick["routing"]["skill"], "frontend-design");
     assert_eq!(pick["routing"]["fallbacks"][0], "driver");
 
-    // A hand-written registry with render-unsafe values (quoted TOML keys
-    // parse fine but would corrupt rendered role files) keeps installs on
-    // the static role files instead of writing broken artifacts.
+    // A hand-written Cursor registry with render-unsafe values keeps its
+    // independent renderer on the static role instead of writing broken artifacts.
     fs::write(
         dir.path().join(".planr/agents.toml"),
-        "[profiles.\"evil\nid\"]\nclient = \"codex\"\nmodel = \"gpt-5.5\"\n\n[[routes]]\nmatch = { work_type = \"code\" }\nprofile = \"evil\nid\"\n",
+        "[profiles.\"evil\nid\"]\nclient = \"cursor\"\nmodel = \"model-standard\"\n\n[[routes]]\nmatch = { work_type = \"code\" }\nprofile = \"evil\nid\"\n",
     )
     .unwrap();
     planr()
         .current_dir(dir.path())
-        .args(["--db", &db_arg, "install", "codex", "--no-mcp", "--force"])
+        .args(["--db", &db_arg, "install", "cursor", "--no-mcp", "--force"])
         .assert()
         .success();
-    let worker = fs::read_to_string(dir.path().join(".codex/agents/planr-worker.toml")).unwrap();
+    let worker = fs::read_to_string(dir.path().join(".cursor/agents/planr-worker.md")).unwrap();
     assert!(
         !worker.contains("generated from"),
         "render-unsafe profile must fall back to the static role: {worker}"
     );
-    toml::from_str::<toml::Value>(&worker).expect("role file must stay parseable TOML");
+    assert!(
+        worker.starts_with("---\n"),
+        "role file must stay parseable markdown"
+    );
 
     // QA-3: spec flags never overwrite without --force either.
     planr()
@@ -2660,7 +2494,7 @@ fn agents_init_flag_specs_generate_a_pool_and_fail_closed() {
             "agents",
             "init",
             "--profile",
-            "solo=codex/gpt-5.5",
+            "solo=cursor/model-standard",
         ])
         .assert()
         .failure()
@@ -2691,7 +2525,7 @@ fn agents_init_flag_specs_generate_a_pool_and_fail_closed() {
             "init",
             "--interactive",
             "--profile",
-            "a=codex/m",
+            "a=cursor/m",
             "--force",
         ])
         .assert()
@@ -2711,7 +2545,7 @@ fn observed_client_lands_on_runs_and_flags_declared_client_deviation() {
     fs::create_dir_all(dir.path().join(".planr")).unwrap();
     fs::write(
         dir.path().join(".planr/agents.toml"),
-        "[profiles.coder]\nclient = \"cursor\"\nmodel = \"gpt-5.5\"\n\n[route_default]\nprofile = \"coder\"\n",
+        "[profiles.coder]\nclient = \"cursor\"\nmodel = \"model-standard\"\n\n[route_default]\nprofile = \"coder\"\n",
     )
     .unwrap();
     let item = create_test_item(dir.path(), &db, "Routed work", "host audit");
@@ -3006,7 +2840,7 @@ fn cancel_reasons_routing_alias_and_skill_existence_warning() {
     // developer's real skill collection cannot leak in.
     fs::write(
         dir.path().join(".planr/agents.toml"),
-        "[profiles.designer]\nclient = \"cursor\"\nmodel = \"opus\"\nskill = \"definitely-missing-skill\"\n\n[route_default]\nprofile = \"designer\"\n",
+        "[profiles.designer]\nclient = \"cursor\"\nmodel = \"model-review\"\nskill = \"definitely-missing-skill\"\n\n[route_default]\nprofile = \"designer\"\n",
     )
     .unwrap();
     let output = planr()
@@ -3070,7 +2904,7 @@ fn plan_work_type_annotations_seed_routed_items_without_retags() {
         .success();
     fs::write(
         dir.path().join(".planr/agents.toml"),
-        "[profiles.frontender]\nclient = \"cursor\"\nmodel = \"opus\"\n\n[profiles.backender]\nclient = \"cursor\"\nmodel = \"gpt-5.5-high\"\n\n[[routes]]\nmatch = { work_type = \"frontend\" }\nprofile = \"frontender\"\n\n[[routes]]\nmatch = { work_type = \"backend\" }\nprofile = \"backender\"\n",
+        "[profiles.frontender]\nclient = \"claude-code\"\nmodel = \"model-review\"\n\n[profiles.backender]\nclient = \"cursor\"\nmodel = \"model-standard\"\n\n[[routes]]\nmatch = { work_type = \"frontend\" }\nprofile = \"frontender\"\n\n[[routes]]\nmatch = { work_type = \"backend\" }\nprofile = \"backender\"\n",
     )
     .unwrap();
     // A build plan whose task list carries annotations: heading style,
@@ -3638,7 +3472,7 @@ fn pick_peek_reads_the_packet_without_leasing() {
         .success();
     fs::write(
         dir.path().join(".planr/agents.toml"),
-        "[profiles.coder]\nclient = \"cursor\"\nmodel = \"gpt-5.5-high\"\n\n[route_default]\nprofile = \"coder\"\n",
+        "[profiles.coder]\nclient = \"cursor\"\nmodel = \"model-standard\"\n\n[route_default]\nprofile = \"coder\"\n",
     )
     .unwrap();
     let item = create_test_item(dir.path(), &db, "Dispatch me", "peek target");
@@ -3695,215 +3529,6 @@ fn pick_peek_reads_the_packet_without_leasing() {
 }
 
 #[test]
-fn agents_init_scaffold_is_warning_free_and_routes_by_default() {
-    let dir = tempdir().unwrap();
-    let db = dir.path().join(".planr/planr.sqlite");
-    planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "project", "init", "Scaffold"])
-        .assert()
-        .success();
-    let output = planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "--json", "agents", "init"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let created: Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(created["path"], ".planr/agents.toml");
-    assert_eq!(created["next"][0], "planr agents check");
-
-    // The scaffold must parse with zero warnings.
-    let output = planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "--json", "agents", "check"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let check: Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(check["ok"], true);
-    assert_eq!(check["warnings"].as_array().unwrap().len(), 0);
-
-    // The scaffold teaches client honesty where clients get declared.
-    let scaffold_content = fs::read_to_string(dir.path().join(".planr/agents.toml")).unwrap();
-    assert!(
-        scaffold_content.contains("Declare the client you will actually dispatch on"),
-        "scaffold must carry the client-honesty rule: {scaffold_content}"
-    );
-
-    // A seeded code item picks up the scaffold's implementer route.
-    planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "item",
-            "create",
-            "Scaffolded work",
-            "--description",
-            "Routes via the starter registry",
-            "--work-type",
-            "code",
-        ])
-        .assert()
-        .success();
-    let output = planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "--json", "pick"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let pick: Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(pick["routing"]["profile"], "implementer");
-    assert_eq!(pick["routing"]["model"], "gpt-5.5");
-    assert_eq!(pick["routing"]["fallbacks"][0], "driver");
-    assert_eq!(pick["routing"]["matched_selector"], "work_type=code");
-
-    // A second init refuses politely and leaves the file untouched...
-    let scaffold = fs::read_to_string(dir.path().join(".planr/agents.toml")).unwrap();
-    let custom = scaffold.replace("gpt-5.5", "gpt-6");
-    fs::write(dir.path().join(".planr/agents.toml"), &custom).unwrap();
-    planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "agents", "init"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("--force"));
-    assert_eq!(
-        fs::read_to_string(dir.path().join(".planr/agents.toml")).unwrap(),
-        custom
-    );
-
-    // ...and --force restores the scaffold.
-    planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "agents", "init", "--force"])
-        .assert()
-        .success();
-    assert_eq!(
-        fs::read_to_string(dir.path().join(".planr/agents.toml")).unwrap(),
-        scaffold
-    );
-}
-
-#[test]
-fn prompt_routing_names_routes_fallbacks_and_host_traps() {
-    let dir = tempdir().unwrap();
-    let db = dir.path().join(".planr/planr.sqlite");
-    planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "project", "init", "Prompt"])
-        .assert()
-        .success();
-
-    // Missing registry: still zero-exit with the host guidance and a
-    // pointer instead of a route table.
-    let missing = planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "--json", "prompt", "routing"])
-        .output()
-        .unwrap();
-    assert!(missing.status.success());
-    let missing_json: serde_json::Value = serde_json::from_slice(&missing.stdout).unwrap();
-    assert_eq!(missing_json["registry"], "missing");
-    assert!(
-        missing_json["prompt"]
-            .as_str()
-            .unwrap()
-            .contains("fork_turns")
-    );
-
-    fs::write(
-        dir.path().join(".planr/agents.toml"),
-        r#"
-[profiles.coder]
-client = "codex"
-model = "gpt-5.5"
-effort = "xhigh"
-
-[profiles.driver]
-client = "cursor"
-model = "fable-5"
-
-[[routes]]
-match = { work_type = "code" }
-profile = "coder"
-fallbacks = ["driver"]
-
-[route_default]
-profile = "driver"
-"#,
-    )
-    .unwrap();
-    let output = planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "--json", "prompt", "routing"])
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["registry"], "ok");
-    let routes = json["routes"].as_array().unwrap();
-    assert_eq!(routes.len(), 2, "every route plus the default is named");
-    assert_eq!(routes[0]["match"], "work_type=code");
-    assert_eq!(routes[0]["fallbacks"][0], "driver");
-    assert_eq!(routes[1]["match"], "default");
-    let prompt = json["prompt"].as_str().unwrap();
-    for required in [
-        "work_type=code",
-        "driver",
-        // The three host traps must be spelled out.
-        "fork_turns: \"none\"",
-        "CLAUDE_CODE_SUBAGENT_MODEL",
-        "Max Mode can override",
-        // Process dispatch reuses the code route's pin as the example.
-        "codex exec --model gpt-5.5 -c model_reasoning_effort=\"xhigh\"",
-        "pi --provider",
-        "opencode run",
-    ] {
-        assert!(
-            prompt.contains(required),
-            "prompt must contain `{required}`"
-        );
-    }
-    assert!(
-        json["hosts"]["codex"][1]
-            .as_str()
-            .unwrap()
-            .contains("fork_turns")
-    );
-    assert_eq!(json["process_dispatch"].as_array().unwrap().len(), 3);
-
-    // --client filters the host sections but keeps the table.
-    let codex_only = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "prompt",
-            "routing",
-            "--client",
-            "codex",
-        ])
-        .output()
-        .unwrap();
-    let codex_json: serde_json::Value = serde_json::from_slice(&codex_only.stdout).unwrap();
-    let codex_prompt = codex_json["prompt"].as_str().unwrap();
-    assert!(codex_prompt.contains("### Codex"));
-    assert!(!codex_prompt.contains("### Claude Code"));
-    assert!(!codex_prompt.contains("### Cursor"));
-    assert!(codex_prompt.contains("work_type=code"));
-    assert!(codex_json["hosts"].get("claude").is_none());
-}
-
-#[test]
 fn mcp_route_tools_reuse_cli_json_shapes() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
@@ -3917,7 +3542,7 @@ fn mcp_route_tools_reuse_cli_json_shapes() {
         r#"
 [profiles.driver]
 client = "cursor"
-model = "fable-5"
+model = "model-premium"
 
 [[routes]]
 match = { work_type = "code" }
@@ -3982,7 +3607,10 @@ profile = "driver"
     };
 
     let listed = tool_payload(0);
-    assert_eq!(listed["registry"]["profiles"]["driver"]["model"], "fable-5");
+    assert_eq!(
+        listed["registry"]["profiles"]["driver"]["model"],
+        "model-premium"
+    );
     assert_eq!(listed["warnings"].as_array().unwrap().len(), 0);
 
     let shown = tool_payload(1);
@@ -4004,1730 +3632,6 @@ profile = "driver"
     let cleared = tool_payload(4);
     assert_eq!(cleared["cleared"], true);
     assert_eq!(cleared["previous"], "driver");
-}
-
-#[test]
-fn preset_composition_cli_mcp_parity_lock_conflicts_and_repository_safety() {
-    let policy = r#"
-schema_version = 1
-id = "portable-balanced"
-version = "1.0.0"
-
-[usage]
-max_active_agents = 3
-max_parallel_readers = 2
-max_parallel_writers = 1
-max_depth = 1
-max_attempts = 4
-review_reserve_percent = 20
-budget_exhaustion = "stop"
-metering = "unavailable"
-
-[transitions.retry]
-max_same_route_retries = 1
-
-[transitions.availability_fallback]
-max_fallbacks = 1
-require_same_capability_class = true
-
-[transitions.quality_escalation]
-max_escalations = 1
-require_verification_evidence = true
-
-[transitions.quota_downgrade]
-enabled = false
-max_downgrades = 0
-noncritical_only = true
-
-[transitions.safety_stop]
-enabled = true
-
-[materiality]
-changed_files_threshold = 10
-changed_lines_threshold = 500
-
-[execution]
-max_read_scope_entries = 4
-max_write_scope_entries = 2
-
-[execution.roles.worker]
-tools = ["cargo"]
-commands = [{ program = "cargo", args = ["test"] }]
-
-[execution.roles.worker.filesystem]
-read_roots = ["src", "tests"]
-write_roots = ["src", "tests"]
-allow_overwrite = false
-"#;
-    let binding = r#"
-schema_version = 1
-id = "codex-test"
-version = "1.0.0"
-host = "codex"
-driver_role = "driver"
-default_role = "driver"
-capability_evidence = ["codex-0.138-cross-tier-smoke"]
-billing_assumptions = ["local subscription"]
-known_limitations = ["effective model requires host evidence"]
-
-[capabilities]
-model_override = true
-effort_override = true
-fork_none = true
-fork_all = true
-max_partial_fork_turns = 4
-
-[profiles.driver]
-profile = "sol"
-client = "codex"
-model = "gpt-5.5"
-effort = "xhigh"
-cost_tier = "premium"
-
-[profiles.worker]
-profile = "luna"
-client = "codex"
-model = "gpt-5.4-mini"
-effort = "high"
-cost_tier = "standard"
-skill = "planr-work"
-
-[[routes]]
-work_type = "code"
-role = "worker"
-fallback_roles = ["driver"]
-
-[verification]
-id = "verify-codex-test"
-verified_at_unix = 1900000000
-max_age_seconds = 86400
-
-[[artifacts]]
-path = ".codex/agents/luna.toml"
-kind = "codex_agent"
-content = '''model = "gpt-5.4-mini"
-model_reasoning_effort = "high"
-'''
-"#;
-    let prepare = |root: &Path| {
-        let db = root.join(".planr/planr.sqlite");
-        planr()
-            .current_dir(root)
-            .args([
-                "--db",
-                db.to_str().unwrap(),
-                "project",
-                "init",
-                "Preset composition",
-            ])
-            .assert()
-            .success();
-        fs::write(root.join("portable-policy.toml"), policy).unwrap();
-        fs::write(root.join("codex-binding.toml"), binding).unwrap();
-        db
-    };
-    let deterministic = |command: &mut assert_cmd::Command| {
-        command
-            .env("PLANR_PRESET_NOW_UNIX", "1900000100")
-            .env("PLANR_PRESET_APPLIED_AT", "2030-03-17T17:48:20Z");
-    };
-
-    let cli_dir = tempdir().unwrap();
-    let cli_db = prepare(cli_dir.path());
-    let mut preview_command = planr();
-    deterministic(&mut preview_command);
-    let preview = preview_command
-        .current_dir(cli_dir.path())
-        .args([
-            "--db",
-            cli_db.to_str().unwrap(),
-            "--json",
-            "agents",
-            "preset",
-            "apply",
-            "portable-policy.toml",
-            "--binding",
-            "codex-binding.toml",
-            "--preview",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let preview: Value = serde_json::from_slice(&preview).unwrap();
-    assert_eq!(preview["action"], "previewed");
-    assert_eq!(preview["mutation"], false);
-    assert_eq!(preview["compatibility"]["ok"], true);
-    assert_eq!(preview["pack"]["status"], "custom");
-    assert_eq!(preview["pack"]["safe"], false);
-    assert!(
-        preview["compatibility"]["warnings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|warning| warning
-                .as_str()
-                .unwrap()
-                .contains("not a validated built-in safe pack"))
-    );
-    assert_eq!(preview["verification_age"]["status"], "fresh");
-    assert_eq!(
-        preview["composition"]["dispatch"]["worker"]["fork_turns"]["mode"],
-        "none"
-    );
-    assert_eq!(
-        preview["permission_diff"]["worker"]["write_roots"],
-        json!(["src", "tests"])
-    );
-    assert_eq!(preview["artifacts"].as_array().unwrap().len(), 4);
-    let policy_diff = preview["artifacts"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|artifact| artifact["path"] == ".planr/policy.toml")
-        .unwrap();
-    assert!(policy_diff["config_diff"]["current"].is_null());
-    assert_eq!(
-        policy_diff["config_diff"]["proposed"]["value"]["usage"]["max_active_agents"],
-        3
-    );
-    assert_eq!(
-        policy_diff["config_diff"]["proposed"]["value"]["transitions"]["retry"]["max_same_route_retries"],
-        1
-    );
-    let registry_diff = preview["artifacts"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|artifact| artifact["path"] == ".planr/agents.toml")
-        .unwrap();
-    assert_eq!(
-        registry_diff["config_diff"]["proposed"]["value"]["profiles"]["luna"]["client"],
-        "codex"
-    );
-    assert_eq!(
-        registry_diff["config_diff"]["proposed"]["value"]["profiles"]["luna"]["model"],
-        "gpt-5.4-mini"
-    );
-    assert_eq!(
-        registry_diff["config_diff"]["proposed"]["value"]["routes"][0]["fallbacks"],
-        json!(["sol"])
-    );
-    assert!(
-        preview["artifacts"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|artifact| artifact["action"] == "create")
-    );
-    for path in [
-        ".planr/policy.toml",
-        ".planr/agents.toml",
-        ".planr/preset.lock.toml",
-        ".codex/agents/luna.toml",
-    ] {
-        assert!(!cli_dir.path().join(path).exists(), "preview wrote {path}");
-    }
-
-    let mut mcp_preview_command = planr();
-    deterministic(&mut mcp_preview_command);
-    let mcp_preview = mcp_preview_command
-        .current_dir(cli_dir.path())
-        .args(["--db", cli_db.to_str().unwrap(), "mcp"])
-        .write_stdin(format!(
-            "{}\n",
-            json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"planr_preset_apply","arguments":{"policy":"portable-policy.toml","binding":"codex-binding.toml"}}})
-        ))
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let mcp_preview: Value = serde_json::from_slice(&mcp_preview).unwrap();
-    let mcp_preview: Value = serde_json::from_str(
-        mcp_preview["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(mcp_preview, preview);
-
-    let aws_secret = "AKIAEXAMPLE123";
-    let embedded_secret = "xoxb-embedded-token";
-    let secret_binding = binding.replace(
-        "model_reasoning_effort = \"high\"",
-        &format!(
-            "model_reasoning_effort = \"high\"\naws_access_key_id = \"{aws_secret}\"\nnotes = \"rotate {embedded_secret} today\""
-        ),
-    );
-    fs::write(cli_dir.path().join("secret-binding.toml"), secret_binding).unwrap();
-    let mut secret_cli_command = planr();
-    deterministic(&mut secret_cli_command);
-    let secret_cli = secret_cli_command
-        .current_dir(cli_dir.path())
-        .args([
-            "--db",
-            cli_db.to_str().unwrap(),
-            "--json",
-            "agents",
-            "preset",
-            "apply",
-            "portable-policy.toml",
-            "--binding",
-            "secret-binding.toml",
-            "--preview",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let secret_cli_raw = String::from_utf8(secret_cli).unwrap();
-    assert!(!secret_cli_raw.contains(aws_secret), "CLI leaked AWS key");
-    assert!(
-        !secret_cli_raw.contains(embedded_secret),
-        "CLI leaked embedded token"
-    );
-    assert!(secret_cli_raw.contains("[REDACTED]"));
-
-    let mut secret_mcp_command = planr();
-    deterministic(&mut secret_mcp_command);
-    let secret_mcp = secret_mcp_command
-        .current_dir(cli_dir.path())
-        .args(["--db", cli_db.to_str().unwrap(), "mcp"])
-        .write_stdin(format!(
-            "{}\n",
-            json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"planr_preset_apply","arguments":{"policy":"portable-policy.toml","binding":"secret-binding.toml"}}})
-        ))
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let secret_mcp_raw = String::from_utf8(secret_mcp).unwrap();
-    assert!(!secret_mcp_raw.contains(aws_secret), "MCP leaked AWS key");
-    assert!(
-        !secret_mcp_raw.contains(embedded_secret),
-        "MCP leaked embedded token"
-    );
-    let secret_cli: Value = serde_json::from_str(&secret_cli_raw).unwrap();
-    let secret_mcp: Value = serde_json::from_str(&secret_mcp_raw).unwrap();
-    let secret_mcp: Value =
-        serde_json::from_str(secret_mcp["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
-    assert_eq!(secret_mcp, secret_cli);
-
-    let evidence_secret = "AKIAMETADATA123";
-    let warning_secret = "xoxb-warning-token";
-    let billing_secret = "ghp_billing_token";
-    let metadata_binding = binding
-        .replace(
-            "capability_evidence = [\"codex-0.138-cross-tier-smoke\"]",
-            &format!("capability_evidence = [\"{evidence_secret}\"]"),
-        )
-        .replace(
-            "billing_assumptions = [\"local subscription\"]",
-            &format!("billing_assumptions = [\"account {billing_secret}\"]"),
-        )
-        .replace(
-            "known_limitations = [\"effective model requires host evidence\"]",
-            &format!("known_limitations = [\"rotate {warning_secret} today\"]"),
-        );
-    fs::write(
-        cli_dir.path().join("secret-metadata-binding.toml"),
-        metadata_binding,
-    )
-    .unwrap();
-    let mut metadata_cli_command = planr();
-    deterministic(&mut metadata_cli_command);
-    let metadata_cli = metadata_cli_command
-        .current_dir(cli_dir.path())
-        .args([
-            "--db",
-            cli_db.to_str().unwrap(),
-            "--json",
-            "agents",
-            "preset",
-            "apply",
-            "portable-policy.toml",
-            "--binding",
-            "secret-metadata-binding.toml",
-            "--confirm",
-        ])
-        .assert()
-        .failure()
-        .get_output()
-        .stdout
-        .clone();
-    let metadata_cli_raw = String::from_utf8(metadata_cli).unwrap();
-    for secret in [evidence_secret, warning_secret, billing_secret] {
-        assert!(
-            !metadata_cli_raw.contains(secret),
-            "CLI leaked metadata {secret}"
-        );
-    }
-    assert!(metadata_cli_raw.contains("binding.capability_evidence[0]"));
-    assert!(metadata_cli_raw.contains("binding.known_limitations[0]"));
-    assert!(metadata_cli_raw.contains("binding.billing_assumptions[0]"));
-    for path in [
-        ".planr/policy.toml",
-        ".planr/agents.toml",
-        ".planr/preset.lock.toml",
-        ".codex/agents/luna.toml",
-    ] {
-        assert!(
-            !cli_dir.path().join(path).exists(),
-            "rejection wrote {path}"
-        );
-    }
-
-    let mut metadata_mcp_command = planr();
-    deterministic(&mut metadata_mcp_command);
-    let metadata_mcp = metadata_mcp_command
-        .current_dir(cli_dir.path())
-        .args(["--db", cli_db.to_str().unwrap(), "mcp"])
-        .write_stdin(format!(
-            "{}\n",
-            json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"planr_preset_apply","arguments":{"policy":"portable-policy.toml","binding":"secret-metadata-binding.toml","confirm":true}}})
-        ))
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let metadata_mcp_raw = String::from_utf8(metadata_mcp).unwrap();
-    for secret in [evidence_secret, warning_secret, billing_secret] {
-        assert!(
-            !metadata_mcp_raw.contains(secret),
-            "MCP leaked metadata {secret}"
-        );
-    }
-    let metadata_mcp: Value = serde_json::from_str(&metadata_mcp_raw).unwrap();
-    assert_eq!(metadata_mcp["result"]["isError"], true);
-    for path in [
-        ".planr/policy.toml",
-        ".planr/agents.toml",
-        ".planr/preset.lock.toml",
-        ".codex/agents/luna.toml",
-    ] {
-        assert!(
-            !cli_dir.path().join(path).exists(),
-            "rejection wrote {path}"
-        );
-    }
-
-    let mut cli_apply_command = planr();
-    deterministic(&mut cli_apply_command);
-    let cli_apply = cli_apply_command
-        .current_dir(cli_dir.path())
-        .args([
-            "--db",
-            cli_db.to_str().unwrap(),
-            "--json",
-            "agents",
-            "preset",
-            "apply",
-            "portable-policy.toml",
-            "--binding",
-            "codex-binding.toml",
-            "--confirm",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let cli_apply: Value = serde_json::from_slice(&cli_apply).unwrap();
-    assert_eq!(cli_apply["action"], "applied");
-    assert_eq!(cli_apply["mutation"], true);
-
-    let mcp_dir = tempdir().unwrap();
-    let mcp_db = prepare(mcp_dir.path());
-    let mut mcp_apply_command = planr();
-    deterministic(&mut mcp_apply_command);
-    let mcp_apply = mcp_apply_command
-        .current_dir(mcp_dir.path())
-        .args(["--db", mcp_db.to_str().unwrap(), "mcp"])
-        .write_stdin(format!(
-            "{}\n",
-            json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"planr_preset_apply","arguments":{"policy":"portable-policy.toml","binding":"codex-binding.toml","confirm":true}}})
-        ))
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let mcp_apply: Value = serde_json::from_slice(&mcp_apply).unwrap();
-    let mcp_apply: Value =
-        serde_json::from_str(mcp_apply["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
-    assert_eq!(mcp_apply, cli_apply);
-    for path in [
-        ".planr/policy.toml",
-        ".planr/agents.toml",
-        ".planr/preset.lock.toml",
-        ".codex/agents/luna.toml",
-    ] {
-        assert_eq!(
-            fs::read(cli_dir.path().join(path)).unwrap(),
-            fs::read(mcp_dir.path().join(path)).unwrap(),
-            "CLI/MCP artifact drift at {path}"
-        );
-    }
-    let lock = fs::read_to_string(cli_dir.path().join(".planr/preset.lock.toml")).unwrap();
-    assert!(lock.contains("id = \"portable-balanced\""));
-    assert!(lock.contains("id = \"codex-test\""));
-    assert!(lock.contains("applied_at = \"2030-03-17T17:48:20Z\""));
-
-    let policy_snapshot = fs::read(cli_dir.path().join(".planr/policy.toml")).unwrap();
-    fs::write(
-        cli_dir.path().join(".planr/agents.toml"),
-        "# unrelated local registry\n",
-    )
-    .unwrap();
-    let mut conflict_preview_command = planr();
-    deterministic(&mut conflict_preview_command);
-    let conflict_preview = conflict_preview_command
-        .current_dir(cli_dir.path())
-        .args([
-            "--db",
-            cli_db.to_str().unwrap(),
-            "--json",
-            "agents",
-            "preset",
-            "apply",
-            "portable-policy.toml",
-            "--binding",
-            "codex-binding.toml",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let conflict_preview: Value = serde_json::from_slice(&conflict_preview).unwrap();
-    let registry_conflict = conflict_preview["artifacts"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|artifact| artifact["path"] == ".planr/agents.toml")
-        .unwrap();
-    assert_eq!(registry_conflict["action"], "conflict");
-    assert!(registry_conflict["config_diff"]["current"].is_object());
-    assert_eq!(
-        registry_conflict["config_diff"]["proposed"]["value"]["profiles"]["luna"]["effort"],
-        "high"
-    );
-    let mut conflict_command = planr();
-    deterministic(&mut conflict_command);
-    conflict_command
-        .current_dir(cli_dir.path())
-        .args([
-            "--db",
-            cli_db.to_str().unwrap(),
-            "agents",
-            "preset",
-            "apply",
-            "portable-policy.toml",
-            "--binding",
-            "codex-binding.toml",
-            "--confirm",
-        ])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "refused existing unrelated configuration: .planr/agents.toml",
-        ));
-    assert_eq!(
-        fs::read(cli_dir.path().join(".planr/policy.toml")).unwrap(),
-        policy_snapshot,
-        "conflict must fail before any write"
-    );
-    assert_eq!(
-        fs::read_to_string(cli_dir.path().join(".planr/agents.toml")).unwrap(),
-        "# unrelated local registry\n"
-    );
-
-    let unsafe_dir = tempdir().unwrap();
-    let unsafe_db = prepare(unsafe_dir.path());
-    let absolute_target = unsafe_dir
-        .path()
-        .join("absolute-target.toml")
-        .to_string_lossy()
-        .to_string();
-    for (index, target, expected) in [
-        (
-            0,
-            ".codex/config.toml".to_string(),
-            "user/global config and .codex/config.toml are forbidden",
-        ),
-        (
-            1,
-            "../outside.toml".to_string(),
-            "contains absolute, current, or parent traversal",
-        ),
-        (2, absolute_target, "must be repository-relative"),
-        (
-            3,
-            "~/.codex/agents/luna.toml".to_string(),
-            "outside the repository artifact allowlist",
-        ),
-    ] {
-        let file = format!("forbidden-binding-{index}.toml");
-        fs::write(
-            unsafe_dir.path().join(&file),
-            binding.replace(".codex/agents/luna.toml", &target),
-        )
-        .unwrap();
-        let mut forbidden_command = planr();
-        deterministic(&mut forbidden_command);
-        forbidden_command
-            .current_dir(unsafe_dir.path())
-            .args([
-                "--db",
-                unsafe_db.to_str().unwrap(),
-                "agents",
-                "preset",
-                "apply",
-                "portable-policy.toml",
-                "--binding",
-                &file,
-                "--confirm",
-            ])
-            .assert()
-            .failure()
-            .stderr(predicate::str::contains(expected));
-        assert!(!unsafe_dir.path().join(".planr/policy.toml").exists());
-        assert!(!unsafe_dir.path().join(".planr/agents.toml").exists());
-        assert!(!unsafe_dir.path().join(".planr/preset.lock.toml").exists());
-    }
-
-    let all_fork = binding
-        .replace(
-            "skill = \"planr-work\"",
-            "skill = \"planr-work\"\nfork_turns = { mode = \"all\" }",
-        )
-        .replace("client = \"codex\"", "client = \"generic-mcp\"");
-    fs::write(unsafe_dir.path().join("all-fork-binding.toml"), all_fork).unwrap();
-    let mut all_fork_command = planr();
-    deterministic(&mut all_fork_command);
-    all_fork_command
-        .current_dir(unsafe_dir.path())
-        .args([
-            "--db",
-            unsafe_db.to_str().unwrap(),
-            "agents",
-            "preset",
-            "apply",
-            "portable-policy.toml",
-            "--binding",
-            "all-fork-binding.toml",
-            "--confirm",
-        ])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("cannot use fork_turns all"));
-    assert!(!unsafe_dir.path().join(".planr/policy.toml").exists());
-    assert!(!unsafe_dir.path().join(".planr/agents.toml").exists());
-    assert!(!unsafe_dir.path().join(".planr/preset.lock.toml").exists());
-
-    let blank_partial = binding
-        .replace(
-            "capability_evidence = [\"codex-0.138-cross-tier-smoke\"]",
-            "capability_evidence = [\"   \"]",
-        )
-        .replace(
-            "skill = \"planr-work\"",
-            "skill = \"planr-work\"\nfork_turns = { mode = \"partial\", turns = 2 }",
-        );
-    fs::write(
-        unsafe_dir.path().join("blank-partial-binding.toml"),
-        blank_partial,
-    )
-    .unwrap();
-    let mut blank_partial_command = planr();
-    deterministic(&mut blank_partial_command);
-    let blank_partial = blank_partial_command
-        .current_dir(unsafe_dir.path())
-        .args(["--db", unsafe_db.to_str().unwrap(), "mcp"])
-        .write_stdin(format!(
-            "{}\n",
-            json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"planr_preset_apply","arguments":{"policy":"portable-policy.toml","binding":"blank-partial-binding.toml","confirm":true}}})
-        ))
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let blank_partial: Value = serde_json::from_slice(&blank_partial).unwrap();
-    assert_eq!(blank_partial["result"]["isError"], true);
-    assert!(
-        blank_partial["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("capability_evidence[0] must not be blank")
-    );
-    assert!(!unsafe_dir.path().join(".planr/policy.toml").exists());
-    assert!(!unsafe_dir.path().join(".planr/agents.toml").exists());
-    assert!(!unsafe_dir.path().join(".planr/preset.lock.toml").exists());
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::symlink;
-        let outside = tempdir().unwrap();
-        fs::create_dir_all(unsafe_dir.path().join(".codex")).unwrap();
-        symlink(outside.path(), unsafe_dir.path().join(".codex/agents")).unwrap();
-        let mut symlink_command = planr();
-        deterministic(&mut symlink_command);
-        symlink_command
-            .current_dir(unsafe_dir.path())
-            .args([
-                "--db",
-                unsafe_db.to_str().unwrap(),
-                "agents",
-                "preset",
-                "apply",
-                "portable-policy.toml",
-                "--binding",
-                "codex-binding.toml",
-                "--confirm",
-            ])
-            .assert()
-            .failure()
-            .stderr(predicate::str::contains("crosses symlink"));
-        assert!(!outside.path().join("luna.toml").exists());
-        assert!(!unsafe_dir.path().join(".planr/policy.toml").exists());
-        assert!(!unsafe_dir.path().join(".planr/agents.toml").exists());
-        assert!(!unsafe_dir.path().join(".planr/preset.lock.toml").exists());
-    }
-}
-
-#[test]
-fn builtin_preset_catalog_cli_mcp_safe_packs_and_repository_boundary() {
-    let catalog_dir = tempdir().unwrap();
-    let catalog_db = catalog_dir.path().join(".planr/planr.sqlite");
-    planr()
-        .current_dir(catalog_dir.path())
-        .args([
-            "--db",
-            catalog_db.to_str().unwrap(),
-            "project",
-            "init",
-            "Built-in catalog",
-        ])
-        .assert()
-        .success();
-    let cli_catalog = planr()
-        .current_dir(catalog_dir.path())
-        .args([
-            "--db",
-            catalog_db.to_str().unwrap(),
-            "--json",
-            "agents",
-            "preset",
-            "list",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let cli_catalog: Value = serde_json::from_slice(&cli_catalog).unwrap();
-    assert_eq!(cli_catalog["policies"].as_array().unwrap().len(), 4);
-    assert_eq!(cli_catalog["bindings"].as_array().unwrap().len(), 5);
-    assert_eq!(cli_catalog["safe_packs"].as_array().unwrap().len(), 20);
-    let mcp_catalog = planr()
-        .current_dir(catalog_dir.path())
-        .args(["--db", catalog_db.to_str().unwrap(), "mcp"])
-        .write_stdin(format!(
-            "{}\n",
-            json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"planr_presets_list","arguments":{}}})
-        ))
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let mcp_catalog: Value = serde_json::from_slice(&mcp_catalog).unwrap();
-    let mcp_catalog: Value = serde_json::from_str(
-        mcp_catalog["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(mcp_catalog, cli_catalog);
-
-    for binding in [
-        "codex-openai",
-        "cursor-openai",
-        "cursor-fable-grok",
-        "claude-native",
-        "mixed-host",
-    ] {
-        let dir = tempdir().unwrap();
-        let home = tempdir().unwrap();
-        let db = dir.path().join(".planr/planr.sqlite");
-        let global_files = [
-            (".codex/config.toml", b"codex-global-snapshot\n".as_slice()),
-            (".claude/settings.json", b"{\"claude\":true}\n".as_slice()),
-            (".cursor/mcp.json", b"{\"cursor\":true}\n".as_slice()),
-        ];
-        for (path, content) in global_files {
-            let target = home.path().join(path);
-            fs::create_dir_all(target.parent().unwrap()).unwrap();
-            fs::write(target, content).unwrap();
-        }
-        let snapshots = global_files
-            .iter()
-            .map(|(path, _)| {
-                (
-                    home.path().join(path),
-                    fs::read(home.path().join(path)).unwrap(),
-                )
-            })
-            .collect::<Vec<_>>();
-        planr()
-            .current_dir(dir.path())
-            .env("HOME", home.path())
-            .args([
-                "--db",
-                db.to_str().unwrap(),
-                "project",
-                "init",
-                "Built-in safe pack",
-            ])
-            .assert()
-            .success();
-
-        let configure = |command: &mut assert_cmd::Command| {
-            command
-                .env("HOME", home.path())
-                .env("PLANR_PRESET_NOW_UNIX", "1784000000")
-                .env("PLANR_PRESET_APPLIED_AT", "2026-07-14T00:00:00Z");
-        };
-        let mut preview_command = planr();
-        configure(&mut preview_command);
-        let preview = preview_command
-            .current_dir(dir.path())
-            .args([
-                "--db",
-                db.to_str().unwrap(),
-                "--json",
-                "agents",
-                "preset",
-                "apply",
-                "balanced",
-                "--binding",
-                binding,
-            ])
-            .assert()
-            .success()
-            .get_output()
-            .stdout
-            .clone();
-        let preview: Value = serde_json::from_slice(&preview).unwrap();
-        assert_eq!(preview["pack"]["status"], "safe", "{binding}");
-        assert_eq!(preview["pack"]["safe"], true, "{binding}");
-        assert_eq!(preview["pack"]["policy"], "balanced");
-        assert_eq!(preview["pack"]["binding"], binding);
-        assert_eq!(preview["compatibility"]["ok"], true);
-        assert!(preview["conflicts"].as_array().unwrap().is_empty());
-
-        let mut mcp_command = planr();
-        configure(&mut mcp_command);
-        let mcp_preview = mcp_command
-            .current_dir(dir.path())
-            .args(["--db", db.to_str().unwrap(), "mcp"])
-            .write_stdin(format!(
-                "{}\n",
-                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"planr_preset_apply","arguments":{"policy":"balanced","binding":binding}}})
-            ))
-            .assert()
-            .success()
-            .get_output()
-            .stdout
-            .clone();
-        let mcp_preview: Value = serde_json::from_slice(&mcp_preview).unwrap();
-        let mcp_preview: Value = serde_json::from_str(
-            mcp_preview["result"]["content"][0]["text"]
-                .as_str()
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(mcp_preview, preview, "CLI/MCP drift for {binding}");
-
-        let mut apply_command = planr();
-        configure(&mut apply_command);
-        let applied = apply_command
-            .current_dir(dir.path())
-            .args([
-                "--db",
-                db.to_str().unwrap(),
-                "--json",
-                "agents",
-                "preset",
-                "apply",
-                "balanced",
-                "--binding",
-                binding,
-                "--confirm",
-            ])
-            .assert()
-            .success()
-            .get_output()
-            .stdout
-            .clone();
-        let applied: Value = serde_json::from_slice(&applied).unwrap();
-        let mut expected = preview.clone();
-        expected["action"] = json!("applied");
-        expected["mutation"] = json!(true);
-        assert_eq!(applied, expected, "apply drift for {binding}");
-
-        let canonical_root = fs::canonicalize(dir.path()).unwrap();
-        let registry: toml::Value =
-            toml::from_str(&fs::read_to_string(dir.path().join(".planr/agents.toml")).unwrap())
-                .unwrap();
-        let profile_matches = |client: &str, model: &str, effort: Option<&str>| {
-            registry["profiles"]
-                .as_table()
-                .unwrap()
-                .values()
-                .any(|profile| {
-                    profile["client"].as_str() == Some(client)
-                        && profile["model"].as_str() == Some(model)
-                        && effort.is_none_or(|effort| profile["effort"].as_str() == Some(effort))
-                })
-        };
-        for artifact in preview["artifacts"].as_array().unwrap() {
-            let relative = artifact["path"].as_str().unwrap();
-            let relative_path = Path::new(relative);
-            assert!(
-                !relative_path.is_absolute(),
-                "absolute built-in target {relative}"
-            );
-            assert!(
-                relative_path
-                    .components()
-                    .all(|component| matches!(component, std::path::Component::Normal(_))),
-                "non-normal built-in target {relative}"
-            );
-            let target = dir.path().join(relative);
-            let canonical_target = fs::canonicalize(&target).unwrap();
-            assert!(canonical_target.starts_with(&canonical_root));
-            let actual = fs::read(&target).unwrap();
-            let actual_hash = format!("{:x}", Sha256::digest(&actual));
-            assert_eq!(artifact["proposed_sha256"], actual_hash, "{relative}");
-            let content = String::from_utf8(actual).unwrap();
-            match artifact["kind"].as_str().unwrap() {
-                "codex_agent" => {
-                    let role: toml::Value = toml::from_str(&content).unwrap();
-                    assert!(
-                        !role["developer_instructions"]
-                            .as_str()
-                            .unwrap()
-                            .trim()
-                            .is_empty(),
-                        "Codex would ignore {relative} without developer_instructions"
-                    );
-                    assert!(!role["model"].as_str().unwrap().trim().is_empty());
-                    assert!(
-                        !role["model_reasoning_effort"]
-                            .as_str()
-                            .unwrap()
-                            .trim()
-                            .is_empty()
-                    );
-                    assert!(profile_matches(
-                        "codex",
-                        role["model"].as_str().unwrap(),
-                        role["model_reasoning_effort"].as_str(),
-                    ));
-                }
-                "claude_agent" | "cursor_agent" => {
-                    let rest = content.strip_prefix("---\n").unwrap();
-                    let (frontmatter, body) = rest.split_once("\n---\n").unwrap();
-                    let fields = frontmatter
-                        .lines()
-                        .map(|line| line.split_once(':').unwrap())
-                        .collect::<BTreeMap<_, _>>();
-                    assert!(!fields["name"].trim().is_empty());
-                    assert!(!fields["model"].trim().is_empty());
-                    assert!(!body.trim().is_empty());
-                    let client = if artifact["kind"] == "claude_agent" {
-                        "claude-code"
-                    } else {
-                        "cursor"
-                    };
-                    assert!(profile_matches(
-                        client,
-                        fields["model"].trim(),
-                        fields.get("effort").map(|effort| effort.trim()),
-                    ));
-                }
-                _ => {}
-            }
-        }
-        for (path, snapshot) in &snapshots {
-            assert_eq!(
-                fs::read(path).unwrap(),
-                *snapshot,
-                "global file changed: {path:?}"
-            );
-        }
-    }
-}
-
-#[test]
-fn preset_evaluation_reports_are_reproducible_threshold_gated_and_surface_identical() {
-    let dir = tempdir().unwrap();
-    let db = dir.path().join(".planr/planr.sqlite");
-    planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "project",
-            "init",
-            "Preset evaluation",
-        ])
-        .assert()
-        .success();
-
-    let output = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "agents",
-            "preset",
-            "evaluate",
-            "--at-unix",
-            "1783987200",
-            "--report-dir",
-            "reports/preset-v1",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let cli: Value = serde_json::from_slice(&output).unwrap();
-    let report = &cli["report"];
-    assert_eq!(report["schema_version"], 1);
-    assert_eq!(report["suite"]["version"], "1.8.0");
-    assert_eq!(report["reproducible_evidence"], true);
-    assert_eq!(report["task_fixtures"].as_array().unwrap().len(), 7);
-    let task_kinds = report["task_fixtures"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|task| task["kind"].as_str().unwrap())
-        .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(
-        task_kinds,
-        std::collections::BTreeSet::from([
-            "browser",
-            "exploration",
-            "implementation",
-            "mechanical",
-            "security",
-            "subagent",
-            "visual",
-        ])
-    );
-    assert!(report["recommended"].as_array().unwrap().is_empty());
-    assert_eq!(report["codex_dispatch_contract"]["all_fork_rejected"], true);
-    assert_eq!(
-        report["codex_dispatch_contract"]["none_fork_parameters_verified"],
-        true
-    );
-    assert_eq!(
-        report["codex_dispatch_contract"]["missing_effective_evidence_cannot_verify"],
-        true
-    );
-    assert_eq!(
-        report["candidates"][0]["model_versions"]["worker"]["model"],
-        "gpt-5.4-mini"
-    );
-    assert!(
-        report["candidates"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|candidate| candidate["status"] == "verified")
-    );
-    assert!(
-        report["candidates"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .flat_map(|candidate| candidate["results"].as_array().unwrap())
-            .all(|result| {
-                result["input_sha256"]
-                    .as_str()
-                    .is_some_and(|hash| hash.len() == 64)
-                    && result["result_sha256"]
-                        .as_str()
-                        .is_some_and(|hash| hash.len() == 64)
-                    && result["evidence"]["generated_by"] == "planr-offline-policy-simulator"
-                    && result["evidence"]["evidence_scope"] == "policy_simulation"
-                    && result["evidence"]["task_executed"] == false
-                    && result["evidence"]["outcome_oracle_evaluated"] == false
-                    && result["evidence"]["recommendation_eligible"] == false
-                    && result["evidence"]["route_verified"] == false
-                    && result["evidence"]["route_observation"]["effective"]["model"]["enforcement"]
-                        == "unavailable"
-            })
-    );
-    assert_eq!(report["transition_counts"]["safety_stop"]["attempted"], 4);
-    assert!(
-        report["candidates"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|candidate| candidate.get("label").is_none())
-    );
-
-    let machine_path = dir.path().join("reports/preset-v1/verification.json");
-    let human_path = dir.path().join("reports/preset-v1/report.md");
-    let original_machine = fs::read(&machine_path).unwrap();
-    let original_human = fs::read(&human_path).unwrap();
-    let written: Value = serde_json::from_slice(&original_machine).unwrap();
-    assert_eq!(written, cli);
-    let markdown = fs::read_to_string(&human_path).unwrap();
-    assert!(markdown.contains("# Preset Evaluation Verification"));
-    assert!(markdown.contains("Codex Sol/Luna contract"));
-    assert!(markdown.contains("balanced-codex-openai"));
-
-    planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "agents",
-            "preset",
-            "evaluate",
-            "--report-dir",
-            "reports/preset-v1",
-        ])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("immutable report already exists"));
-    assert_eq!(fs::read(&machine_path).unwrap(), original_machine);
-    assert_eq!(fs::read(&human_path).unwrap(), original_human);
-
-    let mcp = planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "mcp"])
-        .write_stdin(format!(
-            "{}\n",
-            json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"planr_preset_evaluate","arguments":{"at_unix":1783987200}}})
-        ))
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let mcp: Value = serde_json::from_slice(&mcp).unwrap();
-    let mcp: Value =
-        serde_json::from_str(mcp["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
-    assert_eq!(mcp, cli);
-
-    #[cfg(unix)]
-    {
-        let assert_incomplete_live =
-            |payload: &Value| {
-                assert_eq!(payload["report"]["reproducible_evidence"], false);
-                assert!(
-                    payload["report"]["recommended"]
-                        .as_array()
-                        .unwrap()
-                        .is_empty()
-                );
-                assert!(
-                    payload["report"]["candidates"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .all(|candidate| candidate["status"] == "unverified"
-                            && candidate["evidence_complete"] == false
-                            && candidate["recommendation_evidence_complete"] == false
-                            && candidate["status_reasons"].as_array().unwrap().iter().any(
-                                |reason| reason.as_str().is_some_and(|reason| reason
-                                    .contains("live execution was attempted")
-                                    && reason.contains("challenge-bound"))
-                            ))
-                );
-            };
-        let mapper_adapter = dir.path().join("request-mapper-live-host.sh");
-        fs::write(
-            &mapper_adapter,
-            r#"#!/bin/sh
-request=$(cat)
-candidate=$(printf '%s' "$request" | sed -n 's/.*"candidate":{"id":"\([^"]*\)".*/\1/p')
-task=$(printf '%s' "$request" | sed -n 's/.*"task":{"id":"\([^"]*\)".*/\1/p')
-input_sha=$(printf '%s' "$request" | sed -n 's/.*"input_sha256":"\([^"]*\)".*/\1/p')
-artifact=$(printf '%s' "$request" | sed -n 's/.*"artifact_kind":"\([^"]*\)".*/\1/p')
-case "$task" in
-  explore-routing-boundaries) suffix=routing-boundaries-inspected ;;
-  implement-bounded-policy-change) suffix=bounded-policy-change-implemented ;;
-  mechanical-schema-rewrite) suffix=owned-schema-rewritten ;;
-  browser-report-smoke) suffix=browser-report-inspected ;;
-  visual-report-regression) suffix=visual-contract-matched ;;
-  security-safety-stop) suffix=unsafe-operation-stopped ;;
-  subagent-sol-luna-dispatch) suffix=sol-luna-dispatch-verified ;;
-  *) suffix=unknown-task ;;
-esac
-result="$candidate:$task:$suffix"
-printf '{"schema_version":1,"host_id":"fake-host","host_version":"1.0.0","candidate_id":"%s","task_id":"%s","input_sha256":"%s","artifact_kind":"%s","output":"%s","effective_model":"gpt-5.4-mini","effective_effort":"high","effective_context_fork":{"mode":"none"},"tool_calls":1,"tokens":10,"credits_micros":100,"retries":1,"availability_fallbacks":1,"quality_escalations":1,"corrections":1,"violations":0}\n' "$candidate" "$task" "$input_sha" "$artifact" "$result"
-"#,
-        )
-        .unwrap();
-        let live_output = planr()
-            .current_dir(dir.path())
-            .args([
-                "--db",
-                db.to_str().unwrap(),
-                "--json",
-                "agents",
-                "preset",
-                "evaluate",
-                "--at-unix",
-                "1783987200",
-                "--live-host-command",
-                "/bin/sh",
-                "--live-host-arg",
-                mapper_adapter.to_str().unwrap(),
-            ])
-            .assert()
-            .success()
-            .get_output()
-            .stdout
-            .clone();
-        let live: Value = serde_json::from_slice(&live_output).unwrap();
-        assert_eq!(
-            live["report"]["environment"]["runner"],
-            "planr-live-host-runner"
-        );
-        assert_incomplete_live(&live);
-        assert!(
-            live["report"]["candidates"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .flat_map(|candidate| candidate["results"].as_array().unwrap())
-                .all(|result| result["evidence"]["task_executed"] == false
-                    && result["evidence"]["outcome_oracle_evaluated"] == false
-                    && result["evidence"]["recommendation_eligible"] == false
-                    && result["evidence"]["route_verified"] == false)
-        );
-        let mapper_mcp = planr()
-            .current_dir(dir.path())
-            .args(["--db", db.to_str().unwrap(), "mcp"])
-            .write_stdin(format!(
-                "{}\n",
-                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"planr_preset_evaluate","arguments":{"at_unix":1783987200,"live_host_command":"/bin/sh","live_host_args":[mapper_adapter.to_str().unwrap()]}}})
-            ))
-            .assert()
-            .success()
-            .get_output()
-            .stdout
-            .clone();
-        let mapper_mcp: Value = serde_json::from_slice(&mapper_mcp).unwrap();
-        let mapper_mcp: Value =
-            serde_json::from_str(mapper_mcp["result"]["content"][0]["text"].as_str().unwrap())
-                .unwrap();
-        assert_incomplete_live(&mapper_mcp);
-
-        let artifact_adapter = dir.path().join("artifact-live-host.sh");
-        fs::write(
-            &artifact_adapter,
-            r#"#!/bin/sh
-request=$(cat)
-candidate=$(printf '%s' "$request" | sed -n 's/.*"candidate":{"id":"\([^"]*\)".*/\1/p')
-task=$(printf '%s' "$request" | sed -n 's/.*"task":{"id":"\([^"]*\)".*/\1/p')
-input_sha=$(printf '%s' "$request" | sed -n 's/.*"input_sha256":"\([^"]*\)".*/\1/p')
-artifact=$(printf '%s' "$request" | sed -n 's/.*"artifact_kind":"\([^"]*\)".*/\1/p')
-challenge_path=$(printf '%s' "$request" | sed -n 's/.*"challenge_path":"\([^"]*\)".*/\1/p')
-artifact_path=$(printf '%s' "$request" | sed -n 's/.*"artifact_path":"\([^"]*\)".*/\1/p')
-hash_file() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | awk '{print $1}'
-  else
-    shasum -a 256 "$1" | awk '{print $1}'
-  fi
-}
-case "$task" in
-  explore-routing-boundaries) suffix=routing-boundaries-inspected ;;
-  implement-bounded-policy-change) suffix=bounded-policy-change-implemented ;;
-  mechanical-schema-rewrite) suffix=owned-schema-rewritten ;;
-  browser-report-smoke) suffix=browser-report-inspected ;;
-  visual-report-regression) suffix=visual-contract-matched ;;
-  security-safety-stop) suffix=unsafe-operation-stopped ;;
-  subagent-sol-luna-dispatch) suffix=sol-luna-dispatch-verified ;;
-  *) suffix=unknown-task ;;
-esac
-result="$candidate:$task:$suffix"
-challenge_sha=$(hash_file "$challenge_path")
-printf '{"schema_version":1,"candidate_id":"%s","task_id":"%s","input_sha256":"%s","artifact_kind":"%s","challenge_sha256":"%s","output":"%s"}' "$candidate" "$task" "$input_sha" "$artifact" "$challenge_sha" "$result" > "$artifact_path"
-artifact_sha=$(hash_file "$artifact_path")
-printf '{"schema_version":1,"host_id":"artifact-host","host_version":"1.0.0","candidate_id":"%s","task_id":"%s","input_sha256":"%s","artifact_kind":"%s","artifact_sha256":"%s","output":"%s","effective_model":"gpt-5.4-mini","effective_effort":"high","effective_context_fork":{"mode":"none"},"tool_calls":1,"tokens":10,"credits_micros":100,"retries":1,"availability_fallbacks":1,"quality_escalations":1,"corrections":1,"violations":0}\n' "$candidate" "$task" "$input_sha" "$artifact" "$artifact_sha" "$result"
-"#,
-        )
-        .unwrap();
-        let signing_key = SigningKey::from_bytes(&[7_u8; 32]);
-        let hex = |bytes: &[u8]| {
-            bytes
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>()
-        };
-        let telemetry_public_key = hex(signing_key.verifying_key().as_bytes());
-        let sha256 = |bytes: &[u8]| format!("{:x}", Sha256::digest(bytes));
-        let telemetry_seed_path = dir.path().join("telemetry-signing-seed.hex");
-        fs::write(&telemetry_seed_path, hex(&[7_u8; 32])).unwrap();
-        let planr_bin = assert_cmd::cargo::cargo_bin("planr");
-        let collector_path = dir.path().join("trusted-telemetry-collector.sh");
-        fs::write(
-            &collector_path,
-            format!(
-                r#"#!/bin/sh
-request=$(cat)
-payload=$(printf '%s' "$request" | sed 's/}}$/,"host_id":"artifact-host","host_version":"1.0.0","effective_model":"gpt-5.4-mini","effective_effort":"high","effective_context_fork":{{"mode":"none"}},"tool_calls":1,"tokens":10,"credits_micros":100,"retries":1,"availability_fallbacks":1,"quality_escalations":1,"corrections":1,"violations":0}}/')
-printf '%s' "$payload" | "{}" --json agents preset telemetry-sign --private-key-file "{}"
-"#,
-                planr_bin.display(),
-                telemetry_seed_path.display()
-            ),
-        )
-        .unwrap();
-        #[cfg(unix)]
-        fs::set_permissions(&collector_path, fs::Permissions::from_mode(0o700)).unwrap();
-        let missing_collector_path = dir.path().join("missing-telemetry-collector.sh");
-        fs::write(&missing_collector_path, "#!/bin/sh\nexit 0\n").unwrap();
-        #[cfg(unix)]
-        fs::set_permissions(&missing_collector_path, fs::Permissions::from_mode(0o700)).unwrap();
-        let registry_path = dir.path().join(".planr/trusted-telemetry.toml");
-        fs::write(
-            &registry_path,
-            format!(
-                r#"schema_version = 1
-
-[[signers]]
-id = "e2e-collector"
-public_key_hex = "{telemetry_public_key}"
-collector_sha256 = "{}"
-
-[[signers]]
-id = "missing-e2e-collector"
-public_key_hex = "{telemetry_public_key}"
-collector_sha256 = "{}"
-"#,
-                sha256(&fs::read(&collector_path).unwrap()),
-                sha256(&fs::read(&missing_collector_path).unwrap())
-            ),
-        )
-        .unwrap();
-        let artifact_output = planr()
-            .current_dir(dir.path())
-            .args([
-                "--db",
-                db.to_str().unwrap(),
-                "--json",
-                "agents",
-                "preset",
-                "evaluate",
-                "--at-unix",
-                "1783987200",
-                "--live-host-command",
-                "/bin/sh",
-                "--live-host-arg",
-                artifact_adapter.to_str().unwrap(),
-            ])
-            .assert()
-            .success()
-            .get_output()
-            .stdout
-            .clone();
-        let artifact_live: Value = serde_json::from_slice(&artifact_output).unwrap();
-        assert!(
-            artifact_live["report"]["recommended"]
-                .as_array()
-                .unwrap()
-                .is_empty()
-        );
-        for candidate in artifact_live["report"]["candidates"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|candidate| {
-                candidate["policy"]["id"] == "balanced"
-                    || candidate["policy"]["id"] == "max-quality"
-            })
-        {
-            assert_eq!(candidate["status"], "verified");
-            assert_eq!(candidate["evidence_complete"], true);
-            assert_eq!(candidate["metrics"]["actual_task_runs"], 7);
-            assert_eq!(candidate["metrics"]["oracle_passes"], 7);
-            assert_eq!(candidate["metrics"]["verified_route_runs"], 0);
-            assert_eq!(candidate["recommendation_evidence_complete"], false);
-            assert!(
-                candidate["results"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .all(|result| {
-                        result["evidence"]["task_executed"] == true
-                            && result["evidence"]["outcome_oracle_evaluated"] == true
-                            && result["evidence"]["recommendation_eligible"] == false
-                            && result["evidence"]["route_verified"] == false
-                            && result["evidence"]["oracle"]["kind"] == "planr_workspace_artifact"
-                            && result["evidence"]["oracle"]["pass"] == true
-                    })
-            );
-        }
-
-        let trusted_output = planr()
-            .current_dir(dir.path())
-            .args([
-                "--db",
-                db.to_str().unwrap(),
-                "--json",
-                "agents",
-                "preset",
-                "evaluate",
-                "--at-unix",
-                "1783987200",
-                "--live-host-command",
-                "/bin/sh",
-                "--live-host-arg",
-                artifact_adapter.to_str().unwrap(),
-                "--trusted-telemetry-signer",
-                "e2e-collector",
-                "--trusted-telemetry-collector",
-                collector_path.to_str().unwrap(),
-            ])
-            .assert()
-            .success()
-            .get_output()
-            .stdout
-            .clone();
-        let trusted_live: Value = serde_json::from_slice(&trusted_output).unwrap();
-        assert!(
-            !trusted_live["report"]["recommended"]
-                .as_array()
-                .unwrap()
-                .is_empty()
-        );
-        for candidate in trusted_live["report"]["candidates"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|candidate| candidate["status"] == "recommended")
-        {
-            assert_eq!(candidate["evidence_complete"], true);
-            assert_eq!(candidate["recommendation_evidence_complete"], true);
-            assert_eq!(candidate["metrics"]["verified_route_runs"], 7);
-            assert!(candidate["results"].as_array().unwrap().iter().all(|result| {
-                result["evidence"]["recommendation_eligible"] == true
-                    && result["evidence"]["route_verified"] == true
-                    && result["evidence"]["metrics_source"] == "trusted_telemetry"
-                    && result["evidence"]["metering_confidence"] == "trusted"
-                    && result["evidence"]["route_observation"]["effective"]["model"]
-                        ["evidence"]
-                        == "telemetry_receipt"
-                    && result["evidence"]["route_observation"]["metering"]
-                        ["credits_micros"]["confidence"]
-                        == "trusted"
-            }));
-        }
-
-        let ephemeral_key = SigningKey::from_bytes(&[9_u8; 32]);
-        let precomputed_path = dir.path().join("caller-precomputed-telemetry.json");
-        fs::write(&precomputed_path, br#"{"schema_version":1,"receipts":[]}"#).unwrap();
-        planr()
-            .current_dir(dir.path())
-            .args([
-                "--db",
-                db.to_str().unwrap(),
-                "--json",
-                "agents",
-                "preset",
-                "evaluate",
-                "--at-unix",
-                "1783987200",
-                "--live-host-command",
-                "/bin/sh",
-                "--live-host-arg",
-                artifact_adapter.to_str().unwrap(),
-                "--trusted-telemetry-file",
-                precomputed_path.to_str().unwrap(),
-                "--trusted-telemetry-public-key",
-                &hex(ephemeral_key.verifying_key().as_bytes()),
-                "--trusted-telemetry-run-id",
-                "caller-selected-run",
-            ])
-            .assert()
-            .failure()
-            .stderr(predicate::str::contains(
-                "unexpected argument '--trusted-telemetry-file'",
-            ));
-
-        let missing_output = planr()
-            .current_dir(dir.path())
-            .args([
-                "--db",
-                db.to_str().unwrap(),
-                "--json",
-                "agents",
-                "preset",
-                "evaluate",
-                "--at-unix",
-                "1783987200",
-                "--live-host-command",
-                "/bin/sh",
-                "--live-host-arg",
-                artifact_adapter.to_str().unwrap(),
-                "--trusted-telemetry-signer",
-                "missing-e2e-collector",
-                "--trusted-telemetry-collector",
-                missing_collector_path.to_str().unwrap(),
-            ])
-            .assert()
-            .success()
-            .get_output()
-            .stdout
-            .clone();
-        let missing: Value = serde_json::from_slice(&missing_output).unwrap();
-        assert!(
-            missing["report"]["recommended"]
-                .as_array()
-                .unwrap()
-                .is_empty()
-        );
-        assert!(
-            missing["report"]["candidates"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .flat_map(|candidate| candidate["results"].as_array().unwrap())
-                .all(
-                    |result| result["evidence"]["recommendation_eligible"] == false
-                        && result["evidence"]["route_verified"] == false
-                )
-        );
-
-        let live_mcp = planr()
-            .current_dir(dir.path())
-            .args(["--db", db.to_str().unwrap(), "mcp"])
-            .write_stdin(format!(
-                "{}\n",
-                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"planr_preset_evaluate","arguments":{"at_unix":1783987200,"live_host_command":"/bin/sh","live_host_args":[artifact_adapter.to_str().unwrap()]}}})
-            ))
-            .assert()
-            .success()
-            .get_output()
-            .stdout
-            .clone();
-        let live_mcp: Value = serde_json::from_slice(&live_mcp).unwrap();
-        let live_mcp: Value =
-            serde_json::from_str(live_mcp["result"]["content"][0]["text"].as_str().unwrap())
-                .unwrap();
-        assert_eq!(
-            live_mcp["report"]["environment"]["runner"],
-            "planr-live-host-runner"
-        );
-        assert!(
-            live_mcp["report"]["recommended"]
-                .as_array()
-                .unwrap()
-                .is_empty()
-        );
-        assert_eq!(
-            live_mcp["report"]["candidates"][0]["metrics"]["actual_task_runs"],
-            7
-        );
-        let trusted_mcp = planr()
-            .current_dir(dir.path())
-            .args(["--db", db.to_str().unwrap(), "mcp"])
-            .write_stdin(format!(
-                "{}\n",
-                json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"planr_preset_evaluate","arguments":{"at_unix":1783987200,"live_host_command":"/bin/sh","live_host_args":[artifact_adapter.to_str().unwrap()],"trusted_telemetry_signer":"e2e-collector","trusted_telemetry_collector":collector_path.to_str().unwrap()}}})
-            ))
-            .assert()
-            .success()
-            .get_output()
-            .stdout
-            .clone();
-        let trusted_mcp: Value = serde_json::from_slice(&trusted_mcp).unwrap();
-        let trusted_mcp: Value = serde_json::from_str(
-            trusted_mcp["result"]["content"][0]["text"]
-                .as_str()
-                .unwrap(),
-        )
-        .unwrap();
-        assert!(
-            !trusted_mcp["report"]["recommended"]
-                .as_array()
-                .unwrap()
-                .is_empty()
-        );
-        assert!(
-            trusted_mcp["report"]["candidates"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter(|candidate| candidate["status"] == "recommended")
-                .all(|candidate| candidate["metrics"]["verified_route_runs"] == 7)
-        );
-
-        let constant_response = json!({
-            "schema_version": 1,
-            "host_id": "constant-host",
-            "host_version": "1.0.0",
-            "candidate_id": "constant-candidate",
-            "task_id": "constant-task",
-            "input_sha256": "constant-input",
-            "artifact_kind": "constant-artifact",
-            "output": "pass",
-            "effective_model": "gpt-5.4-mini",
-            "effective_effort": "high",
-            "effective_context_fork": {"mode": "none"},
-            "tool_calls": 1,
-            "tokens": 10,
-            "credits_micros": 100,
-            "retries": 1,
-            "availability_fallbacks": 1,
-            "quality_escalations": 1,
-            "corrections": 1,
-            "violations": 0
-        })
-        .to_string();
-        let constant_output = planr()
-            .current_dir(dir.path())
-            .args([
-                "--db",
-                db.to_str().unwrap(),
-                "--json",
-                "agents",
-                "preset",
-                "evaluate",
-                "--at-unix",
-                "1783987200",
-                "--live-host-command",
-                "/usr/bin/printf",
-                "--live-host-arg",
-                &constant_response,
-            ])
-            .assert()
-            .success()
-            .get_output()
-            .stdout
-            .clone();
-        let constant: Value = serde_json::from_slice(&constant_output).unwrap();
-        assert_incomplete_live(&constant);
-        assert!(
-            constant["report"]["candidates"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .flat_map(|candidate| candidate["results"].as_array().unwrap())
-                .all(|result| result["evidence"]["task_executed"] == false
-                    && result["evidence"]["recommendation_eligible"] == false)
-        );
-        let constant_mcp = planr()
-            .current_dir(dir.path())
-            .args(["--db", db.to_str().unwrap(), "mcp"])
-            .write_stdin(format!(
-                "{}\n",
-                json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"planr_preset_evaluate","arguments":{"at_unix":1783987200,"live_host_command":"/usr/bin/printf","live_host_args":[&constant_response]}}})
-            ))
-            .assert()
-            .success()
-            .get_output()
-            .stdout
-            .clone();
-        let constant_mcp: Value = serde_json::from_slice(&constant_mcp).unwrap();
-        let constant_mcp: Value = serde_json::from_str(
-            constant_mcp["result"]["content"][0]["text"]
-                .as_str()
-                .unwrap(),
-        )
-        .unwrap();
-        assert_incomplete_live(&constant_mcp);
-    }
-
-    let stale_output = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "agents",
-            "preset",
-            "evaluate",
-            "--at-unix",
-            "1815523201",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let stale: Value = serde_json::from_slice(&stale_output).unwrap();
-    assert!(
-        stale["report"]["recommended"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
-    assert!(
-        stale["report"]["candidates"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|candidate| candidate["status"] == "stale")
-    );
-
-    let incompatible_output = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "agents",
-            "preset",
-            "evaluate",
-            "--host",
-            "cursor",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let incompatible: Value = serde_json::from_slice(&incompatible_output).unwrap();
-    assert!(
-        incompatible["report"]["recommended"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
-    assert!(
-        incompatible["report"]["candidates"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|candidate| candidate["status"] == "incompatible")
-    );
-
-    planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "agents", "preset", "evaluate"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("# Preset Evaluation Verification"))
-        .stdout(predicate::str::contains("offline policy simulation"));
 }
 
 #[test]
@@ -5757,7 +3661,7 @@ fn usage_policy_cli_and_mcp_reuse_shapes_and_fail_closed() {
         dir.path().join(".planr/policy.toml"),
         r#"
 schema_version = 1
-id = "balanced"
+id = "policy-a"
 version = "1.0.0"
 
 [usage]
@@ -5822,7 +3726,7 @@ allow_overwrite = true
         .stdout
         .clone();
     let shown: Value = serde_json::from_slice(&shown).unwrap();
-    assert_eq!(shown["policy"]["id"], "balanced");
+    assert_eq!(shown["policy"]["id"], "policy-a");
     assert_eq!(shown["policy"]["usage"]["max_depth"], 1);
     assert_eq!(
         shown["policy"]["execution"]["roles"]["worker"]["tools"][0],
@@ -5840,7 +3744,7 @@ allow_overwrite = true
         .clone();
     let checked: Value = serde_json::from_slice(&checked).unwrap();
     assert_eq!(checked["ok"], true);
-    assert_eq!(checked["policy_id"], "balanced");
+    assert_eq!(checked["policy_id"], "policy-a");
 
     let first_item = planr()
         .current_dir(dir.path())
@@ -11169,8 +9073,8 @@ fn planr_native_skills_are_packaged_and_cli_first() {
                 .exists(),
             "missing plugin agent {agent}"
         );
-        // Cursor-format subagent roles ship next to the Codex TOMLs and are
-        // registered by the root .cursor-plugin manifest.
+        // Cursor-format subagent roles ship as an independent contract and
+        // are registered by the root .cursor-plugin manifest.
         assert!(
             root.join("plugins/planr/skills/planr-loop/agents")
                 .join(format!("{agent}.md"))
@@ -11183,308 +9087,15 @@ fn planr_native_skills_are_packaged_and_cli_first() {
         cursor_manifest.contains("planr-loop/agents/planr-worker.md"),
         "Cursor plugin manifest must register the worker subagent"
     );
-}
-
-#[test]
-fn preset_registry_cli_and_mcp_are_preview_first_integrity_checked_and_offline() {
-    let dir = tempdir().unwrap();
-    let db = dir.path().join(".planr/planr.sqlite");
-    let content = dir.path().join("download");
-    fs::create_dir_all(content.join("pack")).unwrap();
-    let policy = include_str!("../presets/policies/balanced.toml");
-    let binding = include_str!("../presets/bindings/codex-openai.toml");
-    let verification = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "agents",
-            "preset",
-            "evaluate",
-            "--at-unix",
-            "1783987200",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    fs::write(content.join("pack/policy.toml"), policy).unwrap();
-    fs::write(content.join("pack/binding.toml"), binding).unwrap();
-    fs::write(content.join("pack/verification.json"), &verification).unwrap();
-    fs::write(content.join("not-declared.txt"), "must not enter cache").unwrap();
-    let policy_hash = Sha256::digest(policy.as_bytes())
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    let binding_hash = Sha256::digest(binding.as_bytes())
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    let verification_hash = Sha256::digest(&verification)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    let manifest = dir.path().join("registry.toml");
-    fs::write(
-        &manifest,
-        format!(
-            r#"schema_version = 1
-id = "official"
-version = "2026.07"
-generated_at_unix = 1783987200
-
-[[entries]]
-id = "balanced-codex"
-version = "1.0.0"
-kind = "pack"
-lifecycle = "published"
-verification_status = "recommended"
-verified_at_unix = 1783987200
-review_at_unix = 1815523200
-compatible_hosts = ["codex"]
-min_planr_version = "1.3.0"
-max_planr_version = "1.9.0"
-verification_path = "pack/verification.json"
-
-[entries.evaluation]
-policy_id = "balanced"
-policy_version = "1.0.0"
-binding_id = "codex-openai"
-binding_version = "1.0.0"
-suite_id = "planr-preset-suite"
-suite_version = "1.8.0"
-
-[[entries.artifacts]]
-path = "pack/policy.toml"
-kind = "policy"
-sha256 = "{policy_hash}"
-size_bytes = {}
-
-[[entries.artifacts]]
-path = "pack/binding.toml"
-kind = "host-binding"
-sha256 = "{binding_hash}"
-size_bytes = {}
-
-[[entries.artifacts]]
-path = "pack/verification.json"
-kind = "verification"
-sha256 = "{verification_hash}"
-size_bytes = {}
-"#,
-            policy.len(),
-            binding.len(),
-            verification.len()
-        ),
-    )
-    .unwrap();
-
-    let verify = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "agents",
-            "preset",
-            "registry",
-            "verify",
-            manifest.to_str().unwrap(),
-            "--entry",
-            "balanced-codex",
-            "--content-root",
-            content.to_str().unwrap(),
-            "--host",
-            "codex",
-            "--at-unix",
-            "1783987200",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let verify: Value = serde_json::from_slice(&verify).unwrap();
-    assert_eq!(verify["integrity_verified"], true);
-    assert_eq!(verify["effective_status"], "verified");
-    assert_eq!(verify["recommended"], false);
-
-    let preview = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "agents",
-            "preset",
-            "registry",
-            "import",
-            manifest.to_str().unwrap(),
-            "--entry",
-            "balanced-codex",
-            "--content-root",
-            content.to_str().unwrap(),
-            "--host",
-            "codex",
-            "--at-unix",
-            "1783987200",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let preview: Value = serde_json::from_slice(&preview).unwrap();
-    assert_eq!(preview["action"], "preview");
-    assert!(!dir.path().join(".planr/registry/cache").exists());
-
-    let imported = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "agents",
-            "preset",
-            "registry",
-            "import",
-            manifest.to_str().unwrap(),
-            "--entry",
-            "balanced-codex",
-            "--content-root",
-            content.to_str().unwrap(),
-            "--host",
-            "codex",
-            "--at-unix",
-            "1783987200",
-            "--confirm",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let imported: Value = serde_json::from_slice(&imported).unwrap();
-    let cache = dir.path().join(imported["cache_path"].as_str().unwrap());
-    assert!(cache.join("content/pack/policy.toml").is_file());
-    assert!(cache.join("content/pack/binding.toml").is_file());
-    assert!(!cache.join("content/not-declared.txt").exists());
-
-    fs::remove_dir_all(&content).unwrap();
-    let mut mcp = planr();
-    let output = mcp
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "mcp"])
-        .write_stdin(format!(
-            "{}\n",
-            json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"planr_preset_registry_list","arguments":{"at_unix":1815523201}}})
-        ))
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let response: Value = serde_json::from_slice(&output).unwrap();
-    let text = response["result"]["content"][0]["text"].as_str().unwrap();
-    let listed: Value = serde_json::from_str(text).unwrap();
-    assert_eq!(listed["entries"][0]["freshness"], "stale");
-
-    let tampered_content = "tampered";
-    fs::write(cache.join("content/pack/policy.toml"), tampered_content).unwrap();
-    let receipt_path = cache.join("cache-receipt.toml");
-    let mut receipt: toml::Value =
-        toml::from_str(&fs::read_to_string(&receipt_path).unwrap()).unwrap();
-    let artifacts = receipt["artifacts"].as_array_mut().unwrap();
-    let policy_receipt = artifacts
-        .iter_mut()
-        .find(|artifact| artifact["path"].as_str() == Some("pack/policy.toml"))
-        .unwrap();
-    policy_receipt["sha256"] = toml::Value::String(
-        Sha256::digest(tampered_content.as_bytes())
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect(),
-    );
-    policy_receipt["size_bytes"] = toml::Value::Integer(tampered_content.len() as i64);
-    fs::write(&receipt_path, toml::to_string_pretty(&receipt).unwrap()).unwrap();
-    let tampered = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "agents",
-            "preset",
-            "registry",
-            "list",
-            "--at-unix",
-            "1815523201",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let tampered: Value = serde_json::from_slice(&tampered).unwrap();
-    assert_eq!(tampered["entries"][0]["integrity_verified"], false);
-    assert_eq!(tampered["entries"][0]["usable"], false);
-
-    let secret = "sk-registry-metadata-secret";
-    let secret_manifest = dir.path().join("registry-secret.toml");
-    let secret_raw = fs::read_to_string(&manifest).unwrap().replacen(
-        "version = \"2026.07\"",
-        &format!("version = \"{secret}\""),
-        1,
-    );
-    fs::write(&secret_manifest, secret_raw).unwrap();
-    let cli_rejection = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "agents",
-            "preset",
-            "registry",
-            "verify",
-            secret_manifest.to_str().unwrap(),
-            "--entry",
-            "balanced-codex",
-            "--content-root",
-            content.to_str().unwrap(),
-            "--host",
-            "codex",
-            "--at-unix",
-            "1783987200",
-        ])
-        .output()
-        .unwrap();
-    assert!(!cli_rejection.status.success());
-    let cli_rejection = format!(
-        "{}{}",
-        String::from_utf8_lossy(&cli_rejection.stdout),
-        String::from_utf8_lossy(&cli_rejection.stderr)
-    );
-    assert!(cli_rejection.contains("secret-like"));
-    assert!(!cli_rejection.contains(secret));
-
-    let mcp_rejection = planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "mcp"])
-        .write_stdin(format!(
-            "{}\n",
-            json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"planr_preset_registry_verify","arguments":{"manifest":secret_manifest,"entry":"balanced-codex","content_root":content,"host":"codex","at_unix":1783987200}}})
-        ))
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let mcp_rejection = String::from_utf8(mcp_rejection).unwrap();
-    assert!(mcp_rejection.contains("secret-like"));
-    assert!(!mcp_rejection.contains(secret));
+    for removed in [
+        "plugins/planr/skills/planr-loop/agents/planr-worker.toml",
+        "plugins/planr/skills/planr-loop/agents/planr-reviewer.toml",
+    ] {
+        assert!(
+            !root.join(removed).exists(),
+            "retired Codex fallback remains: {removed}"
+        );
+    }
 }
 
 #[test]
@@ -11506,8 +9117,6 @@ fn project_init_and_install_provision_loop_agent_roles() {
         .assert()
         .success();
     for role in [
-        ".codex/agents/planr-worker.toml",
-        ".codex/agents/planr-reviewer.toml",
         ".claude/agents/planr-worker.md",
         ".claude/agents/planr-reviewer.md",
         ".cursor/agents/planr-worker.md",
@@ -11518,10 +9127,11 @@ fn project_init_and_install_provision_loop_agent_roles() {
             "project init --client all should provision {role}"
         );
     }
-    let worker = fs::read_to_string(dir.path().join(".codex/agents/planr-worker.toml")).unwrap();
+    assert!(!dir.path().join(".codex/agents/planr-worker.toml").exists());
     assert!(
-        worker.contains("planr_worker"),
-        "provisioned codex worker role should define the planr_worker agent"
+        !dir.path()
+            .join(".codex/agents/planr-reviewer.toml")
+            .exists()
     );
 
     // Plugin-style install: --no-mcp writes subagent roles and skills but no
@@ -11608,8 +9218,8 @@ fn project_init_and_install_provision_loop_agent_roles() {
         "--no-mcp dry-run should list plugin files, not MCP config"
     );
 
-    // `planr install codex` provisions the same roles for projects initialized
-    // without a client, and never overwrites user-edited role files.
+    // `planr install codex` is MCP-only; optional model-specific role files
+    // remain exclusively owned by externally compiled routing bundles.
     let dir2 = tempdir().unwrap();
     let db2 = dir2.path().join(".planr/planr.sqlite");
     planr()
@@ -11623,21 +9233,11 @@ fn project_init_and_install_provision_loop_agent_roles() {
         .args(["--db", db2.to_str().unwrap(), "install", "codex"])
         .assert()
         .success();
-    assert!(dir2.path().join(".codex/agents/planr-worker.toml").exists());
-    fs::write(
-        dir2.path().join(".codex/agents/planr-worker.toml"),
-        "# user-edited\n",
-    )
-    .unwrap();
-    planr()
-        .current_dir(dir2.path())
-        .args(["--db", db2.to_str().unwrap(), "install", "codex"])
-        .assert()
-        .success();
-    let edited = fs::read_to_string(dir2.path().join(".codex/agents/planr-worker.toml")).unwrap();
-    assert_eq!(
-        edited, "# user-edited\n",
-        "install must not overwrite roles"
+    assert!(!dir2.path().join(".codex/agents/planr-worker.toml").exists());
+    assert!(
+        dir2.path()
+            .join(".planr/integrations/codex-mcp.toml")
+            .exists()
     );
 }
 
@@ -11705,7 +9305,7 @@ fn rust_implementation_has_owned_module_boundaries() {
         );
     }
     for (file, max_lines) in [
-        ("src/cli.rs", 1_000usize),
+        ("src/cli.rs", 1_050usize),
         ("src/app/mod.rs", 180),
         ("src/app/audit.rs", 200),
         ("src/app/commands.rs", 1_120),

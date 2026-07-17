@@ -49,3 +49,7 @@ tempfile = "3"
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+
+[workspace]
+members = ["planr-routing"]
+resolver = "2"

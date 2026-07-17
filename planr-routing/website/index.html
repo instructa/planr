@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Compare verified Planr policy and host-binding compositions with evaluation and registry provenance."
+    />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+    />
+    <title>Planr Preset Catalog</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script type="module" src="./app.mjs"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#catalog">Skip to catalog</a>
+    <header class="site-header">
+      <a class="brand" href="./" aria-label="Planr preset catalog home">
+        <span class="brand-mark" aria-hidden="true">P</span>
+        <span>Planr <strong>Presets</strong></span>
+      </a>
+      <p class="header-note">Evidence before recommendation.</p>
+    </header>
+
+    <main id="catalog">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="eyebrow">Public catalog · read-only</p>
+          <h1 id="hero-title">Choose policy intent.<br />See host reality.</h1>
+          <p class="lede">
+            Compare portable Planr policies with versioned host bindings. Every published status comes from
+            registry verification and evaluation evidence—not editorial judgment.
+          </p>
+        </div>
+        <dl class="catalog-stats" aria-label="Catalog summary">
+          <div><dt>Published</dt><dd id="stat-published">—</dd></div>
+          <div><dt>Recommended</dt><dd id="stat-recommended">—</dd></div>
+          <div><dt>Trust source</dt><dd id="stat-trust">Loading</dd></div>
+        </dl>
+      </section>
+
+      <section class="authority-note" aria-labelledby="authority-title">
+        <div aria-hidden="true" class="authority-icon">↳</div>
+        <div>
+          <h2 id="authority-title">Planr governs policy; the host executes the route.</h2>
+          <p>
+            A binding can request a model, effort, and context-fork mode. Codex, Claude Code, Cursor, or another host
+            retains the final concrete execution choice. The catalog distinguishes binding intent from verified
+            effective-route evidence.
+          </p>
+        </div>
+      </section>
+
+      <section class="compare-shell" aria-labelledby="compare-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Side-by-side</p>
+            <h2 id="compare-title">Compare compositions</h2>
+          </div>
+          <label class="toggle">
+            <input id="recommended-only" type="checkbox" />
+            <span>Recommended only</span>
+          </label>
+        </div>
+
+        <div class="selectors" aria-label="Comparison choices">
+          <label>
+            <span>Composition A</span>
+            <select id="composition-a" aria-controls="comparison-a"></select>
+          </label>
+          <span class="versus" aria-hidden="true">vs</span>
+          <label>
+            <span>Composition B</span>
+            <select id="composition-b" aria-controls="comparison-b"></select>
+          </label>
+        </div>
+
+        <div id="empty-state" class="empty-state" hidden>
+          <p class="eyebrow">Publication gate active</p>
+          <h3>No trusted compositions are published.</h3>
+          <p id="empty-message">
+            Generate this catalog from a signed registry manifest after Planr verifies its evaluation evidence.
+          </p>
+          <code>node website/build-catalog.mjs --help</code>
+        </div>
+
+        <div id="comparison" class="comparison-grid" aria-live="polite">
+          <article id="comparison-a" class="preset-card" aria-label="Composition A"></article>
+          <article id="comparison-b" class="preset-card" aria-label="Composition B"></article>
+        </div>
+      </section>
+
+      <section class="legend" aria-labelledby="legend-title">
+        <div>
+          <p class="eyebrow">Status language</p>
+          <h2 id="legend-title">Five states, no ambiguity</h2>
+        </div>
+        <dl>
+          <div><dt>Experimental</dt><dd>Valid enough to inspect; evaluation binding is not required.</dd></div>
+          <div><dt>Verified</dt><dd>Integrity and current evaluation checks pass; recommendation gates did not.</dd></div>
+          <div><dt>Recommended</dt><dd>Trusted signature plus current canonical evaluation and telemetry gates pass.</dd></div>
+          <div><dt>Stale</dt><dd>The review date or current suite validity has expired.</dd></div>
+          <div><dt>Deprecated</dt><dd>Published for continuity with an explicit replacement path.</dd></div>
+        </dl>
+      </section>
+    </main>
+
+    <footer>
+      <p>Local-first by design. A catalog outage never affects installed packs or active projects.</p>
+      <p id="generated-at">Catalog provenance loading…</p>
+    </footer>
+    <div id="copy-status" class="sr-only" aria-live="polite"></div>
+  </body>
+</html>

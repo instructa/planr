@@ -1,5 +1,6 @@
 packages:
   - "."
+  - "planr-routing"
 
 enableGlobalVirtualStore: false
 verifyDepsBeforeRun: error

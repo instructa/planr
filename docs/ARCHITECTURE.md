@@ -6,7 +6,7 @@ Planr V1 is a single Rust binary with explicit module ownership. The crate stays
 
 - `src/`: the Rust CLI (module ownership below).
 - `tests/e2e.rs`: real CLI, MCP, HTTP, import, review-gate, run-log, and concurrent-pick tests.
-- `plugins/planr/`: the installable plugin payload — all nine skills, the worker and reviewer subagent roles, and the per-host plugin manifests.
+- `plugins/planr/`: the installable plugin payload — all ten skills, independent Claude/Cursor worker and reviewer role assets, and the per-host plugin manifests. Native Codex role TOMLs are generated from the selected binding instead of shipped here.
 - `.agents/plugins/marketplace.json`, `.claude-plugin/marketplace.json`: marketplace manifests pointing Codex and Claude Code at `plugins/planr`.
 - `docs/`: user and contributor guides; `docs/planr-spec/` is the production specification package for Planr V1.
 - `examples/real-world-flow.md`: executable real-world operator flow.
@@ -43,12 +43,12 @@ Planr V1 is a single Rust binary with explicit module ownership. The crate stays
 - `src/usage_policy.rs`: provider-neutral Usage Policy v1 core. Owns strict `.planr/policy.toml` parsing, policy and task-contract vocabulary, materiality classification, budget/concurrency validation, and the pure five-way transition resolver; it contains no provider ids, host dispatch, or execution-permission behavior.
 - `src/execution_policy.rs`: execution admission core. Owns per-role filesystem, network, tool/MCP, structured command, environment, hook, secret, and approval grants; permission-diff previews; bounded task-contract admission; fail-closed command grammar; and isolated write-scope concurrency. It never selects models or mutates graph state. `src/app/policy.rs` binds that pure decision to the current SQLite lease owner and pick token, and only treats an admission from that exact lease generation as authoritative.
 - `src/route_audit.rs`: provider-neutral run-observation contract. Owns strict requested/resolved/effective route stages, model/effort/fork enforcement confidence, transition provenance, policy/binding versions, and per-dimension metering confidence. It rejects requested-only values in the effective stage rather than inferring host execution.
-- `src/preset.rs`: pure preset-composition core. Owns versioned host-binding types, abstract-role compatibility, model/effort/fork capability validation, deterministic registry projection, verification age, permission additions, and provenance-lock vocabulary; it performs no writes.
-- `src/app/presets.rs`: shared CLI/MCP preset application service and repository-artifact writer. Owns preview/conflict reporting, canonical-root and allowlist enforcement, symlink/traversal rejection, create-only apply, rollback on write failure, and `policy_applied`/rejection events.
+- `src/routing_bundle.rs`: provider-neutral RoutingBundle v1 contract and repository transaction boundary. Owns validation, hashes, signatures, allowlisted paths, conflict and symlink rejection, atomic apply, rollback, and application receipts.
+- `planr-routing/`: independently buildable workspace package that owns model policies, host bindings, generated host artifacts, probes, evaluation, signing, registry data, and catalog publication.
 - `src/app/agents.rs`: routing application boundary. Owns the `agents` and `item route` command handlers, the shared `*_value` JSON shapes reused by MCP, per-item route facts assembly, and registry-aware role content selection for installs.
 - `src/app/agents_init.rs`: registry bootstrap boundary. Owns `planr agents init` — the static cost-tiering scaffold and, per the agent-pool plan, the flag-spec builder and interactive wizard.
 - `src/integrations.rs`: agent-client integration descriptor boundary. Owns Codex, Claude Code, Cursor, MCP install metadata, MCP tool schemas, MCP resources, and MCP text response wrapping.
-- `src/rolefiles.rs`: host role file boundary. Owns the shipped static subagent role files and Cursor skills payloads, plus the pure renderers that re-pin role files from registry profiles (Codex TOML with strict field names, Claude/Cursor markdown frontmatter) under the generated-from header.
+- `src/rolefiles.rs`: static host workflow roles and Cursor skill payloads. It does not select or pin models; generated routing artifacts belong to `planr-routing` bundles.
 - `src/util.rs`: small CLI-boundary utilities. Owns ids, timestamps, path helpers, output formatting, and safe file writes.
 
 ## Boundary Rules

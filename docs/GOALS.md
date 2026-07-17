@@ -87,12 +87,15 @@ Iteration 1 reads the map and the stored contract: items already settled stay se
 
 ### Codex with `/goal`
 
-The recommended combination. Install the plugin and provision the subagent roles once:
+Install the plugin, initialize the repository, and optionally apply a repository routing bundle:
 
 ```bash
 codex plugin marketplace add instructa/planr
 codex plugin add planr@planr
-planr project init "My Product" --client codex   # writes .codex/agents/planr-worker.toml + planr-reviewer.toml
+planr project init "My Product"
+planr-routing compile balanced --host codex-openai --output routing-bundle.json
+planr routing bundle preview routing-bundle.json
+planr routing bundle apply routing-bundle.json
 ```
 
 Then:
@@ -102,7 +105,7 @@ $planr-goal <your goal>          # prep: plan, map, contract, starter command
 /goal Use $planr-loop on plan <plan-id>. The loop contract is stored in planr context (tag: goal-contract).
 ```
 
-The `/goal` PM dispatches `spawn the planr_worker agent for item <id>` and `spawn the planr_reviewer agent for item <id>` — the role files preload `$planr-work` and `$planr-review`, so dispatches stay one line. Codex Automations work the same way: set the automation prompt to the starter line. The provisioned worker role pins a cheaper effort tier; see [Cost Tiering](#cost-tiering).
+When a routing bundle is applied, the `/goal` PM follows its generated repository skill and roles. The bundle owner decides exact models, effort, role names, and fork policy; Planr only carries the resulting opaque route in pick packets. Codex Automations use the same starter line.
 
 ### Claude Code
 
@@ -142,29 +145,9 @@ Any MCP-capable agent uses the same flow over `planr mcp`. Every session starts 
 
 ## Cost Tiering
 
-A goal run has three roles with different intelligence needs, so they should not all run on the same model tier:
+A goal run has distinct roles with different intelligence needs. Planr represents those decisions as opaque profiles and routes; it does not choose providers, models, effort levels, fallback chains, or host-native role names.
 
-- **Driver** (the `/goal` session): decomposition, dispatch decisions, conflict resolution, final synthesis. Run it on the strongest model you have — this is never configured in Planr files, it is simply the model of the main session.
-- **Worker**: bounded implementation. `planr pick --json` is a complete handoff packet (one item, scope, evidence format, stop after review request), so the worker runs safely on a cheaper tier.
-- **Reviewer**: the truth gate. It inherits the driver's model on purpose — make workers cheap, not the verdict.
-
-Where each host configures the worker tier (the shipped role files carry these defaults):
-
-| Host | Driver | Worker | Configured in |
-| --- | --- | --- | --- |
-| Codex | session default (e.g. `gpt-5.5` at `high`) | `model = "gpt-5.5"`, `model_reasoning_effort = "medium"` | `.codex/agents/planr-worker.toml` |
-| Claude Code | session model (e.g. `fable` at `high` via `/model` + `/effort`) | `model: opus`, `effort: medium` | `planr-worker.md` frontmatter |
-| Cursor | chat model of the driving session | `model: inherit` by default; pin a cheaper Cursor model id | `.cursor/agents/planr-worker.md` frontmatter |
-
-The defaults use aliases and generic names so they track model generations; pin a full model id (e.g. `claude-opus-4-8`) only if you need determinism, and use `model: sonnet` as the budget alternative. The role files are user-owned copies — `planr project init` provisions them once and never overwrites local edits — so changing the tier is editing one line.
-
-To declare the tiering itself — which model handles which work type, with fallbacks for rate limits — use the agent profile registry (`.planr/agents.toml`): the routing recommendation then travels inside every `planr pick --json` packet, so the driver dispatches the right tier without consulting this table mid-run. `planr agents init` writes a working starter registry with these defaults; see [Model Routing](MODEL_ROUTING.md). The role files above still carry the host-native pins (`planr install <client> --force` re-renders them from the registry); the registry is the declared source of truth for the routing decision.
-
-Traps to verify once per setup — every one of them is silent (the run still works, just at driver prices), which is why the smoke test is worth the two minutes:
-
-- **Claude Code:** the `CLAUDE_CODE_SUBAGENT_MODEL` environment variable clamps every subagent's `model:` frontmatter and per-invocation model with no signal in the `tool_result` ([anthropics/claude-code#57718](https://github.com/anthropics/claude-code/issues/57718)); since v2.1.196, setting it to `inherit` behaves like unset, so that is the safe pin for "driver decides". Org-managed `availableModels` allowlists are equally quiet: a frontmatter model outside the allowlist falls back to inherit without warning. Make sure the env var is unset (or `inherit`), then dispatch the worker on a trivial item and confirm the subagent's messages in the session log (`~/.claude/projects/<project>/*.jsonl`) carry the worker model, not the driver's.
-- **Codex:** the spawn regressions that made children ignore custom agent files ([openai/codex#26868](https://github.com/openai/codex/issues/26868), [#26363](https://github.com/openai/codex/issues/26363)) are fixed in v0.138+, but two traps remain. First, `fork_turns = "all"` (the multi-agent v2 default) intentionally drops the child's `agent_type` and `model` so the fork replays the parent exactly — dispatch that should honor the worker pin needs `fork_turns = "none"` or a partial fork. Second, the role registry is loaded once at session start ([#26408](https://github.com/openai/codex/issues/26408)): after editing or re-rendering `.codex/agents/*.toml`, restart the session, or the child spawns from the stale definitions. Spawn `planr_worker` on a trivial item and confirm the child metadata shows the pinned model and effort with a non-null `agent_path`.
-- **Cursor:** `model: <id>` in `.cursor/agents/planr-worker.md` frontmatter can be overridden without an error by team-admin model policies, plan availability (a model your plan lacks resolves to a fallback), and Max-Mode-only models. On legacy request-based plans, subagents are forced onto Composer regardless of the pin. Dispatch the worker once and check which model the subagent transcript reports before trusting the pin.
+An optional routing-policy package can map planning, exploration, implementation, mechanical work, and independent review onto different cost or quality tiers. If a routing bundle generated repository roles, follow its generated instructions and verify effective child metadata because declarations alone are not proof. The official package and its host-specific caveats live under [`planr-routing`](../planr-routing/docs/MODEL_ROUTING_POLICY.md); the Core contract is documented in [Model Routing](MODEL_ROUTING.md).
 
 ## Coming From Other Goal Tools
 

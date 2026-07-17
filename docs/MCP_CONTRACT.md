@@ -42,10 +42,7 @@ Required groups:
 - artifact add, list, and show
 - event list and debug bundle preview
 - trace item, log add, and log read (including three-stage route observations)
-- built-in policy/binding catalog listing plus safe-pack/custom composition status
-- declarative registry verification with canonical evaluation/safe-binding gates, preview-first immutable import, and manifest-anchored integrity/signature/freshness-checked offline cache listing
-- policy preset preview/apply by path or built-in id with repository-only target validation and deterministic provenance lock
-- deterministic offline preset simulation plus explicit opt-in live-host execution with Planr-controlled challenge workspaces, strict task artifacts read and hashed by Planr, candidate/task outcome oracles, failed-live-attempt `unverified`/incomplete lifecycle semantics, production policy-capability checks, estimated arbitrary-process claims, optional Ed25519-verified run/suite/time/task/challenge-bound telemetry that alone can promote effective route and usage evidence to trusted/recommendation-eligible, observed process latency, transition/correction/violation counts, result hashes, and deterministic lifecycle thresholds
+- provider-neutral RoutingBundle v1 inspection, repository-safe preview/apply, and durable application evidence
 - review annotate, ingest, artifact, evidence, and close
 - item close, context create, and search
 
@@ -67,7 +64,7 @@ HTTP mirrors the same rule: `GET /v1/reviews/:id/artifact` is read-only; `POST /
 
 `planr install <client> --dry-run` prints project-scoped configuration for Codex, Claude Code, and Cursor. Non-dry install writes only repository-local files:
 
-- Codex: `.planr/integrations/codex-mcp.toml` plus `.codex/agents/` roles
+- Codex: `.planr/integrations/codex-mcp.toml`; optional `.codex/agents/` roles are routing-bundle artifacts
 - Claude Code: `.mcp.json` plus `.claude/agents/` roles
 - Cursor: `.cursor/mcp.json` plus `.cursor/agents/` roles and `.cursor/skills/` skill copies
 

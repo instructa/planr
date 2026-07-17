@@ -1,0 +1,140 @@
+schema_version = 1
+id = "mixed-host"
+version = "2.0.0"
+host = "mixed-host"
+driver_role = "driver"
+default_role = "driver"
+capability_evidence = ["codex-0.144.0-native-v2-9ff47868eb", "builtin-cursor-project-agent-contract"]
+billing_assumptions = ["Each host remains authoritative for its own billing and availability"]
+known_limitations = ["effective route evidence must be collected independently from each active host backend"]
+
+[capabilities]
+model_override = true
+effort_override = true
+fork_none = true
+fork_all = true
+
+[profiles.driver]
+profile = "mixed-cursor-fable-driver"
+client = "cursor"
+model = "fable-5"
+cost_tier = "premium"
+
+[profiles.worker]
+profile = "mixed-codex-terra-high"
+client = "codex"
+model = "gpt-5.6-terra"
+agent_type = "planr_terra_high"
+effort = "high"
+cost_tier = "standard"
+skill = "planr-work"
+fork_turns = { mode = "none" }
+
+[profiles.mechanical]
+profile = "mixed-codex-luna-xhigh"
+client = "codex"
+model = "gpt-5.6-luna"
+agent_type = "planr_luna_xhigh"
+effort = "xhigh"
+cost_tier = "premium"
+skill = "planr-work"
+fork_turns = { mode = "none" }
+
+[profiles.reviewer]
+profile = "mixed-codex-sol-high"
+client = "codex"
+model = "gpt-5.6-sol"
+agent_type = "planr_sol_high"
+effort = "high"
+cost_tier = "premium"
+skill = "planr-review"
+fork_turns = { mode = "none" }
+
+[[routes]]
+work_type = "code"
+role = "worker"
+
+[[routes]]
+work_type = "mechanical"
+role = "mechanical"
+
+[[routes]]
+work_type = "review"
+role = "reviewer"
+
+[verification]
+id = "builtin-mixed-host-native-v2"
+verified_at_unix = 1784160000
+max_age_seconds = 31536000
+
+[[artifacts]]
+path = ".cursor/agents/planr-fable-driver.md"
+kind = "cursor_agent"
+content = '''---
+name: planr-fable-driver
+model: fable-5
+---
+Orchestrate the Planr map and dispatch bounded Codex worker roles.
+'''
+
+[[artifacts]]
+path = ".codex/agents/planr-terra-high.toml"
+kind = "codex_agent"
+content = '''name = "planr_terra_high"
+description = "Normal implementation and testing."
+model = "gpt-5.6-terra"
+model_reasoning_effort = "high"
+sandbox_mode = "workspace-write"
+
+developer_instructions = """
+Use the planr-work skill for one picked item, implement the smallest correct slice, and record real verification evidence.
+"""
+'''
+
+[[artifacts]]
+path = ".codex/agents/planr-luna-xhigh.toml"
+kind = "codex_agent"
+content = '''name = "planr_luna_xhigh"
+description = "Bounded checklist-driven and mechanical implementation."
+model = "gpt-5.6-luna"
+model_reasoning_effort = "xhigh"
+sandbox_mode = "workspace-write"
+
+developer_instructions = """
+Use the planr-work skill for one tightly bounded item, follow the checklist exactly, verify the result, and stop.
+"""
+'''
+
+[[artifacts]]
+path = ".codex/agents/planr-sol-high.toml"
+kind = "codex_agent"
+content = '''name = "planr_sol_high"
+description = "Independent final review."
+model = "gpt-5.6-sol"
+model_reasoning_effort = "high"
+sandbox_mode = "read-only"
+
+developer_instructions = """
+Use the planr-review skill, independently verify acceptance criteria and evidence, and report findings before the verdict.
+"""
+'''
+
+[[artifacts]]
+path = ".codex/skills/planr-native-routing/SKILL.md"
+kind = "codex_skill"
+content = '''---
+name: planr-native-routing
+description: Dispatch mixed-host Planr work from the Cursor driver through repository-owned native Codex worker roles.
+---
+# Planr mixed-host native routing
+
+The Cursor `planr-fable-driver` remains the driver. Dispatch Codex work through these generated repository roles; each role file owns its model and reasoning effort.
+
+| Work type | Native dispatch |
+| --- | --- |
+| code | `spawn_agent({ agent_type: "planr_terra_high", fork_turns: "none", ... })` |
+| mechanical | `spawn_agent({ agent_type: "planr_luna_xhigh", fork_turns: "none", ... })` |
+| review | `spawn_agent({ agent_type: "planr_sol_high", fork_turns: "none", ... })` |
+
+Every dispatch that changes role, model, or reasoning effort must name `agent_type` and use `fork_turns: "none"` or an evidenced positive bounded integer. Native Codex rejects `fork_turns: "all"` when `agent_type` selects a role with model or effort overrides. Global Codex CLI `-m` or `-c model_reasoning_effort=...` flags also override spawned role files, so leave those flags unset when role-local child routing is required. Do not use implicit model inheritance or a fallback role.
+'''
