@@ -53,6 +53,14 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
       url: path,
       title: page.data.title,
       description: page.data.description,
+      images: [
+        {
+          url: '/og-image.png',
+          width: 1200,
+          height: 630,
+          alt: 'Planr — Local-first coordination for coding agents',
+        },
+      ],
     },
   };
 }

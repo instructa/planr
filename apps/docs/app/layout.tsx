@@ -20,11 +20,20 @@ export const metadata: Metadata = {
     siteName: 'Planr',
     title: 'Planr — Local-first coordination for coding agents',
     description: 'Plan, coordinate, verify, and recover coding-agent work with durable local state.',
+    images: [
+      {
+        url: '/og-image.png',
+        width: 1200,
+        height: 630,
+        alt: 'Planr — Local-first coordination for coding agents',
+      },
+    ],
   },
   twitter: {
     card: 'summary_large_image',
     title: 'Planr — Local-first coordination for coding agents',
     description: 'Plan, coordinate, verify, and recover coding-agent work with durable local state.',
+    images: ['/og-image.png'],
   },
   formatDetection: { telephone: false },
 };
