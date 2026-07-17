@@ -124,7 +124,10 @@ for (const [name, version] of Object.entries({ ...packageJson.dependencies, ...p
   assert(!version.startsWith('^') && !version.startsWith('~'), `apps/docs dependency ${name} must use an exact version`);
 }
 assert(packageJson.engines.node === '>=22', 'apps/docs must require Node.js 22 or newer');
-assert(packageJson.scripts.deploy === 'alchemy deploy --stage prod', 'apps/docs deploy must target the Alchemy prod stage explicitly');
+assert(
+  packageJson.scripts.deploy === 'alchemy deploy --stage prod --yes && opennextjs-cloudflare populateCache remote --config wrangler.jsonc',
+  'apps/docs deploy must target the Alchemy prod stage and populate the OpenNext SSG cache',
+);
 assert(packageJson.scripts.destroy === 'alchemy destroy --stage prod', 'apps/docs destroy must target the Alchemy prod stage explicitly');
 assert(packageJson.scripts['build:worker'] === 'opennextjs-cloudflare build --skipWranglerConfigCheck', 'worker build must use OpenNext');
 assert(packageJson.scripts['bundle:worker'] === 'wrangler deploy --dry-run --outdir .alchemy-worker', 'worker bundle must use Wrangler without deploying');

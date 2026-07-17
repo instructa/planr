@@ -34,11 +34,11 @@ export default function HomePage() {
             MCP clients, and humans can share without losing ownership or evidence.
           </p>
           <div className="hero-actions">
-            <Link className="button-primary" href="/docs/getting-started/installation">
+            <Link prefetch={false} className="button-primary" href="/docs/getting-started/installation">
               Install Planr
               <ArrowRight aria-hidden="true" />
             </Link>
-            <Link className="button-secondary" href="/docs/getting-started/why-planr">
+            <Link prefetch={false} className="button-secondary" href="/docs/getting-started/why-planr">
               See how it works
             </Link>
           </div>
@@ -71,21 +71,21 @@ export default function HomePage() {
           <span>Planr gives every client the same durable plan, task graph, and evidence trail.</span>
         </div>
         <div className="agent-grid">
-          <Link className="agent-card" href="/docs/integrations/codex">
+          <Link prefetch={false} className="agent-card" href="/docs/integrations/codex">
             <span className="agent-card__mark">
               <Image src="/agents/codex.svg" width={80} height={80} alt="Codex logo" />
             </span>
             <span><strong>Codex</strong><small>Plugin, MCP, hooks, and roles</small></span>
             <ArrowRight aria-hidden="true" />
           </Link>
-          <Link className="agent-card" href="/docs/integrations/claude-code">
+          <Link prefetch={false} className="agent-card" href="/docs/integrations/claude-code">
             <span className="agent-card__mark">
               <Image src="/agents/claude.svg" width={80} height={80} alt="Claude logo" />
             </span>
             <span><strong>Claude Code</strong><small>Plugin and project-scoped MCP</small></span>
             <ArrowRight aria-hidden="true" />
           </Link>
-          <Link className="agent-card" href="/docs/integrations/cursor">
+          <Link prefetch={false} className="agent-card" href="/docs/integrations/cursor">
             <span className="agent-card__mark">
               <Image src="/agents/cursor.svg" width={80} height={80} alt="Cursor logo" />
             </span>
@@ -140,9 +140,9 @@ export default function HomePage() {
       <footer className="home-footer">
         <p>Planr is open source and local-first.</p>
         <nav aria-label="Footer navigation">
-          <Link href="/docs">Documentation</Link>
+          <Link prefetch={false} href="/docs">Documentation</Link>
           <Link href="https://github.com/instructa/planr">GitHub</Link>
-          <Link href="/docs/contributing">Contributing</Link>
+          <Link prefetch={false} href="/docs/contributing">Contributing</Link>
         </nav>
       </footer>
     </HomeLayout>
