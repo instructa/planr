@@ -1,0 +1,15 @@
+{
+  "title": "Planr Documentation",
+  "pages": [
+    "index",
+    "getting-started",
+    "integrations",
+    "concepts",
+    "guides",
+    "reference",
+    "contributing",
+    "operations",
+    "troubleshooting",
+    "faq"
+  ]
+}

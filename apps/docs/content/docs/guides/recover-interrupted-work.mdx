@@ -1,0 +1,50 @@
+---
+title: Recover Interrupted Work
+description: Diagnose stale leases, timeouts, retryable failures, and drift before applying repair.
+---
+
+## 1. Preserve evidence
+
+Do not reset Git or delete `.planr`. Start read-only:
+
+```bash
+git status --short
+planr project show --json
+planr map status --json
+planr pick stale --older-than-seconds 900 --json
+planr recover sweep --older-than-seconds 900 --json
+```
+
+The recovery sweep is preview-only without `--apply`. It reports stale picks, timed-out work, retryable failures, retry delays, and manual conditions.
+
+## 2. Inspect the affected item
+
+```bash
+planr trace item <item-id> --json
+planr log list --item <item-id> --json
+planr context list --item <item-id> --json
+git diff -- <logged-file-a> <logged-file-b>
+```
+
+Decide whether the prior worker is active, whether its changes exist, and whether the last verification remains trustworthy.
+
+## 3. Choose the narrowest repair
+
+- Same worker is returning: keep the lease and resume it.
+- One confirmed stale claim: `planr pick stale --older-than-seconds 900 --release --json`.
+- Intentional operator transfer: `planr pick release <item-id> --force --json`.
+- Mixed stale, timed-out, and retryable work: apply the reviewed sweep.
+
+```bash
+planr recover sweep --older-than-seconds 900 --apply --json
+```
+
+## 4. Re-pick and re-verify
+
+Set a worker identity, pick the item legitimately, reconcile worktree changes, and re-run the last relevant test. Record recovery facts in context or the eventual completion/handoff log.
+
+<Callout type="warn" title="Recovery does not repair source code">
+  Recovery changes Planr runtime state. It does not merge branches, restore deleted files, or decide whether uncommitted changes are correct.
+</Callout>
+
+See [Troubleshooting](/docs/troubleshooting) for symptom-specific paths.

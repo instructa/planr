@@ -1,0 +1,13 @@
+{
+  "title": "Operations",
+  "description": "Release, deploy, roll back, and maintain Planr documentation.",
+  "pages": [
+    "index",
+    "release",
+    "versioning-and-migrations",
+    "docs-deployment",
+    "health-and-diagnostics",
+    "rollback",
+    "documentation-governance"
+  ]
+}

@@ -1,0 +1,80 @@
+---
+title: FAQ
+description: Direct answers about Planr's authority, clients, plans, leases, evidence, review, recovery, sharing, and completion.
+---
+
+## Does Planr require a hosted account?
+
+No. Planr is local-first and stores coordination state with the project. You can use packages or your own encrypted transport when you intentionally need to move state.
+
+## Is Planr a coding agent or project manager?
+
+No. Planr coordinates work performed by coding clients and human operators. It does not replace source control, your editor, or a hosted organization-wide project tracker.
+
+## What is the source of truth?
+
+Markdown product/build plans own scope and acceptance criteria. The SQLite map owns live item status, links, readiness, picks, reviews, approvals, and completion. Logs and artifacts own evidence. See [Local-First Model](/docs/concepts/local-first-model).
+
+## Can multiple clients share one project?
+
+Yes. Codex, Claude Code, Cursor, generic MCP hosts, CLI users, and reviewers coordinate through the same workspace database. Give concurrent workers distinct `PLANR_WORKER_ID` values.
+
+## Can two workers pick the same item?
+
+No. Picking is atomic. One worker receives the lease; the other receives different ready work or a null result with a reason.
+
+## Why is my item pending instead of ready?
+
+Readiness is derived from graph links and gates. Inspect `planr map lookahead --from <item-id>` and the critical lane instead of changing status manually.
+
+## Do Markdown checkboxes change map status?
+
+No. Plans are narrative authority, not live execution state. Compile build-plan tasks with `planr map build`, then use map commands for status changes.
+
+## Are logs mandatory tests?
+
+No. `--cmd` and `--tests` record evidence; they do not execute commands or independently prove correctness. The worker must run the command, record an accurate outcome, and satisfy the plan's verification contract.
+
+## What belongs in context instead of a log?
+
+Use context for reusable decisions, discoveries, constraints, blockers, risks, and goal contracts. Use logs for proof of work, verification, review, or handoff. See [Evidence and Context](/docs/concepts/evidence-and-context).
+
+## Are review and approval the same?
+
+No. Review is an evidence-based graph gate. Approval is an explicit human decision gate. A technically clean review does not authorize a destructive or external action.
+
+## Must every item have a review?
+
+No. Use review where independent checking carries signal or the plan requires it. A plain evidence-backed `done` can close low-risk work. Existing review items must still settle before their targets can close.
+
+## What does independent review mean?
+
+Planr compares the reviewer's recorded worker identity with the target's maker identity and derives `review_mode`. Use different identities for maker and checker; a note claiming independence is not proof.
+
+## What happens when review finds a bug?
+
+A `not-complete` verdict with actionable findings creates fix and follow-up review work. The original target remains `in_review` until the chain settles, keeping downstream work blocked.
+
+## Can I pause work without releasing it?
+
+Yes. `planr pick pause` keeps ownership and records why execution stopped. Use `resume` when the same worker returns. Release only for an intentional transfer.
+
+## What should I do after a session crashes?
+
+Inspect Git, project/map state, the item trace, logs, contexts, and stale/recovery previews. Apply recovery only after confirming the prior owner is gone and understanding the worktree. Follow [Recover Interrupted Work](/docs/guides/recover-interrupted-work).
+
+## Does recovery restore or merge source files?
+
+No. Recovery repairs Planr runtime state. Git/worktree recovery is separate and must preserve user changes.
+
+## Can I share a Planr project?
+
+Export a JSON package with the plans/logs you need, inspect it for sensitive data, and import with `--preview` before `--confirm`. Packages do not carry Git branches or synchronize live databases.
+
+## How do I know a long-running goal is done?
+
+Run `planr plan audit <plan-id> --json`. A goal contract normally requires settled items, complete reviews, clear approvals, and required verification logs. The final summary must agree with the map and evidence.
+
+## Can I use only the CLI?
+
+Yes. Client integration files are optional. The [CLI-only guide](/docs/integrations/cli-only) uses the same project, map, logs, and review contracts as MCP clients.

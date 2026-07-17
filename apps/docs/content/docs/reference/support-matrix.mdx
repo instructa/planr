@@ -1,0 +1,36 @@
+---
+title: Support Matrix
+description: Supported operating systems, architectures, clients, transports, runtimes, and documented boundaries.
+---
+
+## Distribution platforms
+
+| Platform | Release/npm binary | Notes |
+| --- | --- | --- |
+| macOS arm64 | Supported | Homebrew, installer, npm, source |
+| macOS x86_64 | Supported | Homebrew, installer, npm, source |
+| Linux x86_64 | Supported | Installer, npm, source |
+| Linux arm64 | Supported | Installer, npm, source |
+| Native Windows | Not published | Use WSL 2 or build from source at your own integration boundary |
+
+The npm wrapper requires Node.js 18+. Native/Homebrew installs do not require Node.js. Building Planr requires Rust 1.85+. Building this documentation site requires Node.js 22+ and the pinned pnpm version.
+
+## Client support
+
+| Client | First-party surface | Verification |
+| --- | --- | --- |
+| Codex | Plugin skills; project MCP snippet and hooks | `planr doctor --client codex` |
+| Claude Code | Plugin; project `.mcp.json`, roles, hooks | `planr doctor --client claude` |
+| Cursor | Project MCP, agents, skills, hooks, deeplink | `planr doctor --client cursor` |
+| Generic MCP | stdio `planr mcp` | MCP initialize/tools/resources/prompts discovery |
+| CLI-only/CI | Native executable and JSON output | `planr doctor --client all` plus scoped commands |
+
+## Transports and services
+
+- CLI: local process.
+- MCP: stdio, newline-delimited JSON-RPC.
+- HTTP: localhost-only `127.0.0.1`, default port 7526.
+- Events: SSE at `/v1/events/stream`.
+- Hosted Planr service: none required.
+
+MCP and HTTP expose overlapping application services but are not identical surface-for-surface. Use runtime discovery and this reference rather than assuming a CLI spelling maps mechanically to a tool or route.

@@ -1,0 +1,222 @@
+---
+title: Full Lifecycle Tutorial
+description: Replay Planr from product idea to checked plans, executable map, evidence, independent review, recovery preview, export, and closure.
+---
+
+This tutorial builds a two-item “hello” command in an empty practice directory. It exercises Planr's public lifecycle with the real CLI. Generated IDs differ on every run; copy the ID printed by each command into the next command where a placeholder appears.
+
+<Callout type="info" title="Replay status">
+  The documentation test runs this journey in a fresh temporary project and asserts the final map is fully settled. Product commands, state transitions, output shape, client dry-runs, and export are checked on every replay.
+</Callout>
+
+## 1. Create a local project
+
+```bash
+mkdir hello-planr
+cd hello-planr
+planr project init "Hello Planr" --json
+```
+
+Planr creates `.planr/planr.sqlite`. The JSON result includes the new project ID and root path.
+
+## 2. Turn the idea into a product plan
+
+```bash
+planr plan new "Ship hello command" --platform cli --json
+```
+
+The response contains a product-plan ID such as `pln-…` and its directory under `.planr/plans/product/`. Open that directory and replace the scaffold content in `PRODUCT_SPEC.md` with:
+
+```md
+# Product Specification
+
+## Problem
+
+New users need a tiny command they can implement and verify.
+
+## Requirements
+
+- Add an executable hello command.
+- Verify its exact output.
+
+## Success Criteria
+
+Running `./hello.sh` prints exactly `hello from planr`.
+```
+
+Replace `TASKS.md` with:
+
+```md
+# Tasks
+
+### TASK-001: Add the hello command
+
+Create an executable `hello.sh` script.
+
+### TASK-002: Verify the hello command
+
+Run the script and record its exact output.
+```
+
+Check the plan, substituting your product-plan ID:
+
+```bash
+planr plan check <product-plan-id> --json
+```
+
+Do not continue until the response has `ok: true`. Warnings name the empty or placeholder section and tell you what to edit.
+
+## 3. Create a build slice
+
+```bash
+planr plan split <product-plan-id> --slice "CLI MVP" --json
+```
+
+Open the returned build-plan path. Keep its generated frontmatter, then make the Markdown body concrete:
+
+```md
+# Ship hello command - CLI MVP
+
+## Scope Decision
+
+Ship a two-step shell-script example that demonstrates implementation and verification.
+
+## Ownership Target
+
+The repository root owns the example script and its verification evidence.
+
+## Existing Leverage
+
+Use POSIX shell and Planr's standard map workflow.
+
+## Phase 1
+
+### TASK-001: Add the hello command
+
+Create an executable `hello.sh` script that prints `hello from planr`.
+
+### TASK-002: Verify the hello command
+
+Run `./hello.sh` and record the successful output.
+
+## Out Of Scope
+
+Packaging, argument parsing, and platform-specific installers.
+
+## Verification
+
+Run `./hello.sh` and confirm the exact output `hello from planr`.
+
+## Acceptance Criteria
+
+- `hello.sh` is executable.
+- Running it prints exactly `hello from planr`.
+```
+
+Check the build plan, then compile its tasks into the authoritative map:
+
+```bash
+planr plan check <build-plan-id> --json
+planr map build --from <build-plan-id> --json
+planr map show --plan <build-plan-id> --json
+```
+
+You should see two items and one `blocks` link. The first item is `ready`; the second remains `pending` until its dependency closes.
+
+## 4. Pick and implement the first item
+
+A stable worker identity makes ownership and recovery explicit:
+
+```bash
+export PLANR_WORKER_ID="onboarding-builder"
+planr pick --plan <build-plan-id> --work-type code --json
+```
+
+Create `hello.sh`:
+
+```sh
+#!/bin/sh
+printf '%s\n' 'hello from planr'
+```
+
+Make it executable, then close the picked item using its returned item ID:
+
+```bash
+chmod +x hello.sh
+planr done <first-item-id> \
+  --summary "Added an executable hello command." \
+  --files hello.sh \
+  --cmd "chmod +x hello.sh" \
+  --tests "./hello.sh => hello from planr" \
+  --json
+```
+
+The completion log is durable evidence. Closing the first item unlocks the second.
+
+## 5. Verify and request review
+
+```bash
+planr pick --plan <build-plan-id> --work-type code --json
+./hello.sh
+```
+
+The command must print:
+
+```text
+hello from planr
+```
+
+Submit the second item for review instead of closing it directly:
+
+```bash
+planr done <second-item-id> \
+  --summary "Verified the documented command and exact output." \
+  --files hello.sh \
+  --cmd "./hello.sh" \
+  --tests "stdout equals hello from planr" \
+  --review \
+  --json
+```
+
+The target moves to `in_review`, and a ready review item appears.
+
+## 6. Preview recovery and export evidence
+
+Recovery is preview-only unless you explicitly pass `--apply`:
+
+```bash
+planr recover sweep --json
+mkdir -p .planr/artifacts
+planr export --out .planr/artifacts/onboarding-example --include-plans --include-logs --json
+```
+
+The export is a JSON package containing the local project state, plans, and logs. It is useful for handoff or diagnostics without replacing the live map.
+
+## 7. Review independently and close
+
+Use a different reviewer identity:
+
+```bash
+export PLANR_WORKER_ID="onboarding-reviewer"
+planr pick --plan <build-plan-id> --work-type review --json
+```
+
+Inspect the target, its plan, `hello.sh`, and its completion log. If they match, close the returned review item:
+
+```bash
+planr review close <review-item-id> \
+  --verdict complete \
+  --findings "Command, output, executable bit, and evidence match the plan." \
+  --reviewer onboarding-reviewer \
+  --close-target \
+  --json
+planr map show --plan <build-plan-id> --json
+```
+
+The final map has three closed items: two implementation items and their review. `settled` equals `total`, with no picked, pending, ready, or in-review work.
+
+## Where to go next
+
+- Connect [Codex, Claude Code, Cursor, generic MCP, or the CLI](/docs/getting-started/choose-your-interface).
+- Read the [conceptual model](/docs/concepts) before designing a larger map.
+- Use `planr recover sweep --json` after interrupted work; apply recovery only after inspecting the preview.

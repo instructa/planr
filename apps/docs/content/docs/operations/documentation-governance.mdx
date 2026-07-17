@@ -1,0 +1,33 @@
+---
+title: Documentation Governance
+description: Assign one content owner, review drift triggers, and keep published documentation current.
+---
+
+Every public surface has one canonical implementation owner and one published documentation owner. `docs/documentation/COVERAGE.md` is the coverage inventory; `docs/documentation/CONTRACT.md` owns terminology, source precedence, architecture decisions, and exclusions. Published prose lives in `apps/docs/content/docs/`.
+
+## Ownership rules
+
+| Content | Maintained owner |
+| --- | --- |
+| Product scope and lifecycle | `docs/planr-spec/` |
+| Runtime architecture | `docs/ARCHITECTURE.md` plus compiled source |
+| CLI contract | live Clap help, checked into generated CLI reference |
+| MCP schemas and install metadata | `src/integrations.rs`, checked into generated MCP reference |
+| HTTP routes | `src/app/http.rs` and HTTP reference |
+| Distribution and release | manifests, installers, workflows, `docs/RELEASE.md` |
+| Published guides and runbooks | `apps/docs/content/docs/` |
+| Navigation and route coverage | section `meta.json` files and coverage inventory |
+
+Generated pages are never hand-edited. Legacy Markdown may explain history or point to a published route, but it must not duplicate a second maintained procedure.
+
+## Freshness triggers
+
+Review affected documentation in the same change whenever a command, option, MCP schema, route, status, storage field, config variable, installer, dependency baseline, security boundary, release workflow, UI component, or navigation path changes. Dependency and Fumadocs upgrades also require a production build and browser/accessibility evidence.
+
+At each release, review the coverage inventory, generated-reference drift, onboarding replay, concept semantics, maintenance contract, broken links/build output, search discoverability, and the operations runbooks. Changelog entries must link users to migrations, compatibility limits, or new workflows when applicable.
+
+## Page review contract
+
+A maintained page has a routable slug, explicit navigation owner, tested source, clear audience and prerequisites, executable or exact examples, expected outcome, failure recovery, and a next action. Reviewers reject unsupported claims, duplicate ownership, manual edits to generated output, inaccessible interactions, and checks reported as passed without evidence.
+
+When a page becomes stale, either update it with its source change, or add its retired URL to `apps/docs/redirects.mjs` and repair inbound links. Every alias has one current destination, is served as a permanent Next.js redirect, and is documented in `docs/documentation/INFORMATION_ARCHITECTURE.md`; the maintenance gate rejects duplicate sources, missing destinations, and undocumented mappings. Repository Markdown paths are source files, not website aliases. Record intentionally deferred gaps in `docs/documentation/COVERAGE.md`; do not hide them with vague copy.

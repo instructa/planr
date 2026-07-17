@@ -1,0 +1,1282 @@
+---
+title: Generated MCP Tool Schemas
+description: Complete Planr 1.5.0 tools/list inventory with every property, type, description, required field, enum/default declaration, and additionalProperties rule.
+---
+
+<Callout type="info" title="Generated runtime contract">
+  This page is generated from live `tools/list`. Optional fields are every property absent from `required`; defaults and enums appear exactly where the runtime schema declares them. CI compares the complete schema JSON byte-for-byte.
+</Callout>
+
+## `planr_project_show`
+
+Show current Planr project
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {},
+  "required": [],
+  "type": "object"
+}
+```
+
+## `planr_trace_item`
+
+Show an item trace including durable requested, resolved, and effective route observations
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "item_id": {
+      "description": "Item id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "item_id"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_map_show`
+
+Show Planr map (optionally scoped to one plan)
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "plan": {
+      "description": "Only show items and links of this plan id",
+      "type": "string"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+## `planr_map_status`
+
+Show richer map status
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {},
+  "required": [],
+  "type": "object"
+}
+```
+
+## `planr_map_preview`
+
+Preview graph effects before mutation
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "close": {
+      "description": "Item id whose close effect should be previewed",
+      "type": "string"
+    }
+  },
+  "required": [
+    "close"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_map_unlocks`
+
+Show what an item would unlock
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "item_id": {
+      "description": "Item id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "item_id"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_map_lookahead`
+
+Show near-term ready and blocked work
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "from": {
+      "description": "Optional item id to start the lookahead from",
+      "type": "string"
+    },
+    "limit": {
+      "description": "Maximum entries to return (default 10)",
+      "type": "integer"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+## `planr_plan_create`
+
+Create a product plan package
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "ai": {
+      "description": "Include AI feature planning files",
+      "type": "boolean"
+    },
+    "backend": {
+      "description": "Include backend planning files",
+      "type": "boolean"
+    },
+    "platform": {
+      "description": "Target platform label",
+      "type": "string"
+    },
+    "title": {
+      "description": "Plan title",
+      "type": "string"
+    }
+  },
+  "required": [
+    "title"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_plan_refine`
+
+Append refinement context to a plan
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "description": "Plan id",
+      "type": "string"
+    },
+    "note": {
+      "description": "Refinement note to append",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_plan_split`
+
+Create a build plan from a product plan
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "description": "Source product plan id",
+      "type": "string"
+    },
+    "slice": {
+      "description": "Build slice name",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "slice"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_plan_check`
+
+Validate a plan record and path
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "description": "Plan id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_plan_audit`
+
+Audit a plan's goal contract: clause-by-clause pass/fail with evidence
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "description": "Plan id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_plan_link`
+
+Link a plan source to an item
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "item_id": {
+      "description": "Item id",
+      "type": "string"
+    },
+    "relationship": {
+      "description": "Link relationship (default references)",
+      "type": "string"
+    },
+    "section_id": {
+      "description": "Optional plan section id",
+      "type": "string"
+    },
+    "source_id": {
+      "description": "Plan source id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "source_id",
+    "item_id"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_map_build`
+
+Create map items from a plan
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "from": {
+      "description": "Plan id to build items from",
+      "type": "string"
+    }
+  },
+  "required": [
+    "from"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_item_create`
+
+Create a map item
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "after": {
+      "description": "Existing item id this item depends on",
+      "type": "string"
+    },
+    "description": {
+      "description": "Item description",
+      "type": "string"
+    },
+    "max_retries": {
+      "description": "Maximum automatic retries",
+      "type": "integer"
+    },
+    "post": {
+      "description": "Post-condition note",
+      "type": "string"
+    },
+    "pre": {
+      "description": "Pre-condition note",
+      "type": "string"
+    },
+    "retry_backoff": {
+      "description": "Retry backoff strategy",
+      "type": "string"
+    },
+    "retry_delay_ms": {
+      "description": "Base retry delay in milliseconds",
+      "type": "integer"
+    },
+    "timeout_seconds": {
+      "description": "Runtime timeout before the pick is stale",
+      "type": "integer"
+    },
+    "title": {
+      "description": "Item title",
+      "type": "string"
+    },
+    "work_type": {
+      "description": "Work type (default generic)",
+      "type": "string"
+    }
+  },
+  "required": [
+    "title",
+    "description"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_item_breakdown`
+
+Break an item into chained child items (parent parks as a gate)
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "description": "Parent item id",
+      "type": "string"
+    },
+    "into": {
+      "description": "Child titles separated by newlines or commas",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "into"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_item_insert`
+
+Insert an item between linked work
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "after": {
+      "description": "Item id the new item comes after",
+      "type": "string"
+    },
+    "before": {
+      "description": "Optional item id the new item comes before",
+      "type": "string"
+    },
+    "confirm": {
+      "description": "Apply the insert instead of previewing",
+      "type": "boolean"
+    },
+    "description": {
+      "description": "New item description",
+      "type": "string"
+    },
+    "title": {
+      "description": "New item title",
+      "type": "string"
+    }
+  },
+  "required": [
+    "title",
+    "description",
+    "after"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_item_amend`
+
+Add future-work context to an item
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "description": "Item id",
+      "type": "string"
+    },
+    "note": {
+      "description": "Amendment content",
+      "type": "string"
+    },
+    "tag": {
+      "description": "Context kind label (default amendment)",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "note"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_item_replan`
+
+Preview or replace pending child work
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "confirm": {
+      "description": "Apply the replan instead of previewing",
+      "type": "boolean"
+    },
+    "into": {
+      "description": "Comma-separated replacement child titles",
+      "type": "string"
+    },
+    "parent_id": {
+      "description": "Parent item id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "parent_id",
+    "into"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_agents_list`
+
+Show the agent profile registry: profiles, routes, and validation warnings
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {},
+  "required": [],
+  "type": "object"
+}
+```
+
+## `planr_policy_show`
+
+Show the parsed provider-neutral Usage Policy v1 or its missing/degraded state
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {},
+  "required": [],
+  "type": "object"
+}
+```
+
+## `planr_policy_check`
+
+Validate .planr/policy.toml; missing preserves advisory routing and malformed policy fails closed
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {},
+  "required": [],
+  "type": "object"
+}
+```
+
+## `planr_policy_admit`
+
+Evaluate a bounded task contract and execution permission request before delegation
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "request": {
+      "description": "ExecutionAdmissionRequest object",
+      "type": "object"
+    }
+  },
+  "required": [
+    "request"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_item_route`
+
+Show an item's resolved advisory route and whether an override or policy won
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "item_id": {
+      "description": "Item id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "item_id"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_item_route_set`
+
+Pin an item to an agent profile from the registry (beats every policy route)
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "item_id": {
+      "description": "Item id",
+      "type": "string"
+    },
+    "profile": {
+      "description": "Profile id declared in .planr/agents.toml",
+      "type": "string"
+    }
+  },
+  "required": [
+    "item_id",
+    "profile"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_item_route_clear`
+
+Remove an item's pinned profile so policy routing applies again
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "item_id": {
+      "description": "Item id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "item_id"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_pick_item`
+
+Atomically pick the next ready item
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "peek": {
+      "description": "Read the next work packet (incl. routing) without leasing it; the worker takes the lease",
+      "type": "boolean"
+    },
+    "plan": {
+      "description": "Only lease items belonging to this plan (plan id), so plan-scoped goal runs stay inside their contract",
+      "type": "string"
+    },
+    "work_type": {
+      "description": "Only lease items of this work type (e.g. review for checkers, code for makers)",
+      "type": "string"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+## `planr_pick_heartbeat`
+
+Record worker heartbeat for picked work
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "item_id": {
+      "description": "Item id (defaults to this worker's current pick)",
+      "type": "string"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+## `planr_pick_progress`
+
+Record progress for picked work
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "item_id": {
+      "description": "Item id",
+      "type": "string"
+    },
+    "note": {
+      "description": "Optional progress note",
+      "type": "string"
+    },
+    "percent": {
+      "description": "Progress percent 0-100",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "item_id"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_pick_pause`
+
+Pause picked work without releasing it
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "item_id": {
+      "description": "Item id",
+      "type": "string"
+    },
+    "note": {
+      "description": "Optional pause note",
+      "type": "string"
+    }
+  },
+  "required": [
+    "item_id"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_pick_resume`
+
+Resume picked work
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "item_id": {
+      "description": "Item id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "item_id"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_pick_stale`
+
+Inspect stale picked work
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "older_than_seconds": {
+      "description": "Staleness threshold in seconds (default 900)",
+      "type": "integer"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+## `planr_recover_sweep`
+
+Preview or apply stale, timed-out, and retryable recovery
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "apply": {
+      "description": "Apply recovery instead of previewing",
+      "type": "boolean"
+    },
+    "older_than_seconds": {
+      "description": "Staleness threshold in seconds (default 900)",
+      "type": "integer"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+## `planr_approval_request`
+
+Request human approval before close
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "item_id": {
+      "description": "Item id",
+      "type": "string"
+    },
+    "reason": {
+      "description": "Why approval is needed",
+      "type": "string"
+    }
+  },
+  "required": [
+    "item_id"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_approval_approve`
+
+Approve item close gate
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "by": {
+      "description": "Approver identity",
+      "type": "string"
+    },
+    "comment": {
+      "description": "Optional approval comment",
+      "type": "string"
+    },
+    "item_id": {
+      "description": "Item id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "item_id",
+    "by"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_approval_deny`
+
+Deny item close gate
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "by": {
+      "description": "Denier identity",
+      "type": "string"
+    },
+    "comment": {
+      "description": "Optional denial comment",
+      "type": "string"
+    },
+    "item_id": {
+      "description": "Item id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "item_id",
+    "by"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_approval_list`
+
+List item approval gates
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "open": {
+      "description": "Only list open approval requests",
+      "type": "boolean"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+## `planr_artifact_add`
+
+Attach artifact metadata or small content
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "content": {
+      "description": "Optional inline content",
+      "type": "string"
+    },
+    "item": {
+      "description": "Optional item id",
+      "type": "string"
+    },
+    "kind": {
+      "description": "Artifact kind (default evidence)",
+      "type": "string"
+    },
+    "mime": {
+      "description": "MIME type (default text/plain)",
+      "type": "string"
+    },
+    "name": {
+      "description": "Artifact name",
+      "type": "string"
+    },
+    "path": {
+      "description": "Optional file path reference",
+      "type": "string"
+    }
+  },
+  "required": [
+    "name"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_artifact_list`
+
+List artifacts
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "item": {
+      "description": "Optional item id filter",
+      "type": "string"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+## `planr_artifact_show`
+
+Show artifact details
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "description": "Artifact id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_event_list`
+
+List persisted events
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "item": {
+      "description": "Optional item id filter",
+      "type": "string"
+    },
+    "limit": {
+      "description": "Maximum events (default 50)",
+      "type": "integer"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+## `planr_debug_bundle`
+
+Preview a privacy-minimized debug bundle
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "item": {
+      "description": "Optional item id filter",
+      "type": "string"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+## `planr_log_add`
+
+Add evidence log to an item
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "commands": {
+      "description": "Commands run",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "files": {
+      "description": "Changed file paths",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "item": {
+      "description": "Item id",
+      "type": "string"
+    },
+    "kind": {
+      "description": "Log kind (default completion)",
+      "type": "string"
+    },
+    "profile": {
+      "description": "Registry profile the run actually executed on (advisory mismatch check)",
+      "type": "string"
+    },
+    "route_observation": {
+      "description": "Requested/resolved/effective route, transition, policy/binding provenance, and metering",
+      "type": "object"
+    },
+    "summary": {
+      "description": "What was done",
+      "type": "string"
+    },
+    "tests": {
+      "description": "Tests run with results",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "item",
+    "summary"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_review_annotate`
+
+Attach review annotation feedback
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "author": {
+      "description": "Annotation author",
+      "type": "string"
+    },
+    "file": {
+      "description": "File path the annotation refers to",
+      "type": "string"
+    },
+    "item_id": {
+      "description": "Item id",
+      "type": "string"
+    },
+    "line": {
+      "description": "Line number the annotation refers to",
+      "type": "integer"
+    },
+    "message": {
+      "description": "Annotation message",
+      "type": "string"
+    },
+    "severity": {
+      "description": "Severity (default info)",
+      "type": "string"
+    }
+  },
+  "required": [
+    "item_id",
+    "message"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_review_ingest`
+
+Ingest hook-compatible review feedback
+
+```json
+{
+  "additionalProperties": true,
+  "properties": {
+    "feedback": {
+      "description": "Review feedback payload",
+      "type": "object"
+    },
+    "item_id": {
+      "description": "Item id",
+      "type": "string"
+    },
+    "payload": {
+      "description": "Alternative feedback payload key",
+      "type": "object"
+    }
+  },
+  "required": [
+    "item_id"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_review_artifact`
+
+Write a review artifact
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "review_item_id": {
+      "description": "Review item id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "review_item_id"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_review_evidence`
+
+Collect scoped Git and PR evidence for an item
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "item_id": {
+      "description": "Item id",
+      "type": "string"
+    },
+    "pr_url": {
+      "description": "Optional pull request URL to record",
+      "type": "string"
+    }
+  },
+  "required": [
+    "item_id"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_review_close`
+
+Close a review item with verdict
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "close_target": {
+      "description": "With verdict complete: also close the reviewed target item (requires a completion log on the target)",
+      "type": "boolean"
+    },
+    "findings": {
+      "description": "Findings discovered during review",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "review_item_id": {
+      "description": "Review item id",
+      "type": "string"
+    },
+    "reviewer": {
+      "description": "Reviewer identity recorded on the review log, artifact, and event (defaults to the worker id)",
+      "type": "string"
+    },
+    "verdict": {
+      "description": "Verdict: complete, partial, failed, or unclear",
+      "type": "string"
+    }
+  },
+  "required": [
+    "review_item_id"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_close_item`
+
+Close an item after checks
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "item_id": {
+      "description": "Item id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "item_id"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_context_create`
+
+Add project or item context
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "content": {
+      "description": "Context content",
+      "type": "string"
+    },
+    "item": {
+      "description": "Optional item id",
+      "type": "string"
+    },
+    "kind": {
+      "description": "Context kind (default discovery)",
+      "type": "string"
+    }
+  },
+  "required": [
+    "content"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_search`
+
+Search items, plans, logs, and context
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "query": {
+      "description": "Search query",
+      "type": "string"
+    }
+  },
+  "required": [
+    "query"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_log_read`
+
+Read one log entry
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "description": "Log id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "type": "object"
+}
+```

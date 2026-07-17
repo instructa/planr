@@ -1,0 +1,5 @@
+{
+  "title": "Concepts",
+  "description": "Understand Planr's local-first execution model.",
+  "pages": ["index", "local-first-model", "plans-and-map", "graph-and-readiness", "picks-and-leases", "evidence-and-context", "reviews-and-approvals", "recovery-packages-and-closure"]
+}

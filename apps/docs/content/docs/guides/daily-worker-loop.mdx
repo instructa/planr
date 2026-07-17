@@ -1,0 +1,48 @@
+---
+title: Daily Worker Loop
+description: Execute one scoped map item with durable progress and completion evidence.
+---
+
+## Before picking
+
+Start from the repository root. Inspect local changes and set a stable identity:
+
+```bash
+git status --short
+export PLANR_WORKER_ID="maker-api-1"
+planr map status --json
+planr pick --plan <plan-id> --work-type code --json
+```
+
+Read the returned item, linked plan, upstream handoffs, conditions, recovery policy, and remaining snapshot. Stop if the item is not the work you are authorized to perform.
+
+## While working
+
+Work only on the picked item. Preserve unrelated dirty files. During a long task, make runtime state visible:
+
+```bash
+planr pick progress <item-id> --percent 40 --note "implementation complete; focused tests next"
+planr context add "Confirmed upstream API returns opaque IDs" --item <item-id> --tag discovery
+```
+
+Run the verification required by the plan. Record exact commands and meaningful results, not aspirational checks.
+
+## Finish
+
+```bash
+planr done <item-id> \
+  --summary "Implemented and verified the API slice." \
+  --files src/api.rs,tests/api.rs \
+  --cmd "cargo test api" \
+  --tests "API tests passed" \
+  --review \
+  --json
+```
+
+The target moves to `in_review`; a checker can pick the review. For low-risk work where the plan does not require review, omit `--review` and close directly with evidence.
+
+## Know when to stop
+
+Stop after submitting review. Do not pick your own review under the maker identity. If the pick result is null, inspect its `reason`; never silently widen a plan or work-type filter.
+
+Next: [Review and Fix Loops](/docs/guides/review-and-fix-loops).

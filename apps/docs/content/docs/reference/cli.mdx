@@ -1,0 +1,45 @@
+---
+title: CLI Conventions
+description: Invoke Planr reliably and navigate its complete generated command reference.
+---
+
+## Invocation
+
+```text
+planr [--db <path>] [--json] [--no-color] <command>
+```
+
+`--db` selects an explicit SQLite database. Otherwise `PLANR_DB` wins, then Planr discovers `.planr/planr.sqlite` from the workspace. Use `--json` for scripts and agent calls; human output can change presentation without changing the JSON contract.
+
+## Command families
+
+| Family | Commands |
+| --- | --- |
+| Project and planning | `project`, `plan`, `map` |
+| Graph execution | `item`, `link`, `pick`, `done`, `close`, `recover` |
+| Evidence and gates | `log`, `review`, `approval`, `context`, `note`, `artifact`, `event`, `trace` |
+| Inspection | `search`, `doctor`, `prime`, `debug`, `scrub` |
+| Routing and policy | `agents`, `routing`, `policy` |
+| Integration | `install`, `prompt`, `mcp`, `serve` |
+| Portability | `export`, `import`, plus low-level `map export`/`map import` |
+
+The [generated CLI reference](/docs/reference/cli-generated) contains every current subcommand, positional argument, option, default, and enum printed by the repository binary.
+
+## Automation rules
+
+- Set `PLANR_WORKER_ID` for stable lease ownership.
+- Use `--plan` and `--work-type` on picks instead of filtering results afterward.
+- Treat a null pick as a successful query with a `reason`, not as a process crash.
+- Preview `recover`, package import, item insert/replan/cancel, scrub, and routing bundle changes before confirmation/apply.
+- Record commands actually run in logs; `--cmd` does not execute its string.
+- Never parse human tables when `--json` exists.
+
+## Examples
+
+Successful scoped pick:
+
+```bash
+PLANR_WORKER_ID="maker-1" planr pick --plan <plan-id> --work-type code --json
+```
+
+Expected no-work outcome: exit success with `item: null`, a `reason`, and `remaining`. Invalid IDs, transitions, or arguments exit non-zero and emit a structured error under `--json`. See [Outputs and Errors](/docs/reference/outputs-and-errors).

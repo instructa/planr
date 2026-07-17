@@ -1,0 +1,36 @@
+---
+title: Local-First Model
+description: Understand Planr's local authority, ownership boundaries, and multi-client coordination.
+---
+
+## What it is
+
+Planr is a local coordination layer for work performed by agents and humans. The workspace contains readable Markdown plans and a `.planr/planr.sqlite` database; no hosted Planr account is required.
+
+## Why it exists
+
+Chat history is a poor source of truth: it is client-specific, can be compacted, and does not enforce atomic ownership or dependency rules. Local durable state lets Codex, Claude Code, Cursor, MCP hosts, CLI operators, and reviewers resume the same work without reconstructing it from a transcript.
+
+## Who owns what
+
+| Fact | Canonical owner |
+| --- | --- |
+| Product intent, scope, acceptance criteria | Markdown product and build plans |
+| Item status, links, readiness, picks, reviews, approvals, completion | SQLite map |
+| Commands, tests, findings, screenshots | Logs and artifacts |
+| Decisions, constraints, discoveries, goal contracts | Context records |
+| Source changes | Your repository and version control |
+
+Markdown checkboxes never override the map. A story or chat message can explain history, but it does not close an item.
+
+## How it changes
+
+CLI and MCP calls operate on the same database. Mutations are transactional, picks are atomic, and events/logs preserve important transitions. To share a project between clients, launch each client from the same workspace and keep worker identities distinct.
+
+<Callout type="warn" title="Do not copy a live database between active writers">
+  Coordinate through one workspace database. Use Planr export/import for backups or reusable packages, and preview imports before confirming them.
+</Callout>
+
+## Where to go next
+
+Read [Plans and Map](/docs/concepts/plans-and-map), then choose a [client interface](/docs/getting-started/choose-your-interface).

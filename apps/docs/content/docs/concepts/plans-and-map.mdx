@@ -1,0 +1,32 @@
+---
+title: Plans and Map
+description: Learn how narrative plans become authoritative executable work.
+---
+
+## What they are
+
+A **product plan** explains the problem, requirements, success criteria, architecture, and candidate tasks. A **build plan** narrows that intent into verifiable implementation slices. The **map** compiles those slices into live items and links.
+
+## Why the separation exists
+
+Plans need rich prose and reviewable diffs. Execution needs atomic claims, computed readiness, and closure gates. Keeping both first-class avoids forcing prose into database rows or pretending Markdown checkboxes can coordinate concurrent workers.
+
+## Who owns them
+
+Product and technical owners maintain plan meaning. `planr plan check` validates required structure. `planr map build --from <build-plan-id>` creates map state; after that, the map owns execution status.
+
+## How they change
+
+```bash
+planr plan new "Feature name" --platform web --json
+planr plan refine <product-plan-id> --note "Confirmed constraint"
+planr plan split <product-plan-id> --slice "API delivery" --json
+planr plan check <build-plan-id> --json
+planr map build --from <build-plan-id> --json
+```
+
+Product tasks are candidates until compiled into the map. If scope changes during execution, update the plan for narrative truth and adapt future graph work explicitly with item/link commands. Do not edit a plan checkbox and assume live readiness changed.
+
+## Where to go next
+
+Learn how the compiled graph behaves in [Graph and Readiness](/docs/concepts/graph-and-readiness), or replay the [full lifecycle](/docs/getting-started/full-lifecycle).

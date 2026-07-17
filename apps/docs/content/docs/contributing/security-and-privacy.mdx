@@ -1,0 +1,24 @@
+---
+title: Security and Privacy
+description: Preserve Planr's local-first boundary and keep secrets out of evidence and documentation.
+---
+
+Planr stores V1 state in the configured local SQLite database and `.planr` files. It emits no content telemetry by default. Its HTTP server binds to `127.0.0.1`; localhost is a security boundary, not an invitation to expose the API through a public proxy.
+
+## Execution and destructive changes
+
+Planr does not execute shell commands merely because they appear in a plan or log. The user or an authorized agent runs commands separately and records evidence. Destructive import, scrub, and recovery flows must preserve confirmation or preview-first behavior. Documentation examples show previews before confirmation.
+
+## Sensitive evidence
+
+Logs, contexts, artifacts, exports, debug bundles, screenshots, Git diffs, and browser reports may contain repository paths or user content. Minimize them, inspect them before sharing, and never paste credentials, tokens, private keys, cookies, or unnecessary source. `planr scrub` detects common secret-looking patterns; review its preview before using `planr scrub --confirm` to replace flagged values with `[REDACTED]`.
+
+Generated documentation and CI artifacts must use synthetic identifiers and disposable data. The docs application has no analytics or hosted content service. Do not add telemetry, remote MDX, or third-party scripts without an explicit product, privacy, security, and documentation decision.
+
+## Local checks
+
+<CommandBlock command="scripts/security-local.sh" label="Run leak and vulnerability checks" />
+
+This runs the repository's BetterLeaks and Trivy checks. GitHub also runs secret and filesystem scans plus a pinned Actions security audit. Treat a finding as sensitive: share only the minimum reproduction with repository maintainers through the project's private security channel, not a public issue containing the secret.
+
+Before review, verify that new HTTP behavior remains localhost-only, new stored fields are included in scrub/export decisions, and examples use redacted or synthetic values.

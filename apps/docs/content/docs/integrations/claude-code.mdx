@@ -1,0 +1,23 @@
+---
+title: Claude Code
+description: Add Planr plugin skills and project-scoped MCP support to Claude Code.
+---
+
+In Claude Code, add the marketplace and plugin:
+
+```text
+/plugin marketplace add instructa/planr
+/plugin install planr@planr
+```
+
+Then run these commands from the project root:
+
+```bash
+planr install claude --dry-run
+planr install claude
+planr doctor --client claude
+```
+
+The installer writes project-scoped `.mcp.json` configuration plus Planr roles and hooks. The dry-run also shows the equivalent `claude mcp add` command when you intentionally want user scope.
+
+Use `--no-mcp`, `--no-hooks`, or `--force` only after inspecting the preview. For a CLI-shaped prompt, run `planr prompt cli --client claude`. Continue with the shared [full lifecycle](/docs/getting-started/full-lifecycle).

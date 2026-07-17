@@ -1,11 +1,47 @@
 packages:
   - "."
+  - "apps/*"
   - "planr-routing"
 
 enableGlobalVirtualStore: false
 verifyDepsBeforeRun: error
 
+overrides:
+  '@cloudflare/workers-types': 5.20260717.1
+
 allowBuilds:
   esbuild: true
+  msgpackr-extract: true
+  rclone.js: true
   sharp: false
+  unrs-resolver: true
   workerd: true
+
+minimumReleaseAgeExclude:
+  - '@tailwindcss/node@4.3.3'
+  - '@tailwindcss/oxide-android-arm64@4.3.3'
+  - '@tailwindcss/oxide-darwin-arm64@4.3.3'
+  - '@tailwindcss/oxide-darwin-x64@4.3.3'
+  - '@tailwindcss/oxide-freebsd-x64@4.3.3'
+  - '@tailwindcss/oxide-linux-arm-gnueabihf@4.3.3'
+  - '@tailwindcss/oxide-linux-arm64-gnu@4.3.3'
+  - '@tailwindcss/oxide-linux-arm64-musl@4.3.3'
+  - '@tailwindcss/oxide-linux-x64-gnu@4.3.3'
+  - '@tailwindcss/oxide-linux-x64-musl@4.3.3'
+  - '@tailwindcss/oxide-wasm32-wasi@4.3.3'
+  - '@tailwindcss/oxide-win32-arm64-msvc@4.3.3'
+  - '@tailwindcss/oxide-win32-x64-msvc@4.3.3'
+  - '@tailwindcss/oxide@4.3.3'
+  - '@tailwindcss/postcss@4.3.3'
+  - tailwindcss@4.3.3
+  - lucide-react@1.25.0
+  - '@cloudflare/workers-types@5.20260717.1'
+  - miniflare@4.20260714.0
+  - wrangler@4.112.0
+  - '@distilled.cloud/aws@0.29.1'
+  - '@distilled.cloud/axiom@0.29.1'
+  - '@distilled.cloud/cloudflare@0.29.1'
+  - '@distilled.cloud/core@0.29.1'
+  - '@distilled.cloud/neon@0.29.1'
+  - '@distilled.cloud/planetscale@0.29.1'
+  - alchemy@2.0.0-beta.63

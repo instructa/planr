@@ -1,0 +1,39 @@
+---
+title: Reviews and Approvals
+description: Distinguish evidence-based checker work from explicit human decision gates.
+---
+
+## What they are
+
+A **review** is a graph item that checks a target against its plan, changed files, logs, tests, and live evidence. An **approval** is an explicit human decision attached to an item.
+
+## Why both exist
+
+Technical correctness and authorization are different questions. A reviewer can prove the implementation matches acceptance criteria; only the designated human can authorize a release, cost, deletion, or external side effect.
+
+## Who owns them
+
+The maker submits evidence and requests review. A checker picks review work—ideally with a different `PLANR_WORKER_ID`. The named human approves or denies an approval request. The map enforces both gates.
+
+## How they change
+
+```bash
+planr done <item-id> --summary "Implemented feature" --cmd "cargo test" --review --json
+planr pick --plan <plan-id> --work-type review --json
+planr review evidence <target-item-id> --json
+planr review close <review-item-id> --verdict complete --close-target --json
+```
+
+Planr derives `review_mode` as `independent`, `single_agent`, or `unattributed` from recorded worker identity. A `not-complete` verdict with actionable findings creates fix and follow-up review work; the target stays `in_review` until the chain settles.
+
+```bash
+planr approval request <item-id> --reason "production release"
+planr approval list --open --json
+planr approval approve <item-id> --by "release owner" --comment "window confirmed"
+```
+
+Requested or denied approval blocks closure. Inspect the gate with `planr map preview --close <item-id>`.
+
+## Where to go next
+
+Follow [Review and Fix Loops](/docs/guides/review-and-fix-loops) or review the closure rules in [Recovery, Packages, and Closure](/docs/concepts/recovery-packages-and-closure).

@@ -1,0 +1,58 @@
+---
+title: Local HTTP API
+description: Complete localhost review workspace, JSON endpoint, SSE, request, and security contract.
+---
+
+Start the server with `planr serve --port 7526`. It binds only `127.0.0.1`; there is no remote bind option or authentication layer. Do not expose it through a proxy or tunnel without adding your own access control.
+
+## UI and stream
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/review` | Local review workspace HTML |
+| GET | `/v1/review-workspace` | Review queue and evidence payload |
+| GET | `/v1/events/stream` | Server-Sent Events; recent replay then live events and heartbeats |
+| Any non-OPTIONS method | `/health` | Returns `{ "ok": true }`; use GET for conventional health checks |
+
+## Project and graph
+
+| Method | Path |
+| --- | --- |
+| GET, POST | `/v1/projects` |
+| GET | `/v1/projects/{project_id}/map?plan={plan_id}` |
+| GET | `/v1/projects/{project_id}/map/status` |
+| GET | `/v1/projects/{project_id}/map/lookahead?from={item_id}` |
+| GET, POST | `/v1/projects/{project_id}/items` |
+| GET | `/v1/items/{id}/unlocks` |
+| GET | `/v1/items/{id}/preview-close` |
+| POST | `/v1/items/{id}/insert`, `/v1/items/{id}/amend`, `/v1/items/{id}/replan` |
+
+## Execution, evidence, and gates
+
+| Method | Path |
+| --- | --- |
+| POST | `/v1/pick` |
+| POST | `/v1/items/{id}/heartbeat`, `/v1/items/{id}/progress`, `/v1/items/{id}/pause`, `/v1/items/{id}/resume` |
+| POST | `/v1/items/{id}/log`, `/v1/items/{id}/close`, `/v1/items/{id}/reviews` |
+| POST | `/v1/items/{id}/approval/request`, `/v1/items/{id}/approval/approve`, `/v1/items/{id}/approval/deny` |
+| GET | `/v1/approvals?open=true` |
+| GET, POST | `/v1/items/{id}/review-evidence` |
+| POST | `/v1/items/{id}/review-annotations`, `/v1/items/{id}/review-feedback` |
+| POST | `/v1/reviews/{id}/close` |
+| GET, POST | `/v1/reviews/{id}/artifact` |
+| POST | `/v1/recover/sweep`, `/v1/policy/admit` |
+
+## Context, artifacts, events, and search
+
+| Method | Path |
+| --- | --- |
+| POST | `/v1/contexts` |
+| GET, POST | `/v1/artifacts` |
+| GET | `/v1/artifacts/{id}` |
+| GET | `/v1/events?item={id}&limit={n}` |
+| GET | `/v1/debug/bundle?item={id}` |
+| GET | `/v1/search?q={query}` |
+
+POST bodies are JSON objects. Invalid JSON returns HTTP 400 with `bad_request`; payloads larger than the server limit return 413. `OPTIONS` returns 204. JSON errors use `{ "error": { "code", "message", "details" } }`. The server sends permissive localhost CORS headers, which is not a substitute for network isolation.
+
+The API calls the same application services as CLI/MCP; state and gate semantics are identical. Use [Outputs and Errors](/docs/reference/outputs-and-errors) for error codes.

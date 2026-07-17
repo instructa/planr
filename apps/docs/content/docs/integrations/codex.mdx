@@ -1,0 +1,23 @@
+---
+title: Codex
+description: Add Planr skills and project-scoped MCP support to Codex.
+---
+
+## Install the Codex plugin
+
+```bash
+codex plugin marketplace add instructa/planr
+codex plugin add planr@planr
+```
+
+The plugin supplies Planr skills. From your project root, preview and then install the project MCP configuration and hooks:
+
+```bash
+planr install codex --dry-run
+planr install codex
+planr doctor --client codex
+```
+
+Use `--no-mcp` if MCP is already managed elsewhere, `--no-hooks` to omit hooks, or `--force` to replace generated Planr files after reviewing the dry-run.
+
+For a CLI-shaped prompt instead of MCP tools, run `planr prompt cli --client codex`. Continue with the shared [full lifecycle](/docs/getting-started/full-lifecycle).

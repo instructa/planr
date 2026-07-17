@@ -1,0 +1,1952 @@
+---
+title: Generated CLI Reference
+description: Complete compiled Planr 1.5.0 command and option help, checked against the repository binary.
+---
+
+<Callout type="info" title="Generated executable contract">
+  This page is generated from the current repository binary. Run `pnpm docs:reference:generate` after changing the CLI; CI fails if the committed help is stale.
+</Callout>
+
+Global options apply where shown. Prefer `--json` for automation; human output is intended for terminals.
+
+## `planr`
+
+```text
+Local-first planning and execution coordination for coding agents
+
+Usage: planr [OPTIONS] <COMMAND>
+
+Commands:
+  agents    Inspect the agent profile registry (.planr/agents.toml) that drives advisory model routing in pick packets
+  routing   Inspect, preview, or apply a provider-neutral routing bundle
+  policy
+  project
+  plan
+  map
+  item
+  link
+  pick
+  approval
+  log
+  close
+  done      Log evidence and finish the step in one command: completion log, then review request (--review) or close, optionally pick the next item
+  review
+  context
+  note
+  search
+  doctor
+  prime     Compact state block for host hooks (session start / post-compaction)
+  install
+  prompt
+  mcp
+  serve
+  trace
+  scrub
+  artifact
+  event
+  debug
+  recover
+  export
+  import
+  help      Print this message or the help of the given subcommand(s)
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+  -V, --version   Print version
+```
+
+### `planr agents`
+
+```text
+Inspect the agent profile registry (.planr/agents.toml) that drives advisory model routing in pick packets
+
+Usage: planr agents [OPTIONS] <COMMAND>
+
+Commands:
+  list     Show resolved profiles, routes, and validation warnings
+  check    Validate the registry; exits non-zero only on parse failure
+  init     Write a commented starter registry with cost-tiering defaults
+  routing  The driver dispatch block (alias for `planr prompt routing`)
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr agents list`
+
+```text
+Show resolved profiles, routes, and validation warnings
+
+Usage: planr agents list [OPTIONS]
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr agents check`
+
+```text
+Validate the registry; exits non-zero only on parse failure
+
+Usage: planr agents check [OPTIONS]
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr agents init`
+
+```text
+Write a commented starter registry with cost-tiering defaults
+
+Usage: planr agents init [OPTIONS]
+
+Options:
+      --db <DB>               Path to Planr SQLite database
+      --force                 Overwrite an existing .planr/agents.toml
+      --json                  Emit JSON output
+      --profile <SPEC>        Declare a profile: <id>=<client>/<model>[@<effort>][#<tier>]. Repeatable
+      --no-color              Disable color in human output
+      --skill <SPEC>          Pair a declared profile with a skill: <profile>=<skill>. Repeatable
+      --route <SPEC>          Route a work type: <work_type>=<profile>[,<fallback>...]. Repeatable
+      --default-route <SPEC>  Default route: <profile>[,<fallback>...]
+      --interactive           Build the registry through guided prompts (requires a terminal)
+  -h, --help                  Print help
+```
+
+#### `planr agents routing`
+
+```text
+The driver dispatch block (alias for `planr prompt routing`)
+
+Usage: planr agents routing [OPTIONS]
+
+Options:
+      --client <CLIENT>  [possible values: codex, claude, cursor, all]
+      --db <DB>          Path to Planr SQLite database
+      --json             Emit JSON output
+      --no-color         Disable color in human output
+  -h, --help             Print help
+```
+
+### `planr routing`
+
+```text
+Inspect, preview, or apply a provider-neutral routing bundle
+
+Usage: planr routing [OPTIONS] <COMMAND>
+
+Commands:
+  bundle
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr routing bundle`
+
+```text
+Usage: planr routing bundle [OPTIONS] <COMMAND>
+
+Commands:
+  inspect  Parse and validate a bundle without inspecting repository targets
+  preview  Show exact repository-local actions without writing
+  apply    Apply the already validated bundle transactionally inside this repository
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+##### `planr routing bundle inspect`
+
+```text
+Parse and validate a bundle without inspecting repository targets
+
+Usage: planr routing bundle inspect [OPTIONS] <BUNDLE>
+
+Arguments:
+  <BUNDLE>
+
+Options:
+      --db <DB>
+          Path to Planr SQLite database
+      --trusted-signer <TRUSTED_SIGNER>
+          Expected signer id for a signed bundle (paired with --trusted-public-key-file)
+      --json
+          Emit JSON output
+      --trusted-public-key-file <TRUSTED_PUBLIC_KEY_FILE>
+          External Ed25519 public-key file for a signed bundle
+      --no-color
+          Disable color in human output
+  -h, --help
+          Print help
+```
+
+##### `planr routing bundle preview`
+
+```text
+Show exact repository-local actions without writing
+
+Usage: planr routing bundle preview [OPTIONS] <BUNDLE>
+
+Arguments:
+  <BUNDLE>
+
+Options:
+      --db <DB>
+          Path to Planr SQLite database
+      --trusted-signer <TRUSTED_SIGNER>
+          Expected signer id for a signed bundle (paired with --trusted-public-key-file)
+      --json
+          Emit JSON output
+      --trusted-public-key-file <TRUSTED_PUBLIC_KEY_FILE>
+          External Ed25519 public-key file for a signed bundle
+      --no-color
+          Disable color in human output
+  -h, --help
+          Print help
+```
+
+##### `planr routing bundle apply`
+
+```text
+Apply the already validated bundle transactionally inside this repository
+
+Usage: planr routing bundle apply [OPTIONS] <BUNDLE>
+
+Arguments:
+  <BUNDLE>
+
+Options:
+      --db <DB>
+          Path to Planr SQLite database
+      --trusted-signer <TRUSTED_SIGNER>
+          Expected signer id for a signed bundle (paired with --trusted-public-key-file)
+      --json
+          Emit JSON output
+      --trusted-public-key-file <TRUSTED_PUBLIC_KEY_FILE>
+          External Ed25519 public-key file for a signed bundle
+      --no-color
+          Disable color in human output
+  -h, --help
+          Print help
+```
+
+### `planr policy`
+
+```text
+Usage: planr policy [OPTIONS] <COMMAND>
+
+Commands:
+  show   Show the parsed repository usage policy
+  check  Validate the repository usage policy
+  admit  Evaluate an execution request against the repository usage policy
+  help   Print this message or the help of the given subcommand(s)
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr policy show`
+
+```text
+Show the parsed repository usage policy
+
+Usage: planr policy show [OPTIONS]
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr policy check`
+
+```text
+Validate the repository usage policy
+
+Usage: planr policy check [OPTIONS]
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr policy admit`
+
+```text
+Evaluate an execution request against the repository usage policy
+
+Usage: planr policy admit [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+### `planr project`
+
+```text
+Usage: planr project [OPTIONS] <COMMAND>
+
+Commands:
+  init
+  show
+  list
+  delete
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr project init`
+
+```text
+Usage: planr project init [OPTIONS] [NAME]
+
+Arguments:
+  [NAME]  [default: "Planr Project"]
+
+Options:
+      --client <CLIENT>  [possible values: codex, claude, cursor, all]
+      --db <DB>          Path to Planr SQLite database
+      --force
+      --json             Emit JSON output
+      --no-color         Disable color in human output
+  -h, --help             Print help
+```
+
+#### `planr project show`
+
+```text
+Usage: planr project show [OPTIONS]
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr project list`
+
+```text
+Usage: planr project list [OPTIONS]
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr project delete`
+
+```text
+Usage: planr project delete [OPTIONS] <TARGET>
+
+Arguments:
+  <TARGET>
+
+Options:
+      --db <DB>     Path to Planr SQLite database
+      --with-files
+      --confirm
+      --json        Emit JSON output
+      --no-color    Disable color in human output
+  -h, --help        Print help
+```
+
+### `planr plan`
+
+```text
+Usage: planr plan [OPTIONS] <COMMAND>
+
+Commands:
+  new
+  refine
+  split
+  check
+  audit
+  show
+  list
+  archive
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr plan new`
+
+```text
+Usage: planr plan new [OPTIONS] <TITLE>
+
+Arguments:
+  <TITLE>
+
+Options:
+      --db <DB>              Path to Planr SQLite database
+      --platform <PLATFORM>
+      --ai
+      --json                 Emit JSON output
+      --backend
+      --no-color             Disable color in human output
+  -h, --help                 Print help
+```
+
+#### `planr plan refine`
+
+```text
+Usage: planr plan refine [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --db <DB>      Path to Planr SQLite database
+      --note <NOTE>
+      --json         Emit JSON output
+      --no-color     Disable color in human output
+  -h, --help         Print help
+```
+
+#### `planr plan split`
+
+```text
+Usage: planr plan split [OPTIONS] --slice <SLICE> <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --db <DB>        Path to Planr SQLite database
+      --slice <SLICE>
+      --json           Emit JSON output
+      --no-color       Disable color in human output
+  -h, --help           Print help
+```
+
+#### `planr plan check`
+
+```text
+Usage: planr plan check [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr plan audit`
+
+```text
+Usage: planr plan audit [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr plan show`
+
+```text
+Usage: planr plan show [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr plan list`
+
+```text
+Usage: planr plan list [OPTIONS]
+
+Options:
+      --db <DB>        Path to Planr SQLite database
+      --stage <STAGE>  [possible values: product, build, review]
+      --json           Emit JSON output
+      --no-color       Disable color in human output
+  -h, --help           Print help
+```
+
+#### `planr plan archive`
+
+```text
+Usage: planr plan archive [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+### `planr map`
+
+```text
+Usage: planr map [OPTIONS] [COMMAND]
+
+Commands:
+  show
+  build
+  lane
+  pressure
+  status
+  preview
+  unlocks
+  lookahead
+  export
+  import
+  help       Print this message or the help of the given subcommand(s)
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr map show`
+
+```text
+Usage: planr map show [OPTIONS]
+
+Options:
+      --db <DB>      Path to Planr SQLite database
+      --json
+      --plan <PLAN>  Only show items and links belonging to this plan (plan id)
+      --no-color     Disable color in human output
+  -h, --help         Print help
+```
+
+#### `planr map build`
+
+```text
+Usage: planr map build [OPTIONS] --from <FROM>
+
+Options:
+      --db <DB>      Path to Planr SQLite database
+      --from <FROM>
+      --json         Emit JSON output
+      --no-color     Disable color in human output
+  -h, --help         Print help
+```
+
+#### `planr map lane`
+
+```text
+Usage: planr map lane [OPTIONS]
+
+Options:
+      --critical
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr map pressure`
+
+```text
+Usage: planr map pressure [OPTIONS]
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr map status`
+
+```text
+Usage: planr map status [OPTIONS]
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr map preview`
+
+```text
+Usage: planr map preview [OPTIONS] --close <CLOSE>
+
+Options:
+      --close <CLOSE>
+      --db <DB>        Path to Planr SQLite database
+      --json           Emit JSON output
+      --no-color       Disable color in human output
+  -h, --help           Print help
+```
+
+#### `planr map unlocks`
+
+```text
+Usage: planr map unlocks [OPTIONS] <ITEM_ID>
+
+Arguments:
+  <ITEM_ID>
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr map lookahead`
+
+```text
+Usage: planr map lookahead [OPTIONS]
+
+Options:
+      --db <DB>        Path to Planr SQLite database
+      --from <FROM>
+      --json           Emit JSON output
+      --limit <LIMIT>  [default: 10]
+      --no-color       Disable color in human output
+  -h, --help           Print help
+```
+
+#### `planr map export`
+
+```text
+Usage: planr map export [OPTIONS]
+
+Options:
+      --db <DB>          Path to Planr SQLite database
+      --format <FORMAT>  [default: json]
+      --json             Emit JSON output
+      --no-color         Disable color in human output
+  -h, --help             Print help
+```
+
+#### `planr map import`
+
+```text
+Usage: planr map import [OPTIONS] <FILE>
+
+Arguments:
+  <FILE>
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+### `planr item`
+
+```text
+Usage: planr item [OPTIONS] <COMMAND>
+
+Commands:
+  create
+  show
+  update
+  breakdown
+  insert
+  amend
+  replan
+  cancel
+  route      Show or pin the item's advisory model route. Without flags, prints the resolved route and whether an override or policy won
+  help       Print this message or the help of the given subcommand(s)
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr item create`
+
+```text
+Usage: planr item create [OPTIONS] --description <DESCRIPTION> <TITLE>
+
+Arguments:
+  <TITLE>
+
+Options:
+      --db <DB>
+          Path to Planr SQLite database
+      --description <DESCRIPTION>
+
+      --after <AFTER>
+
+      --json
+          Emit JSON output
+      --no-color
+          Disable color in human output
+      --timeout-seconds <TIMEOUT_SECONDS>
+
+      --max-retries <MAX_RETRIES>
+
+      --retry-backoff <RETRY_BACKOFF>
+          [default: exponential]
+      --retry-delay-ms <RETRY_DELAY_MS>
+
+      --pre <PRE>
+
+      --post <POST>
+
+      --work-type <WORK_TYPE>
+          Work type (free-form): built-in vocabulary like code/fix/review, or a registry route's use case (frontend, backend, ...) so model routing binds. Defaults to generic
+  -h, --help
+          Print help
+```
+
+#### `planr item show`
+
+```text
+Usage: planr item show [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr item update`
+
+```text
+Usage: planr item update [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --db <DB>                    Path to Planr SQLite database
+      --title <TITLE>
+      --description <DESCRIPTION>
+      --json                       Emit JSON output
+      --no-color                   Disable color in human output
+      --work-type <WORK_TYPE>      Retag the item's work type (free-form, e.g. a registry route's use case like `frontend`); model routing re-resolves on next pick
+  -h, --help                       Print help
+```
+
+#### `planr item breakdown`
+
+```text
+Usage: planr item breakdown [OPTIONS] --into <INTO> <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --db <DB>      Path to Planr SQLite database
+      --into <INTO>  Child title; repeat the flag per child, or pass one value with newline- or comma-separated titles
+      --json         Emit JSON output
+      --no-color     Disable color in human output
+  -h, --help         Print help
+```
+
+#### `planr item insert`
+
+```text
+Usage: planr item insert [OPTIONS] --description <DESCRIPTION> --after <AFTER> <TITLE>
+
+Arguments:
+  <TITLE>
+
+Options:
+      --db <DB>                    Path to Planr SQLite database
+      --description <DESCRIPTION>
+      --after <AFTER>
+      --json                       Emit JSON output
+      --before <BEFORE>
+      --no-color                   Disable color in human output
+      --preview
+      --confirm
+  -h, --help                       Print help
+```
+
+#### `planr item amend`
+
+```text
+Usage: planr item amend [OPTIONS] --note <NOTE> <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --db <DB>      Path to Planr SQLite database
+      --note <NOTE>
+      --json         Emit JSON output
+      --tag <TAG>    [default: amendment]
+      --no-color     Disable color in human output
+  -h, --help         Print help
+```
+
+#### `planr item replan`
+
+```text
+Usage: planr item replan [OPTIONS] --into <INTO> <PARENT_ID>
+
+Arguments:
+  <PARENT_ID>
+
+Options:
+      --db <DB>      Path to Planr SQLite database
+      --into <INTO>
+      --json         Emit JSON output
+      --preview
+      --confirm
+      --no-color     Disable color in human output
+  -h, --help         Print help
+```
+
+#### `planr item cancel`
+
+```text
+Usage: planr item cancel [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --db <DB>          Path to Planr SQLite database
+      --preview
+      --confirm
+      --json             Emit JSON output
+      --no-color         Disable color in human output
+      --reason <REASON>  Why the item is cancelled; recorded on the item_cancelled event
+  -h, --help             Print help
+```
+
+#### `planr item route`
+
+```text
+Show or pin the item's advisory model route. Without flags, prints the resolved route and whether an override or policy won
+
+Usage: planr item route [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --db <DB>        Path to Planr SQLite database
+      --set <PROFILE>  Pin the item to this profile id from .planr/agents.toml; the pin beats every policy route until cleared
+      --clear          Remove the pinned profile so policy routing applies again
+      --json           Emit JSON output
+      --no-color       Disable color in human output
+  -h, --help           Print help
+```
+
+### `planr link`
+
+```text
+Usage: planr link [OPTIONS] <COMMAND>
+
+Commands:
+  add
+  remove
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr link add`
+
+```text
+Usage: planr link add [OPTIONS] <FROM_ITEM> <TO_ITEM>
+
+Arguments:
+  <FROM_ITEM>
+  <TO_ITEM>
+
+Options:
+      --db <DB>      Path to Planr SQLite database
+      --type <TYPE>  [default: blocks]
+      --json         Emit JSON output
+      --no-color     Disable color in human output
+  -h, --help         Print help
+```
+
+#### `planr link remove`
+
+```text
+Usage: planr link remove [OPTIONS] <FROM_ITEM> <TO_ITEM>
+
+Arguments:
+  <FROM_ITEM>
+  <TO_ITEM>
+
+Options:
+      --db <DB>      Path to Planr SQLite database
+      --type <TYPE>
+      --json         Emit JSON output
+      --no-color     Disable color in human output
+  -h, --help         Print help
+```
+
+### `planr pick`
+
+```text
+Usage: planr pick [OPTIONS] [COMMAND]
+
+Commands:
+  release
+  heartbeat
+  progress
+  pause
+  resume
+  stale
+  help       Print this message or the help of the given subcommand(s)
+
+Options:
+      --db <DB>                Path to Planr SQLite database
+      --json                   Emit JSON output
+      --no-color               Disable color in human output
+      --work-type <WORK_TYPE>  Only lease items of this work type (e.g. `review` for checker agents, `code` for makers)
+      --plan <PLAN>            Only lease items belonging to this plan (plan id), so plan-scoped goal runs never pick work outside their contract
+      --peek                   Read the next work packet (incl. its routing block) without leasing it — for drivers that dispatch; the worker takes the lease
+  -h, --help                   Print help
+```
+
+#### `planr pick release`
+
+```text
+Usage: planr pick release [OPTIONS] <ITEM_ID>
+
+Arguments:
+  <ITEM_ID>
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --force
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr pick heartbeat`
+
+```text
+Usage: planr pick heartbeat [OPTIONS] [ITEM_ID]
+
+Arguments:
+  [ITEM_ID]
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr pick progress`
+
+```text
+Usage: planr pick progress [OPTIONS] --percent <PERCENT> <ITEM_ID>
+
+Arguments:
+  <ITEM_ID>
+
+Options:
+      --db <DB>            Path to Planr SQLite database
+      --percent <PERCENT>
+      --json               Emit JSON output
+      --note <NOTE>
+      --no-color           Disable color in human output
+  -h, --help               Print help
+```
+
+#### `planr pick pause`
+
+```text
+Usage: planr pick pause [OPTIONS] <ITEM_ID>
+
+Arguments:
+  <ITEM_ID>
+
+Options:
+      --db <DB>      Path to Planr SQLite database
+      --note <NOTE>
+      --json         Emit JSON output
+      --no-color     Disable color in human output
+  -h, --help         Print help
+```
+
+#### `planr pick resume`
+
+```text
+Usage: planr pick resume [OPTIONS] <ITEM_ID>
+
+Arguments:
+  <ITEM_ID>
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr pick stale`
+
+```text
+Usage: planr pick stale [OPTIONS]
+
+Options:
+      --db <DB>                                  Path to Planr SQLite database
+      --older-than-seconds <OLDER_THAN_SECONDS>  [default: 900]
+      --json                                     Emit JSON output
+      --release
+      --no-color                                 Disable color in human output
+  -h, --help                                     Print help
+```
+
+### `planr approval`
+
+```text
+Usage: planr approval [OPTIONS] <COMMAND>
+
+Commands:
+  request
+  approve
+  deny
+  list
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr approval request`
+
+```text
+Usage: planr approval request [OPTIONS] <ITEM_ID>
+
+Arguments:
+  <ITEM_ID>
+
+Options:
+      --db <DB>          Path to Planr SQLite database
+      --reason <REASON>
+      --json             Emit JSON output
+      --no-color         Disable color in human output
+  -h, --help             Print help
+```
+
+#### `planr approval approve`
+
+```text
+Usage: planr approval approve [OPTIONS] --by <BY> <ITEM_ID>
+
+Arguments:
+  <ITEM_ID>
+
+Options:
+      --by <BY>
+      --db <DB>            Path to Planr SQLite database
+      --comment <COMMENT>
+      --json               Emit JSON output
+      --no-color           Disable color in human output
+  -h, --help               Print help
+```
+
+#### `planr approval deny`
+
+```text
+Usage: planr approval deny [OPTIONS] --by <BY> <ITEM_ID>
+
+Arguments:
+  <ITEM_ID>
+
+Options:
+      --by <BY>
+      --db <DB>            Path to Planr SQLite database
+      --comment <COMMENT>
+      --json               Emit JSON output
+      --no-color           Disable color in human output
+  -h, --help               Print help
+```
+
+#### `planr approval list`
+
+```text
+Usage: planr approval list [OPTIONS]
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --open
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+### `planr log`
+
+```text
+Usage: planr log [OPTIONS] <COMMAND>
+
+Commands:
+  add
+  show
+  list
+  help  Print this message or the help of the given subcommand(s)
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr log add`
+
+```text
+Usage: planr log add [OPTIONS] --item <ITEM> --summary <SUMMARY>
+
+Options:
+      --db <DB>             Path to Planr SQLite database
+      --item <ITEM>
+      --json                Emit JSON output
+      --summary <SUMMARY>
+      --files <FILES>       Changed file; repeat the flag or pass a comma-separated list
+      --no-color            Disable color in human output
+      --cmd <CMD>
+      --tests <TESTS>
+      --kind <KIND>         Log kind: completion (default), progress, or verification (live-verify evidence; `plan audit` checks for it) [default: completion]
+      --profile <PROFILE>
+      --route-audit <PATH>
+  -h, --help                Print help
+```
+
+#### `planr log show`
+
+```text
+Usage: planr log show [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr log list`
+
+```text
+Usage: planr log list [OPTIONS]
+
+Options:
+      --db <DB>      Path to Planr SQLite database
+      --item <ITEM>
+      --json         Emit JSON output
+      --no-color     Disable color in human output
+  -h, --help         Print help
+```
+
+### `planr close`
+
+```text
+Usage: planr close [OPTIONS] --summary <SUMMARY> [ITEM_ID]
+
+Arguments:
+  [ITEM_ID]
+
+Options:
+      --db <DB>            Path to Planr SQLite database
+      --summary <SUMMARY>
+      --json               Emit JSON output
+      --next
+      --no-color           Disable color in human output
+  -h, --help               Print help
+```
+
+### `planr done`
+
+```text
+Log evidence and finish the step in one command: completion log, then review request (--review) or close, optionally pick the next item
+
+Usage: planr done [OPTIONS] --summary <SUMMARY> [ITEM_ID]
+
+Arguments:
+  [ITEM_ID]
+
+Options:
+      --db <DB>             Path to Planr SQLite database
+      --summary <SUMMARY>
+      --files <FILES>       Changed file; repeat the flag or pass a comma-separated list
+      --json                Emit JSON output
+      --cmd <CMD>
+      --no-color            Disable color in human output
+      --tests <TESTS>
+      --review              Request a review instead of closing the item directly
+      --next                Pick the next ready item after finishing this step
+      --profile <PROFILE>
+      --route-audit <PATH>
+  -h, --help                Print help
+```
+
+### `planr review`
+
+```text
+Usage: planr review [OPTIONS] <COMMAND>
+
+Commands:
+  request
+  annotate
+  ingest
+  artifact
+  evidence
+  close
+  list
+  show
+  help      Print this message or the help of the given subcommand(s)
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr review request`
+
+```text
+Usage: planr review request [OPTIONS] <ITEM_ID>
+
+Arguments:
+  <ITEM_ID>
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr review annotate`
+
+```text
+Usage: planr review annotate [OPTIONS] --message <MESSAGE> <ITEM_ID>
+
+Arguments:
+  <ITEM_ID>
+
+Options:
+      --db <DB>              Path to Planr SQLite database
+      --message <MESSAGE>
+      --json                 Emit JSON output
+      --severity <SEVERITY>  [default: info]
+      --file <FILE>
+      --no-color             Disable color in human output
+      --line <LINE>
+      --author <AUTHOR>
+  -h, --help                 Print help
+```
+
+#### `planr review ingest`
+
+```text
+Usage: planr review ingest [OPTIONS] <ITEM_ID>
+
+Arguments:
+  <ITEM_ID>
+
+Options:
+      --db <DB>      Path to Planr SQLite database
+      --from <PATH>
+      --json         Emit JSON output
+      --stdin
+      --no-color     Disable color in human output
+  -h, --help         Print help
+```
+
+#### `planr review artifact`
+
+```text
+Usage: planr review artifact [OPTIONS] <REVIEW_ITEM_ID>
+
+Arguments:
+  <REVIEW_ITEM_ID>
+
+Options:
+      --db <DB>    Path to Planr SQLite database
+      --out <OUT>
+      --json       Emit JSON output
+      --no-color   Disable color in human output
+  -h, --help       Print help
+```
+
+#### `planr review evidence`
+
+```text
+Usage: planr review evidence [OPTIONS] <ITEM_ID>
+
+Arguments:
+  <ITEM_ID>
+
+Options:
+      --db <DB>          Path to Planr SQLite database
+      --pr-url <PR_URL>
+      --json             Emit JSON output
+      --no-color         Disable color in human output
+  -h, --help             Print help
+```
+
+#### `planr review close`
+
+```text
+Usage: planr review close [OPTIONS] --verdict <VERDICT> <REVIEW_ITEM_ID>
+
+Arguments:
+  <REVIEW_ITEM_ID>
+
+Options:
+      --db <DB>              Path to Planr SQLite database
+      --verdict <VERDICT>    [possible values: complete, not-complete, unclear]
+      --findings <FINDINGS>
+      --json                 Emit JSON output
+      --no-color             Disable color in human output
+      --reviewer <REVIEWER>  Reviewer identity recorded on the review log, artifact, and event. Defaults to this process's worker id
+      --close-target         On a complete verdict, also close the reviewed item when it already has a completion log
+  -h, --help                 Print help
+```
+
+#### `planr review list`
+
+```text
+Usage: planr review list [OPTIONS]
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --open
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr review show`
+
+```text
+Usage: planr review show [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+### `planr context`
+
+```text
+Usage: planr context [OPTIONS] <COMMAND>
+
+Commands:
+  add
+  list
+  help  Print this message or the help of the given subcommand(s)
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr context add`
+
+```text
+Usage: planr context add [OPTIONS] <TEXT>
+
+Arguments:
+  <TEXT>
+
+Options:
+      --db <DB>      Path to Planr SQLite database
+      --item <ITEM>
+      --json         Emit JSON output
+      --tag <TAG>    [default: discovery]
+      --no-color     Disable color in human output
+  -h, --help         Print help
+```
+
+#### `planr context list`
+
+```text
+Usage: planr context list [OPTIONS]
+
+Options:
+      --db <DB>      Path to Planr SQLite database
+      --item <ITEM>
+      --json         Emit JSON output
+      --tag <TAG>    Only list notes stored with this tag (e.g. `goal-contract`)
+      --no-color     Disable color in human output
+  -h, --help         Print help
+```
+
+### `planr note`
+
+```text
+Usage: planr note [OPTIONS] <COMMAND>
+
+Commands:
+  add
+  list
+  help  Print this message or the help of the given subcommand(s)
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr note add`
+
+```text
+Usage: planr note add [OPTIONS] <TEXT>
+
+Arguments:
+  <TEXT>
+
+Options:
+      --db <DB>      Path to Planr SQLite database
+      --item <ITEM>
+      --json         Emit JSON output
+      --tag <TAG>    [default: discovery]
+      --no-color     Disable color in human output
+  -h, --help         Print help
+```
+
+#### `planr note list`
+
+```text
+Usage: planr note list [OPTIONS]
+
+Options:
+      --db <DB>      Path to Planr SQLite database
+      --item <ITEM>
+      --json         Emit JSON output
+      --tag <TAG>    Only list notes stored with this tag (e.g. `goal-contract`)
+      --no-color     Disable color in human output
+  -h, --help         Print help
+```
+
+### `planr search`
+
+```text
+Usage: planr search [OPTIONS] <QUERY>
+
+Arguments:
+  <QUERY>
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+### `planr doctor`
+
+```text
+Usage: planr doctor [OPTIONS]
+
+Options:
+      --client <CLIENT>  [possible values: codex, claude, cursor, all]
+      --db <DB>          Path to Planr SQLite database
+      --json             Emit JSON output
+      --no-color         Disable color in human output
+  -h, --help             Print help
+```
+
+### `planr prime`
+
+```text
+Compact state block for host hooks (session start / post-compaction)
+
+Usage: planr prime [OPTIONS]
+
+Options:
+      --db <DB>      Path to Planr SQLite database
+      --hook-json    Emit the Claude Code SessionStart hook envelope (hookSpecificOutput.additionalContext)
+      --cursor-json  Emit the Cursor command-hook envelope (additional_context)
+      --json         Emit JSON output
+      --no-color     Disable color in human output
+  -h, --help         Print help
+```
+
+### `planr install`
+
+```text
+Usage: planr install [OPTIONS] <COMMAND>
+
+Commands:
+  codex
+  claude
+  cursor
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr install codex`
+
+```text
+Usage: planr install codex [OPTIONS]
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --dry-run
+      --json      Emit JSON output
+      --no-mcp    Plugin-style install: write subagent roles and skills only, no MCP config
+      --force     Overwrite existing role and skill files, e.g. to re-render roles after editing .planr/agents.toml. Never touches hand edits without it
+      --no-color  Disable color in human output
+      --no-hooks  Skip installing host hooks (session-start/post-compaction state injection via `planr prime`). Hooks are installed by default
+  -h, --help      Print help
+```
+
+#### `planr install claude`
+
+```text
+Usage: planr install claude [OPTIONS]
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --dry-run
+      --json      Emit JSON output
+      --no-mcp    Plugin-style install: write subagent roles and skills only, no MCP config
+      --force     Overwrite existing role and skill files, e.g. to re-render roles after editing .planr/agents.toml. Never touches hand edits without it
+      --no-color  Disable color in human output
+      --no-hooks  Skip installing host hooks (session-start/post-compaction state injection via `planr prime`). Hooks are installed by default
+  -h, --help      Print help
+```
+
+#### `planr install cursor`
+
+```text
+Usage: planr install cursor [OPTIONS]
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --dry-run
+      --json      Emit JSON output
+      --no-mcp    Plugin-style install: write subagent roles and skills only, no MCP config
+      --force     Overwrite existing role and skill files, e.g. to re-render roles after editing .planr/agents.toml. Never touches hand edits without it
+      --no-color  Disable color in human output
+      --no-hooks  Skip installing host hooks (session-start/post-compaction state injection via `planr prime`). Hooks are installed by default
+  -h, --help      Print help
+```
+
+### `planr prompt`
+
+```text
+Usage: planr prompt [OPTIONS] <COMMAND>
+
+Commands:
+  cli
+  mcp
+  http
+  routing  Model-prioritization block from the registry plus host dispatch traps
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr prompt cli`
+
+```text
+Usage: planr prompt cli [OPTIONS]
+
+Options:
+      --client <CLIENT>  [possible values: codex, claude, cursor, all]
+      --db <DB>          Path to Planr SQLite database
+      --json             Emit JSON output
+      --no-color         Disable color in human output
+  -h, --help             Print help
+```
+
+#### `planr prompt mcp`
+
+```text
+Usage: planr prompt mcp [OPTIONS]
+
+Options:
+      --client <CLIENT>  [possible values: codex, claude, cursor, all]
+      --db <DB>          Path to Planr SQLite database
+      --json             Emit JSON output
+      --no-color         Disable color in human output
+  -h, --help             Print help
+```
+
+#### `planr prompt http`
+
+```text
+Usage: planr prompt http [OPTIONS]
+
+Options:
+      --client <CLIENT>  [possible values: codex, claude, cursor, all]
+      --db <DB>          Path to Planr SQLite database
+      --json             Emit JSON output
+      --no-color         Disable color in human output
+  -h, --help             Print help
+```
+
+#### `planr prompt routing`
+
+```text
+Model-prioritization block from the registry plus host dispatch traps
+
+Usage: planr prompt routing [OPTIONS]
+
+Options:
+      --client <CLIENT>  [possible values: codex, claude, cursor, all]
+      --db <DB>          Path to Planr SQLite database
+      --json             Emit JSON output
+      --no-color         Disable color in human output
+  -h, --help             Print help
+```
+
+### `planr mcp`
+
+```text
+Usage: planr mcp [OPTIONS]
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+### `planr serve`
+
+```text
+Usage: planr serve [OPTIONS]
+
+Options:
+      --db <DB>      Path to Planr SQLite database
+  -p, --port <PORT>  [default: 7526]
+      --json         Emit JSON output
+      --no-color     Disable color in human output
+  -h, --help         Print help
+```
+
+### `planr trace`
+
+```text
+Usage: planr trace [OPTIONS] <COMMAND>
+
+Commands:
+  item
+  help  Print this message or the help of the given subcommand(s)
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr trace item`
+
+```text
+Usage: planr trace item [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+### `planr scrub`
+
+```text
+Usage: planr scrub [OPTIONS]
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --preview
+      --confirm
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+### `planr artifact`
+
+```text
+Usage: planr artifact [OPTIONS] <COMMAND>
+
+Commands:
+  add
+  show
+  list
+  help  Print this message or the help of the given subcommand(s)
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr artifact add`
+
+```text
+Usage: planr artifact add [OPTIONS] [NAME]
+
+Arguments:
+  [NAME]  Artifact name; alternatively pass --name anywhere in the command
+
+Options:
+      --db <DB>            Path to Planr SQLite database
+      --name <NAME>
+      --item <ITEM>
+      --json               Emit JSON output
+      --kind <KIND>
+      --no-color           Disable color in human output
+      --path <PATH>
+      --content <CONTENT>
+      --mime <MIME>
+  -h, --help               Print help
+```
+
+#### `planr artifact show`
+
+```text
+Usage: planr artifact show [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr artifact list`
+
+```text
+Usage: planr artifact list [OPTIONS]
+
+Options:
+      --db <DB>      Path to Planr SQLite database
+      --item <ITEM>
+      --json         Emit JSON output
+      --no-color     Disable color in human output
+  -h, --help         Print help
+```
+
+### `planr event`
+
+```text
+Usage: planr event [OPTIONS] <COMMAND>
+
+Commands:
+  list
+  help  Print this message or the help of the given subcommand(s)
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr event list`
+
+```text
+Usage: planr event list [OPTIONS]
+
+Options:
+      --db <DB>        Path to Planr SQLite database
+      --item <ITEM>
+      --json           Emit JSON output
+      --limit <LIMIT>  [default: 50]
+      --no-color       Disable color in human output
+  -h, --help           Print help
+```
+
+### `planr debug`
+
+```text
+Usage: planr debug [OPTIONS] <COMMAND>
+
+Commands:
+  bundle
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr debug bundle`
+
+```text
+Usage: planr debug bundle [OPTIONS]
+
+Options:
+      --db <DB>      Path to Planr SQLite database
+      --item <ITEM>
+      --json         Emit JSON output
+      --preview
+      --no-color     Disable color in human output
+  -h, --help         Print help
+```
+
+### `planr recover`
+
+```text
+Usage: planr recover [OPTIONS] <COMMAND>
+
+Commands:
+  sweep
+  help   Print this message or the help of the given subcommand(s)
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr recover sweep`
+
+```text
+Usage: planr recover sweep [OPTIONS]
+
+Options:
+      --db <DB>                                  Path to Planr SQLite database
+      --older-than-seconds <OLDER_THAN_SECONDS>  [default: 900]
+      --apply
+      --json                                     Emit JSON output
+      --no-color                                 Disable color in human output
+  -h, --help                                     Print help
+```
+
+### `planr export`
+
+```text
+Usage: planr export [OPTIONS] --out <OUT>
+
+Options:
+      --db <DB>                        Path to Planr SQLite database
+      --include-plans
+      --include-logs
+      --json                           Emit JSON output
+      --no-color                       Disable color in human output
+      --template-name <TEMPLATE_NAME>
+      --tag <TAG>
+      --out <OUT>
+  -h, --help                           Print help
+```
+
+### `planr import`
+
+```text
+Usage: planr import [OPTIONS] <FILE>
+
+Arguments:
+  <FILE>
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --preview
+      --confirm
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```

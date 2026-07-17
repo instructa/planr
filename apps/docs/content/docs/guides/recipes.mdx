@@ -1,0 +1,69 @@
+---
+title: Common Recipes
+description: Focused command patterns for blocked, paused, stale, handoff, review, and closure scenarios.
+---
+
+## Nothing is ready
+
+```bash
+planr map status --json
+planr map lane --critical --json
+planr map lookahead --from <blocked-item-id> --json
+```
+
+Inspect blockers instead of removing links speculatively. A plan-scoped null pick explains whether nothing is ready or filters excluded ready work.
+
+## Wait for a human without losing ownership
+
+```bash
+planr approval request <item-id> --reason "confirm destructive migration"
+planr pick pause <item-id> --note "waiting for migration approval"
+planr approval list --open --json
+```
+
+Resume only after the decision is recorded.
+
+## Record a durable blocker
+
+```bash
+planr context add "Vendor sandbox returns 503; retry after maintenance window" --item <item-id> --tag blocker
+planr pick progress <item-id> --percent 30 --note "blocked by vendor sandbox"
+```
+
+Do not claim completion. Pause if the same worker will resume; release only for an intentional transfer.
+
+## Hand off a partial implementation
+
+```bash
+planr log add --item <item-id> --kind progress \
+  --summary "Parsing works; persistence is not implemented." \
+  --files src/parser.rs \
+  --cmd "cargo test parser"
+planr pick pause <item-id> --note "handoff recorded"
+```
+
+Then follow [Handoff and Resume](/docs/guides/handoff-and-resume) for lease disposition.
+
+## Preview closure blockers
+
+```bash
+planr map preview --close <item-id> --json
+```
+
+Resolve open review, approval, dependency, or manual-condition gates; do not bypass them with an unverified close.
+
+## Recover several abandoned workers
+
+```bash
+planr recover sweep --older-than-seconds 900 --json
+# Inspect every candidate.
+planr recover sweep --older-than-seconds 900 --apply --json
+```
+
+## Confirm a long-running goal is actually done
+
+```bash
+planr plan audit <plan-id> --json
+```
+
+The goal holds only when its stored contract clauses—settled items, complete reviews, clear approvals, and required verification logs—are satisfied.

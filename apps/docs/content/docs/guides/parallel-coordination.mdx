@@ -1,0 +1,49 @@
+---
+title: Parallel Coordination
+description: Coordinate multiple clients and workers over one map without duplicate ownership.
+---
+
+## 1. Share one project boundary
+
+Launch every client from the same workspace so all processes discover the same `.planr/planr.sqlite`. Do not operate on copied databases and expect live synchronization.
+
+## 2. Give every worker a distinct identity
+
+```bash
+# Terminal or client A
+export PLANR_WORKER_ID="frontend-maker"
+
+# Terminal or client B
+export PLANR_WORKER_ID="backend-maker"
+
+# Reviewer
+export PLANR_WORKER_ID="integration-checker"
+```
+
+Stable identities make leases, heartbeat updates, completion logs, and review independence auditable.
+
+## 3. Pick only startable work
+
+```bash
+planr pick --plan <plan-id> --work-type code --json
+```
+
+The database resolves races atomically. One worker wins a ready item; the other receives a different ready item or a null result with a reason. Never manually assign the same item to both.
+
+## 4. Model ordering in the graph
+
+Use `blocks` for hard dependencies and `hands_to` when a result must also appear in downstream context. Both link kinds block readiness until the upstream item is `closed` or `closed_partial`; cancellation does not unlock either. Inspect parallel opportunity and bottlenecks:
+
+```bash
+planr map lane --critical --json
+planr map pressure --json
+planr map unlocks <item-id> --json
+```
+
+## 5. Separate maker and checker
+
+Makers pick `code`, reviewers pick `review`. A different recorded identity produces `review_mode: independent`; a prose claim of independence does not.
+
+## Failure rule
+
+If a worker disappears, do not immediately force-release its item. Inspect timestamps, Git state, logs, and trace first, then follow [Recover Interrupted Work](/docs/guides/recover-interrupted-work).

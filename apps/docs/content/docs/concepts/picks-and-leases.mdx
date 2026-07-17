@@ -1,0 +1,42 @@
+---
+title: Picks and Leases
+description: Coordinate exclusive worker ownership, progress, pauses, and intentional transfer.
+---
+
+## What they are
+
+A pick is an atomic lease on one ready item. It records worker identity, a pick token, timestamps, heartbeat, progress, and optional recovery policy.
+
+## Why they exist
+
+Two clients can ask for work at the same time. The database grants only one lease, preventing duplicate implementation and ambiguous completion evidence.
+
+## Who owns a pick
+
+The worker named by `PLANR_WORKER_ID` owns it until completion or release. Keep that identity stable for a session, and give parallel workers different identities. A reviewer should use a different identity from the maker when independent review matters.
+
+## How picks change
+
+```bash
+export PLANR_WORKER_ID="api-maker"
+planr pick --plan <plan-id> --work-type code --json
+planr pick progress <item-id> --percent 50 --note "implementation complete; tests running"
+planr pick pause <item-id> --note "waiting for a human decision"
+planr pick resume <item-id>
+planr pick heartbeat <item-id>
+```
+
+Evidence written by the owner refreshes the heartbeat. Use an explicit heartbeat only during a long silent operation. A paused item remains owned; it is not available to another worker.
+
+Inspect before transfer:
+
+```bash
+planr pick stale --older-than-seconds 900 --json
+planr pick release <item-id> --force --json
+```
+
+Forced release is an operator action for a departed worker or intentional handoff—not a way to steal active work.
+
+## Where to go next
+
+Use [Handoff and Resume](/docs/guides/handoff-and-resume) for a safe transfer and [Recover Interrupted Work](/docs/guides/recover-interrupted-work) for stale or timed-out state.

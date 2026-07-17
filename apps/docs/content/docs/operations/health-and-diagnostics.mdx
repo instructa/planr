@@ -1,0 +1,29 @@
+---
+title: Health and Diagnostics
+description: Diagnose documentation build, runtime, routing, search, and accessibility failures by owner.
+---
+
+The docs service has no dedicated `/health` endpoint. Use a real rendered route for platform health; `/health` belongs to the separate localhost Planr HTTP API.
+
+## Triage by symptom
+
+| Symptom | First checks | Owner |
+| --- | --- | --- |
+| Install or build fails | Node 22, pinned pnpm, frozen lockfile, Fumadocs content output | `apps/docs/package.json`, lockfile, MDX source |
+| Worker will not deploy or serve | OpenNext build, Alchemy plan/output, active Cloudflare profile or CI token/account, Worker logs | `alchemy.run.ts` and deployment configuration |
+| Page is 404 | file slug, section `meta.json`, `source.config.ts`, requested base URL | content owner |
+| Legacy alias does not redirect | `redirects.mjs`, Next config, destination route, browser redirect check | docs architecture owner |
+| Search misses a page | page frontmatter, build output, `/api/search?query=...`, `lib/source.ts` | content/search owner |
+| Wrong canonical URL | build-time `NEXT_PUBLIC_SITE_URL` | deployment owner |
+| Layout or interaction regression | browser report, viewport screenshot, console, shell components | docs UI owner |
+| Stale command or schema | source generator/check output and canonical Rust owner | runtime and reference owner |
+
+## Diagnostic ladder
+
+1. Reproduce with `pnpm install --frozen-lockfile` and the static docs gates.
+2. Run `pnpm docs:verify-maintenance` and the relevant onboarding, concept, or reference verifier.
+3. Build, start, and request `/`, `/docs`, `/api/search?query=installation`, and an unknown route.
+4. Run the browser verifier against that exact origin and inspect its JSON report, screenshots, and axe results.
+5. Compare the failed deployment's commit, Alchemy stage, Cloudflare account, `NEXT_PUBLIC_SITE_URL`, Node version, pnpm version, and Worker identity with the last known good release.
+
+Sanitize logs and screenshots before attaching them. If the failure is not quickly attributable, preserve the candidate artifact, deployment logs, failing URL, timestamps, and verifier report, then roll back traffic. Do not edit production content in place.

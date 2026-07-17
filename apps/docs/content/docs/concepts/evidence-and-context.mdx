@@ -1,0 +1,38 @@
+---
+title: Evidence and Context
+description: Store proof, decisions, discoveries, and artifacts on the right durable surface.
+---
+
+## What they are
+
+- **Logs** prove progress, completion, verification, review, or handoff with summaries, files, commands, tests, and findings.
+- **Artifacts** point to durable files such as screenshots, reports, or review documents.
+- **Context** preserves reusable discoveries, decisions, constraints, risks, blockers, and goal contracts.
+- **Notes** are short task-local reminders.
+
+## Why they exist
+
+The next worker needs evidence, not “tests passed” in a vanished chat. Separating proof from reusable knowledge also keeps the map's state authority clear.
+
+## Who owns them
+
+The worker who performed a command records its evidence. Reviewers record findings and verdict evidence. Product or technical owners record decisions and constraints that later work must recall.
+
+## How they change
+
+```bash
+planr log add --item <item-id> \
+  --summary "Hardened parser boundaries" \
+  --files src/parser.rs,tests/parser.rs \
+  --cmd "cargo test parser" \
+  --tests "parser suite: passed"
+
+planr context add "External IDs remain opaque strings" --item <item-id> --tag decision
+planr context list --item <item-id> --json
+```
+
+Use `--kind verification` for live browser or smoke-test evidence. Record exact commands and meaningful outcomes; do not attach unrelated dirty files as proof. A completion log supports closure but does not replace a required review or approval.
+
+## Where to go next
+
+Read [Reviews and Approvals](/docs/concepts/reviews-and-approvals) and the [Handoff and Resume guide](/docs/guides/handoff-and-resume).

@@ -1,0 +1,33 @@
+---
+title: Reference Maintenance
+description: Regenerate CLI help and verify MCP, HTTP, configuration, data, error, and support coverage before release.
+---
+
+## Required workflow
+
+After changing commands, MCP discovery, routes, model vocabularies, environment variables, storage, or supported platforms:
+
+```bash
+pnpm docs:reference:generate
+pnpm docs:verify-reference
+pnpm docs:content
+pnpm docs:typecheck
+pnpm docs:lint
+pnpm docs:build
+```
+
+`docs:reference:generate` builds this repository's Planr binary, rewrites the generated CLI page from recursive `--help`, and rewrites the complete MCP schema page from live `tools/list`. Review generated diffs like code.
+
+`docs:verify-reference` fails when:
+
+- committed CLI help differs from the current repository binary;
+- any runtime MCP schema property, type, description, required field, enum/default, or `additionalProperties` rule differs from the generated schema page;
+- the checked HTTP route manifest and authoritative router differ in either direction, or a manifest path is absent from the HTTP page;
+- a public environment variable or storage table is absent from its reference;
+- item status, link kind, error code, client, platform, or transport coverage drifts.
+
+## Ownership
+
+The implementation remains the executable source of truth. Generated help is canonical for CLI syntax. Runtime MCP discovery is canonical for MCP schemas. Rust routes/models and SQLite schema are canonical for HTTP/data vocabulary. Editorial pages own explanation, examples, cross-links, privacy notes, and support policy.
+
+Never hand-edit `cli-generated.mdx`; regenerate it. If a source surface is intentionally internal, keep it out of the public inventory and document that boundary in the verifier rather than silently ignoring a failed check.

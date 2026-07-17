@@ -1,0 +1,54 @@
+---
+title: Handoff and Resume
+description: Transfer work across agents, clients, or sessions without relying on chat history.
+---
+
+## Handoff from the current worker
+
+Make the repository and Planr state tell the same story:
+
+```bash
+git status --short
+planr pick progress <item-id> --percent 65 --note "parser complete; integration test still failing on empty input"
+planr context add "Empty input must return validation_error" --item <item-id> --tag decision
+planr log add --item <item-id> --kind progress \
+  --summary "Parser implemented; next worker should fix the empty-input integration case." \
+  --files src/parser.rs,tests/integration.rs \
+  --cmd "cargo test integration_empty_input"
+planr pick pause <item-id> --note "handoff prepared"
+```
+
+Pause preserves ownership. If the same logical worker resumes in another session, keep the same `PLANR_WORKER_ID` and run `planr pick resume <item-id>`.
+
+## Resume from zero chat context
+
+```bash
+git status --short
+planr project show --json
+planr map show --json
+planr trace item <item-id> --json
+planr log list --item <item-id> --json
+planr context list --item <item-id> --json
+```
+
+Compare the trace and logs with the worktree. Re-run the last reported verification before changing code when practical.
+
+## Transfer to a different worker
+
+An operator should first establish that the owner is gone or intentionally transferring the lease. Then:
+
+```bash
+planr pick release <item-id> --force --json
+export PLANR_WORKER_ID="replacement-maker"
+planr pick --plan <plan-id> --work-type code --json
+```
+
+The replacement must actually win the pick before working. Forced release does not transfer uncommitted files; coordinate the Git/worktree handoff separately.
+
+## Handoff checklist
+
+- exact current status and remaining work;
+- changed files and unrelated dirty files;
+- commands already run and their results;
+- confirmed decisions, blockers, and dead ends;
+- lease disposition: paused for same owner or released for a new one.

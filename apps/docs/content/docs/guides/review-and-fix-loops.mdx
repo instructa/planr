@@ -1,0 +1,50 @@
+---
+title: Review and Fix Loops
+description: Audit evidence independently and keep findings as explicit gated work.
+---
+
+## Maker: submit evidence
+
+```bash
+export PLANR_WORKER_ID="feature-maker"
+planr done <item-id> --summary "Implemented feature" --files src/feature.rs \
+  --cmd "cargo test feature" --tests "feature suite passed" --review --json
+```
+
+## Checker: inspect before deciding
+
+```bash
+export PLANR_WORKER_ID="feature-checker"
+planr pick --plan <plan-id> --work-type review --json
+planr review evidence <target-item-id> --json
+planr trace item <target-item-id> --json
+```
+
+Compare acceptance criteria, implementation, focused tests, regressions, logs, and relevant live behavior. Review evidence distinguishes files named by item logs from unrelated dirty files.
+
+## Clean verdict
+
+```bash
+planr review close <review-item-id> \
+  --verdict complete \
+  --findings "Acceptance criteria and recorded verification are satisfied." \
+  --close-target \
+  --json
+```
+
+## Findings verdict
+
+```bash
+planr review close <review-item-id> \
+  --verdict not-complete \
+  --findings "Empty input bypasses validation; add a regression test." \
+  --json
+planr review artifact <review-item-id>
+planr map show --json
+```
+
+Planr creates fix and follow-up review work. The original target remains `in_review`, so downstream work stays gated. The maker fixes only the explicit finding, records new evidence, and unlocks the follow-up checker item. Never close the original target merely by summarizing an unresolved finding.
+
+## Unclear verdict
+
+Use `unclear` when the available evidence cannot support complete or not-complete. Record exactly what evidence is missing; do not disguise uncertainty as success.
