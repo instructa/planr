@@ -1,0 +1,46 @@
+---
+title: Graph and Readiness
+description: Understand items, links, statuses, parent gates, and computed readiness.
+---
+
+## What it is
+
+The map is a dependency graph. An item is one live unit of work. Links express relationships:
+
+| Link | Meaning |
+| --- | --- |
+| `blocks` | Readiness-blocking. Downstream becomes ready only when upstream is `closed` or `closed_partial`. |
+| `hands_to` | Readiness-blocking with handoff context. It has the same `closed`/`closed_partial` requirement as `blocks`. |
+| `reviews` | A review item gates its target's closure. |
+| `relates_to` | Non-blocking context relationship. |
+
+Both link kinds block readiness when the kind is `blocks` or `hands_to`; the handoff link adds downstream context but is not a softer dependency.
+
+## Why it exists
+
+Readiness is derived instead of guessed. Workers receive work that is actually startable, and downstream work does not silently bypass unfinished implementation, review, or approval gates.
+
+## Who owns it
+
+The SQLite map owns link and status truth. Workers mutate only items they have legitimately picked; operators may adapt future work deliberately. Parent gates represent outcomes, while their children are the pickable work packages.
+
+## How it changes
+
+The direct lifecycle is `pending → ready → picked → closed`; `running` is an optional explicit work state. Evidence-backed `planr done` without `--review` closes directly. When review is requested, the branch is `picked` or `running` → `in_review` → `closed` after the review gate completes. Other states are `blocked`, `failed`, `cancelled`, and `closed_partial`.
+
+For readiness links, only an upstream `closed` or `closed_partial` status satisfies `blocks` and `hands_to`. A `cancelled` item counts as settled in aggregate progress, but it does **not** satisfy either readiness link; downstream remains pending until the graph is explicitly adapted. This prevents cancellation from silently authorizing dependent work.
+
+```bash
+planr map show --json
+planr map status --json
+planr map lane --critical --json
+planr map pressure --json
+planr map lookahead --from <item-id> --json
+planr map preview --close <item-id> --json
+```
+
+Use `preview --close` before a consequential closure to see blockers, reviews, approvals, conditions, and downstream unlocks without mutating state.
+
+## Where to go next
+
+Read [Picks and Leases](/docs/concepts/picks-and-leases) before running parallel workers, and [Reviews and Approvals](/docs/concepts/reviews-and-approvals) before adding gates.

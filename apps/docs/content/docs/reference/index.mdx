@@ -1,0 +1,30 @@
+---
+title: Reference
+description: Canonical executable contracts for Planr CLI, MCP, HTTP, configuration, storage, data, errors, and supported hosts.
+---
+
+Reference material is derived from compiled help, runtime MCP discovery, HTTP routing source, model/schema vocabularies, and repository configuration. Editorial explanation adds context but never invents a command, option, transport, or state.
+
+<Cards>
+  <Card title="CLI conventions" href="/docs/reference/cli" description="Invocation, global options, command families, JSON behavior, and safe automation." />
+  <Card title="Generated CLI help" href="/docs/reference/cli-generated" description="Every compiled command, subcommand, argument, and option from Planr 1.5.0." />
+  <Card title="MCP" href="/docs/reference/mcp" description="Protocol, every tool, required schemas, resources, prompts, and errors." />
+  <Card title="Generated MCP schemas" href="/docs/reference/mcp-schemas-generated" description="Complete live tools/list JSON Schema for every public MCP tool." />
+  <Card title="Local HTTP API" href="/docs/reference/http-api" description="Review UI, JSON endpoints, SSE, request rules, and localhost boundary." />
+  <Card title="Configuration and storage" href="/docs/reference/configuration-and-storage" description="Environment variables, files, paths, precedence, and privacy." />
+  <Card title="Data and status" href="/docs/reference/data-and-status" description="Objects, vocabularies, links, transitions, logs, packages, and schema." />
+  <Card title="Outputs and errors" href="/docs/reference/outputs-and-errors" description="JSON envelopes, null picks, HTTP/MCP failures, and exit behavior." />
+  <Card title="Support matrix" href="/docs/reference/support-matrix" description="Operating systems, architectures, clients, transports, and runtimes." />
+  <Card title="Maintenance" href="/docs/reference/maintenance" description="Coverage matrix and commands that fail when public surfaces drift." />
+</Cards>
+
+## Source-to-page coverage
+
+| Public source | Canonical page | Mechanical gate |
+| --- | --- | --- |
+| Compiled Clap command tree and help | [Generated CLI help](/docs/reference/cli-generated) | Exact generated-file comparison |
+| Runtime MCP `tools/list`, `resources/list`, `prompts/list` | [MCP](/docs/reference/mcp) | Live stdio discovery coverage |
+| `src/app/http.rs` routes | [Local HTTP API](/docs/reference/http-api) | Route marker coverage |
+| Environment and storage source | [Configuration and storage](/docs/reference/configuration-and-storage) | Env/path vocabulary coverage |
+| Rust model and SQLite schema | [Data and status](/docs/reference/data-and-status) | Status, link, table, and error coverage |
+| Release/install/client contracts | [Support matrix](/docs/reference/support-matrix) | Required platform/client assertions |

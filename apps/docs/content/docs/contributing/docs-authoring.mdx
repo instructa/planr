@@ -1,0 +1,44 @@
+---
+title: Documentation Authoring
+description: Add a clear, accessible Fumadocs page and validate it without tribal knowledge.
+---
+
+Published documentation is English, task-oriented, and source-grounded. One page owns one user outcome. Prefer links to canonical reference over repeating long command inventories.
+
+## Add a page
+
+1. Create an `.mdx` file under the owning section in `apps/docs/content/docs/`.
+2. Add `title` and `description` frontmatter. The shell renders the page title, so begin body headings at `##`.
+3. Add the slug to that section's explicit `meta.json` `pages` array in the intended order.
+4. State the audience, prerequisites, exact steps or contract, expected outcome, recovery path, and next page.
+5. Link every command, option, route, field, and state to a tested source. If behavior is not shipped, label it as future work instead of documenting it as available.
+
+## Use the small component set
+
+Use `<CommandBlock command="..." label="..." />` for one exact executable command with an accessible copy action. Use `<PathCard>` only on curated landing pages that route a reader to an outcome. `PlanrMark` is decorative and must be paired with visible text. Standard Fumadocs MDX elements cover tables, callouts, code, and links.
+
+Avoid screenshots for instructions that can be expressed as stable text. When an image is necessary, provide useful alternative text and keep the essential information in prose. Controls need accessible names, keyboard behavior, visible focus, and reduced-motion support.
+
+## Validate locally
+
+<CommandBlock command="pnpm docs:content && pnpm docs:typecheck && pnpm docs:lint" label="Validate content" />
+
+<CommandBlock command="pnpm docs:dev" label="Preview locally" />
+
+Open the new route, use keyboard search to find its title and terminology, verify desktop and narrow viewports, follow every local link, and confirm the custom 404 for a bad URL. Before review, run the production build and the relevant semantic or reference verifier from [Testing](/docs/contributing/testing).
+
+## Generated and legacy content
+
+Run `pnpm docs:reference:generate` only when the public CLI or MCP contract changes. Review the generated diff and commit it with its source change. Never edit `cli-generated.mdx` or `mcp-schemas-generated.mdx` by hand.
+
+Legacy Markdown may remain as a short pointer during migration, but it must not become a second maintained explanation. Update `docs/documentation/COVERAGE.md` when ownership or route coverage changes.
+
+## Review checklist
+
+- A new contributor can execute the page from a clean checkout.
+- Examples are safe, deterministic, and use preview before destructive operations.
+- Success, failure recovery, and the next useful action are explicit.
+- Navigation, search, build, links, and accessibility are verified.
+- The change updates the canonical source, generated outputs, and release notes when required.
+
+If validation fails, fix the source owner first; do not weaken a verifier to accept drift.

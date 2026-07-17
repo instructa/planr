@@ -23,7 +23,26 @@
     "build:native": "cargo build --release",
     "test": "cargo test",
     "pack:check": "npm pack --dry-run",
-    "routing": "cargo run --manifest-path planr-routing/Cargo.toml --"
+    "routing": "cargo run --manifest-path planr-routing/Cargo.toml --",
+    "docs:dev": "pnpm --filter @planr/docs dev",
+    "docs:alchemy:dev": "pnpm --filter @planr/docs alchemy:dev",
+    "docs:build": "pnpm --filter @planr/docs build",
+    "docs:start": "pnpm --filter @planr/docs start",
+    "docs:deploy": "pnpm --filter @planr/docs deploy",
+    "docs:destroy": "pnpm --filter @planr/docs destroy",
+    "docs:content": "pnpm --filter @planr/docs content",
+    "docs:typecheck": "pnpm --filter @planr/docs typecheck",
+    "docs:lint": "pnpm --filter @planr/docs lint",
+    "docs:verify-shell": "pnpm --filter @planr/docs verify:shell",
+    "docs:verify-onboarding": "cargo build --bin planr && pnpm --filter @planr/docs verify:onboarding",
+    "docs:verify-concepts": "cargo build --bin planr && pnpm --filter @planr/docs verify:concepts",
+    "docs:verify-maintenance": "pnpm --filter @planr/docs verify:maintenance",
+    "docs:verify-deployment": "pnpm --filter @planr/docs verify:deployment",
+    "docs:verify-release": "pnpm --filter @planr/docs verify:release",
+    "docs:verify-release-live": "pnpm --filter @planr/docs verify:release-live",
+    "docs:verify-clean-install": "pnpm --filter @planr/docs verify:clean-install",
+    "docs:reference:generate": "cargo build --bin planr && pnpm --filter @planr/docs reference:generate",
+    "docs:verify-reference": "cargo build --bin planr && pnpm --filter @planr/docs reference:check && pnpm --filter @planr/docs verify:reference"
   },
   "engines": {
     "node": ">=18"

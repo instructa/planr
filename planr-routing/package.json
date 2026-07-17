@@ -16,7 +16,9 @@
     "site:serve": "node website/serve.mjs"
   },
   "devDependencies": {
-    "alchemy": "0.93.7"
+    "@cloudflare/workers-types": "5.20260717.1",
+    "alchemy": "0.93.12",
+    "wrangler": "4.112.0"
   },
   "engines": {
     "node": ">=22"

@@ -1,0 +1,42 @@
+---
+title: Architecture and Ownership
+description: Put changes in Planr's canonical runtime, storage, integration, or documentation owner.
+---
+
+Planr V1 has one Rust binary, an independently buildable `planr-routing` workspace package, distribution wrappers, and one Next.js documentation application. Ownership follows behavior, not whichever file is easiest to edit.
+
+## Runtime owners
+
+| Change | Canonical owner |
+| --- | --- |
+| CLI syntax and parsed DTOs | `src/cli.rs` |
+| Process startup and composition | `src/main.rs` |
+| Shared CLI, MCP, and HTTP mutations | `src/app/application.rs` |
+| Compound completion and evidence flow | `src/app/flow.rs` |
+| MCP and localhost HTTP adapters | `src/app/mcp.rs`, `src/app/http.rs` |
+| Typed public vocabulary and JSON DTOs | `src/model.rs` |
+| SQLite schema and additive upgrades | `src/storage/schema.rs` |
+| Row mapping and data access | `src/storage/rows.rs`, `src/app/repository/` |
+| Install metadata and MCP schemas | `src/integrations.rs` |
+| Routing policy, host artifacts, and bundles | `planr-routing/` plus `src/routing_bundle.rs` |
+
+Do not copy a shared mutation into each transport. Do not add catch-all `common`, `shared`, or broad utility modules. A new module must name a durable behavior or data boundary.
+
+## Documentation owners
+
+`apps/docs/content/docs/` owns published English prose and `meta.json` navigation. `apps/docs/components/` owns reusable UI. `apps/docs/lib/source.ts` owns the Fumadocs page tree, and `apps/docs/app/api/search/route.ts` owns search. The generated CLI and MCP pages are outputs of scripts in `apps/docs/scripts/`; never hand-edit generated reference.
+
+The source hierarchy is:
+
+1. `docs/planr-spec/` and `AGENTS.md` for product intent and architecture;
+2. compiled Rust and TypeScript plus live `--help` output for shipped behavior;
+3. installer, package, and release manifests for distribution;
+4. legacy Markdown for explanation only.
+
+When sources disagree, fix the canonical owner and every downstream contract in the same change. Do not preserve duplicate truths.
+
+## Architecture decisions
+
+Current decisions are deliberate: one `apps/docs` application, Next.js App Router, local MDX, Fumadocs primitives, explicit navigation, and generated or checked references. Record a new decision in `docs/documentation/CONTRACT.md` when it changes a durable ownership, runtime, content, or deployment boundary.
+
+Next, use [Testing](/docs/contributing/testing) to choose the evidence required by your owner.

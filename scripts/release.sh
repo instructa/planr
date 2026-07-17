@@ -72,7 +72,7 @@ git add Cargo.toml Cargo.lock package.json \
   plugins/planr/.claude-plugin/plugin.json \
   .cursor-plugin/plugin.json
 git commit -m "release $version: $summary"
-git tag "v$version"
+git tag -a "v$version" -m "planr v$version: $summary"
 git push origin HEAD "v$version"
 
 echo "released v$version; watch the Release workflow for binaries and the tap update"

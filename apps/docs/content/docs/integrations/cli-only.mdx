@@ -1,0 +1,23 @@
+---
+title: CLI Only
+description: Operate Planr from a terminal, shell script, or CI job without writing client integration files.
+---
+
+No client installation is required. Run `planr` from the workspace root and keep `PLANR_WORKER_ID` stable for the duration of a picked item:
+
+```bash
+export PLANR_WORKER_ID="ci-worker"
+planr project show --json
+planr map show --json
+planr pick --work-type code --json
+```
+
+Use `planr --help` and subcommand `--help` output as the local command reference. To give a coding client a copyable CLI workflow without installing MCP, generate its prompt:
+
+```bash
+planr prompt cli --client codex
+planr prompt cli --client claude
+planr prompt cli --client cursor
+```
+
+In CI, prefer `--json`, explicit `--plan` scopes, and completion logs containing files, commands, and tests. Follow the [full lifecycle](/docs/getting-started/full-lifecycle) for a replayed end-to-end example.

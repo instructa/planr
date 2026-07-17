@@ -1,0 +1,5 @@
+{
+  "title": "Getting Started",
+  "description": "Evaluate, install, and reach first success with Planr.",
+  "pages": ["index", "why-planr", "installation", "quickstart", "full-lifecycle", "choose-your-interface"]
+}

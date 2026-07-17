@@ -1,0 +1,23 @@
+---
+title: Concepts
+description: Understand the objects, ownership boundaries, and state transitions behind Planr.
+---
+
+Planr separates narrative intent from authoritative execution state.
+
+| Layer | Owns |
+| --- | --- |
+| Product and build plans | Scope, decisions, acceptance criteria, verification intent |
+| Map | Items, links, readiness, status, picks, reviews, approvals, completion |
+| Logs and artifacts | Durable progress, commands, tests, findings, screenshots, live proof |
+| Context | Decisions, constraints, discoveries, capabilities, and goal contracts |
+
+<Cards>
+  <Card title="Local-first model" href="/docs/concepts/local-first-model" description="Learn what stays local and which surface owns each fact." />
+  <Card title="Plans and map" href="/docs/concepts/plans-and-map" description="Separate narrative intent from live execution commitments." />
+  <Card title="Graph and readiness" href="/docs/concepts/graph-and-readiness" description="Understand items, links, statuses, and derived readiness." />
+  <Card title="Picks and leases" href="/docs/concepts/picks-and-leases" description="Coordinate concurrent workers without duplicate ownership." />
+  <Card title="Evidence and context" href="/docs/concepts/evidence-and-context" description="Choose logs, artifacts, context, or notes for durable information." />
+  <Card title="Reviews and approvals" href="/docs/concepts/reviews-and-approvals" description="Use evidence checks and human decision gates correctly." />
+  <Card title="Recovery, packages, and closure" href="/docs/concepts/recovery-packages-and-closure" description="Recover explicit state, move packages, and know when work is settled." />
+</Cards>

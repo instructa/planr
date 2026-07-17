@@ -1,0 +1,37 @@
+---
+title: Testing Changes
+description: Select the smallest credible test set, then run the release-grade gates for broad changes.
+---
+
+Tests prove the owner you changed and every public surface that consumes it. Record exact commands, results, and anything left unverified.
+
+## Gate by changed surface
+
+| Change | Required focused evidence |
+| --- | --- |
+| Rust behavior or data | `cargo fmt --check`, focused `cargo test <name> -- --nocapture`, then `cargo test` |
+| CLI, MCP, HTTP, or shared mutations | Rust E2E coverage plus generated-reference drift checks |
+| Shell scripts | ShellCheck and the script's dry-run or isolated smoke test |
+| Docs prose/navigation/UI | content generation, typecheck, lint, production build, and browser verification |
+| Onboarding commands | `pnpm docs:verify-onboarding` |
+| Graph semantics | `pnpm docs:verify-concepts` |
+| CLI or MCP contracts | `pnpm docs:verify-reference` and the MCP contract fixture tests |
+| Release or dependency changes | package dry-run, release build/checksums, and security gates |
+
+## Documentation ladder
+
+<CommandBlock command="pnpm docs:content && pnpm docs:typecheck && pnpm docs:lint && pnpm docs:build" label="Run static docs gates" />
+
+<CommandBlock command="pnpm docs:verify-onboarding && pnpm docs:verify-concepts && pnpm docs:verify-reference && pnpm docs:verify-maintenance" label="Run semantic docs gates" />
+
+<CommandBlock command="pnpm docs:verify-deployment && pnpm docs:verify-release && pnpm docs:verify-clean-install" label="Run release-readiness gates" />
+
+For live proof, run `pnpm docs:start` after a successful build, then run `pnpm docs:verify-shell` in another terminal. The browser verifier exercises navigation, search, responsive behavior, 404 recovery, representative content, screenshots, and axe accessibility checks against the production server.
+
+## Full repository gate
+
+<CommandBlock command="scripts/ci-local.sh" label="Reproduce CI" />
+
+This includes formatting, Clippy with warnings denied, Rust tests, ShellCheck, a release build, package dry-run, version smoke test, and dependency audit. `scripts/security-local.sh` adds BetterLeaks and Trivy checks. The optional maintainer-local `~/projects/planr-test` consumer suite runs when present; contributors without it rely on the in-repo E2E suite.
+
+If a required gate cannot run on your platform, mark it unverified and explain the replacement evidence. A skipped gate is not a pass.

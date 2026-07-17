@@ -1,0 +1,40 @@
+---
+title: Outputs and Errors
+description: JSON response conventions, null picks, structured errors, protocol failures, and exit behavior.
+---
+
+## CLI JSON
+
+`--json` returns command-specific objects without a universal success envelope. Mutation responses normally include the changed object plus effects such as `unlocked`, `remaining`, `review`, or `closed_target`. Read the fields documented by current output; unknown additional fields should be tolerated by consumers.
+
+A successful “nothing to pick” response is not an error:
+
+```json
+{
+  "item": null,
+  "reason": "nothing_ready",
+  "remaining": { "settled": 3, "total": 5, "counts": { "pending": 2 } }
+}
+```
+
+Plan-scoped picks may instead report `ready_items_excluded_by_filter` and repair suggestions. Do not widen scope automatically.
+
+## Error codes
+
+Planr derives stable coarse codes: `not_found`, `invalid_transition`, `already_closed`, `bad_request`, `locked`, `parse_error`, and `internal_error`. JSON errors use:
+
+```json
+{ "error": { "code": "not_found", "message": "…" } }
+```
+
+HTTP adds `details: {}` and maps `not_found` to 404, `internal_error` to 500, other application errors to 400, malformed JSON to 400 `bad_request`, and oversized bodies to 413.
+
+## MCP errors
+
+Protocol errors use JSON-RPC error objects. Tool application failures are successful JSON-RPC responses with `result.isError: true`; clients must check `isError` before decoding text content as success.
+
+## Exit and recovery behavior
+
+CLI argument, parse, transition, and application failures exit non-zero. Preview commands can exit zero while reporting candidates or conflicts because no mutation was attempted. Database `locked` errors may indicate an unsupported copied/multi-writer topology; the normal connection config already uses WAL and a busy timeout.
+
+When diagnosing, capture the exact command, exit status, sanitized stderr/stdout, `planr --version`, and whether the same operation fails through CLI, MCP, and HTTP. See [Troubleshooting](/docs/troubleshooting).

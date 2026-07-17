@@ -1,0 +1,42 @@
+---
+title: Configuration and Storage
+description: Environment variables, repository files, generated paths, precedence, and local privacy boundaries.
+---
+
+## Runtime environment
+
+| Variable | Meaning |
+| --- | --- |
+| `PLANR_DB` | Database path when `--db` is absent. Default: discovered workspace `.planr/planr.sqlite`. |
+| `PLANR_WORKER_ID` | Preferred stable worker/lease identity. |
+| `PLANR_SESSION_ID` | Worker identity fallback when `PLANR_WORKER_ID` is blank or absent. |
+| `PLANR_PROFILE` | Observed registry profile fallback for execution logs. |
+| `PLANR_NATIVE_BIN` | npm wrapper override for a native Planr executable. |
+
+Precedence is explicit CLI flag, then environment, then workspace default where supported. Never reuse one worker ID for concurrent workers.
+
+## Installer environment
+
+`PLANR_BIN`, `PLANR_DOWNLOAD`, `PLANR_REPO`, `PLANR_VERSION`, `PLANR_TARGET`, `PLANR_RELEASE_BASE_URL`, and `PLANR_SKIP_CHECKSUM` configure `scripts/install.sh`. They are installer inputs, not normal CLI runtime configuration. Skipping checksums is only for controlled development mirrors.
+
+## Repository-local paths
+
+| Path | Owner and contents |
+| --- | --- |
+| `.planr/planr.sqlite` plus `-wal`/`-shm` | Authoritative runtime graph; SQLite WAL mode and 5-second busy timeout |
+| `.planr/project/` | Durable project Markdown context pack |
+| `.planr/plans/product/<slug>/` | Product plan package and manifest |
+| `.planr/plans/build/*.plan.md` | Build plans |
+| `.planr/reviews/*.review.md` | Saved review artifacts |
+| `.planr/artifacts/` | Conventional local verification/package outputs |
+| `.planr/agents.toml` | Optional advisory agent profiles and routes |
+| `.planr/policy.toml` | Optional provider-neutral usage/execution policy |
+| `.planr/integrations/codex-mcp.toml` | Generated project Codex MCP snippet |
+| `.mcp.json` | Claude project MCP configuration |
+| `.cursor/mcp.json`, `.cursor/agents/`, `.cursor/skills/` | Cursor project integration |
+
+`planr install ... --dry-run` previews generated client paths. Routing bundles may write only allowlisted repository-local targets and refuse traversal, symlinks, conflicts, or user-global configuration.
+
+## Privacy and backup
+
+The database, logs, contexts, artifacts, package exports, and debug bundles can contain internal paths and operational metadata. Planr minimizes review/debug output but cannot classify your content. Inspect and sanitize before sharing. Do not copy a live database between active writers; use [Packages and Reuse](/docs/guides/packages-and-reuse) for explicit transport.

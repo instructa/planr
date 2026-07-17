@@ -1,0 +1,33 @@
+---
+title: Release Planr
+description: Prepare, publish, verify, and diagnose a Planr binary release through the supported path.
+---
+
+`scripts/release.sh <version> "summary"` is the only supported release entry point. Do not create a version tag or edit distribution manifests by hand.
+
+## Prepare
+
+1. Work on `main` with a clean worktree.
+2. Add and commit a `CHANGELOG.md` section named exactly `## [<version>]`.
+3. Confirm the `v<version>` tag does not exist.
+4. Run the repository and docs gates appropriate to the release. Any public behavior change must update its canonical docs and generated references before tagging.
+
+Versions must use `x.y.z`, optionally followed by `-alpha.N`, `-beta.N`, or `-rc.N`.
+
+## Release
+
+<CommandBlock command={'scripts/release.sh 1.6.0 "one-line release summary"'} label="Release" />
+
+The script synchronizes Cargo, npm, Codex, Claude, Cursor, and `Cargo.lock` versions; runs build, tests, package dry-run, and security checks; then creates the release commit and annotated Git tag and pushes both.
+
+## Watch the workflow
+
+The tag workflow verifies manifest and changelog drift, creates a draft GitHub release, and builds four archives: macOS arm64/x86_64 and Linux arm64/x86_64. It publishes `SHA256SUMS` only after every build succeeds, then makes the release public. npm publication uses OIDC when enabled; stable releases may update Homebrew when enabled.
+
+Pre-releases are marked as GitHub prereleases and publish npm under the `alpha` dist-tag. They do not move Homebrew or the stable installer.
+
+## Verify and recover
+
+Confirm all four assets and `SHA256SUMS`, verify checksums, run `planr --version` from an installed artifact, and inspect npm/Homebrew only when their jobs are enabled. If a job fails, keep the release draft or mark the release affected, fix the owning source, and issue a new version. Do not silently replace a public release contract or reuse a released version.
+
+For artifact and changelog evidence required at handoff, follow `docs/RELEASE.md`. For site publication, use [Deploy the documentation](/docs/operations/docs-deployment).

@@ -10,6 +10,12 @@ dist/
 node_modules/
 .pnpm-store/
 *.tgz
+.next/
+.source/
+.open-next/
+.wrangler/
+wrangler.jsonc
+*.tsbuildinfo
 
 # Local frontend experiments/scaffolds
 apps/web/

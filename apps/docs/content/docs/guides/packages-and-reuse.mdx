@@ -1,0 +1,39 @@
+---
+title: Packages and Reuse
+description: Export local graph state for backup or templates, then import it with an explicit preview.
+---
+
+## Export
+
+```bash
+planr export \
+  --include-plans \
+  --include-logs \
+  --template-name "Backend delivery slice" \
+  --tag api \
+  --out planr-package.json \
+  --json
+```
+
+The JSON package can contain items, links, contexts, logs, plan snapshots, and review artifacts. Inspect it before sharing; logs or contexts may contain internal paths or sensitive operational details.
+
+## Import safely
+
+Use a separate or backed-up project for an unfamiliar package:
+
+```bash
+planr import planr-package.json --preview --json
+planr import planr-package.json --confirm --json
+planr map show --json
+```
+
+Preview reports what would change. `--confirm` is an explicit mutation and should follow review of the source, target project, and collisions.
+
+## Boundaries
+
+- An export is not the live map and does not receive later updates.
+- Packages move coordination context, not Git branches or uncommitted files.
+- Planr does not require a cloud share service.
+- Encrypt packages containing sensitive material with a local tool such as `age` or `gpg` before transport.
+
+For an interrupted live workspace, use [recovery](/docs/guides/recover-interrupted-work), not export/import as a substitute for diagnosis.

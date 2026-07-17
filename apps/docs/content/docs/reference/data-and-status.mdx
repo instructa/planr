@@ -1,0 +1,42 @@
+---
+title: Data and Status Contracts
+description: Public objects, IDs, vocabularies, transitions, links, logs, packages, and SQLite ownership.
+---
+
+## Core objects and IDs
+
+| Object | Typical ID | Key public fields |
+| --- | --- | --- |
+| Project | `p-…` | name, root path, description, status |
+| Plan | `pln-…` | stage, path, title, slug, parse status, archived |
+| Item | `i-…` | parent, title, description, status, work type, priority, worker, plan path |
+| Context | `ctx-…` | item, worker, kind, content, tags |
+| Log | `log-…` | item, run, kind, summary, files, commands, tests, findings |
+| Artifact | `art-…` | item, name, kind, path/content, MIME type, size, metadata |
+| Event | integer | project, item, worker, event type, payload, timestamp |
+
+IDs are opaque. Store and pass returned IDs; do not derive them from titles.
+
+## Item statuses
+
+`pending`, `ready`, `picked`, `running`, `in_review`, `blocked`, `closed`, `closed_partial`, `failed`, `cancelled`.
+
+`closed`, `closed_partial`, and `cancelled` count as settled for aggregate progress. For `blocks` and `hands_to` readiness, only `closed` and `closed_partial` satisfy the upstream dependency; cancellation remains blocking.
+
+Direct completion is `ready/picked/running → closed`. Optional review is `picked/running → in_review → closed`. Invalid transitions fail rather than coercing state.
+
+## Work and relationship vocabularies
+
+Built-in work types are `generic`, `research`, `plan`, `code`, `review`, `fix`, `test`, `shell`, and `release`; custom strings are allowed for routing use cases.
+
+Link kinds are `blocks`, `hands_to`, `reviews`, and `relates_to`. Source relationships are `scopes`, `implements`, `verifies`, `reviews`, and `references`. Plan stages are `product`, `build`, and `review`.
+
+Context kinds include `discovery`, `decision`, `constraint`, `pattern`, `blocker`, `bug`, and `risk`. Public log kinds accepted by `log add` are `completion`, `progress`, and `verification`.
+
+## SQLite schema ownership
+
+Schema version 1 stores `projects`, `plans`, `items`, `links`, `source_links`, `contexts`, `runs`, `logs`, `artifacts`, `events`, `meta`, and the `search_index` FTS table. The database is authoritative for runtime state; direct SQL writes are unsupported because they bypass invariants, readiness promotion, events, and evidence rules.
+
+## Packages
+
+Top-level `export` produces JSON packages with schema requirements, graph state, contexts, optional logs/plans, review artifacts, and optional registry snapshot. `import` previews by default and requires `--confirm` to mutate. Low-level `map export`/`map import` are graph serialization surfaces; use top-level packages for reusable handoff.

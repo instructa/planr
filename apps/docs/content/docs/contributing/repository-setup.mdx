@@ -1,0 +1,32 @@
+---
+title: Repository Setup
+description: Prepare a Planr checkout and prove that the Rust and documentation toolchains work.
+---
+
+Use this path for a fresh clone or a new Git worktree. Planr requires Rust 1.85 or newer. The documentation application requires Node.js 22 and the pnpm version pinned by the root `packageManager` field.
+
+## 1. Read the repository contract
+
+Read `AGENTS.md`, then use `docs/planr-spec/` as the product source of truth. Existing uncommitted files belong to their author: inspect `git status --short` and do not reset, overwrite, or stage unrelated changes.
+
+## 2. Install dependencies
+
+<CommandBlock command="rustc --version" label="Check Rust" />
+
+<CommandBlock command="node --version && corepack enable && pnpm install --frozen-lockfile" label="Install workspace dependencies" />
+
+The frozen install must succeed without changing `pnpm-lock.yaml`. If it changes the lockfile, stop and resolve the Node, Corepack, or pnpm mismatch before editing source.
+
+## 3. Prove both surfaces
+
+<CommandBlock command="cargo test" label="Test Planr" />
+
+<CommandBlock command="pnpm docs:content && pnpm docs:typecheck && pnpm docs:lint && pnpm docs:build" label="Build the docs" />
+
+These commands establish a baseline. If the baseline fails before your change, preserve the output and report it separately from failures introduced by your work.
+
+## Worktree safety
+
+`git rev-parse --show-toplevel` identifies the active checkout. `git rev-parse --git-common-dir` identifies shared Git metadata; a different common directory is normal in a linked worktree. Run commands from the active worktree root so `.planr`, build output, and changed-file evidence point at the correct checkout.
+
+Next, read [Architecture](/docs/contributing/architecture) before choosing a file owner.

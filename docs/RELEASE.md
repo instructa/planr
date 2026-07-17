@@ -25,7 +25,7 @@ The script enforces, in order:
 1. branch is `main`, worktree is clean, `CHANGELOG.md` already has a committed `## [x.y.z]` section, and the tag does not exist;
 2. the version is written into all four manifests plus `Cargo.lock`;
 3. gates: `cargo test` (includes the manifest drift guard in `tests/e2e.rs`), `npm pack --dry-run`, and `scripts/security-local.sh` (betterleaks + trivy leak gate);
-4. one mechanical commit `release x.y.z: <summary>`, tag `vx.y.z`, and a single push of branch plus tag.
+4. one mechanical commit `release x.y.z: <summary>`, an annotated `vx.y.z` tag carrying that summary, and a single push of branch plus tag.
 
 Two independent gates back the script:
 

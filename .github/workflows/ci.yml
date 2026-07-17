@@ -13,6 +13,56 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@1e60f620b9541d3000c8c3e2a9a1e317bc22e8a9 # v4
+        with:
+          node-version: 22
+
+      - name: Enable pinned pnpm
+        run: corepack enable
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate documentation content
+        run: pnpm docs:content
+
+      - name: Typecheck documentation
+        run: pnpm docs:typecheck
+
+      - name: Lint documentation
+        run: pnpm docs:lint
+
+      - name: Build documentation
+        run: pnpm docs:build
+
+      - name: Build Cloudflare Worker deployment artifact
+        run: pnpm docs:verify-deployment
+
+      - name: Replay documented onboarding against this repository
+        run: pnpm docs:verify-onboarding
+
+      - name: Verify documented graph semantics against this repository
+        run: pnpm docs:verify-concepts
+
+      - name: Verify public reference coverage and drift
+        run: pnpm docs:verify-reference
+
+      - name: Verify contributor and operations contracts
+        run: pnpm docs:verify-maintenance
+
+      - name: Verify documentation release inventory and links
+        run: pnpm docs:verify-release
+
   quality:
     name: Quality Gates
     runs-on: ubuntu-latest

@@ -1,0 +1,27 @@
+---
+title: Versioning and Migrations
+description: Keep distribution versions aligned and upgrade local Planr data without promising unsafe downgrades.
+---
+
+The Planr release version is synchronized across `Cargo.toml`, the root npm package, Codex and Claude plugin manifests, the Cursor manifest, and `Cargo.lock` by `scripts/release.sh`. Rust tests and the tag workflow reject drift. The private docs package remains independently marked `0.0.0`; its deploy identity should be the Git commit or immutable build artifact, not the Planr binary version.
+
+## Dependency policy
+
+The docs application pins exact Next.js, React, Fumadocs, styling, TypeScript, lint, and accessibility versions. Update them deliberately with the lockfile, build output, browser evidence, and release notes when user-visible behavior changes. Do not introduce caret or tilde ranges in `apps/docs/package.json`.
+
+## Database upgrades
+
+Planr calls its schema initializer when opening SQLite. `src/storage/schema.rs` creates missing tables and uses additive, idempotent column upgrades before recording the schema version in `meta`. Users do not run manual SQL migrations.
+
+Before upgrading a workspace that matters:
+
+1. stop Planr processes that use the database;
+2. back up the workspace's `.planr/planr.sqlite` and relevant `.planr` files;
+3. install the new binary and run `planr doctor --client all --json`;
+4. exercise read-only inspection before resuming mutations.
+
+There is no documented guarantee that an older binary can read a database after a newer binary has upgraded it. Do not solve a failed upgrade by running an old binary against the changed database. Preserve the failed database, collect sanitized diagnostics, and restore the pre-upgrade backup only after stopping all Planr processes.
+
+## Migration change checklist
+
+A schema change must remain additive or include an explicit migration design, update schema/version tests, cover existing and fresh databases, document backup and recovery behavior, and verify CLI, MCP, HTTP, export/import, scrub, and search consumers. Release notes must call out operator action and compatibility limits.

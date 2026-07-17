@@ -1,0 +1,36 @@
+---
+title: Deploy the Documentation
+description: Deploy Planr documentation to docs.planr.so with Alchemy, OpenNext, and Cloudflare Workers.
+---
+
+The documentation site is a Next.js App Router application that reads local MDX at build time. Its canonical deployment is Cloudflare Workers through Alchemy's `Nextjs` resource and OpenNext. Builds require Node.js 22, the root-pinned pnpm version, and the frozen lockfile. Production binds `https://docs.planr.so`; development and preview stages use generated URLs and never claim the production hostname.
+
+## Build
+
+<CommandBlock command="corepack enable && pnpm install --frozen-lockfile" label="Install" />
+
+<CommandBlock command="pnpm docs:content && pnpm docs:typecheck && pnpm docs:lint && pnpm docs:build" label="Validate and build" />
+
+<CommandBlock command="pnpm docs:verify-deployment" label="Build the OpenNext Worker artifact" />
+
+Copy `apps/docs/.env.example` to `apps/docs/.env.local`. Set `ALCHEMY_PASSWORD`, `CLOUDFLARE_API_TOKEN`, and `CLOUDFLARE_ACCOUNT_ID`; keep them out of Git. The production Alchemy build sets `NEXT_PUBLIC_SITE_URL=https://docs.planr.so` so canonical metadata matches the attached hostname. Archive the commit SHA, stage, Node and pnpm versions, build log, Worker identity, and deployed URL.
+
+## Deploy with Alchemy
+
+<CommandBlock command="pnpm --filter @planr/docs exec alchemy login" label="Authenticate interactively" />
+
+<CommandBlock command="STAGE=prod pnpm docs:deploy" label="Deploy docs.planr.so" />
+
+`apps/docs/alchemy.run.ts` is authoritative. It adopts the named `planr-docs-prod` Worker when present, transforms the Next.js output through OpenNext, and passes `domains: ['docs.planr.so']` only when `STAGE=prod`. The `planr.so` zone must already be available in the authenticated Cloudflare account; Cloudflare provisions the Worker custom-domain record and certificate.
+
+For Cloudflare-local development, use `pnpm docs:alchemy:dev`. Normal content work can continue to use `pnpm docs:dev` without cloud credentials.
+
+## Pre-traffic health check
+
+Require successful HTTP responses and expected content from `/`, `/docs`, a representative deep route such as `/docs/getting-started/installation`, and `/api/search?query=installation`. Confirm canonical metadata uses the configured origin, an unknown route renders the recovery 404, and static assets load without browser errors.
+
+Run `PLANR_DOCS_URL=https://docs.planr.so pnpm docs:verify-release-live` and `PLANR_DOCS_URL=https://docs.planr.so pnpm docs:verify-shell` after deployment. The verifier produces a JSON report and screenshots under `.planr/artifacts/docs-shell/`.
+
+## Promote
+
+Promote only after static, semantic, live-browser, search, responsive, and accessibility evidence passes. Record the Alchemy stage, Worker identity, deployment output, commit, and last known-good commit needed by [Rollback](/docs/operations/rollback). Do not run `pnpm docs:destroy` as rollback.

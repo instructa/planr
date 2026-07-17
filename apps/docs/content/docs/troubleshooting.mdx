@@ -1,0 +1,111 @@
+---
+title: Troubleshooting
+description: Diagnose installation, discovery, lease, readiness, review, approval, recovery, and client failures without destroying evidence.
+---
+
+Start with facts:
+
+```bash
+planr --version
+planr doctor --client all --json
+planr project show --json
+git status --short
+```
+
+When reporting a failure, include the exact command, sanitized output, platform and architecture, Planr version, workspace root, and whether the CLI reproduces it outside the editor integration.
+
+## `planr: command not found`
+
+Open a new terminal, then run `command -v planr` and inspect `echo "$PATH"`. Upgrade or uninstall through the package manager that owns the existing binary; avoid layering a second installation over an unknown one. See [Installation](/docs/getting-started/installation).
+
+## Planr cannot find the project
+
+Run commands from the repository root or a child directory containing the expected `.planr` ancestor. If this is a new project, run `planr project init`. Do not point a client at one workspace while its MCP server starts in another.
+
+## CLI works but the editor has no Planr tools
+
+Preview the relevant installer, apply it, restart the client, and diagnose only that client:
+
+```bash
+planr install codex --dry-run
+planr doctor --client codex --json
+```
+
+Substitute `claude` or `cursor`. For generic MCP, confirm the server command is `planr mcp`, uses stdio, and starts in the workspace root.
+
+## `pick` returns no item
+
+A null JSON pick includes a `reason`. Inspect the plan scope, work type, readiness, and blockers:
+
+```bash
+planr map status --json
+planr map show --plan <plan-id> --json
+planr map lane --critical --json
+```
+
+Do not remove dependencies or widen the plan filter just to obtain work. If ready work was excluded, follow the repair command returned by Planr only when it is within your intended scope.
+
+## An item is stuck in `picked` or `running`
+
+First determine whether the owner is still active:
+
+```bash
+planr trace item <item-id> --json
+planr pick stale --older-than-seconds 900 --json
+planr recover sweep --older-than-seconds 900 --json
+```
+
+Inspect Git and logs before releasing anything. Use targeted stale release for one abandoned lease or apply the recovery sweep after reviewing all candidates. See [Recover Interrupted Work](/docs/guides/recover-interrupted-work).
+
+## An item is stuck `in_review`
+
+```bash
+planr review list --json
+planr trace item <target-item-id> --json
+planr map preview --close <target-item-id> --json
+```
+
+Pick the ready review under a checker identity. If a previous review found issues, complete the generated fix and follow-up review chain; the target correctly remains gated until that chain closes.
+
+## Closure is rejected
+
+Preview the attempted close:
+
+```bash
+planr map preview --close <item-id> --json
+```
+
+Common causes are upstream blockers, an open review, requested or denied approval, missing manual conditions, or insufficient completion evidence. Resolve the reported gate rather than forcing state.
+
+## Review says files are unrelated or missing
+
+Completion evidence is item-scoped. Make sure the completion or verification log names the actual changed files and exact commands. `planr review evidence <item-id>` distinguishes logged files from unrelated dirty work; unrelated changes remain visible but are not credited as proof.
+
+## Recovery preview lists unexpected work
+
+Do not add `--apply`. Inspect each candidate with `trace item`, logs, worker identity, timestamps, and Git state. Recovery policies may include stale leases, explicit timeouts, retry counts, and backoff delays; not every failed item is automatically retryable.
+
+## Import preview is surprising
+
+Stop before `--confirm`. Verify the package source, inspect its JSON for sensitive content, confirm the target project, and use a disposable project when evaluating an unfamiliar package. An import is a graph mutation, not a merge of source files.
+
+## The map and Markdown disagree
+
+The map owns live status, links, picks, reviews, approvals, and completion. Markdown plans own scope and acceptance criteria. Update the appropriate surface; never “fix” live status by editing a checkbox.
+
+## A browser or smoke test passed but audit still fails
+
+Record it as a verification log on the scoped item:
+
+```bash
+planr log add --item <item-id> --kind verification \
+  --summary "Verified the user flow in a running browser" \
+  --cmd "exact browser or smoke command"
+planr plan audit <plan-id> --json
+```
+
+The command must be real evidence, not a planned future check.
+
+## Prepare a safe bug report
+
+Use `planr debug bundle --preview` before generating diagnostic material. Sanitize secrets, user data, private URLs, prompts, and proprietary source. Include the smallest reproduction and explain whether the worktree already contained unrelated changes.

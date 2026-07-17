@@ -1,0 +1,12 @@
+{
+  "title": "Contributing",
+  "description": "Change Planr and its documentation safely.",
+  "pages": [
+    "index",
+    "repository-setup",
+    "architecture",
+    "docs-authoring",
+    "testing",
+    "security-and-privacy"
+  ]
+}

@@ -1,0 +1,30 @@
+---
+title: Quickstart
+description: Create and verify your first local Planr project in under five minutes.
+---
+
+This path proves that Planr is installed, can create durable local state, and can inspect that state. Run it in a repository or an empty practice directory.
+
+## 1. Initialize the project
+
+<CommandBlock command={'planr project init "Hello Planr"'} label="Initialize" />
+
+Planr creates `.planr/planr.sqlite` inside the current workspace. Commit the Markdown plans you want collaborators to read; do not commit the local SQLite database unless your team has deliberately chosen that workflow.
+
+## 2. Inspect what Planr created
+
+<CommandBlock command="planr project show --json" label="Inspect" />
+
+The JSON response includes the project name, root path, active status, and local database path. Your generated IDs will differ from examples in these docs.
+
+## 3. Run diagnostics
+
+<CommandBlock command="planr doctor --client all --json" label="Diagnose" />
+
+A successful result has `db_status: "pass"`. Each detected client reports its own status and install hint, so a missing editor integration does not invalidate the CLI project.
+
+## First success
+
+You now have an inspectable Planr project that survives the current chat or client session. Nothing has been sent to a hosted service: Planr's authoritative execution graph remains local to the workspace.
+
+Next, run the [complete executable lifecycle](/docs/getting-started/full-lifecycle) or [connect a client](/docs/getting-started/choose-your-interface).

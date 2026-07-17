@@ -1,0 +1,58 @@
+---
+title: MCP Reference
+description: Complete Planr stdio MCP protocol, tool, resource, prompt, result, and error contract.
+---
+
+## Transport and protocol
+
+Launch one newline-delimited JSON-RPC server in the workspace root:
+
+```json
+{ "command": "planr", "args": ["mcp"] }
+```
+
+An explicit database goes before `mcp`: `planr --db /absolute/project/.planr/planr.sqlite mcp`. `initialize` reports protocol `2025-03-26` with tools, resources, and prompts capabilities. Supported methods are `initialize`, `ping`, `tools/list`, `tools/call`, `resources/list`, `resources/read`, `prompts/list`, and `prompts/get`. Notifications without `id` receive no response.
+
+## Tools
+
+Schemas are returned by `tools/list`. Unless noted, input schemas reject additional properties. Required fields follow each name in parentheses. The [generated MCP schema inventory](/docs/reference/mcp-schemas-generated) gives the complete JSON Schema for every tool, including all optional properties, types, descriptions, required arrays, `additionalProperties`, and any runtime-declared defaults or enums.
+
+| Area | Tools |
+| --- | --- |
+| Project/inspection | `planr_project_show`; `planr_trace_item` (`item_id`) |
+| Map | `planr_map_show`; `planr_map_status`; `planr_map_preview` (`close`); `planr_map_unlocks` (`item_id`); `planr_map_lookahead` |
+| Plans | `planr_plan_create` (`title`); `planr_plan_refine` (`id`); `planr_plan_split` (`id`, `slice`); `planr_plan_check` (`id`); `planr_plan_audit` (`id`); `planr_plan_link` (`source_id`, `item_id`); `planr_map_build` (`from`) |
+| Items | `planr_item_create` (`title`, `description`); `planr_item_breakdown` (`id`, `into`); `planr_item_insert` (`title`, `description`, `after`); `planr_item_amend` (`id`, `note`); `planr_item_replan` (`parent_id`, `into`) |
+| Routing/policy | `planr_agents_list`; `planr_policy_show`; `planr_policy_check`; `planr_policy_admit` (`request`); `planr_item_route` (`item_id`); `planr_item_route_set` (`item_id`, `profile`); `planr_item_route_clear` (`item_id`) |
+| Lease/recovery | `planr_pick_item`; `planr_pick_heartbeat`; `planr_pick_progress` (`item_id`); `planr_pick_pause` (`item_id`); `planr_pick_resume` (`item_id`); `planr_pick_stale`; `planr_recover_sweep` |
+| Approvals | `planr_approval_request` (`item_id`); `planr_approval_approve` (`item_id`, `by`); `planr_approval_deny` (`item_id`, `by`); `planr_approval_list` |
+| Evidence | `planr_artifact_add` (`name`); `planr_artifact_list`; `planr_artifact_show` (`id`); `planr_event_list`; `planr_debug_bundle`; `planr_log_add` (`item`, `summary`); `planr_log_read` (`id`); `planr_context_create` (`content`); `planr_search` (`query`) |
+| Review/closure | `planr_review_annotate` (`item_id`, `message`); `planr_review_ingest` (`item_id`, allows feedback payload properties); `planr_review_artifact` (`review_item_id`); `planr_review_evidence` (`item_id`); `planr_review_close` (`review_item_id`); `planr_close_item` (`item_id`) |
+
+Important booleans include `peek`, `apply`, `confirm`, `open`, and `close_target`; mutation defaults remain preview/read-only where the generated schema says so. A property not listed in `required` is optional. Do not infer an enum or default that is absent from the runtime schema.
+
+## Resources
+
+All resources return `application/json`:
+
+- `planr://project/map`
+- `planr://project/context`
+- `planr://item/{id}`
+- `planr://plan/{id}`
+- `planr://log/{id}`
+
+Unknown or missing IDs produce JSON-RPC errors. Resource templates use `{id}` substitution in the URI.
+
+## Prompts
+
+- `planr-plan` — prepare or refine planning work;
+- `planr-work` — execute one map item;
+- `planr-review` — audit a review item;
+- `planr-map` — inspect and coordinate the graph;
+- `planr-summary` — summarize evidence-backed completion.
+
+## Results and errors
+
+Successful tools return MCP text content whose text is serialized Planr JSON. Tool execution failures return `isError: true` with a text JSON error object and keep the server alive. Protocol failures use JSON-RPC codes: `-32700` parse error, `-32601` method not found, `-32602` missing/invalid parameters, and `-32603` internal error.
+
+For workflows, see [Generic MCP](/docs/integrations/generic-mcp) and [Daily Worker Loop](/docs/guides/daily-worker-loop).

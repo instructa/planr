@@ -1,0 +1,34 @@
+---
+title: Planr Documentation
+description: Choose a path from first install to evidence-backed, multi-agent delivery.
+---
+
+Planr is a local-first planning and execution coordination tool for Codex, Claude Code, Cursor, and generic MCP or CLI clients. It keeps product intent readable, graph state authoritative, ownership explicit, and completion backed by evidence.
+
+<Cards>
+  <Card title="Install and start" href="/docs/getting-started/installation" description="Install Planr, verify the binary, and reach your first ready item." />
+  <Card title="Understand the model" href="/docs/concepts" description="Learn how plans, maps, picks, logs, reviews, and recovery fit together." />
+  <Card title="Connect a client" href="/docs/integrations" description="Set up Codex, Claude Code, Cursor, generic MCP, or CLI-only use." />
+  <Card title="Look up a surface" href="/docs/reference" description="Find canonical CLI, MCP, HTTP, configuration, and data contracts." />
+</Cards>
+
+## The lifecycle
+
+Planr uses one public flow across clients:
+
+```text
+idea -> product plan -> build plan -> map -> pick -> log -> review/evidence -> recovery/package -> close
+```
+
+The map is the live source of truth. Plans preserve intent and verification context; logs and reviews prove why a state transition is safe.
+
+<Callout type="info" title="Local by default">
+  Planr stores project coordination state beside your repository. It does not require a hosted account, analytics service, or cloud content backend.
+</Callout>
+
+## Choose your next step
+
+- New user: [install Planr](/docs/getting-started/installation), then follow the [quickstart](/docs/getting-started/quickstart).
+- Existing project: open the [guides](/docs/guides) for scoped planning, coordination, and recovery.
+- Integrator: choose a supported path under [client integrations](/docs/integrations).
+- Contributor: start with [repository and documentation contribution](/docs/contributing).

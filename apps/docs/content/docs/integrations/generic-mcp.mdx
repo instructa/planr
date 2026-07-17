@@ -1,0 +1,21 @@
+---
+title: Generic MCP
+description: Connect any stdio-capable MCP host to the current Planr workspace.
+---
+
+Configure one stdio server and launch it with the workspace root as its working directory:
+
+```json
+{
+  "mcpServers": {
+    "planr": {
+      "command": "planr",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+The workspace root matters because Planr discovers `.planr/planr.sqlite` from the current project. If your host cannot set a working directory, pass the explicit database path before `mcp`, as shown by the first-party installers' dry-runs.
+
+Restart or reload the host, confirm that Planr tools appear, and call a read-only project or map tool first. The MCP tools and CLI share the same lifecycle and authoritative map; follow the [full lifecycle](/docs/getting-started/full-lifecycle) for the concepts and expected state transitions.
