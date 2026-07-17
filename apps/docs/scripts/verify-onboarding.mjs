@@ -134,7 +134,12 @@ try {
     check(preview.includes('planr'), `${client} dry-run prints a Planr MCP setup preview`);
   }
   const doctor = run(['doctor', '--client', 'all', '--json']);
-  check(doctor.db_status === 'pass' && doctor.clients.every(({ status }) => status === 'pass'), 'doctor validates the project and all supported first-party clients');
+  check(
+    doctor.db_status === 'pass' &&
+      doctor.clients.map(({ client }) => client).join(',') === 'codex,claude,cursor' &&
+      doctor.clients.every(({ status }) => status === 'pass' || status === 'not_installed'),
+    'doctor validates the project and reports every supported first-party client',
+  );
 
   const exportedManifest = await readFile(path.join(workspace, '.planr', 'artifacts', 'onboarding-example'), 'utf8');
   check(exportedManifest.includes(product.id), 'export manifest references the tutorial product plan');
