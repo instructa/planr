@@ -16,6 +16,7 @@ node_modules/
 .alchemy-worker/
 .wrangler/
 wrangler.jsonc
+!apps/docs/wrangler.jsonc
 *.tsbuildinfo
 
 # Local frontend experiments/scaffolds

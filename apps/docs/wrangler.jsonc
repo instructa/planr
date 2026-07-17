@@ -1,0 +1,17 @@
+{
+  "name": "planr-docs-prod",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-04-24",
+  "compatibility_flags": [
+    "nodejs_compat",
+    "global_fetch_strictly_public"
+  ],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS",
+    "not_found_handling": "none",
+    "html_handling": "auto-trailing-slash",
+    "run_worker_first": false
+  },
+  "vars": {}
+}

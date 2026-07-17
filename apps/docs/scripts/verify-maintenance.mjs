@@ -203,6 +203,10 @@ requireMarkers(alchemyConfig, 'Alchemy deployment wiring', [
 requireMarkers(await read('apps/docs/open-next.config.ts'), 'OpenNext configuration', [
   'defineCloudflareConfig', 'export default',
 ]);
+requireMarkers(await read('apps/docs/wrangler.jsonc'), 'Wrangler bundle configuration', [
+  '"name": "planr-docs-prod"', '"main": ".open-next/worker.js"',
+  '"directory": ".open-next/assets"', '"nodejs_compat"',
+]);
 
 const releaseScript = await read('scripts/release.sh');
 assert(
