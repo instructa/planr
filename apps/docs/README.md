@@ -75,7 +75,7 @@ The canonical deployment is a Next.js application on Cloudflare Workers through 
 1. authenticate the Cloudflare account with `pnpm --filter @planr/docs exec alchemy login --configure`; Alchemy stores local OAuth credentials in its profile, not in `.env`;
 2. use `.env.example` only when overriding the public canonical origin for a local build;
 3. validate locally with `pnpm docs:build` and optionally `pnpm docs:alchemy:dev`;
-4. deploy production with `pnpm docs:deploy` from the repository root; the package script pins `--stage prod` explicitly;
+4. deploy production with `pnpm docs:deploy` from the repository root; the package script pins `--stage prod`, accepts the non-interactive Alchemy plan, and populates the read-only OpenNext SSG cache;
 5. verify the emitted URL and `https://planr.so` with the release-live and browser gates.
 
 `apps/docs/alchemy.run.ts` is the infrastructure source of truth. It uses the Alchemy v2 Effect stack and Cloudflare remote state. `Cloudflare.Website.StaticSite` runs OpenNext, passes the result through Wrangler's local dry-run bundler, and deploys `.alchemy-worker/worker.js` with `bundle: false`. It adopts the named Worker when it already exists and binds `planr.so` only for `prod`. `NEXT_PUBLIC_SITE_URL` is set to the canonical production origin during that build.

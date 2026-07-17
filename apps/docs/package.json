@@ -11,7 +11,7 @@
     "bundle:worker": "wrangler deploy --dry-run --outdir .alchemy-worker",
     "build:deploy": "pnpm run build:worker && pnpm run bundle:worker",
     "start": "next start",
-    "deploy": "alchemy deploy --stage prod",
+    "deploy": "alchemy deploy --stage prod --yes && opennextjs-cloudflare populateCache remote --config wrangler.jsonc",
     "destroy": "alchemy destroy --stage prod",
     "content": "fumadocs-mdx",
     "typecheck": "fumadocs-mdx && tsc --noEmit",

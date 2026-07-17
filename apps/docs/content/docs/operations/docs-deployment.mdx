@@ -21,6 +21,8 @@ Local deployment credentials belong in the Alchemy profile created by OAuth; do 
 
 <CommandBlock command="pnpm docs:deploy" label="Deploy planr.so" />
 
+The command deploys the Alchemy production stack and then populates OpenNext's read-only static-assets incremental cache with the prerendered documentation routes. Keep both steps together: without cache population, Cloudflare must execute the OpenNext server path for every SSG request.
+
 `apps/docs/alchemy.run.ts` is authoritative. `Cloudflare.Website.StaticSite` runs OpenNext and Wrangler's local dry-run bundler, uploads the resulting `.alchemy-worker/worker.js` with `bundle: false`, and serves `.open-next/assets`. The extra local bundle step retains OpenNext's Wrangler-compatible runtime behavior while keeping the compressed Worker below Cloudflare's 3 MiB Free-plan limit. It adopts the named `planr-docs-prod` Worker when present and passes `domain: 'planr.so'` only for the `prod` stage. The `planr.so` zone must already be available in the authenticated Cloudflare account; Cloudflare provisions the Worker custom-domain record and certificate. `Cloudflare.state()` keeps stack state remotely available to local and CI deploys.
 
 For Cloudflare-local development, use `pnpm docs:alchemy:dev`. Normal content work can continue to use `pnpm docs:dev` without cloud credentials.
