@@ -15,9 +15,9 @@ const Website = Cloudflare.Website.StaticSite(
 
     return {
       name: `planr-docs-${stage}`,
-      command: "pnpm run build:worker",
+      command: "pnpm run build:deploy",
       outdir: ".open-next/assets",
-      main: ".open-next/worker.js",
+      main: ".alchemy-worker/worker.js",
       bundle: false,
       domain: stage === "prod" ? productionDomain : undefined,
       compatibility: {

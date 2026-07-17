@@ -50,7 +50,7 @@ All commands run through the root workspace scripts; no global Fumadocs or Next.
 
 `docs:verify-maintenance` checks the contributor and operations page tree, authoring and test instructions, local-first/security boundaries, exact docs dependency pins, deployment and rollback contracts, governance triggers, and their canonical repository sources.
 
-`docs:verify-deployment` runs the OpenNext Cloudflare transform without contacting Cloudflare and must produce `.open-next/worker.js`. Alchemy v2 consumes that prebuilt entrypoint and `.open-next/assets` directly, with bundling disabled so the OpenNext module graph is uploaded byte-for-byte.
+`docs:verify-deployment` runs the OpenNext Cloudflare transform and Wrangler's local dry-run bundler without contacting Cloudflare. It must produce `.open-next/worker.js` and the deployable `.alchemy-worker/worker.js`. Alchemy v2 uploads that single prebundled entrypoint with bundling disabled and serves `.open-next/assets`. This keeps the compressed Worker below Cloudflare's 3 MiB Free-plan limit while preserving OpenNext's Wrangler-compatible module semantics.
 
 `docs:verify-release` checks every current route, explicit navigation entry, internal link and anchor, redirect target, coverage entry, duplicate heading, unfinished marker, and root entry point. With the production server running, `PLANR_DOCS_URL=http://localhost:3000 pnpm docs:verify-release-live` also renders all 55 MDX routes and verifies every redirect, representative search results, the sitemap, and the custom 404.
 
@@ -78,6 +78,6 @@ The canonical deployment is a Next.js application on Cloudflare Workers through 
 4. deploy production with `pnpm docs:deploy` from the repository root; the package script pins `--stage prod` explicitly;
 5. verify the emitted URL and `https://planr.so` with the release-live and browser gates.
 
-`apps/docs/alchemy.run.ts` is the infrastructure source of truth. It uses the Alchemy v2 Effect stack and Cloudflare remote state. `Cloudflare.Website.StaticSite` runs the OpenNext build and deploys its prebuilt Worker with `bundle: false`, adopts the named Worker when it already exists, and binds `planr.so` only for `prod`. `NEXT_PUBLIC_SITE_URL` is set to the canonical production origin during that build.
+`apps/docs/alchemy.run.ts` is the infrastructure source of truth. It uses the Alchemy v2 Effect stack and Cloudflare remote state. `Cloudflare.Website.StaticSite` runs OpenNext, passes the result through Wrangler's local dry-run bundler, and deploys `.alchemy-worker/worker.js` with `bundle: false`. It adopts the named Worker when it already exists and binds `planr.so` only for `prod`. `NEXT_PUBLIC_SITE_URL` is set to the canonical production origin during that build.
 
 Use `pnpm docs:destroy` only after confirming the production target; it removes Alchemy-managed infrastructure and is not part of normal rollback. Local credentials remain in `~/.alchemy/profiles.json`, while stack state is stored through `Cloudflare.state()`.

@@ -127,7 +127,9 @@ assert(packageJson.engines.node === '>=22', 'apps/docs must require Node.js 22 o
 assert(packageJson.scripts.deploy === 'alchemy deploy --stage prod', 'apps/docs deploy must target the Alchemy prod stage explicitly');
 assert(packageJson.scripts.destroy === 'alchemy destroy --stage prod', 'apps/docs destroy must target the Alchemy prod stage explicitly');
 assert(packageJson.scripts['build:worker'] === 'opennextjs-cloudflare build --skipWranglerConfigCheck', 'worker build must use OpenNext');
-assert(packageJson.scripts['verify:deployment'] === 'pnpm run build:worker', 'deployment verification must build the OpenNext Worker artifact');
+assert(packageJson.scripts['bundle:worker'] === 'wrangler deploy --dry-run --outdir .alchemy-worker', 'worker bundle must use Wrangler without deploying');
+assert(packageJson.scripts['build:deploy'] === 'pnpm run build:worker && pnpm run bundle:worker', 'deployment build must produce the OpenNext and bundled Worker artifacts');
+assert(packageJson.scripts['verify:deployment'] === 'pnpm run build:deploy', 'deployment verification must build the deployable Worker artifact');
 assert(packageJson.devDependencies.alchemy === '2.0.0-beta.63', 'Alchemy v2 must stay exactly pinned');
 assert(packageJson.devDependencies.effect === '4.0.0-beta.98', 'Effect v4 must stay exactly pinned');
 assert(packageJson.devDependencies['@effect/platform-node'] === '4.0.0-beta.98', 'Effect Node platform must stay exactly pinned');
@@ -196,7 +198,7 @@ requireMarkers(alchemyConfig, 'Alchemy deployment wiring', [
   'Alchemy.Stack(', 'Cloudflare.providers()', 'Cloudflare.state()',
   'Cloudflare.Website.StaticSite(', 'planr-docs-${stage}',
   'stage === "prod"', 'planr.so', 'AdoptPolicy.adopt(true)',
-  'main: ".open-next/worker.js"', 'bundle: false', 'NEXT_PUBLIC_SITE_URL',
+  'main: ".alchemy-worker/worker.js"', 'bundle: false', 'NEXT_PUBLIC_SITE_URL',
 ]);
 requireMarkers(await read('apps/docs/open-next.config.ts'), 'OpenNext configuration', [
   'defineCloudflareConfig', 'export default',
