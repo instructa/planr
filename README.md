@@ -1,20 +1,12 @@
 # Planr
 
-## Documentation
-
-The product documentation lives in the first-class Fumadocs workspace at [`apps/docs`](apps/docs/README.md). It is developed with the repository-pinned pnpm version and Node.js 22 or newer:
-
-```bash
-corepack enable
-pnpm install --frozen-lockfile
-pnpm docs:dev
-```
-
-Open <http://localhost:3000/docs>. The documentation source hierarchy and public-surface coverage contract live in [`docs/documentation`](docs/documentation/CONTRACT.md).
-
 ![Planr — turn chaotic agent work into a verified task graph](public/planr_banner1.webp)
 
 Planr is a local-first planning and execution coordination tool for coding agents. It combines reviewable Markdown plans with a dependency-aware work map so Codex, Claude Code, Cursor, generic MCP clients, and human operators can drive the same work safely — from idea to verified completion.
+
+[**View the Demo →**](https://x.com/kevinkern/status/2066957434564808884?s=20)
+
+[**Documentation →**](http://localhost:3000/docs) · Source: [`apps/docs`](apps/docs/README.md)
 
 ```text
 idea -> product plan -> build plan -> map -> pick -> log -> review/evidence -> close
