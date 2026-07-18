@@ -12,7 +12,7 @@ The docs service has no dedicated `/health` endpoint. Use a real rendered route 
 | Install or build fails | Node 22, pinned pnpm, frozen lockfile, Fumadocs content output | `apps/docs/package.json`, lockfile, MDX source |
 | Static site will not deploy or serve | Next.js export, Alchemy plan/output, active Cloudflare profile or CI token/account, asset manifest | `alchemy.run.ts` and deployment configuration |
 | Page is 404 | file slug, section `meta.json`, `source.config.ts`, requested base URL | content owner |
-| Legacy alias does not redirect | `redirects.mjs`, Next config, destination route, browser redirect check | docs architecture owner |
+| Legacy alias does not redirect | `redirects.mjs`, `worker.mjs`, worker-first route inventory, destination route, live redirect check | docs architecture owner |
 | Search misses a page | page frontmatter, build output, `/api/search?query=...`, `lib/source.ts` | content/search owner |
 | Wrong canonical URL | build-time `NEXT_PUBLIC_SITE_URL` | deployment owner |
 | Layout or interaction regression | browser report, viewport screenshot, console, shell components | docs UI owner |

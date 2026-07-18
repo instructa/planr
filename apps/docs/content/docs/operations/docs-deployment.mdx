@@ -21,9 +21,9 @@ Local deployment credentials belong in the Alchemy profile created by OAuth; do 
 
 <CommandBlock command="pnpm docs:deploy" label="Deploy planr.so" />
 
-The command deploys the Alchemy production stack with the complete checked export. HTML, React navigation payloads, the client-side search database, per-page Markdown, LLM indexes, redirects, headers, and the recovery 404 are all immutable build assets.
+The command deploys the Alchemy production stack with the complete checked export. HTML, React navigation payloads, the client-side search database, per-page Markdown, LLM indexes, and the recovery 404 are immutable build assets. A small edge worker owns permanent legacy redirects and the response content types for agent-readable Markdown, search, and LLM routes.
 
-`apps/docs/alchemy.run.ts` is authoritative. `Cloudflare.Website.StaticSite` runs the static export and serves `out` directly with `404-page` fallback behavior. It adopts the named `planr-docs-prod` resource when present and passes `domain: 'planr.so'` only for the `prod` stage. The `planr.so` zone must already be available in the authenticated Cloudflare account; Cloudflare provisions the custom-domain record and certificate. `Cloudflare.state()` keeps stack state remotely available to local and CI deploys. Direct assets keep every documentation request outside the Free-plan Worker CPU budget.
+`apps/docs/alchemy.run.ts` is authoritative. `Cloudflare.Website.StaticSite` runs the static export and serves `out` with `404-page` fallback behavior. Its worker-first inventory is limited to exact entries from `redirects.mjs` plus `/docs/*.md`, `/api/search`, `/llms.txt`, and `/llms-full.txt`; all human pages and ordinary static assets bypass the worker. It adopts the named `planr-docs-prod` resource when present and passes `domain: 'planr.so'` only for the `prod` stage. The `planr.so` zone must already be available in the authenticated Cloudflare account; Cloudflare provisions the custom-domain record and certificate. `Cloudflare.state()` keeps stack state remotely available to local and CI deploys.
 
 For Cloudflare-local development, use `pnpm docs:alchemy:dev`. Normal content work can continue to use `pnpm docs:dev` without cloud credentials.
 

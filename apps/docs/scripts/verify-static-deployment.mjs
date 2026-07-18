@@ -55,6 +55,33 @@ for (const { source, destination } of legacyRedirects) {
   assert.ok(redirects.includes(`${source} ${destination} 308`), `static redirects omit ${source}`);
 }
 
+const wrangler = JSON.parse(await readFile(path.join(appRoot, 'wrangler.jsonc'), 'utf8'));
+assert.equal(wrangler.main, 'worker.mjs', 'Wrangler must deploy the redirect and agent MIME worker');
+const workerFirst = wrangler.assets.run_worker_first;
+const redirectRoutes = legacyRedirects.map(({ source }) => source);
+assert.deepEqual(
+  workerFirst.slice(0, redirectRoutes.length),
+  redirectRoutes,
+  'Wrangler worker-first redirect routes must match the canonical inventory in order',
+);
+assert.deepEqual(
+  workerFirst.slice(redirectRoutes.length),
+  ['/docs/*.md', '/api/search', '/llms.txt', '/llms-full.txt'],
+  'only agent MIME routes may join legacy redirects in worker-first routing',
+);
+
+const worker = await readFile(path.join(appRoot, 'worker.mjs'), 'utf8');
+for (const marker of [
+  "from './redirects.mjs'",
+  "status: 308",
+  "`${destination}${url.search}`",
+  "env.ASSETS.fetch(request)",
+  "'text/markdown; charset=utf-8'",
+  "'application/json; charset=utf-8'",
+]) {
+  assert.ok(worker.includes(marker), `edge worker omits ${marker}`);
+}
+
 console.log('static_deployment_verification=passed');
 console.log(`html_pages=${docsHtml.length} markdown_pages=${publicMarkdown.length} redirects=${redirects.length}`);
 console.log(`assets=${outputFiles.length} search_bytes=${(await readFile(path.join(outputRoot, 'api', 'search'))).byteLength}`);

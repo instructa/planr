@@ -110,7 +110,7 @@ const governance = await readPage('operations', 'documentation-governance');
 requireMarkers(governance, 'governance runbook', [
   '`docs/documentation/COVERAGE.md`', '`docs/documentation/CONTRACT.md`',
   'Generated pages are never hand-edited', 'Freshness triggers', 'At each release', 'failure recovery',
-  '`apps/docs/redirects.mjs`', 'permanent Cloudflare asset redirect', 'duplicate sources',
+  '`apps/docs/redirects.mjs`', 'permanent Cloudflare edge redirect', 'duplicate sources',
 ]);
 
 const release = await readPage('operations', 'release');
@@ -197,11 +197,12 @@ requireMarkers(alchemyConfig, 'Alchemy deployment wiring', [
   'Alchemy.Stack(', 'Cloudflare.providers()', 'Cloudflare.state()',
   'Cloudflare.Website.StaticSite(', 'planr-docs-${stage}',
   'stage === "prod"', 'planr.so', 'AdoptPolicy.adopt(true)',
-  'command: "pnpm run build"', 'outdir: "out"', 'notFoundHandling: "404-page"', 'NEXT_PUBLIC_SITE_URL',
+  'command: "pnpm run build"', 'outdir: "out"', 'main: "worker.mjs"',
+  'notFoundHandling: "404-page"', 'runWorkerFirst:', 'legacyRedirects.map', 'NEXT_PUBLIC_SITE_URL',
 ]);
 requireMarkers(await read('apps/docs/wrangler.jsonc'), 'Wrangler static asset configuration', [
-  '"name": "planr-docs-prod"', '"directory": "out"',
-  '"not_found_handling": "404-page"', '"run_worker_first": false',
+  '"name": "planr-docs-prod"', '"main": "worker.mjs"', '"directory": "out"',
+  '"binding": "ASSETS"', '"not_found_handling": "404-page"', '"run_worker_first": [',
 ]);
 requireMarkers(await read('apps/docs/scripts/prepare-static-assets.mjs'), 'static asset preparation', [
   'legacyRedirects', "path.join(outputRoot, '_headers')", "path.join(outputRoot, '_redirects')",
@@ -230,6 +231,7 @@ const sourceChecks = [
   ['scripts/release.sh', ['The only supported release path', 'cargo test', 'scripts/security-local.sh', 'git tag -a']],
   ['docs/RELEASE.md', ['only supported release path', 'annotated `vx.y.z` tag']],
   ['apps/docs/redirects.mjs', ['legacyRedirects', 'permanent: true']],
+  ['apps/docs/worker.mjs', ["from './redirects.mjs'", 'status: 308', 'env.ASSETS.fetch(request)']],
   ['src/storage/schema.rs', ['const SCHEMA_VERSION', 'ensure_column', "'schema_version'"]],
 ];
 for (const [path, markers] of sourceChecks) requireMarkers(await read(path), path, markers);
