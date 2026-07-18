@@ -30,6 +30,40 @@ pub fn agent_roles(client: &str) -> &'static [(&'static str, &'static str)] {
     }
 }
 
+/// Repository-local artifacts reconciled by `planr install` for one client.
+/// This is also the dry-run path contract, so preview and writes cannot drift.
+pub fn install_artifact_paths(
+    client: &str,
+    include_mcp: bool,
+    include_hooks: bool,
+) -> Vec<&'static str> {
+    let mut paths = Vec::new();
+    if include_mcp {
+        paths.push(match client {
+            "codex" => ".planr/integrations/codex-mcp.toml",
+            "claude" => ".mcp.json",
+            "cursor" => ".cursor/mcp.json",
+            _ => return paths,
+        });
+    }
+    paths.extend(agent_roles(client).iter().map(|(path, _)| *path));
+    if client == "cursor" {
+        paths.extend(cursor_skills().iter().map(|(path, _)| *path));
+    }
+    if include_hooks {
+        match client {
+            "codex" => paths.push(".codex/hooks.json"),
+            "claude" => paths.push(".claude/settings.json"),
+            "cursor" => paths.extend([
+                ".cursor/hooks.json",
+                ".cursor/hooks/planr-evidence-guard.sh",
+            ]),
+            _ => {}
+        }
+    }
+    paths
+}
+
 macro_rules! cursor_skill {
     ($name:literal) => {
         (

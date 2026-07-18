@@ -5,5 +5,12 @@ import nextTypeScript from 'eslint-config-next/typescript';
 export default defineConfig([
   ...nextVitals,
   ...nextTypeScript,
-  globalIgnores(['.next/**', '.open-next/**', '.source/**', '.wrangler/**']),
+  globalIgnores([
+    '.alchemy/**',
+    '.alchemy-worker/**',
+    '.next/**',
+    '.open-next/**',
+    '.source/**',
+    '.wrangler/**',
+  ]),
 ]);

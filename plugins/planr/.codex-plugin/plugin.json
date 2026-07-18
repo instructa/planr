@@ -19,7 +19,7 @@
     "category": "Productivity",
     "defaultPrompt": [
       "Use $planr to plan a production-ready app from my idea.",
-      "Use $planr-loop to ship one feature with verification until done."
+      "Use $planr to prepare my next feature and tell me the verified next step."
     ]
   }
 }

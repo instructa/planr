@@ -1,0 +1,5 @@
+{
+  "title": "For Agents",
+  "description": "Set up Planr and route work with one public entry skill.",
+  "pages": ["index", "quickstart", "prompt-recipes", "skills"]
+}

@@ -1,0 +1,43 @@
+---
+title: Agent Quickstart
+description: Let Codex, Claude Code, or Cursor set up Planr safely and reach the first public Planr prompt.
+---
+
+This path delegates installation and project integration to your coding agent while keeping every mutation previewable and project-scoped. Choose exactly one client recipe below, paste its setup prompt, and wait for the receipt before asking for product work.
+
+<Callout type="info" title="The only entry skill you need">
+  After setup, start ordinary Planr requests with `$planr`. You do not need to choose `$planr-plan`, `$planr-goal`, or another stage skill.
+</Callout>
+
+## Codex setup
+
+<AgentRecipe client="codex" />
+
+## Claude Code setup
+
+<AgentRecipe client="claude" />
+
+## Cursor setup
+
+<AgentRecipe client="cursor" />
+
+## Verify the setup receipt
+
+Do not accept “installed” as the only result. The agent must report the detected client and repository, resolved Planr binary and version, whether the project already existed, every integration path changed or preserved, plugin/skill status, structured doctor result, any reload or trust action, and the exact next `$planr` prompt.
+
+The setup is complete only when `planr project show --json` reads the project and `planr doctor --client <client> --json` reports the real client status. A missing reload action or a preserved conflict is an honest incomplete step, not permission to overwrite configuration.
+
+## Start your first request
+
+Reload the client if the receipt says to, open a fresh session, and paste:
+
+<PromptBlock prompt="first" label="First Planr request" />
+
+This request is intentionally read-first. `$planr` inspects the authoritative map and tells you whether the verified next step is planning, mapped work, review, recovery, or status.
+
+## Continue safely
+
+- Need a plan but no implementation? Use the [planning-only recipe](/docs/agents/prompt-recipes#planning-only).
+- Want bounded autonomous delivery? Follow [prepare first, execute second](/docs/agents/prompt-recipes#autonomous-work-prepare-first-execute-second).
+- Prefer to run every command yourself? Use the [human Quickstart](/docs/getting-started/quickstart).
+- Client tools did not appear? Follow [Troubleshooting](/docs/troubleshooting#cli-works-but-the-editor-has-no-planr-tools).

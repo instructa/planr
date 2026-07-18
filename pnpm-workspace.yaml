@@ -8,6 +8,7 @@ verifyDepsBeforeRun: error
 
 overrides:
   '@cloudflare/workers-types': 5.20260717.1
+  postcss: 8.5.19
 
 allowBuilds:
   esbuild: true

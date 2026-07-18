@@ -72,9 +72,9 @@ planr prompt cli --client codex
 planr prompt http
 ```
 
-`planr install claude` writes a project `.mcp.json` plus static workflow roles. `planr install cursor` writes `.cursor/mcp.json`, static workflow roles, and Planr skills, then prints a user-level MCP deeplink. `planr install codex` writes only the project MCP snippet. Optional model pins and generated host roles come from a repository-local routing bundle. Dry-runs print exact paths first; no command touches global user configuration.
+`planr install codex` writes a project MCP snippet and project hooks; its workflow skills come from the Codex plugin, and it writes no project roles or skills. `planr install claude` writes project `.mcp.json`, standalone worker/reviewer roles, and hooks; workflow skills come from the Claude Code plugin. `planr install cursor` writes project MCP, roles, all ten skills, and hooks, then prints an optional user-level MCP deeplink. Optional model pins come from a repository-local routing bundle. Dry-runs print the complete repository artifact and hook-reconciliation paths without writing them; no command silently edits global user configuration.
 
-Skills-and-agents-only setups (no MCP) use `--no-mcp`: `planr install cursor --no-mcp` writes the subagents and skills but no MCP config — the skills drive the `planr` CLI directly, so nothing is lost except MCP tool access.
+`--no-mcp` skips only the project MCP artifact. Codex then reconciles hooks only; Claude Code writes standalone project roles and hooks but no project skills; Cursor writes project roles, skills, and hooks. Add `--no-hooks` to skip hooks as well. The Codex and Claude Code plugins remain the owners of their workflow skills.
 
 Runtime surfaces:
 
@@ -87,7 +87,7 @@ Open `http://127.0.0.1:7526/review` after `planr serve` for the local browser re
 
 ## Agent Skills And Plugin
 
-The repository ships a plugin under `plugins/planr` for Codex and Claude Code that bundles Planr workflow skills; Claude Code additionally registers static workflow roles. Cursor receives the same skills and static roles through `planr install cursor`. Model-specific role files are optional routing-bundle artifacts. The CLI above must be installed separately. See [Skills](SKILLS.md).
+The repository ships a plugin under `plugins/planr` for Codex and Claude Code that bundles all ten workflow skills; Claude Code additionally registers plugin worker/reviewer agents. The Codex plugin does not register project agents. Cursor receives the ten skills and both project agents through `planr install cursor` (or its plugin manifest). Model-specific role files are optional routing-bundle artifacts. The CLI above must be installed separately. See [Skills](SKILLS.md).
 
 ## From Source
 

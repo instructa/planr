@@ -5,8 +5,11 @@ import {
   DocsDescription,
   DocsPage,
   DocsTitle,
+  MarkdownCopyButton,
+  ViewOptionsPopover,
 } from 'fumadocs-ui/layouts/docs/page';
 import { getMDXComponents } from '@/components/mdx';
+import { markdownPathForPage } from '@/lib/llm';
 import { source } from '@/lib/source';
 
 type PageProps = {
@@ -20,11 +23,16 @@ export default async function DocumentationPage({ params }: PageProps) {
   if (!page) notFound();
 
   const Content = page.data.body;
+  const markdownUrl = markdownPathForPage(page);
 
   return (
     <DocsPage toc={page.data.toc} full={page.data.full}>
       <DocsTitle>{page.data.title}</DocsTitle>
       <DocsDescription>{page.data.description}</DocsDescription>
+      <div className="flex items-center gap-2 border-b pb-6">
+        <MarkdownCopyButton markdownUrl={markdownUrl} />
+        <ViewOptionsPopover markdownUrl={markdownUrl} />
+      </div>
       <DocsBody>
         <Content components={getMDXComponents()} />
       </DocsBody>

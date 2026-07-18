@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import axe from 'axe-core';
+import { agentClientIds, agentRecipes } from '../lib/agent-recipes.ts';
 
 const docsRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const repositoryRoot = dirname(dirname(docsRoot));
@@ -242,22 +243,55 @@ try {
   assert(home.h1?.includes('Give every agent a plan.'), 'Homepage hero heading is missing');
   const homeContract = await evaluate(`({
     nav: [...document.querySelectorAll('header a')].map((link) => link.textContent.trim()),
+    heroActions: [...document.querySelectorAll('.hero-actions a')].map((link) => ({ label: link.textContent.trim(), href: link.getAttribute('href') })),
     paths: [...document.querySelectorAll('.path-card')].length,
     agents: [...document.querySelectorAll('.agent-card')].map((card) => ({
       label: card.querySelector('strong')?.textContent?.trim(),
       logo: card.querySelector('img')?.getAttribute('alt'),
       href: card.getAttribute('href')
     })),
+    setupTabs: [...document.querySelectorAll('[data-agent-tab]')].map((tab) => ({
+      client: tab.getAttribute('data-agent-tab'),
+      selected: tab.getAttribute('aria-selected'),
+      controls: tab.getAttribute('aria-controls'),
+      controlsTargetExists: Boolean(document.getElementById(tab.getAttribute('aria-controls'))),
+      logo: tab.querySelector('img')?.getAttribute('alt')
+    })),
+    setupPanels: [...document.querySelectorAll('[data-agent-setup-panel]')].map((panel) => ({
+      client: panel.getAttribute('data-agent-setup-panel'),
+      id: panel.id,
+      labelledBy: panel.getAttribute('aria-labelledby'),
+      hidden: panel.hidden,
+    })),
+    setupMarkdown: document.querySelector('.agent-setup-links a[href$=".md"]')?.getAttribute('href'),
+    manualAlternative: document.querySelector('.agent-setup-manual a')?.getAttribute('href'),
     lifecycle: [...document.querySelectorAll('.lifecycle-preview li')].length,
     copyButton: document.querySelector('[data-testid="copy-command"]')?.getAttribute('aria-label')
   })`);
   assert(homeContract.nav.some((label) => label.includes('Docs')), 'Global Docs navigation is missing');
+  assert(JSON.stringify(homeContract.heroActions) === JSON.stringify([
+    { label: 'Set up with your agent', href: '#agent-setup' },
+    { label: 'Install manually', href: '/docs/getting-started/installation' },
+    { label: 'See how it works', href: '/docs/getting-started/why-planr' },
+  ]), 'Hero agent and manual setup actions are incomplete');
   assert(homeContract.paths === 3, 'Homepage must expose three audience paths');
   assert(JSON.stringify(homeContract.agents) === JSON.stringify([
     { label: 'Codex', logo: 'Codex logo', href: '/docs/integrations/codex' },
     { label: 'Claude Code', logo: 'Claude logo', href: '/docs/integrations/claude-code' },
     { label: 'Cursor', logo: 'Cursor logo', href: '/docs/integrations/cursor' },
   ]), 'Homepage coding-agent integrations or official logo labels are incomplete');
+  assert(JSON.stringify(homeContract.setupTabs) === JSON.stringify([
+    { client: 'codex', selected: 'true', controls: 'agent-panel-codex', controlsTargetExists: true, logo: 'Codex logo' },
+    { client: 'claude', selected: 'false', controls: 'agent-panel-claude', controlsTargetExists: true, logo: 'Claude logo' },
+    { client: 'cursor', selected: 'false', controls: 'agent-panel-cursor', controlsTargetExists: true, logo: 'Cursor logo' },
+  ]), 'Agent setup tabs or accessible labels are incomplete');
+  assert(JSON.stringify(homeContract.setupPanels) === JSON.stringify([
+    { client: 'codex', id: 'agent-panel-codex', labelledBy: 'agent-tab-codex', hidden: false },
+    { client: 'claude', id: 'agent-panel-claude', labelledBy: 'agent-tab-claude', hidden: true },
+    { client: 'cursor', id: 'agent-panel-cursor', labelledBy: 'agent-tab-cursor', hidden: true },
+  ]), 'Every agent tab must own a labelled panel and Codex must be the only active default');
+  assert(homeContract.setupMarkdown === '/docs/agents/quickstart.md', 'Agent setup lacks its Markdown fallback');
+  assert(homeContract.manualAlternative === '/docs/getting-started/installation', 'Manual installation alternative is missing');
   assert(homeContract.lifecycle === 4, 'Homepage lifecycle preview is incomplete');
   assert(homeContract.copyButton === 'Copy command', 'Copy control has no accessible name');
   await screenshot('homepage-desktop');
@@ -284,6 +318,66 @@ try {
   const copyLabel = await evaluate(`document.querySelector('[data-testid="copy-command"]')?.getAttribute('aria-label')`);
   assert(copyLabel === 'Command copied', 'Copy success state was not announced');
   results.interactions.push({ name: 'copy-command', value: clipboard, status: 'passed' });
+
+  for (const client of agentClientIds) {
+    await click(`[data-agent-tab="${client}"]`);
+    await waitFor(
+      () => evaluate(`(() => {
+        const tabs = [...document.querySelectorAll('[data-agent-tab]')];
+        const panels = [...document.querySelectorAll('[data-agent-setup-panel]')];
+        const selectedTabs = tabs.filter((tab) => tab.getAttribute('aria-selected') === 'true');
+        const activePanels = panels.filter((panel) => !panel.hidden);
+        return tabs.every((tab) => {
+          const panel = document.getElementById(tab.getAttribute('aria-controls'));
+          return panel?.getAttribute('aria-labelledby') === tab.id;
+        }) && selectedTabs.length === 1
+          && selectedTabs[0]?.getAttribute('data-agent-tab') === '${client}'
+          && activePanels.length === 1
+          && activePanels[0]?.getAttribute('data-agent-setup-panel') === '${client}';
+      })()`),
+      `${client} agent setup selection`,
+    );
+    await click(`[data-agent-setup-panel="${client}"] [data-testid="copy-command"]`);
+    const copiedPrompt = await waitFor(
+      () => evaluate(`navigator.clipboard.readText()`),
+      `${client} canonical setup prompt`,
+    );
+    assert(copiedPrompt === agentRecipes[client].setupPrompt, `${client} landing copy drifted from the typed recipe`);
+  }
+  results.interactions.push({ name: 'landing-agent-canonical-copy', clients: agentClientIds.length, status: 'passed' });
+
+  await evaluate(`document.querySelector('[data-agent-tab="codex"]')?.focus()`);
+  await press('ArrowRight');
+  const keyboardTabState = await waitFor(
+    () => evaluate(`(() => {
+      const tabs = [...document.querySelectorAll('[data-agent-tab]')];
+      const panels = [...document.querySelectorAll('[data-agent-setup-panel]')];
+      const selectedTabs = tabs.filter((tab) => tab.getAttribute('aria-selected') === 'true');
+      const activePanels = panels.filter((panel) => !panel.hidden);
+      const relationshipsValid = tabs.every((tab) => {
+        const panel = document.getElementById(tab.getAttribute('aria-controls'));
+        return panel?.getAttribute('aria-labelledby') === tab.id;
+      });
+      if (selectedTabs.length !== 1 || activePanels.length !== 1 || !relationshipsValid) return null;
+      if (selectedTabs[0]?.getAttribute('data-agent-tab') !== 'claude') return null;
+      if (activePanels[0]?.getAttribute('data-agent-setup-panel') !== 'claude') return null;
+      if (document.activeElement?.getAttribute('data-agent-tab') !== 'claude') return null;
+      return { selected: 'claude', activePanel: 'claude', panelCount: panels.length, relationshipsValid };
+    })()`),
+    'keyboard agent tab selection',
+  );
+  results.interactions.push({ name: 'landing-agent-keyboard-tabs', from: 'codex', to: 'claude', ...keyboardTabState, status: 'passed' });
+
+  await evaluate(`(() => {
+    Object.defineProperty(navigator.clipboard, 'writeText', { configurable: true, value: async () => { throw new Error('denied'); } });
+    document.execCommand = () => false;
+  })()`);
+  await click('[data-agent-setup-panel="claude"] [data-testid="copy-command"]');
+  await waitFor(
+    () => evaluate(`document.querySelector('[data-agent-setup-panel="claude"] [data-testid="copy-command"]')?.getAttribute('aria-label') === 'Copy failed'`),
+    'announced copy error state',
+  );
+  results.interactions.push({ name: 'landing-agent-copy-error', announced: true, status: 'passed' });
 
   const themeBefore = await evaluate(`document.documentElement.className`);
   await click('[data-theme-toggle]');
@@ -346,7 +440,7 @@ try {
     toc: document.querySelector('#nd-toc')?.innerText,
     copyButtons: document.querySelectorAll('[data-testid="copy-command"]').length
   })`);
-  for (const section of ['Getting Started', 'Integrations', 'Concepts', 'Guides', 'Reference', 'Contributing', 'Operations']) {
+  for (const section of ['Getting Started', 'For Agents', 'Integrations', 'Concepts', 'Guides', 'Reference', 'Contributing', 'Operations']) {
     assert(docsContract.sidebar?.includes(section), `Sidebar hierarchy is missing ${section}`);
   }
   assert(docsContract.toc?.includes('Before you install'), 'Table of contents is missing document headings');
@@ -354,6 +448,49 @@ try {
   assert(docsContract.copyButtons === 3, 'Installation page command copy controls are missing');
   results.interactions.push({ name: 'docs-navigation-toc-breadcrumbs', status: 'passed', breadcrumb: docsContract.breadcrumb });
   await screenshot('docs-installation-desktop');
+
+  const agentQuickstart = await navigate('/docs/agents/quickstart');
+  assert(agentQuickstart.h1 === 'Agent Quickstart', 'Agent Quickstart did not render');
+  const agentQuickstartContract = await evaluate(`({
+    clients: [...document.querySelectorAll('[data-agent-recipe]')].map((recipe) => recipe.getAttribute('data-agent-recipe')),
+    copyButtons: document.querySelectorAll('[data-testid="copy-command"]').length,
+    body: document.querySelector('#nd-page')?.innerText,
+    breadcrumb: document.querySelector('#nd-page > div')?.innerText
+  })`);
+  assert(JSON.stringify(agentQuickstartContract.clients) === JSON.stringify(['codex', 'claude', 'cursor']), 'Agent Quickstart client recipes are incomplete');
+  assert(agentQuickstartContract.copyButtons === 4, 'Agent Quickstart prompt copy controls are incomplete');
+  assert(agentQuickstartContract.body?.includes('The only entry skill you need'), 'Agent Quickstart does not teach the public entry skill');
+  assert(agentQuickstartContract.breadcrumb === 'For Agents', 'Agent Quickstart breadcrumb did not render its collection');
+  await click('[data-agent-recipe="codex"] [data-testid="copy-command"]');
+  const setupPrompt = await waitFor(() => evaluate(`navigator.clipboard.readText()`), 'copied Codex setup prompt');
+  assert(setupPrompt.includes('Set up Planr for Codex in this repository.'), 'Agent Quickstart copied the wrong Codex setup prompt');
+  assert(setupPrompt.includes('planr install codex --dry-run'), 'Copied Codex setup prompt lost its preview contract');
+  results.interactions.push({ name: 'agent-quickstart-client-copy', clients: 3, copyButtons: 4, status: 'passed' });
+  await screenshot('docs-agent-quickstart-desktop');
+
+  const promptRecipes = await navigate('/docs/agents/prompt-recipes');
+  assert(promptRecipes.h1 === 'Agent Prompt Recipes', 'Agent Prompt Recipes did not render');
+  const promptContract = await evaluate(`(() => {
+    const native = document.querySelector('pre[aria-label="Native driver handoff command"]')?.closest('.command-block');
+    native?.querySelector('[data-testid="copy-command"]')?.setAttribute('id', 'verify-native-handoff');
+    return {
+      copyButtons: document.querySelectorAll('[data-testid="copy-command"]').length,
+      hasPreparation: document.querySelector('#nd-page')?.innerText.includes('Prepare outside the host loop'),
+      hasExecution: document.querySelector('#nd-page')?.innerText.includes('Start the generated handoff'),
+      hasAdvancedPlan: document.querySelector('#nd-page')?.innerText.includes('$planr-plan'),
+      hasAdvancedGoal: document.querySelector('#nd-page')?.innerText.includes('$planr-goal'),
+      nativeButton: Boolean(native)
+    };
+  })()`);
+  assert(promptContract.copyButtons === 9, 'Prompt Recipes does not expose every typed prompt');
+  assert(promptContract.hasPreparation && promptContract.hasExecution, 'Prompt Recipes does not separate preparation and execution');
+  assert(promptContract.hasAdvancedPlan && promptContract.hasAdvancedGoal, 'Advanced direct entries are missing');
+  assert(promptContract.nativeButton, 'Native plan-bound handoff is missing');
+  await click('#verify-native-handoff');
+  const loopHandoff = await waitFor(() => evaluate(`navigator.clipboard.readText()`), 'copied plan-bound loop handoff');
+  assert(loopHandoff.startsWith('/goal Use $planr-loop on plan <plan-id>.'), 'Copied autonomous handoff is not plan-bound');
+  results.interactions.push({ name: 'agent-prompt-phase-boundary-copy', prompts: 9, status: 'passed' });
+  await screenshot('docs-agent-prompt-recipes-desktop');
 
   const lifecycle = await navigate('/docs/getting-started/full-lifecycle');
   assert(lifecycle.h1 === 'Full Lifecycle Tutorial', 'Full lifecycle tutorial did not render');
@@ -479,10 +616,13 @@ try {
   await navigate('/');
   const mobileHome = await evaluate(`({
     agents: document.querySelectorAll('.agent-card').length,
+    setupTabs: document.querySelectorAll('[data-agent-tab]').length,
     horizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
-    agentSectionVisible: Boolean(document.querySelector('.agent-shell')?.getBoundingClientRect().height)
+    agentSectionVisible: Boolean(document.querySelector('.agent-shell')?.getBoundingClientRect().height),
+    setupSectionVisible: Boolean(document.querySelector('.agent-setup-shell')?.getBoundingClientRect().height)
   })`);
   assert(mobileHome.agents === 3 && mobileHome.agentSectionVisible, 'Mobile homepage coding-agent section is incomplete');
+  assert(mobileHome.setupTabs === 3 && mobileHome.setupSectionVisible, 'Mobile homepage agent setup is incomplete');
   assert(!mobileHome.horizontalOverflow, 'Mobile homepage overflows horizontally');
   results.interactions.push({ name: 'mobile-homepage-agents', viewport: '390x844@2x', status: 'passed' });
   await screenshot('homepage-mobile');
@@ -501,7 +641,7 @@ try {
       const menu = document.querySelector('#nd-sidebar-mobile');
       if (!menu) return null;
       const text = menu.innerText;
-      return text.includes('Getting Started') && text.includes('Reference') ? { text } : null;
+      return text.includes('Getting Started') && text.includes('For Agents') && text.includes('Reference') ? { text } : null;
     })()`),
     'mobile documentation sidebar',
   );
@@ -527,6 +667,8 @@ try {
     '/docs',
     '/docs/getting-started/installation',
     '/docs/getting-started/full-lifecycle',
+    '/docs/agents/quickstart',
+    '/docs/agents/prompt-recipes',
     '/docs/concepts/local-first-model',
     '/docs/guides/recover-interrupted-work',
     '/docs/troubleshooting',

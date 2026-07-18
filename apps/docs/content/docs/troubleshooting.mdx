@@ -33,6 +33,20 @@ planr doctor --client codex --json
 
 Substitute `claude` or `cursor`. For generic MCP, confirm the server command is `planr mcp`, uses stdio, and starts in the workspace root.
 
+The [Agent Quickstart](/docs/agents/quickstart) has the canonical client-specific setup prompts, expected project artifacts, reload guidance, and success receipt. Re-run setup safely only after comparing its dry-run with the existing files.
+
+## The agent asks me to choose a Planr skill
+
+Start with `$planr` and state the outcome or boundary in plain English, such as “plan only; do not implement” or “report what is blocked.” The router reads live state and selects the stage. Direct `$planr-plan`, `$planr-goal`, and other stage skills are [advanced precision controls](/docs/agents/skills), not onboarding prerequisites.
+
+## Autonomous preparation started implementing
+
+Stop the run. Goal preparation must create and check a plan, build the linked map, store the goal contract and observable proof, print a plan-bound `$planr-loop` handoff, and then stop. It must not edit product code or begin loop execution. Restart from the [autonomous preparation recipe](/docs/agents/prompt-recipes#autonomous-work-prepare-first-execute-second) and inspect the returned board before launching the generated handoff.
+
+## The autonomous loop lost its scope
+
+Do not continue with a generic driver prompt. Recover the real plan ID and stored `goal-contract` context, run `planr plan audit <plan-id> --json`, and resume only the generated `$planr-loop` line scoped to that plan. If the contract or plan cannot be found, use the read-first [recovery prompt](/docs/agents/prompt-recipes#recover-interrupted-work) rather than creating a duplicate board.
+
 ## `pick` returns no item
 
 A null JSON pick includes a `reason`. Inspect the plan scope, work type, readiness, and blockers:

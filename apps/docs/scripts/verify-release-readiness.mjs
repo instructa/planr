@@ -85,7 +85,7 @@ function internalLinks(page) {
 
 const pages = await collectPages(contentRoot);
 const routeMap = new Map(pages.map((page) => [page.route, page]));
-assert.equal(routeMap.size, 55, 'release inventory must contain exactly 55 unique MDX routes');
+assert.equal(routeMap.size, 59, 'release inventory must contain exactly 59 unique MDX routes');
 const navigation = await declaredRoutes();
 assert.deepEqual([...navigation].sort(), [...routeMap.keys()].sort(), 'explicit navigation and MDX route inventory drifted');
 
@@ -118,7 +118,7 @@ assert.ok(rootReadme.includes('[**Documentation →**](https://planr.so/docs)'),
 
 const requirementAudit = [
   { id: 1, requirement: 'Latest stable compatible Fumadocs app, pinned and integrated', evidence: 'exact dependency gate, lockfile install, CONTRACT stack decision, CI scripts' },
-  { id: 2, requirement: 'Clear English task-oriented content and copyable commands', evidence: '55 frontmatter-valid pages, authoring contract, CommandBlock browser interaction' },
+  { id: 2, requirement: 'Clear English task-oriented content and copyable commands', evidence: '59 frontmatter-valid pages, authoring contract, CommandBlock browser interaction' },
   { id: 3, requirement: 'Landing, installation, quickstart, and complete lifecycle', evidence: 'published route inventory plus clean-install onboarding replay' },
   { id: 4, requirement: 'Core concepts and canonical ownership', evidence: 'concept page tree plus semantic graph replay' },
   { id: 5, requirement: 'Codex, Claude Code, Cursor, CLI-only, and generic MCP', evidence: 'five integration routes plus client dry-run diagnostics' },
@@ -128,7 +128,7 @@ const requirementAudit = [
   { id: 9, requirement: 'Content, build, link, orphan, semantic, browser, and accessibility guardrails', evidence: 'CI plus release, maintenance, reference, onboarding, concepts, and shell verifiers' },
   { id: 10, requirement: 'Obvious repository documentation entry points', evidence: 'root README and apps/docs README checks' },
   { id: 11, requirement: 'Official Fumadocs and AgentRig research with recorded decisions', evidence: 'CONTRACT sources and adopted/rejected ADRs' },
-  { id: 12, requirement: 'Audited public-surface coverage with no unexplained gaps', evidence: '55-route COVERAGE inventory, 121 link checks, 105 coverage targets, drift verifiers' },
+  { id: 12, requirement: 'Audited public-surface coverage with no unexplained gaps', evidence: '59-route COVERAGE inventory with agent and human journeys, link/orphan checks, drift verifiers' },
 ];
 
 const report = {

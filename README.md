@@ -44,7 +44,7 @@ Or with the release installer:
 curl -fsSL https://raw.githubusercontent.com/instructa/planr/main/scripts/install.sh | sh
 ```
 
-Then initialize a project (also provisions the worker/reviewer subagent roles for your client):
+Then initialize a project. When selected, Claude Code and Cursor also receive standalone project worker/reviewer roles; Codex workflow skills come from its plugin:
 
 ```bash
 planr project init "My Product" --client all
@@ -90,7 +90,7 @@ One command installs everything the plugin would carry:
 
 ```bash
 planr install cursor            # writes .cursor/mcp.json, .cursor/agents/, and .cursor/skills/
-planr install cursor --no-mcp   # skills and subagents only, no MCP config
+planr install cursor --no-mcp   # project skills, subagents, and hooks; no MCP config
 ```
 
 The dry-run also prints a one-click `cursor://` deeplink for user-level MCP install. Marketplace listing is pending review. Multitasking with Cursor subagents: [Cursor guide](docs/CURSOR.md).
@@ -112,7 +112,7 @@ planr prompt cli
 
 ## Tell Your Agent
 
-Two skills drive everything. `$planr` routes any request to the right stage skill from live map state; `$planr-loop` drives one feature through work, live verification, and independent review until the map is clean.
+Remember one public entry point: `$planr`. It routes the request from live Planr state, including planning-only work and autonomous-goal preparation. Stage skills are advanced surfaces selected by the router.
 
 Start a new product from an idea:
 
@@ -123,10 +123,13 @@ Create a production-ready Habit Tracker web app plan. Create the product plan,
 split an MVP build plan, check it, then build the Planr map. Do not implement yet.
 ```
 
-Ship one feature autonomously until verified:
+For a long autonomous run, prepare outside the driver first. The preparation result prints a real plan id; Codex or Claude Code then starts only the plan-bound loop driver:
 
 ```text
-Use $planr-loop.
+Use $planr to prepare an autonomous goal for the weekly overview feature.
+
+/goal Use $planr-loop on plan <plan-id>. The loop contract is stored in planr
+context (tag: goal-contract).
 
 Goal: ship the weekly overview feature. DONE when every in-scope map item is closed
 with log evidence, all reviews are closed complete, and a live verification log shows

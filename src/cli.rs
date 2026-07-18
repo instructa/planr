@@ -819,11 +819,12 @@ pub(crate) enum InstallCommand {
 pub(crate) struct InstallClientArgs {
     #[arg(long)]
     pub(crate) dry_run: bool,
-    /// Plugin-style install: write subagent roles and skills only, no MCP config.
+    /// Skip project MCP config. Codex installs hooks only; Claude installs
+    /// project roles/hooks; Cursor installs project roles/skills/hooks.
     #[arg(long)]
     pub(crate) no_mcp: bool,
-    /// Overwrite existing role and skill files, e.g. to re-render roles
-    /// after editing .planr/agents.toml. Never touches hand edits without it.
+    /// Overwrite Planr-owned role/skill files provisioned for this client,
+    /// e.g. after editing .planr/agents.toml. Otherwise preserves hand edits.
     #[arg(long)]
     pub(crate) force: bool,
     /// Skip installing host hooks (session-start/post-compaction state

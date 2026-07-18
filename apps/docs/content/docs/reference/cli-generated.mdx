@@ -1578,8 +1578,8 @@ Options:
       --db <DB>   Path to Planr SQLite database
       --dry-run
       --json      Emit JSON output
-      --no-mcp    Plugin-style install: write subagent roles and skills only, no MCP config
-      --force     Overwrite existing role and skill files, e.g. to re-render roles after editing .planr/agents.toml. Never touches hand edits without it
+      --no-mcp    Skip project MCP config. Codex installs hooks only; Claude installs project roles/hooks; Cursor installs project roles/skills/hooks
+      --force     Overwrite Planr-owned role/skill files provisioned for this client, e.g. after editing .planr/agents.toml. Otherwise preserves hand edits
       --no-color  Disable color in human output
       --no-hooks  Skip installing host hooks (session-start/post-compaction state injection via `planr prime`). Hooks are installed by default
   -h, --help      Print help
@@ -1594,8 +1594,8 @@ Options:
       --db <DB>   Path to Planr SQLite database
       --dry-run
       --json      Emit JSON output
-      --no-mcp    Plugin-style install: write subagent roles and skills only, no MCP config
-      --force     Overwrite existing role and skill files, e.g. to re-render roles after editing .planr/agents.toml. Never touches hand edits without it
+      --no-mcp    Skip project MCP config. Codex installs hooks only; Claude installs project roles/hooks; Cursor installs project roles/skills/hooks
+      --force     Overwrite Planr-owned role/skill files provisioned for this client, e.g. after editing .planr/agents.toml. Otherwise preserves hand edits
       --no-color  Disable color in human output
       --no-hooks  Skip installing host hooks (session-start/post-compaction state injection via `planr prime`). Hooks are installed by default
   -h, --help      Print help
@@ -1610,8 +1610,8 @@ Options:
       --db <DB>   Path to Planr SQLite database
       --dry-run
       --json      Emit JSON output
-      --no-mcp    Plugin-style install: write subagent roles and skills only, no MCP config
-      --force     Overwrite existing role and skill files, e.g. to re-render roles after editing .planr/agents.toml. Never touches hand edits without it
+      --no-mcp    Skip project MCP config. Codex installs hooks only; Claude installs project roles/hooks; Cursor installs project roles/skills/hooks
+      --force     Overwrite Planr-owned role/skill files provisioned for this client, e.g. after editing .planr/agents.toml. Otherwise preserves hand edits
       --no-color  Disable color in human output
       --no-hooks  Skip installing host hooks (session-start/post-compaction state injection via `planr prime`). Hooks are installed by default
   -h, --help      Print help

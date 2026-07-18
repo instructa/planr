@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const docsRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repositoryRoot = path.dirname(path.dirname(docsRoot));
+const verifierPath = fileURLToPath(import.meta.url);
 const configuredPlanrBin = process.env.PLANR_BIN;
 const planrBin = configuredPlanrBin
   ? path.resolve(process.cwd(), configuredPlanrBin)
@@ -18,12 +19,55 @@ const cargoVersion = cargoManifest.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
 
 assert.ok(cargoVersion, 'Could not read the Planr package version from Cargo.toml');
 assert.equal(repositoryPackage.version, cargoVersion, 'package.json and Cargo.toml must declare the same Planr version');
+assert.ok(path.isAbsolute(planrBin), 'Onboarding replay must execute an absolute Planr binary path, never an ambient `planr` from PATH');
 await access(
   planrBin,
   constants.X_OK,
 ).catch(() => {
-  throw new Error(`Repository Planr binary is not executable at ${planrBin}. Run \`cargo build --bin planr\` or set PLANR_BIN to an explicit repository build.`);
+  throw new Error(`Configured Planr binary is not executable at ${planrBin}. Run \`cargo build --bin planr\` or set PLANR_BIN to an explicit matching repository build; ambient PATH lookup is intentionally disabled.`);
 });
+
+const binaryGuardAssertions = [];
+if (process.env.PLANR_SKIP_BINARY_GUARD_FIXTURES !== '1') {
+  const fixtureRoot = await mkdtemp(path.join(tmpdir(), 'planr-binary-guard-'));
+  try {
+    const fixtureEnvironment = {
+      ...process.env,
+      PLANR_SKIP_BINARY_GUARD_FIXTURES: '1',
+    };
+    const missingPath = path.join(fixtureRoot, 'missing-planr');
+    const missing = spawnSync(process.execPath, [verifierPath], {
+      cwd: repositoryRoot,
+      encoding: 'utf8',
+      env: { ...fixtureEnvironment, PLANR_BIN: missingPath },
+    });
+    assert.notEqual(missing.status, 0, 'a missing explicit Planr binary must fail onboarding verification');
+    assert.match(
+      `${missing.stderr}\n${missing.stdout}`,
+      /Configured Planr binary is not executable.*ambient PATH lookup is intentionally disabled/s,
+      'missing binary failure must explain how to build or explicitly select the repository binary',
+    );
+    binaryGuardAssertions.push('missing explicit binary fails without falling back to ambient PATH');
+
+    const stalePath = path.join(fixtureRoot, 'stale-planr');
+    await writeFile(stalePath, "#!/usr/bin/env node\nconsole.log('planr 0.0.0');\n");
+    await chmod(stalePath, 0o755);
+    const stale = spawnSync(process.execPath, [verifierPath], {
+      cwd: repositoryRoot,
+      encoding: 'utf8',
+      env: { ...fixtureEnvironment, PLANR_BIN: stalePath },
+    });
+    assert.notEqual(stale.status, 0, 'a stale explicit Planr binary must fail onboarding verification');
+    assert.match(
+      `${stale.stderr}\n${stale.stdout}`,
+      /does not match this repository release/,
+      'stale binary failure must identify the repository-version mismatch',
+    );
+    binaryGuardAssertions.push('stale explicit binary fails with an actionable repository-version mismatch');
+  } finally {
+    await rm(fixtureRoot, { recursive: true, force: true });
+  }
+}
 
 const workspace = await mkdtemp(path.join(tmpdir(), 'planr-docs-onboarding-'));
 const report = {
@@ -31,7 +75,10 @@ const report = {
   planrBinary: planrBin,
   expectedVersion: repositoryPackage.version,
   commands: [],
-  assertions: [],
+  assertions: [
+    'replay binary path is absolute and cannot resolve an ambient planr from PATH',
+    ...binaryGuardAssertions,
+  ],
 };
 
 function run(args, { worker, json = true } = {}) {

@@ -50,13 +50,13 @@ Stage skills (what the router and loop dispatch to; also directly invocable):
 
 ## Cheat Sheet
 
-Default usage needs two skills:
+Default usage needs one public entry point:
 
 ```text
 $planr        any request -> routed to the right stage skill from live map state
-$planr-loop   one feature -> loop work/verify/review/fix until done or budget exhausted
-$planr-goal   broad goal -> plan + map + durable contract + starter for /goal or manual loops
 ```
+
+`$planr-goal` and `$planr-loop` are advanced stage surfaces selected by the router. A long-running goal is always prepared first; only the resulting real plan id is passed to the loop driver.
 
 The stage order the router follows for a new app:
 
@@ -81,10 +81,13 @@ Create the product plan, split an MVP build plan, check it, then build the Planr
 Do not implement yet. End with the build plan id, critical lane, and first ready items.
 ```
 
-Example autonomous feature loop:
+Example autonomous feature loop (two separate prompts):
 
 ```text
-Use $planr-loop.
+Use $planr to prepare an autonomous goal for the weekly overview feature.
+
+/goal Use $planr-loop on plan <plan-id>. The loop contract is stored in planr
+context (tag: goal-contract).
 
 Goal: ship the weekly overview feature. DONE when every in-scope map item is closed with
 log evidence, all reviews are closed complete, and a live verification log shows the
@@ -103,7 +106,7 @@ Do not close the item until review is complete.
 
 ## Two Journeys: New Project vs. Existing Project
 
-Both journeys use the same entry point (`$planr` or `$planr-loop`). What differs is the state the router finds, and what kind of plan the work gets.
+Both journeys use the same public entry point (`$planr`). What differs is the state the router finds, and what kind of plan the work gets.
 
 ### Journey 1 — start a project from an idea
 
@@ -120,7 +123,7 @@ Create a production-ready Habit Tracker web app plan. Create the product plan,
 split an MVP build plan, check it, then build the Planr map. Do not implement yet.
 ```
 
-The router runs the full stage order: product plan -> build plan -> map -> work. From there, `$planr-loop` or `$planr-work` executes against the map.
+The router runs the full stage order: product plan -> build plan -> map. From there it can select `$planr-work`, or prepare a plan-bound `$planr-loop` run.
 
 ### Journey 2 — mid-project: add a feature, refactor, or fix
 
@@ -138,12 +141,15 @@ What the router does with that, and why:
 
 1. `$planr-plan` creates a new plan scoped to the feature (`planr plan new "Auth system" ...`), not a new project. Refine notes capture constraints from the existing codebase; the build plan's "existing leverage" field records what is reused instead of rebuilt.
 2. `$planr-task-graph` extends the existing map: new items, plus `blocks` links to anything already on the map that must land first.
-3. Execution is identical to journey 1: `$planr-loop` for autonomous, `$planr-work` / `$planr-review` for human-in-the-loop.
+3. Execution is identical to journey 1: a plan-bound `$planr-loop` for autonomous work, or `$planr-work` / `$planr-review` for human-in-the-loop.
 
-Or autonomous in one prompt:
+Or autonomous in two prompts:
 
 ```text
-Use $planr-loop.
+Use $planr to prepare an autonomous goal for the auth system.
+
+/goal Use $planr-loop on plan <plan-id>. The loop contract is stored in planr
+context (tag: goal-contract).
 
 Goal: ship an auth system (email+password, sessions, protected routes).
 DONE when every auth map item is closed with log evidence, all reviews are closed
@@ -164,8 +170,8 @@ Rules that hold in both journeys:
 The CLI provisions the role files automatically — no manual copying:
 
 ```bash
-planr project init "My Product" --client all   # writes .codex/agents/*.toml, .claude/agents/*.md, and .cursor/agents/*.md
-planr agents init                              # generates canonical native Codex roles in an existing project
+planr project init "My Product" --client all   # writes standalone Claude and Cursor roles; Codex has no project roles
+planr agents init                              # writes the provider-neutral .planr/agents.toml registry; it does not generate Codex roles
 planr install claude                           # provisions Claude's independent roles
 planr install cursor                           # provisions Cursor's independent roles and skills
 ```
@@ -176,57 +182,34 @@ Dispatches stay one line: `Use $planr-work on item <id>` and `Use $planr-review 
 
 ## Install For Codex
 
-Copy the Planr skills into Codex's local skill directory:
+Install the Codex plugin for all ten workflow skills, then initialize and install the project integration:
 
 ```bash
-mkdir -p ~/.codex/skills
-cp -R plugins/planr/skills/* ~/.codex/skills/
-```
-
-If Planr was installed from an npm package that includes `skills/`, copy from the package location instead:
-
-```bash
-PLANR_PKG="$(npm root -g)/planr"
-mkdir -p ~/.codex/skills
-cp -R "$PLANR_PKG"/plugins/planr/skills/* ~/.codex/skills/
-```
-
-Do not present `npx planr` as the primary install path until the npm artifact ships platform-native Planr binaries. Today the normal user path is the GitHub Release installer; npm is a development and consumer-test wrapper.
-
-Then run Codex from a repository where `planr` is installed and initialized:
-
-```bash
+codex plugin marketplace add instructa/planr
+codex plugin add planr@planr
 planr project init "Example Product" --client codex
+planr install codex
 planr doctor --client codex
 ```
 
-Codex can also use Planr through MCP:
-
-```bash
-planr install codex --dry-run
-planr prompt mcp --client codex
-```
+The CLI writes the project MCP snippet and hooks. It does not copy project skills or agents; those skills are plugin-owned, and Codex has no Planr project-agent contract. `--no-mcp` leaves hooks only, while `--no-mcp --no-hooks` writes neither integration artifact.
 
 ## Install For Claude Code
 
-Claude Code loads project skills from `.claude/skills/`:
+Install the Claude Code plugin for all ten workflow skills and its plugin worker/reviewer agents, then install the project integration:
 
-```bash
-mkdir -p .claude/skills .claude/agents
-cp -R plugins/planr/skills/* .claude/skills/
-cp plugins/planr/agents/*.md .claude/agents/
+```text
+/plugin marketplace add instructa/planr
+/plugin install planr@planr
 ```
-
-Then add MCP and the Planr workflow prompt to project instructions when needed:
 
 ```bash
 planr project init "Example Product" --client claude
-planr install claude --dry-run
-planr prompt mcp --client claude
-planr prompt cli --client claude
+planr install claude
+planr doctor --client claude
 ```
 
-`planr install claude` writes a project-scoped `.mcp.json` when not run as a dry-run.
+The CLI writes project-scoped `.mcp.json`, standalone project worker/reviewer roles, and hooks. It does not copy project skills. `--no-mcp` retains the standalone roles and hooks; add `--no-hooks` to omit hooks.
 
 ## Install For Cursor
 
@@ -237,7 +220,7 @@ planr project init "Example Product" --client cursor
 planr install cursor
 ```
 
-`planr install cursor` writes `.cursor/mcp.json`, copies the ten skills to `.cursor/skills/`, provisions `.cursor/agents/planr-worker.md` and `planr-reviewer.md`, and prints a one-click deeplink for user-level MCP install. Prefer skills and agents without MCP? `planr install cursor --no-mcp` writes only the subagents and skills — the skills are CLI-first, so the whole workflow runs through the `planr` binary. Invoke skills with `/planr` or `/planr-loop` in Agent chat, and dispatch subagents with `/planr-worker` and `/planr-reviewer`. Use `planr serve --port 7526` and `planr prompt http --client cursor` if a Cursor workflow should inspect the local HTTP/review workspace. Subagent multitasking and worktree guidance: [Cursor](CURSOR.md).
+`planr install cursor` writes `.cursor/mcp.json`, copies the ten skills to `.cursor/skills/`, provisions `.cursor/agents/planr-worker.md` and `planr-reviewer.md`, reconciles hooks, and prints a one-click deeplink for user-level MCP install. `planr install cursor --no-mcp` retains the agents, skills, and hooks while omitting MCP; add `--no-hooks` to omit hooks. Invoke the public router with `/planr` in Agent chat, and dispatch subagents with `/planr-worker` and `/planr-reviewer`. Use `planr serve --port 7526` and `planr prompt http --client cursor` if a Cursor workflow should inspect the local HTTP/review workspace. Subagent multitasking and worktree guidance: [Cursor](CURSOR.md).
 
 ## MCP-Only Clients
 

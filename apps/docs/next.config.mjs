@@ -6,6 +6,12 @@ import { legacyRedirects } from './redirects.mjs';
 const config = {
   reactStrictMode: true,
   redirects: async () => legacyRedirects,
+  rewrites: async () => [
+    {
+      source: '/docs/:slug*.md',
+      destination: '/api/markdown/:slug*',
+    },
+  ],
 };
 
 const withMDX = createMDX();

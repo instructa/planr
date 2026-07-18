@@ -19,13 +19,13 @@ Re-running the command refreshes `.cursor/mcp.json` but never overwrites edited 
 
 ## Skills And Agents Only (No MCP)
 
-The skills are CLI-first — they drive the `planr` binary directly through the terminal — so MCP is optional. For a plugin-style install that writes only the subagents and skills:
+The skills are CLI-first — they drive the `planr` binary directly through the terminal — so MCP is optional. To install project subagents, skills, and the default hooks without MCP:
 
 ```bash
 planr install cursor --no-mcp
 ```
 
-This writes `.cursor/agents/` and `.cursor/skills/` and nothing else: no `.cursor/mcp.json`, no deeplink. Everything below (subagent dispatch, parallel work, goal loops) works identically in this mode because the skills call `planr pick`, `planr done`, `planr review ...` as shell commands. `--no-mcp --dry-run` lists the files that would be written. The flag works for `claude` and `codex` too (roles only; their skills ship via each host's plugin system).
+This writes `.cursor/agents/`, `.cursor/skills/`, and the default project hooks, but no `.cursor/mcp.json` or deeplink. Add `--no-hooks` when hooks must also be skipped. Everything below works in this mode because the skills call the Planr CLI directly. `--no-mcp --dry-run` lists the roles and skills and states whether the non-dry run would reconcile hooks. For Claude Code the flag writes standalone project roles and hooks but no project skills; for Codex it writes hooks only. Their workflow skills come from their respective plugins.
 
 ## One-Click MCP Install
 

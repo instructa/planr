@@ -3,16 +3,12 @@ title: Cursor
 description: Add project MCP, agents, skills, and hooks to Cursor.
 ---
 
-From the project root:
+<AgentRecipe client="cursor" />
 
-```bash
-planr install cursor --dry-run
-planr install cursor
-planr doctor --client cursor
-```
+## Technical details
 
-Planr writes `.cursor/mcp.json`, Planr worker and reviewer agents, skills, and hooks. The preview also prints a Cursor deeplink for an intentional user-level MCP install.
+Planr writes `.cursor/mcp.json`, Planr worker and reviewer agents, all ten workflow skills, and hooks. The preview also prints a Cursor deeplink for an intentional user-level MCP install.
 
-Use `--no-mcp` when Cursor's MCP configuration is managed elsewhere, `--no-hooks` to omit hooks, or `--force` after reviewing generated-file changes. For a CLI-shaped prompt, run `planr prompt cli --client cursor`.
+Use `--no-mcp` when Cursor's MCP configuration is managed elsewhere; project agents, skills, and default hooks remain. Add `--no-hooks` to omit hooks too. Use `--force` only after reviewing generated-file changes. For a CLI-shaped prompt, run `planr prompt cli --client cursor`.
 
-Continue with the shared [full lifecycle](/docs/getting-started/full-lifecycle).
+Continue with the shared [Agent Prompt Recipes](/docs/agents/prompt-recipes) or [full lifecycle](/docs/getting-started/full-lifecycle). The recipe above is rendered from the typed contract shared with the Agent Quickstart, landing page, and verification.
