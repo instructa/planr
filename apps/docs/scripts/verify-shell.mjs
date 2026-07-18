@@ -250,19 +250,13 @@ try {
       logo: card.querySelector('img')?.getAttribute('alt'),
       href: card.getAttribute('href')
     })),
-    setupTabs: [...document.querySelectorAll('[data-agent-tab]')].map((tab) => ({
-      client: tab.getAttribute('data-agent-tab'),
-      selected: tab.getAttribute('aria-selected'),
-      controls: tab.getAttribute('aria-controls'),
-      controlsTargetExists: Boolean(document.getElementById(tab.getAttribute('aria-controls'))),
-      logo: tab.querySelector('img')?.getAttribute('alt')
+    setupActions: [...document.querySelectorAll('[data-agent-copy]')].map((button) => ({
+      client: button.getAttribute('data-agent-copy'),
+      copyState: button.getAttribute('data-copy-state'),
+      label: button.getAttribute('aria-label'),
+      logo: button.querySelector('img')?.getAttribute('alt')
     })),
-    setupPanels: [...document.querySelectorAll('[data-agent-setup-panel]')].map((panel) => ({
-      client: panel.getAttribute('data-agent-setup-panel'),
-      id: panel.id,
-      labelledBy: panel.getAttribute('aria-labelledby'),
-      hidden: panel.hidden,
-    })),
+    setupText: document.querySelector('.agent-setup-shell')?.textContent,
     setupMarkdown: document.querySelector('.agent-setup-links a[href$=".md"]')?.getAttribute('href'),
     manualAlternative: document.querySelector('.agent-setup-manual a')?.getAttribute('href'),
     lifecycle: [...document.querySelectorAll('.lifecycle-preview li')].length,
@@ -280,16 +274,17 @@ try {
     { label: 'Claude Code', logo: 'Claude logo', href: '/docs/integrations/claude-code' },
     { label: 'Cursor', logo: 'Cursor logo', href: '/docs/integrations/cursor' },
   ]), 'Homepage coding-agent integrations or official logo labels are incomplete');
-  assert(JSON.stringify(homeContract.setupTabs) === JSON.stringify([
-    { client: 'codex', selected: 'true', controls: 'agent-panel-codex', controlsTargetExists: true, logo: 'Codex logo' },
-    { client: 'claude', selected: 'false', controls: 'agent-panel-claude', controlsTargetExists: true, logo: 'Claude logo' },
-    { client: 'cursor', selected: 'false', controls: 'agent-panel-cursor', controlsTargetExists: true, logo: 'Cursor logo' },
-  ]), 'Agent setup tabs or accessible labels are incomplete');
-  assert(JSON.stringify(homeContract.setupPanels) === JSON.stringify([
-    { client: 'codex', id: 'agent-panel-codex', labelledBy: 'agent-tab-codex', hidden: false },
-    { client: 'claude', id: 'agent-panel-claude', labelledBy: 'agent-tab-claude', hidden: true },
-    { client: 'cursor', id: 'agent-panel-cursor', labelledBy: 'agent-tab-cursor', hidden: true },
-  ]), 'Every agent tab must own a labelled panel and Codex must be the only active default');
+  assert(JSON.stringify(homeContract.setupActions) === JSON.stringify([
+    { client: 'codex', copyState: 'idle', label: 'Copy install prompt for Codex', logo: 'Codex logo' },
+    { client: 'claude', copyState: 'idle', label: 'Copy install prompt for Claude Code', logo: 'Claude logo' },
+    { client: 'cursor', copyState: 'idle', label: 'Copy install prompt for Cursor', logo: 'Cursor logo' },
+  ]), 'Compact agent setup actions or accessible labels are incomplete');
+  assert(!homeContract.setupText.includes('Safety boundary'), 'Landing setup must not render the Safety boundary block');
+  assert(!homeContract.setupText.includes('Required success receipt'), 'Landing setup must not render the success receipt block');
+  for (const client of agentClientIds) {
+    const openingLine = agentRecipes[client].setupPrompt.split('\n', 1)[0];
+    assert(!homeContract.setupText.includes(openingLine), `${client} setup prompt body leaked into the landing page`);
+  }
   assert(homeContract.setupMarkdown === '/docs/agents/quickstart.md', 'Agent setup lacks its Markdown fallback');
   assert(homeContract.manualAlternative === '/docs/getting-started/installation', 'Manual installation alternative is missing');
   assert(homeContract.lifecycle === 4, 'Homepage lifecycle preview is incomplete');
@@ -320,64 +315,58 @@ try {
   results.interactions.push({ name: 'copy-command', value: clipboard, status: 'passed' });
 
   for (const client of agentClientIds) {
-    await click(`[data-agent-tab="${client}"]`);
-    await waitFor(
+    await click(`[data-agent-copy="${client}"]`);
+    const copiedState = await waitFor(
       () => evaluate(`(() => {
-        const tabs = [...document.querySelectorAll('[data-agent-tab]')];
-        const panels = [...document.querySelectorAll('[data-agent-setup-panel]')];
-        const selectedTabs = tabs.filter((tab) => tab.getAttribute('aria-selected') === 'true');
-        const activePanels = panels.filter((panel) => !panel.hidden);
-        return tabs.every((tab) => {
-          const panel = document.getElementById(tab.getAttribute('aria-controls'));
-          return panel?.getAttribute('aria-labelledby') === tab.id;
-        }) && selectedTabs.length === 1
-          && selectedTabs[0]?.getAttribute('data-agent-tab') === '${client}'
-          && activePanels.length === 1
-          && activePanels[0]?.getAttribute('data-agent-setup-panel') === '${client}';
+        const button = document.querySelector('[data-agent-copy="${client}"]');
+        const status = document.querySelector('.agent-setup-shell [role="status"]');
+        if (button?.getAttribute('data-copy-state') !== 'copied') return null;
+        return {
+          label: button.getAttribute('aria-label'),
+          message: status?.textContent?.trim(),
+        };
       })()`),
-      `${client} agent setup selection`,
+      `${client} copy success announcement`,
     );
-    await click(`[data-agent-setup-panel="${client}"] [data-testid="copy-command"]`);
     const copiedPrompt = await waitFor(
       () => evaluate(`navigator.clipboard.readText()`),
       `${client} canonical setup prompt`,
     );
     assert(copiedPrompt === agentRecipes[client].setupPrompt, `${client} landing copy drifted from the typed recipe`);
+    assert(copiedState.label === `Copied ${agentRecipes[client].displayName}`, `${client} copy label did not announce success`);
+    assert(
+      copiedState.message === `${agentRecipes[client].displayName} install prompt copied to clipboard.`,
+      `${client} live region did not announce copy success`,
+    );
   }
   results.interactions.push({ name: 'landing-agent-canonical-copy', clients: agentClientIds.length, status: 'passed' });
 
-  await evaluate(`document.querySelector('[data-agent-tab="codex"]')?.focus()`);
-  await press('ArrowRight');
-  const keyboardTabState = await waitFor(
-    () => evaluate(`(() => {
-      const tabs = [...document.querySelectorAll('[data-agent-tab]')];
-      const panels = [...document.querySelectorAll('[data-agent-setup-panel]')];
-      const selectedTabs = tabs.filter((tab) => tab.getAttribute('aria-selected') === 'true');
-      const activePanels = panels.filter((panel) => !panel.hidden);
-      const relationshipsValid = tabs.every((tab) => {
-        const panel = document.getElementById(tab.getAttribute('aria-controls'));
-        return panel?.getAttribute('aria-labelledby') === tab.id;
-      });
-      if (selectedTabs.length !== 1 || activePanels.length !== 1 || !relationshipsValid) return null;
-      if (selectedTabs[0]?.getAttribute('data-agent-tab') !== 'claude') return null;
-      if (activePanels[0]?.getAttribute('data-agent-setup-panel') !== 'claude') return null;
-      if (document.activeElement?.getAttribute('data-agent-tab') !== 'claude') return null;
-      return { selected: 'claude', activePanel: 'claude', panelCount: panels.length, relationshipsValid };
-    })()`),
-    'keyboard agent tab selection',
+  await evaluate(`document.querySelector('[data-agent-copy="codex"]')?.focus()`);
+  await press('Tab');
+  const keyboardAction = await waitFor(
+    () => evaluate(`document.activeElement?.getAttribute('data-agent-copy')`),
+    'keyboard agent action traversal',
   );
-  results.interactions.push({ name: 'landing-agent-keyboard-tabs', from: 'codex', to: 'claude', ...keyboardTabState, status: 'passed' });
+  assert(keyboardAction === 'claude', 'Tab did not move between provider copy actions');
+  results.interactions.push({ name: 'landing-agent-keyboard-actions', from: 'codex', to: keyboardAction, status: 'passed' });
 
   await evaluate(`(() => {
     Object.defineProperty(navigator.clipboard, 'writeText', { configurable: true, value: async () => { throw new Error('denied'); } });
     document.execCommand = () => false;
   })()`);
-  await click('[data-agent-setup-panel="claude"] [data-testid="copy-command"]');
-  await waitFor(
-    () => evaluate(`document.querySelector('[data-agent-setup-panel="claude"] [data-testid="copy-command"]')?.getAttribute('aria-label') === 'Copy failed'`),
+  await click('[data-agent-copy="claude"]');
+  const copyError = await waitFor(
+    () => evaluate(`(() => {
+      const button = document.querySelector('[data-agent-copy="claude"]');
+      const status = document.querySelector('.agent-setup-shell [role="status"]');
+      if (button?.getAttribute('data-copy-state') !== 'error') return null;
+      return { label: button.getAttribute('aria-label'), message: status?.textContent?.trim() };
+    })()`),
     'announced copy error state',
   );
-  results.interactions.push({ name: 'landing-agent-copy-error', announced: true, status: 'passed' });
+  assert(copyError.label === 'Copy failed for Claude Code', 'Copy failure accessible label is incomplete');
+  assert(copyError.message === 'Could not copy the Claude Code install prompt.', 'Copy failure live region is incomplete');
+  results.interactions.push({ name: 'landing-agent-copy-error', announced: copyError.message, status: 'passed' });
 
   const themeBefore = await evaluate(`document.documentElement.className`);
   await click('[data-theme-toggle]');
@@ -616,13 +605,13 @@ try {
   await navigate('/');
   const mobileHome = await evaluate(`({
     agents: document.querySelectorAll('.agent-card').length,
-    setupTabs: document.querySelectorAll('[data-agent-tab]').length,
+    setupActions: document.querySelectorAll('[data-agent-copy]').length,
     horizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
     agentSectionVisible: Boolean(document.querySelector('.agent-shell')?.getBoundingClientRect().height),
     setupSectionVisible: Boolean(document.querySelector('.agent-setup-shell')?.getBoundingClientRect().height)
   })`);
   assert(mobileHome.agents === 3 && mobileHome.agentSectionVisible, 'Mobile homepage coding-agent section is incomplete');
-  assert(mobileHome.setupTabs === 3 && mobileHome.setupSectionVisible, 'Mobile homepage agent setup is incomplete');
+  assert(mobileHome.setupActions === 3 && mobileHome.setupSectionVisible, 'Mobile homepage agent setup is incomplete');
   assert(!mobileHome.horizontalOverflow, 'Mobile homepage overflows horizontally');
   results.interactions.push({ name: 'mobile-homepage-agents', viewport: '390x844@2x', status: 'passed' });
   await screenshot('homepage-mobile');
