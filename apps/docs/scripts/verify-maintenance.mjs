@@ -96,13 +96,13 @@ requireMarkers(security, 'security guide', [
 const deployment = await readPage('operations', 'docs-deployment');
 requireMarkers(deployment, 'deployment runbook', [
   'Node.js 22', 'pnpm install --frozen-lockfile', 'NEXT_PUBLIC_SITE_URL',
-  'Alchemy v2', 'OpenNext', 'planr.so', 'pnpm docs:deploy',
-  '/api/search?query=installation', 'PLANR_DOCS_URL=https://planr.so pnpm docs:verify-shell',
+  'Alchemy v2', 'direct Cloudflare assets', 'planr.so', 'pnpm docs:deploy',
+  '/api/search', 'PLANR_DOCS_URL=https://planr.so pnpm docs:verify-shell',
 ]);
 
 const rollback = await readPage('operations', 'rollback');
 requireMarkers(rollback, 'rollback runbook', [
-  'last known-good commit', 'pnpm docs:deploy', '/api/search?query=installation', 'custom 404',
+  'last known-good commit', 'pnpm docs:deploy', '/api/search', 'custom 404',
   'pnpm docs:destroy', 'does not touch user `.planr` data', 'Do not assume a binary downgrade is safe',
 ]);
 
@@ -110,7 +110,7 @@ const governance = await readPage('operations', 'documentation-governance');
 requireMarkers(governance, 'governance runbook', [
   '`docs/documentation/COVERAGE.md`', '`docs/documentation/CONTRACT.md`',
   'Generated pages are never hand-edited', 'Freshness triggers', 'At each release', 'failure recovery',
-  '`apps/docs/redirects.mjs`', 'permanent Next.js redirect', 'duplicate sources',
+  '`apps/docs/redirects.mjs`', 'permanent Cloudflare asset redirect', 'duplicate sources',
 ]);
 
 const release = await readPage('operations', 'release');
@@ -125,19 +125,19 @@ for (const [name, version] of Object.entries({ ...packageJson.dependencies, ...p
 }
 assert(packageJson.engines.node === '>=22', 'apps/docs must require Node.js 22 or newer');
 assert(
-  packageJson.scripts.deploy === 'alchemy deploy --stage prod --yes && opennextjs-cloudflare populateCache remote --config wrangler.jsonc',
-  'apps/docs deploy must target the Alchemy prod stage and populate the OpenNext SSG cache',
+  packageJson.scripts.deploy === 'alchemy deploy --stage prod --yes',
+  'apps/docs deploy must target the Alchemy prod stage',
 );
 assert(packageJson.scripts.destroy === 'alchemy destroy --stage prod', 'apps/docs destroy must target the Alchemy prod stage explicitly');
-assert(packageJson.scripts['build:worker'] === 'opennextjs-cloudflare build --skipWranglerConfigCheck', 'worker build must use OpenNext');
-assert(packageJson.scripts['bundle:worker'] === 'wrangler deploy --dry-run --outdir .alchemy-worker', 'worker bundle must use Wrangler without deploying');
-assert(packageJson.scripts['build:deploy'] === 'pnpm run build:worker && pnpm run bundle:worker', 'deployment build must produce the OpenNext and bundled Worker artifacts');
-assert(packageJson.scripts['verify:deployment'] === 'pnpm run build:deploy && node scripts/verify-agent-worker.mjs', 'deployment verification must build and inspect the deployable Worker artifact');
+assert(packageJson.scripts.build === 'next build && node scripts/prepare-static-assets.mjs', 'docs build must prepare the deployable static artifact');
+assert(packageJson.scripts.start === 'wrangler dev --config wrangler.jsonc --port 3000 --local', 'docs start must emulate Cloudflare static routing');
+assert(packageJson.scripts['verify:deployment'].includes('wrangler deploy --config wrangler.jsonc --dry-run'), 'deployment verification must run Wrangler without deploying');
+assert(packageJson.scripts['verify:deployment'].includes('verify-static-deployment.mjs'), 'deployment verification must inspect the complete static artifact');
 assert(packageJson.devDependencies.alchemy === '2.0.0-beta.63', 'Alchemy v2 must stay exactly pinned');
 assert(packageJson.devDependencies.effect === '4.0.0-beta.98', 'Effect v4 must stay exactly pinned');
 assert(packageJson.devDependencies['@effect/platform-node'] === '4.0.0-beta.98', 'Effect Node platform must stay exactly pinned');
 assert(packageJson.devDependencies['@effect/platform-bun'] === '4.0.0-beta.98', 'Effect Bun platform must stay exactly pinned');
-assert(packageJson.devDependencies['@opennextjs/cloudflare'] === '1.20.1', 'OpenNext must stay exactly pinned');
+assert(!('@opennextjs/cloudflare' in packageJson.devDependencies), 'static docs must not retain the OpenNext Worker runtime');
 
 const pages = await collectPages(contentRoot);
 const routeMap = new Map(pages.map((page) => [page.route, page]));
@@ -190,25 +190,22 @@ for (const redirect of legacyRedirects) {
 }
 
 const nextConfig = await read('apps/docs/next.config.mjs');
-requireMarkers(nextConfig, 'Next.js redirect wiring', [
-  "import { initOpenNextCloudflareForDev } from '@opennextjs/cloudflare'",
-  "import { legacyRedirects } from './redirects.mjs'", 'redirects: async () => legacyRedirects',
-  'initOpenNextCloudflareForDev()',
-]);
+requireMarkers(nextConfig, 'Next.js static export wiring', ["output: 'export'", 'createMDX()', 'withMDX(config)']);
 
 const alchemyConfig = await read('apps/docs/alchemy.run.ts');
 requireMarkers(alchemyConfig, 'Alchemy deployment wiring', [
   'Alchemy.Stack(', 'Cloudflare.providers()', 'Cloudflare.state()',
   'Cloudflare.Website.StaticSite(', 'planr-docs-${stage}',
   'stage === "prod"', 'planr.so', 'AdoptPolicy.adopt(true)',
-  'main: ".alchemy-worker/worker.js"', 'bundle: false', 'NEXT_PUBLIC_SITE_URL',
+  'command: "pnpm run build"', 'outdir: "out"', 'notFoundHandling: "404-page"', 'NEXT_PUBLIC_SITE_URL',
 ]);
-requireMarkers(await read('apps/docs/open-next.config.ts'), 'OpenNext configuration', [
-  'defineCloudflareConfig', 'export default',
+requireMarkers(await read('apps/docs/wrangler.jsonc'), 'Wrangler static asset configuration', [
+  '"name": "planr-docs-prod"', '"directory": "out"',
+  '"not_found_handling": "404-page"', '"run_worker_first": false',
 ]);
-requireMarkers(await read('apps/docs/wrangler.jsonc'), 'Wrangler bundle configuration', [
-  '"name": "planr-docs-prod"', '"main": ".open-next/worker.js"',
-  '"directory": ".open-next/assets"', '"nodejs_compat"',
+requireMarkers(await read('apps/docs/scripts/prepare-static-assets.mjs'), 'static asset preparation', [
+  'legacyRedirects', "path.join(outputRoot, '_headers')", "path.join(outputRoot, '_redirects')",
+  'Content-Type: text/markdown',
 ]);
 
 const releaseScript = await read('scripts/release.sh');
@@ -221,15 +218,15 @@ assert(!/^git tag "v\$version"$/m.test(releaseScript), 'release script still con
 const sourceChecks = [
   ['apps/docs/README.md', ['Node.js 22', 'pnpm install --frozen-lockfile', 'NEXT_PUBLIC_SITE_URL', 'planr.so', 'pnpm docs:deploy', 'Alchemy v2']],
   ['apps/docs/.env.example', ['NEXT_PUBLIC_SITE_URL=https://planr.so']],
-  ['apps/docs/alchemy.run.ts', ['planr.so', 'Cloudflare.Website.StaticSite', 'AdoptPolicy.adopt(true)', 'bundle: false']],
+  ['apps/docs/alchemy.run.ts', ['planr.so', 'Cloudflare.Website.StaticSite', 'AdoptPolicy.adopt(true)', 'outdir: "out"']],
   ['apps/docs/app/page.tsx', ['Works with your coding agent', "agentRecipeList.map((recipe) =>"]],
   ['apps/docs/lib/agent-recipes.ts', ['/agents/codex.svg', '/agents/claude.svg', '/agents/cursor.svg', 'satisfies Record<AgentClientId, AgentRecipe>']],
   ['apps/docs/public/agents/README.md', ['developers.openai.com/assets/OpenAI-black-monoblossom.svg', 'anthropic.com/press-kit', 'cursor.com/brand']],
   ['apps/docs/public/agents/codex.svg', ['<svg', 'fill="black"']],
   ['apps/docs/public/agents/claude.svg', ['<svg', 'fill="#D97757"']],
   ['apps/docs/public/agents/cursor.svg', ['<svg', 'fill: #26251e']],
-  ['apps/docs/open-next.config.ts', ['defineCloudflareConfig']],
-  ['.github/workflows/ci.yml', ['Build Cloudflare Worker deployment artifact', 'pnpm docs:verify-deployment']],
+  ['apps/docs/scripts/verify-static-deployment.mjs', ['static_deployment_verification=passed', 'api/markdown/', '_redirects']],
+  ['.github/workflows/ci.yml', ['Build Cloudflare static deployment artifact', 'pnpm docs:verify-deployment']],
   ['scripts/release.sh', ['The only supported release path', 'cargo test', 'scripts/security-local.sh', 'git tag -a']],
   ['docs/RELEASE.md', ['only supported release path', 'annotated `vx.y.z` tag']],
   ['apps/docs/redirects.mjs', ['legacyRedirects', 'permanent: true']],

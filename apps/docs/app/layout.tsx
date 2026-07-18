@@ -42,7 +42,12 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
       <body className="flex min-h-screen flex-col">
-        <RootProvider components={{ Link: NoPrefetchLink }}>{children}</RootProvider>
+        <RootProvider
+          components={{ Link: NoPrefetchLink }}
+          search={{ options: { type: 'static' } }}
+        >
+          {children}
+        </RootProvider>
       </body>
     </html>
   );

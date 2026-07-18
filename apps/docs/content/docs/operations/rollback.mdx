@@ -3,13 +3,13 @@ title: Rollback
 description: Restore the last known-good documentation artifact and recover safely from product upgrades.
 ---
 
-Rollback redeploys a previously verified commit with its committed lockfile and Alchemy/OpenNext configuration to the same `prod` stage. It does not rebuild an old commit with today's dependency graph or environment.
+Rollback redeploys a previously verified commit with its committed lockfile, static export, and Alchemy configuration to the same `prod` stage. It does not rebuild an old commit with today's dependency graph or environment.
 
 ## Documentation rollback
 
 1. Freeze promotion and record the failing artifact, deployment, time, and symptom.
 2. Check out the last known-good commit, restore its matching deployment environment, and run `pnpm docs:deploy`; Alchemy converges the existing `planr-docs-prod` Worker and keeps `planr.so` attached.
-3. Verify `/`, `/docs`, a deep route, `/api/search?query=installation`, canonical metadata, assets, and the custom 404.
+3. Verify `/`, `/docs`, a deep route and its `.md` representation, `/api/search`, canonical metadata, browser search, assets, and the custom 404.
 4. Run the browser verifier against the restored origin and monitor platform error rates before declaring recovery.
 5. Diagnose forward on a new commit. Never patch generated files or deployed Worker content in place, and never use `pnpm docs:destroy` as a rollback mechanism.
 

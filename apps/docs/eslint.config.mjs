@@ -10,6 +10,8 @@ export default defineConfig([
     '.alchemy-worker/**',
     '.next/**',
     '.open-next/**',
+    'out/**',
+    '.wrangler-static/**',
     '.source/**',
     '.wrangler/**',
   ]),
