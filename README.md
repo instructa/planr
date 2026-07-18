@@ -4,6 +4,8 @@
 
 Planr is a local-first planning and execution coordination tool for coding agents. It combines reviewable Markdown plans with a dependency-aware work map so Codex, Claude Code, Cursor, generic MCP clients, and human operators can drive the same work safely — from idea to verified completion.
 
+[**View the Demo →**](https://x.com/kevinkern/status/2066957434564808884?s=20)
+
 ```text
 idea -> product plan -> build plan -> map -> pick -> log -> review/evidence -> close
 ```
