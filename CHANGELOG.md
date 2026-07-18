@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Locked the client provisioning contract in CLI help, generated reference, docs, and E2E tests: Codex installs project MCP/hooks but no project roles or skills; Claude Code installs project MCP/standalone roles/hooks while its plugin owns skills; Cursor installs project MCP/roles/skills/hooks. `--no-mcp` skips only MCP, and `--no-hooks` independently skips hooks.
+
 ## [1.5.0] - 2026-07-17
 
 Routing policy becomes an optional package instead of a responsibility compiled into Planr Core. Planr keeps the provider-neutral declaration, evidence, and safe repository transaction boundary; `planr-routing` owns volatile model and host knowledge.
@@ -88,7 +92,7 @@ Per-task model routing becomes a declared contract instead of prose, and Cursor 
 - Package export/import carries the agent registry: `export` snapshots `.planr/agents.toml` raw, `import` previews the exact action (`create`, `identical`, `conflict`) and never overwrites a differing local registry — the conflict is reported with a remove-and-re-import hint. Pre-registry packages import unchanged.
 - `planr install cursor` is now the one-command Cursor setup: besides `.cursor/mcp.json` it provisions the `planr-worker` and `planr-reviewer` subagents (`.cursor/agents/*.md`, Cursor frontmatter with `model: inherit` cost-tier note) and copies all ten Planr skills to `.cursor/skills/`, so `/planr`, `/planr-loop`, `/planr-worker`, and `/planr-reviewer` work without waiting on the marketplace listing. Existing files are never overwritten.
 - One-click user-level MCP install: `planr install cursor --dry-run` (and the non-dry output) prints a `cursor://anysphere.cursor-deeplink/mcp/install` link. The embedded config is `planr mcp` without `--db`, so each workspace resolves its own `.planr` database — safe at user scope.
-- `planr install <client> --no-mcp`: plugin-style install for skills-and-agents-only setups. Writes the subagent roles (and, for Cursor, the skills) with no MCP config; the skills are CLI-first, so the full workflow runs through the `planr` binary without MCP. `--no-mcp --dry-run` lists the files that would be written.
+- `planr install <client> --no-mcp`: client-specific CLI-first setup without MCP. Codex writes no roles or project skills, Claude Code writes standalone roles but no project skills, and Cursor writes roles plus skills; default hooks remain unless `--no-hooks` is also passed. `--no-mcp --dry-run` lists the client-owned files and hook intent.
 - `planr project init --client all` now provisions Cursor subagent roles alongside Codex and Claude Code; `--client cursor` provisions them for Cursor alone.
 - The Cursor plugin manifest registers both subagents and its version is guarded by the release script and the version drift test (it had drifted to 1.1.12).
 - `docs/CURSOR.md` documents multitasking with Cursor's built-in features: maker/checker subagent dispatch, parallel and background subagents over pick leases, cloud agent caveats, and the shared-absolute-`--db` rule for parallel agents in git worktrees.
@@ -368,7 +372,7 @@ Friction fixes from the dogfood run.
 
 ### Added
 
-- `planr project init` and `planr install codex` provision the loop subagent role files (`.codex/agents/*.toml`, `.claude/agents/*.md`) automatically — no manual copying.
+- `planr project init` provisions standalone Claude Code loop roles; Codex workflow skills are plugin-owned and `planr install codex` writes project MCP/hooks, not project agents.
 
 ## [1.1.2] - 2026-06-10
 

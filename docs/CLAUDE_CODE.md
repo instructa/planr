@@ -38,7 +38,7 @@ planr install claude
 planr doctor --client claude
 ```
 
-Dry-run prints both project-scope `.mcp.json` content and the user-scope CLI form. The non-dry command writes only this repository's `.mcp.json`.
+Dry-run prints both project-scope `.mcp.json` content and the optional user-scope CLI form. The non-dry command writes this repository's `.mcp.json`, standalone worker/reviewer roles, and additive fail-open session hooks. Workflow skills and plugin agents come from the Claude Code plugin. Use `--no-mcp` to omit `.mcp.json`, or `--no-hooks` to omit hook reconciliation.
 
 Claude Code should treat Planr map state as authoritative and use Markdown plans as context.
 
@@ -49,4 +49,4 @@ planr review ingest <item-id> --from .planr/tmp/claude-review.json
 planr review artifact <review-item-id>
 ```
 
-Planr does not install shell hooks or edit global Claude Code configuration. The review item remains open until `planr review close` records the final verdict.
+Planr does not edit global Claude Code configuration. Project hooks live in `.claude/settings.json`, preserve foreign entries, and can be omitted with `--no-hooks`. The review item remains open until `planr review close` records the final verdict.

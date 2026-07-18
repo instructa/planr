@@ -1,0 +1,34 @@
+---
+title: Planr Skills for Agents
+description: Understand the one public entry skill and the advanced stage skills without memorizing the workflow graph.
+---
+
+## One skill to remember
+
+`$planr` is the public router. It reads project, map, review, and approval state, combines that state with your intent, and dispatches exactly one appropriate workflow. Use it for features, fixes, plans, autonomous preparation, implementation, reviews, status, summaries, and recovery.
+
+<PromptBlock prompt="first" label="Default entry" />
+
+## Advanced direct skills
+
+Use a direct skill only when you deliberately want its narrower boundary.
+
+| Skill | Use it directly when | Boundary |
+| --- | --- | --- |
+| `$planr-plan` | You need a product/build plan or want to refine scope before implementation. | Produces checked, map-ready intent; does not implement. |
+| `$planr-goal` | You want to compile a broad, long-running outcome into an autonomous board. | Preparation-only; prints a plan-bound loop handoff and stops. |
+| `$planr-loop` | You already have a bounded plan/goal contract and want its execution protocol. | Iterates one scoped item, verification, and independent review until audit holds or budget ends. |
+| `$planr-task-graph` | A checked plan needs items, links, dependencies, or map repair. | Changes task-graph structure, not product code. |
+| `$planr-work` | You intentionally own one picked implementation item. | Implements one item and records evidence before review. |
+| `$planr-review` | You are the independent checker for a ready review item. | Findings-first; never substitutes the maker's self-assessment. |
+| `$planr-status` | You require an explicitly read-only state or goal-contract verdict. | Reports map evidence without implementing. |
+| `$planr-summary` | Work is complete or paused and needs an evidence-backed handoff. | Summarizes recorded changes, verification, and remaining state. |
+
+## Routing examples
+
+- “Use `$planr`. Plan this only; do not implement.” routes to planning.
+- “Use `$planr` to prepare this as an autonomous goal; do not implement during preparation.” routes to goal compilation.
+- “Use `$planr`. What remains blocked?” routes to status.
+- “Use `$planr`. Continue the next verified item.” routes from live readiness to work or reports the blocker.
+
+The direct names remain installed so power users and routers can be precise. New users should begin with the [Agent Quickstart](/docs/agents/quickstart), then copy outcome-based [Prompt Recipes](/docs/agents/prompt-recipes).

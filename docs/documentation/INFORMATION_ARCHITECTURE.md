@@ -8,6 +8,7 @@ This file records the implemented route and navigation contract. Routes are publ
 | --- | --- | --- |
 | evaluator | `/` -> `/docs` -> `/docs/getting-started/why-planr` | Understands the local-first map and evidence model. |
 | first-time user | `/docs/getting-started/installation` -> `/docs/getting-started/quickstart` | Installs, initializes, inspects, and diagnoses Planr. |
+| agent-led user | `/docs/agents/quickstart` -> `/docs/agents/prompt-recipes` | Completes safe setup, starts with `$planr`, and keeps autonomous execution plan-bound. |
 | lifecycle user | `/docs/getting-started/full-lifecycle` | Completes plan, map, work, evidence, and review. |
 | worker/operator | `/docs/guides/daily-worker-loop` -> `/docs/guides/parallel-coordination` | Picks without collisions and records durable evidence. |
 | reviewer | `/docs/concepts/reviews-and-approvals` -> `/docs/guides/review-and-fix-loops` | Closes a complete gate or creates a bounded fix chain. |
@@ -18,7 +19,7 @@ This file records the implemented route and navigation contract. Routes are publ
 
 ## Implemented route tree
 
-The 55 MDX files below are the current page tree and must agree with every `meta.json` file and `COVERAGE.md`.
+The 59 MDX files below are the current page tree and must agree with every `meta.json` file and `COVERAGE.md`.
 
 ```text
 /docs
@@ -28,6 +29,10 @@ The 55 MDX files below are the current page tree and must agree with every `meta
 │   ├── quickstart
 │   ├── full-lifecycle
 │   └── choose-your-interface
+├── agents (For Agents)
+│   ├── quickstart
+│   ├── prompt-recipes
+│   └── skills
 ├── integrations
 │   ├── codex
 │   ├── claude-code
@@ -85,7 +90,8 @@ Each named section also has its own index route. The application additionally ow
 - Root and section `meta.json` files explicitly order every page.
 - Guides state prerequisites, outcome, failure recovery, and next action.
 - Reference pages name their generated or compiled source.
-- Integration differences stay on integration pages; shared setup stays in getting started.
+- The For Agents section owns the shared setup and prompt journey; integration pages own client-specific technical detail and render the same typed recipe rather than copying it.
+- Getting Started remains the manual, CLI-first journey.
 - Search indexes the same Fumadocs source tree used by navigation.
 - English is canonical for this release.
 

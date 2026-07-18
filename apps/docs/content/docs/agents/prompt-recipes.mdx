@@ -1,0 +1,68 @@
+---
+title: Agent Prompt Recipes
+description: Copy accurate prompts for planning, autonomous preparation, status, recovery, and advanced direct routing.
+---
+
+Use `$planr` for normal work. These prompts describe intent and boundaries; the router reads live Planr state and chooses the correct stage. Replace “my request” with the outcome and proof that matter to you.
+
+## First request
+
+<PromptBlock prompt="first" label="Inspect and route" />
+
+## Planning only
+
+Use this when you want an inspectable plan and map before any code changes. “Do not implement” is part of the contract.
+
+<PromptBlock prompt="planOnly" label="Plan without implementation" />
+
+## Autonomous work: prepare first, execute second
+
+Autonomous delivery has two explicit phases. Preparation compiles durable state; it does not implement.
+
+### 1. Prepare outside the host loop
+
+<PromptBlock prompt="autonomousPreparation" label="Prepare an autonomous goal" />
+
+The preparation response must name the checked plan ID, linked map, stored goal-contract tag, observable proof, iteration budget, and exact plan-bound execution handoff. Inspect that board before starting execution.
+
+### 2. Start the generated handoff
+
+For Codex or Claude Code with a native goal driver, the generated command has this shape:
+
+<PromptBlock prompt="generatedLoopHandoff" label="Native driver handoff" />
+
+For Cursor, a plain MCP host, or a session without a native driver, use the generated portable line and re-dispatch it after a session ends:
+
+<PromptBlock prompt="portableLoopHandoff" label="Portable loop handoff" />
+
+Use the real plan ID returned by preparation. Never replace the plan-bound `$planr-loop` prompt with the general router inside a driver: the explicit plan scope and stored contract are the safety boundary.
+
+## Status without changes
+
+<PromptBlock prompt="status" label="Read-only status" />
+
+For an autonomous scope, the decisive check is `planr plan audit <plan-id> --json`. It evaluates the stored contract rather than inferring completion from chat history.
+
+## Recover interrupted work
+
+<PromptBlock prompt="recovery" label="Inspect before recovery" />
+
+Recovery begins with map, lease, review, approval, log, and preview evidence. It must not release ownership, apply a sweep, or rewrite the board merely because a previous chat ended.
+
+## Advanced direct entry points
+
+Direct stage skills are optional precision controls for experienced users. They do not replace `$planr` as the documented default.
+
+### `$planr-plan`: plan a bounded scope directly
+
+<PromptBlock prompt="advancedPlan" label="Advanced direct planning" />
+
+`$planr-plan` creates or refines product/build plans, checks required sections, and makes the next map command explicit. It does not implement the plan.
+
+### `$planr-goal`: compile an autonomous board directly
+
+<PromptBlock prompt="advancedGoal" label="Advanced goal preparation" />
+
+`$planr-goal` is preparation-only. It creates and checks the plan, builds the linked map, stores a durable goal contract and oracle, prints the generated plan-bound loop handoff, and stops. `$planr-loop` is the execution protocol; the host driver merely repeats it.
+
+See [Skills](/docs/agents/skills) for the full boundary table and [Troubleshooting](/docs/troubleshooting) when routing or recovery state is unclear.

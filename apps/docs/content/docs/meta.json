@@ -3,6 +3,7 @@
   "pages": [
     "index",
     "getting-started",
+    "agents",
     "integrations",
     "concepts",
     "guides",

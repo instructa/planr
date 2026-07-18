@@ -12,7 +12,9 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { HomeLayout } from 'fumadocs-ui/layouts/home';
 import { CommandBlock } from '@/components/command-block';
+import { AgentSetupPanel } from '@/components/agent-setup-panel';
 import { PathCard } from '@/components/path-card';
+import { agentRecipeList } from '@/lib/agent-recipes';
 import { baseOptions } from '@/lib/layout.shared';
 
 export default function HomePage() {
@@ -34,13 +36,14 @@ export default function HomePage() {
             MCP clients, and humans can share without losing ownership or evidence.
           </p>
           <div className="hero-actions">
-            <Link prefetch={false} className="button-primary" href="/docs/getting-started/installation">
-              Install Planr
+            <Link prefetch={false} className="button-primary" href="#agent-setup">
+              Set up with your agent
               <ArrowRight aria-hidden="true" />
             </Link>
-            <Link prefetch={false} className="button-secondary" href="/docs/getting-started/why-planr">
-              See how it works
+            <Link prefetch={false} className="button-secondary" href="/docs/getting-started/installation">
+              Install manually
             </Link>
+            <Link prefetch={false} className="button-tertiary" href="/docs/getting-started/why-planr">See how it works</Link>
           </div>
           <div className="trust-row" aria-label="Product guarantees">
             <span><ShieldCheck aria-hidden="true" /> Local by default</span>
@@ -51,7 +54,7 @@ export default function HomePage() {
         <div className="hero-terminal">
           <div className="hero-terminal__glow" aria-hidden="true" />
           <div className="hero-terminal__label">
-            <span>First run</span>
+            <span>Manual first run</span>
             <span>~ 2 minutes</span>
           </div>
           <CommandBlock command="brew install instructa/tap/planr" label="Install" />
@@ -64,6 +67,8 @@ export default function HomePage() {
         </div>
       </section>
 
+      <AgentSetupPanel />
+
       <section className="agent-shell" aria-labelledby="agent-title">
         <div className="agent-heading">
           <p>Works with your coding agent</p>
@@ -71,27 +76,15 @@ export default function HomePage() {
           <span>Planr gives every client the same durable plan, task graph, and evidence trail.</span>
         </div>
         <div className="agent-grid">
-          <Link prefetch={false} className="agent-card" href="/docs/integrations/codex">
-            <span className="agent-card__mark">
-              <Image src="/agents/codex.svg" width={80} height={80} alt="Codex logo" />
-            </span>
-            <span><strong>Codex</strong><small>Plugin, MCP, hooks, and roles</small></span>
-            <ArrowRight aria-hidden="true" />
-          </Link>
-          <Link prefetch={false} className="agent-card" href="/docs/integrations/claude-code">
-            <span className="agent-card__mark">
-              <Image src="/agents/claude.svg" width={80} height={80} alt="Claude logo" />
-            </span>
-            <span><strong>Claude Code</strong><small>Plugin and project-scoped MCP</small></span>
-            <ArrowRight aria-hidden="true" />
-          </Link>
-          <Link prefetch={false} className="agent-card" href="/docs/integrations/cursor">
-            <span className="agent-card__mark">
-              <Image src="/agents/cursor.svg" width={80} height={80} alt="Cursor logo" />
-            </span>
-            <span><strong>Cursor</strong><small>MCP, agents, skills, and hooks</small></span>
-            <ArrowRight aria-hidden="true" />
-          </Link>
+          {agentRecipeList.map((recipe) => (
+            <Link key={recipe.id} prefetch={false} className="agent-card" href={recipe.integrationUrl}>
+              <span className="agent-card__mark">
+                <Image src={recipe.logoPath} width={80} height={80} alt={recipe.logoAlt} />
+              </span>
+              <span><strong>{recipe.displayName}</strong><small>{recipe.cardSummary}</small></span>
+              <ArrowRight aria-hidden="true" />
+            </Link>
+          ))}
         </div>
       </section>
 

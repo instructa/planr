@@ -8,7 +8,7 @@ use crate::cli::{
 use crate::integrations::{cursor_deeplink, install_snippet, mcp_json_config};
 use crate::model::LinkKind;
 use crate::planpack::{build_plan_body, product_plan_files, project_pack_files};
-use crate::rolefiles::{agent_roles, cursor_skills};
+use crate::rolefiles::{agent_roles, cursor_skills, install_artifact_paths};
 use crate::util::{
     append_line, command_exists, format_item, format_project, now_string, print_json, short_id,
     worker_id, write_if_missing,
@@ -966,19 +966,26 @@ impl App {
         };
         if args.dry_run {
             if args.no_mcp {
-                println!(
-                    "# Plugin-style install for {client}: subagent roles and skills only, no MCP config."
-                );
-                for (relative, _) in agent_roles(client) {
-                    println!("{relative}");
-                }
-                if client == "cursor" {
-                    for (relative, _) in cursor_skills() {
-                        println!("{relative}");
+                let contract = match client {
+                    "codex" => {
+                        "no project MCP, roles, or skills; workflow skills come from the Codex plugin"
                     }
-                }
+                    "claude" => {
+                        "project subagent roles; no project MCP or skills; workflow skills come from the Claude Code plugin"
+                    }
+                    "cursor" => "project subagent roles and skills; no project MCP",
+                    _ => unreachable!(),
+                };
+                println!("# {client} --no-mcp: {contract}.");
             } else {
                 println!("{}", install_snippet(client, &self.db_path));
+            }
+            println!("# Non-dry install reconciles these repository artifacts:");
+            for path in install_artifact_paths(client, !args.no_mcp, !args.no_hooks) {
+                println!("{path}");
+            }
+            if args.no_hooks {
+                println!("# --no-hooks: no project hooks will be reconciled.");
             }
             return Ok(());
         }
@@ -1039,8 +1046,7 @@ impl App {
                 "skills": skill_paths,
             });
             let mut human = if args.no_mcp {
-                "cursor integration written plugin-style (subagent roles, skills; no MCP config)"
-                    .to_string()
+                "cursor project subagent roles and skills written (no MCP config)".to_string()
             } else {
                 let deeplink = cursor_deeplink();
                 payload["deeplink"] = json!(deeplink);
@@ -1054,10 +1060,12 @@ impl App {
             hooks_human(&mut human);
             self.emit(payload, human)
         } else {
-            let mut human = if args.no_mcp {
-                format!("{client} subagent roles written (no MCP config)")
-            } else {
-                format!("{client} integration written")
+            let mut human = match (client, args.no_mcp) {
+                ("codex", true) => "codex install completed (no MCP config, project roles, or project skills; Codex plugin owns workflow skills)".to_string(),
+                ("codex", false) => "codex project MCP snippet written (Codex plugin owns workflow skills)".to_string(),
+                ("claude", true) => "claude project subagent roles written (no MCP config or project skills; Claude Code plugin owns workflow skills)".to_string(),
+                ("claude", false) => "claude integration written (project MCP config and subagent roles; Claude Code plugin owns workflow skills)".to_string(),
+                _ => unreachable!(),
             };
             let mut payload = json!({"client": client, "path": mcp_path, "agents": agent_paths});
             if let Some(hooks) = &hook_install {

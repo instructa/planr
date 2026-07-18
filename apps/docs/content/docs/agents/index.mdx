@@ -1,0 +1,26 @@
+---
+title: For Agents
+description: Set up Planr safely, remember one public skill, and hand autonomous work to a bounded loop.
+---
+
+You do not need to learn Planr's internal workflow stages. Start every normal request with `$planr`; it reads live repository state and routes your intent to planning, implementation, review, status, or recovery.
+
+<Cards>
+  <Card title="Agent Quickstart" href="/docs/agents/quickstart" description="Let Codex, Claude Code, or Cursor install and initialize Planr safely." />
+  <Card title="Prompt Recipes" href="/docs/agents/prompt-recipes" description="Copy planning, autonomous preparation, status, and recovery prompts." />
+  <Card title="Skills" href="/docs/agents/skills" description="Learn the one default entry and the advanced direct-stage boundaries." />
+  <Card title="Human Quickstart" href="/docs/getting-started/quickstart" description="Run the CLI-first five-minute path manually." />
+</Cards>
+
+<Callout type="info" title="One skill to remember">
+  Use `$planr` and describe the outcome you want. The router chooses the stage from your words and the authoritative map state.
+</Callout>
+
+## The agent journey
+
+1. Follow the [Agent Quickstart](/docs/agents/quickstart) and copy the setup prompt for your client.
+2. Check the setup receipt and reload the client when instructed.
+3. Start with one `$planr` request.
+4. For long-running autonomous work, prepare the board first and start only the generated, plan-bound loop handoff.
+
+The existing [Getting Started](/docs/getting-started) path remains the canonical manual journey. Both paths operate on the same local project, plans, map, logs, reviews, and approvals.

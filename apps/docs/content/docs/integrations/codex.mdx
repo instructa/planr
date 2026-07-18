@@ -3,21 +3,12 @@ title: Codex
 description: Add Planr skills and project-scoped MCP support to Codex.
 ---
 
-## Install the Codex plugin
+<AgentRecipe client="codex" />
 
-```bash
-codex plugin marketplace add instructa/planr
-codex plugin add planr@planr
-```
+## Technical details
 
-The plugin supplies Planr skills. From your project root, preview and then install the project MCP configuration and hooks:
+The plugin supplies all ten Planr workflow skills. It does not install project agents. The project installer owns only the MCP snippet and hooks.
 
-```bash
-planr install codex --dry-run
-planr install codex
-planr doctor --client codex
-```
+Use `--no-mcp` if MCP is already managed elsewhere; Codex then reconciles hooks only and still writes no project roles or skills. Add `--no-hooks` to omit hooks too. Use `--force` only after reviewing the dry-run.
 
-Use `--no-mcp` if MCP is already managed elsewhere, `--no-hooks` to omit hooks, or `--force` to replace generated Planr files after reviewing the dry-run.
-
-For a CLI-shaped prompt instead of MCP tools, run `planr prompt cli --client codex`. Continue with the shared [full lifecycle](/docs/getting-started/full-lifecycle).
+For a CLI-shaped prompt instead of MCP tools, run `planr prompt cli --client codex`. Continue with the shared [Agent Prompt Recipes](/docs/agents/prompt-recipes) or [full lifecycle](/docs/getting-started/full-lifecycle). The recipe above is rendered from the typed contract shared with the Agent Quickstart, landing page, and verification.

@@ -4,12 +4,13 @@ This is the canonical inventory that maps shipped public surfaces to repository 
 
 ## Published route inventory
 
-The site currently owns 55 MDX routes. Next.js also emits the landing page and framework support routes during the production build.
+The site currently owns 59 MDX routes. Next.js also emits the landing page and framework support routes during the production build.
 
 | Section | Published routes |
 | --- | --- |
 | Documentation | `/docs` |
 | Getting started | `/docs/getting-started`, `/docs/getting-started/why-planr`, `/docs/getting-started/installation`, `/docs/getting-started/quickstart`, `/docs/getting-started/full-lifecycle`, `/docs/getting-started/choose-your-interface` |
+| For Agents | `/docs/agents`, `/docs/agents/quickstart`, `/docs/agents/prompt-recipes`, `/docs/agents/skills` |
 | Integrations | `/docs/integrations`, `/docs/integrations/codex`, `/docs/integrations/claude-code`, `/docs/integrations/cursor`, `/docs/integrations/generic-mcp`, `/docs/integrations/cli-only` |
 | Concepts | `/docs/concepts`, `/docs/concepts/local-first-model`, `/docs/concepts/plans-and-map`, `/docs/concepts/graph-and-readiness`, `/docs/concepts/picks-and-leases`, `/docs/concepts/evidence-and-context`, `/docs/concepts/reviews-and-approvals`, `/docs/concepts/recovery-packages-and-closure` |
 | Guides | `/docs/guides`, `/docs/guides/daily-worker-loop`, `/docs/guides/parallel-coordination`, `/docs/guides/handoff-and-resume`, `/docs/guides/review-and-fix-loops`, `/docs/guides/recover-interrupted-work`, `/docs/guides/packages-and-reuse`, `/docs/guides/recipes` |
@@ -24,6 +25,7 @@ The site currently owns 55 MDX routes. Next.js also emits the landing page and f
 | --- | --- | --- |
 | Promise, users, non-goals | `docs/planr-spec/PRODUCT_SPEC.md` | `/docs/getting-started/why-planr` |
 | Install, first success, full lifecycle | manifests, installers, `src/cli.rs`, E2E tests | `/docs/getting-started/installation`, `/docs/getting-started/quickstart`, `/docs/getting-started/full-lifecycle` |
+| Agent setup, public routing, and prompt recipes | typed client/prompt contracts and installed Planr skills | `/docs/agents`, `/docs/agents/quickstart`, `/docs/agents/prompt-recipes`, `/docs/agents/skills` |
 | Local-first authority and boundaries | product/data specs, `src/storage/` | `/docs/concepts/local-first-model` |
 | Product plans, build plans, maps | `src/planpack.rs`, `src/app/commands.rs` | `/docs/concepts/plans-and-map` |
 | Items, links, statuses, readiness | `src/model.rs`, `src/app/repository/item.rs`, `src/app/lease.rs` | `/docs/concepts/graph-and-readiness` |
@@ -56,6 +58,7 @@ The executable and schema sources decide exact inventory. Editorial pages explai
 | --- | --- | --- |
 | Homebrew, install script, npm, source build | release manifests, `scripts/install.sh`, npm wrapper | `/docs/getting-started/installation` |
 | Interface selection and client differences | integration descriptors and installers | `/docs/getting-started/choose-your-interface`, `/docs/integrations` |
+| Agent-led setup and autonomous handoff | typed onboarding prompts and Planr goal/loop contracts | `/docs/agents/quickstart`, `/docs/agents/prompt-recipes` |
 | Codex | Codex manifest, generated role/install assets | `/docs/integrations/codex` |
 | Claude Code | Claude manifest, generated role/install assets | `/docs/integrations/claude-code` |
 | Cursor | Cursor manifest, role/skill/install assets | `/docs/integrations/cursor` |
@@ -81,7 +84,7 @@ The executable and schema sources decide exact inventory. Editorial pages explai
 
 ## Audit completion checklist
 
-- [x] All 55 current MDX routes are explicitly inventoried.
+- [x] All 59 current MDX routes are explicitly inventoried.
 - [x] Every public product, CLI, MCP, HTTP, data, client, contributor, and operations surface has a current target and canonical source owner.
 - [x] Generated CLI and MCP inventories are separated from editorial guidance and mechanically checked.
 - [x] Retired aliases are isolated in `apps/docs/redirects.mjs` and resolve to a current route.

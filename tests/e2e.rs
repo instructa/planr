@@ -225,6 +225,11 @@ fn mcp_contract_install_fixtures_and_cli_docs_do_not_drift() {
         .success();
 
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    planr()
+        .arg("--version")
+        .assert()
+        .success()
+        .stdout(format!("planr {}\n", env!("CARGO_PKG_VERSION")));
     let fixture: Value =
         serde_json::from_slice(&fs::read(root.join("docs/fixtures/mcp-contract.json")).unwrap())
             .unwrap();
@@ -9011,7 +9016,7 @@ fn http_json(response: &str) -> Value {
 #[test]
 fn planr_native_skills_are_packaged_and_cli_first() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    for skill in [
+    let skills = [
         "planr",
         "planr-goal",
         "planr-loop",
@@ -9022,7 +9027,8 @@ fn planr_native_skills_are_packaged_and_cli_first() {
         "planr-review",
         "planr-status",
         "planr-summary",
-    ] {
+    ];
+    for skill in skills {
         let path = root
             .join("plugins/planr/skills")
             .join(skill)
@@ -9066,6 +9072,29 @@ fn planr_native_skills_are_packaged_and_cli_first() {
         claude_marketplace.contains("./plugins/planr"),
         "Claude marketplace must point at the plugins/planr subdirectory"
     );
+    let codex_manifest: Value = serde_json::from_slice(
+        &fs::read(root.join("plugins/planr/.codex-plugin/plugin.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(codex_manifest["skills"], "./skills/");
+    assert!(
+        codex_manifest.get("agents").is_none(),
+        "Codex plugin must provide skills without claiming project agents"
+    );
+    let cursor_manifest: Value =
+        serde_json::from_slice(&fs::read(root.join(".cursor-plugin/plugin.json")).unwrap())
+            .unwrap();
+    assert_eq!(cursor_manifest["skills"], "./plugins/planr/skills/");
+    assert_eq!(cursor_manifest["agents"].as_array().unwrap().len(), 2);
+    for skill in skills {
+        assert!(
+            root.join("plugins/planr/skills")
+                .join(skill)
+                .join("SKILL.md")
+                .exists(),
+            "Claude plugin convention must discover skill {skill}"
+        );
+    }
     for agent in ["planr-worker", "planr-reviewer"] {
         assert!(
             root.join("plugins/planr/agents")
@@ -9134,8 +9163,7 @@ fn project_init_and_install_provision_loop_agent_roles() {
             .exists()
     );
 
-    // Plugin-style install: --no-mcp writes subagent roles and skills but no
-    // MCP config, for setups that use skills and agents without MCP.
+    // Cursor owns project roles and skills even when MCP is omitted.
     let no_mcp = tempdir().unwrap();
     let no_mcp_db = no_mcp.path().join(".planr/planr.sqlite");
     planr()
@@ -9239,6 +9267,270 @@ fn project_init_and_install_provision_loop_agent_roles() {
             .join(".planr/integrations/codex-mcp.toml")
             .exists()
     );
+}
+
+#[test]
+fn client_install_responsibilities_are_exact() {
+    let full_contracts: [(&str, &[&str], &[&str]); 3] = [
+        (
+            "codex",
+            &[".planr/integrations/codex-mcp.toml", ".codex/hooks.json"],
+            &[
+                ".codex/agents/planr-worker.toml",
+                ".codex/skills/planr/SKILL.md",
+            ],
+        ),
+        (
+            "claude",
+            &[
+                ".mcp.json",
+                ".claude/agents/planr-worker.md",
+                ".claude/agents/planr-reviewer.md",
+                ".claude/settings.json",
+            ],
+            &[".claude/skills/planr/SKILL.md"],
+        ),
+        (
+            "cursor",
+            &[
+                ".cursor/mcp.json",
+                ".cursor/agents/planr-worker.md",
+                ".cursor/agents/planr-reviewer.md",
+                ".cursor/skills/planr/SKILL.md",
+                ".cursor/skills/planr-goal/SKILL.md",
+                ".cursor/skills/planr-loop/SKILL.md",
+                ".cursor/skills/planr-verify-web/SKILL.md",
+                ".cursor/skills/planr-task-graph/SKILL.md",
+                ".cursor/skills/planr-plan/SKILL.md",
+                ".cursor/skills/planr-work/SKILL.md",
+                ".cursor/skills/planr-review/SKILL.md",
+                ".cursor/skills/planr-status/SKILL.md",
+                ".cursor/skills/planr-summary/SKILL.md",
+                ".cursor/hooks.json",
+                ".cursor/hooks/planr-evidence-guard.sh",
+            ],
+            &[],
+        ),
+    ];
+    for (client, present, absent) in full_contracts {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join(".planr/planr.sqlite");
+        let db_arg = db.to_str().unwrap();
+        planr()
+            .current_dir(dir.path())
+            .args(["--db", db_arg, "project", "init", "Install Contract"])
+            .assert()
+            .success();
+        let dry_run = planr()
+            .current_dir(dir.path())
+            .args(["--db", db_arg, "install", client, "--dry-run"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let dry_run = String::from_utf8(dry_run).unwrap();
+        for path in present {
+            assert!(
+                dry_run.contains(path),
+                "planr install {client} --dry-run must preview {path}: {dry_run}"
+            );
+            assert!(
+                !dir.path().join(path).exists(),
+                "planr install {client} --dry-run must not write {path}"
+            );
+        }
+        for path in absent {
+            assert!(
+                !dry_run.contains(path),
+                "planr install {client} --dry-run must not claim {path}: {dry_run}"
+            );
+        }
+        planr()
+            .current_dir(dir.path())
+            .args(["--db", db_arg, "install", client])
+            .assert()
+            .success();
+        for path in present {
+            assert!(
+                dir.path().join(path).exists(),
+                "planr install {client} must provision {path}"
+            );
+        }
+        for path in absent {
+            assert!(
+                !dir.path().join(path).exists(),
+                "planr install {client} must not provision {path}"
+            );
+        }
+    }
+
+    let no_mcp_contracts: [(&str, &[&str], &[&str], &str); 3] = [
+        (
+            "codex",
+            &[".codex/hooks.json"],
+            &[
+                ".planr/integrations/codex-mcp.toml",
+                ".codex/agents/planr-worker.toml",
+                ".codex/skills/planr/SKILL.md",
+            ],
+            "no project MCP, roles, or skills",
+        ),
+        (
+            "claude",
+            &[
+                ".claude/agents/planr-worker.md",
+                ".claude/agents/planr-reviewer.md",
+                ".claude/settings.json",
+            ],
+            &[".mcp.json", ".claude/skills/planr/SKILL.md"],
+            "project subagent roles; no project MCP or skills",
+        ),
+        (
+            "cursor",
+            &[
+                ".cursor/agents/planr-worker.md",
+                ".cursor/agents/planr-reviewer.md",
+                ".cursor/skills/planr/SKILL.md",
+                ".cursor/hooks.json",
+                ".cursor/hooks/planr-evidence-guard.sh",
+            ],
+            &[".cursor/mcp.json"],
+            "project subagent roles and skills; no project MCP",
+        ),
+    ];
+    for (client, present, absent, dry_run_contract) in no_mcp_contracts {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join(".planr/planr.sqlite");
+        let db_arg = db.to_str().unwrap();
+        planr()
+            .current_dir(dir.path())
+            .args(["--db", db_arg, "project", "init", "No MCP Contract"])
+            .assert()
+            .success();
+        let dry_run = planr()
+            .current_dir(dir.path())
+            .args(["--db", db_arg, "install", client, "--no-mcp", "--dry-run"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let dry_run = String::from_utf8(dry_run).unwrap();
+        assert!(dry_run.contains(dry_run_contract), "{dry_run}");
+        for path in present {
+            assert!(
+                dry_run.contains(path),
+                "planr install {client} --no-mcp --dry-run must preview {path}: {dry_run}"
+            );
+        }
+        for path in absent {
+            assert!(
+                !dry_run.contains(path),
+                "planr install {client} --no-mcp --dry-run must not claim {path}: {dry_run}"
+            );
+        }
+        planr()
+            .current_dir(dir.path())
+            .args(["--db", db_arg, "install", client, "--no-mcp"])
+            .assert()
+            .success();
+        for path in present {
+            assert!(
+                dir.path().join(path).exists(),
+                "planr install {client} --no-mcp must provision {path}"
+            );
+        }
+        for path in absent {
+            assert!(
+                !dir.path().join(path).exists(),
+                "planr install {client} --no-mcp must not provision {path}"
+            );
+        }
+    }
+
+    planr()
+        .args(["install", "codex", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Codex installs hooks only"))
+        .stdout(predicate::str::contains("subagent roles and skills only").not());
+
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let install_contract = fs::read_to_string(root.join("docs/MCP_CONTRACT.md")).unwrap();
+    for required in [
+        "complete client-owned MCP, role, skill, and hook-reconciliation paths",
+        "Codex reconciles hooks only",
+        "Claude Code writes standalone roles and hooks but no project skills",
+        "Cursor writes roles, all ten skills, and hooks",
+        "`--no-hooks` is the independent hook opt-out",
+        "neither path writes Planr project roles or project skills",
+    ] {
+        assert!(
+            install_contract.contains(required),
+            "canonical install contract is missing: {required}"
+        );
+    }
+    let skills_doc = fs::read_to_string(root.join("docs/SKILLS.md")).unwrap();
+    assert!(skills_doc.contains(
+        "writes the provider-neutral .planr/agents.toml registry; it does not generate Codex roles"
+    ));
+    assert!(!skills_doc.contains("generates canonical native Codex roles"));
+}
+
+#[test]
+fn public_examples_use_the_router_and_only_plan_bound_goal_drivers() {
+    fn collect_public_docs(path: &std::path::Path, files: &mut Vec<std::path::PathBuf>) {
+        if path.is_file() {
+            if matches!(
+                path.extension().and_then(|extension| extension.to_str()),
+                Some("md" | "mdx" | "json")
+            ) {
+                files.push(path.to_path_buf());
+            }
+            return;
+        }
+        for entry in fs::read_dir(path).unwrap() {
+            collect_public_docs(&entry.unwrap().path(), files);
+        }
+    }
+
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = vec![root.join("README.md")];
+    for public_root in ["docs", "apps/docs/content", "plugins/planr"] {
+        collect_public_docs(&root.join(public_root), &mut files);
+    }
+    for path in files {
+        let body = fs::read_to_string(&path).unwrap();
+        assert!(
+            !body.contains("Use $planr-loop."),
+            "{} teaches an unprepared standalone loop",
+            path.display()
+        );
+        for stale_install_claim in [
+            "no MCP configuration at all",
+            "generates canonical native Codex roles",
+            "Plugin-style install: write subagent roles and skills only",
+        ] {
+            assert!(
+                !body.contains(stale_install_claim),
+                "{} contains stale install guidance: {stale_install_claim}",
+                path.display()
+            );
+        }
+        for line in body
+            .lines()
+            .filter(|line| line.contains("/goal Use $planr"))
+        {
+            assert!(
+                line.contains("/goal Use $planr-loop on plan "),
+                "{} teaches a non-plan-bound /goal driver: {line}",
+                path.display()
+            );
+        }
+    }
+    let readme = fs::read_to_string(root.join("README.md")).unwrap();
+    assert!(readme.contains("Remember one public entry point: `$planr`"));
 }
 
 #[test]

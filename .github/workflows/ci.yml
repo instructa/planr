@@ -51,6 +51,30 @@ jobs:
       - name: Replay documented onboarding against this repository
         run: pnpm docs:verify-onboarding
 
+      - name: Verify agent routes and prompt contracts
+        run: |
+          pnpm docs:verify-agent-journey
+          pnpm docs:verify-agent-landing
+          pnpm --filter @planr/docs verify:agent-markdown
+
+      - name: Verify browser interactions and accessibility
+        run: |
+          pnpm docs:start > /tmp/planr-docs-server.log 2>&1 &
+          docs_server_pid=$!
+          trap 'kill "$docs_server_pid"' EXIT
+          for attempt in $(seq 1 120); do
+            if curl --fail --silent http://127.0.0.1:3000/llms.txt >/dev/null; then
+              break
+            fi
+            if ! kill -0 "$docs_server_pid" 2>/dev/null; then
+              sed -n '1,200p' /tmp/planr-docs-server.log
+              exit 1
+            fi
+            sleep 0.25
+          done
+          curl --fail --silent http://127.0.0.1:3000/llms.txt >/dev/null
+          CHROME_PATH="$(command -v google-chrome)" PLANR_DOCS_URL=http://127.0.0.1:3000 pnpm docs:verify-shell
+
       - name: Verify documented graph semantics against this repository
         run: pnpm docs:verify-concepts
 
