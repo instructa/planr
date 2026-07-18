@@ -15,10 +15,8 @@ const Website = Cloudflare.Website.StaticSite(
 
     return {
       name: `planr-docs-${stage}`,
-      command: "pnpm run build:deploy",
-      outdir: ".open-next/assets",
-      main: ".alchemy-worker/worker.js",
-      bundle: false,
+      command: "pnpm run build",
+      outdir: "out",
       domain: stage === "prod" ? productionDomain : undefined,
       compatibility: {
         date: "2026-04-24",
@@ -26,6 +24,7 @@ const Website = Cloudflare.Website.StaticSite(
       },
       assets: {
         htmlHandling: "auto-trailing-slash",
+        notFoundHandling: "404-page",
       },
       env: {
         NEXT_PUBLIC_SITE_URL: siteUrl,

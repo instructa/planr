@@ -7,7 +7,7 @@ import process from 'node:process';
 
 const appRoot = path.resolve(import.meta.dirname, '..');
 const contentRoot = path.join(appRoot, 'content', 'docs');
-const nextBin = path.join(appRoot, 'node_modules', 'next', 'dist', 'bin', 'next');
+const wranglerBin = path.join(appRoot, 'node_modules', 'wrangler', 'bin', 'wrangler.js');
 
 async function collectMdxFiles(directory = contentRoot) {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -35,16 +35,16 @@ async function availablePort() {
 
 async function waitForServer(baseUrl, child, output) {
   for (let attempt = 0; attempt < 120; attempt += 1) {
-    if (child.exitCode !== null) throw new Error(`Next exited early.\n${output.join('')}`);
+    if (child.exitCode !== null) throw new Error(`Wrangler exited early.\n${output.join('')}`);
     try {
       const response = await fetch(`${baseUrl}/llms.txt`);
       if (response.ok) return;
     } catch {
-      // The production server is still starting.
+      // The production-shaped static server is still starting.
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error(`Timed out waiting for Next.\n${output.join('')}`);
+  throw new Error(`Timed out waiting for Wrangler.\n${output.join('')}`);
 }
 
 function pageContract(file) {
@@ -63,7 +63,15 @@ async function main() {
   const port = await availablePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const output = [];
-  const child = spawn(process.execPath, [nextBin, 'start', '--port', String(port)], {
+  const child = spawn(process.execPath, [
+    wranglerBin,
+    'dev',
+    '--config',
+    'wrangler.jsonc',
+    '--port',
+    String(port),
+    '--local',
+  ], {
     cwd: appRoot,
     env: { ...process.env, NEXT_TELEMETRY_DISABLED: '1' },
     stdio: ['ignore', 'pipe', 'pipe'],

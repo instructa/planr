@@ -77,7 +77,7 @@ The executable and schema sources decide exact inventory. Editorial pages explai
 | Rust, docs, semantic, browser, accessibility gates | tests, scripts, CI workflows | `/docs/contributing/testing` |
 | Product release and publication | `scripts/release.sh`, release workflow, `docs/RELEASE.md` | `/docs/operations/release` |
 | Version synchronization and SQLite upgrades | release script, manifests, `src/storage/schema.rs` | `/docs/operations/versioning-and-migrations` |
-| Alchemy/OpenNext docs build and Cloudflare deployment | `apps/docs/alchemy.run.ts`, Next/OpenNext config, environment contract | `/docs/operations/docs-deployment` |
+| Alchemy static docs build and Cloudflare deployment | `apps/docs/alchemy.run.ts`, Next static export, environment contract | `/docs/operations/docs-deployment` |
 | Runtime diagnosis | docs scripts, source loader, deployment config | `/docs/operations/health-and-diagnostics` |
 | Docs and product rollback boundaries | immutable deployment contract, schema owner, release policy | `/docs/operations/rollback` |
 | Ownership, freshness, redirects, coverage | this matrix, docs contract, IA, redirect inventory, CI | `/docs/operations/documentation-governance` |

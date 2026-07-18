@@ -45,7 +45,7 @@ jobs:
       - name: Build documentation
         run: pnpm docs:build
 
-      - name: Build Cloudflare Worker deployment artifact
+      - name: Build Cloudflare static deployment artifact
         run: pnpm docs:verify-deployment
 
       - name: Replay documented onboarding against this repository

@@ -94,9 +94,9 @@ Rejected for this scope:
 - TanStack Start: AgentRig proves it is viable, but it adds routing/build decisions that Planr does not otherwise own and is not needed for a documentation-only app.
 - A bespoke Rust-rendered site or the `planr-routing/website` static implementation: neither supplies the requested polished docs authoring/search system.
 
-### DOC-ADR-003: Deploy with Alchemy and OpenNext on Cloudflare Workers
+### DOC-ADR-003: Deploy direct static assets with Alchemy on Cloudflare
 
-Use an Alchemy v2 Effect stack and OpenNext as the committed deployment owner. `Cloudflare.Website.StaticSite` runs the OpenNext build, uploads its prebuilt Worker with `bundle: false`, and serves the generated assets. Bind `docs.planr.so` only when the Alchemy stage is `prod`; development and preview stages use generated URLs. The Cloudflare zone must already exist in the authenticated account. Local credentials live in the Alchemy profile, shared state uses `Cloudflare.state()`, and CI verifies the OpenNext Worker artifact without deploying it.
+Use an Alchemy v2 Effect stack as the committed deployment owner. Next.js exports every human and agent-readable route, Fumadocs search runs from a build-time Orama database in the browser, and `Cloudflare.Website.StaticSite` serves the generated files directly with no application Worker. Bind `planr.so` only when the Alchemy stage is `prod`; development and preview stages use generated URLs. The Cloudflare zone must already exist in the authenticated account. Local credentials live in the Alchemy profile, shared state uses `Cloudflare.state()`, and CI verifies the complete static artifact and Wrangler configuration without deploying it. This avoids making public documentation availability depend on a paid Worker CPU allowance.
 
 ### DOC-ADR-004: Use Fumadocs primitives before copying components
 
