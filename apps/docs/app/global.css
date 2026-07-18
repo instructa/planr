@@ -57,6 +57,12 @@
   background-color: #fff !important;
 }
 
+/* Shiki's GitHub Dark comment token misses WCAG AA against our darker code
+   surface. Override only that token while preserving the rest of the theme. */
+.dark #nd-page figure code span[style*="--shiki-dark:#6A737D"] {
+  --shiki-dark: #9aa8a2 !important;
+}
+
 ::selection {
   background: color-mix(in oklab, var(--color-fd-primary) 28%, transparent);
 }
