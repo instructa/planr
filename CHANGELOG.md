@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-07-18
+
 ### Fixed
 
 - Locked the client provisioning contract in CLI help, generated reference, docs, and E2E tests: Codex installs project MCP/hooks but no project roles or skills; Claude Code installs project MCP/standalone roles/hooks while its plugin owns skills; Cursor installs project MCP/roles/skills/hooks. `--no-mcp` skips only MCP, and `--no-hooks` independently skips hooks.
