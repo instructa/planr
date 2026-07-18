@@ -97,7 +97,7 @@ Each named section also has its own index route. The application additionally ow
 
 ## Redirect policy
 
-`apps/docs/redirects.mjs` is the one executable inventory of retired public site aliases. `apps/docs/next.config.mjs` returns that inventory from Next.js `redirects()`, so production serves permanent redirects. The maintenance verifier enforces unique sources, current destinations, absence of alias/source collisions, and documentation of both sides here.
+`apps/docs/redirects.mjs` is the one executable inventory of retired public site aliases. `apps/docs/worker.mjs` consumes that inventory and returns permanent redirects while preserving query strings; Alchemy derives the exact worker-first paths from the same inventory. The maintenance verifier enforces unique sources, current destinations, absence of alias/source collisions, and documentation of both sides here.
 
 The inventory covers these retired route families:
 

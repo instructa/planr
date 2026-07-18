@@ -150,6 +150,7 @@ if (live) {
     const response = await fetch(`${baseUrl}${page.route}`);
     const body = await response.text();
     assert.equal(response.status, 200, `${page.route} returned ${response.status}`);
+    assert.equal(response.headers.get('x-planr-edge'), null, `${page.route} unexpectedly invoked the edge worker`);
     assert.ok(body.includes('id="nd-page"') && body.includes('<h1'), `${page.route} did not render the docs shell`);
     checkedRoutes.push(page.route);
   }
@@ -158,7 +159,14 @@ if (live) {
     const response = await fetch(`${baseUrl}${source}`, { redirect: 'manual' });
     assert.equal(response.status, 308, `${source} did not return a permanent redirect`);
     assert.equal(response.headers.get('location'), destination, `${source} returned the wrong redirect destination`);
+    assert.equal(response.headers.get('x-planr-edge'), 'legacy-redirect', `${source} bypassed the redirect worker`);
   }
+
+  const queryRedirect = legacyRedirects[0];
+  const query = '?utm_source=legacy&mode=agent';
+  const queryResponse = await fetch(`${baseUrl}${queryRedirect.source}${query}`, { redirect: 'manual' });
+  assert.equal(queryResponse.status, 308, 'query-bearing legacy URL was not permanent');
+  assert.equal(queryResponse.headers.get('location'), `${queryRedirect.destination}${query}`, 'legacy redirect did not preserve its query string');
 
   const searchCases = [
     ['installation', '/docs/getting-started/installation'],
@@ -171,7 +179,20 @@ if (live) {
     const response = await fetch(`${baseUrl}/api/search?query=${encodeURIComponent(query)}`);
     const body = await response.text();
     assert.equal(response.status, 200, `search failed for ${query}`);
+    assert.match(response.headers.get('content-type') ?? '', /^application\/json; charset=utf-8$/i, 'search returned the wrong content type');
+    assert.equal(response.headers.get('x-planr-edge'), 'agent-asset', 'search bypassed the agent MIME worker');
     assert.ok(body.includes(expectedRoute), `search for ${query} omitted ${expectedRoute}`);
+  }
+
+  for (const [route, expectedType] of [
+    ['/docs/agents/quickstart.md', 'text/markdown; charset=utf-8'],
+    ['/llms.txt', 'text/markdown; charset=utf-8'],
+    ['/llms-full.txt', 'text/markdown; charset=utf-8'],
+  ]) {
+    const response = await fetch(`${baseUrl}${route}`);
+    assert.equal(response.status, 200, `${route} returned ${response.status}`);
+    assert.equal(response.headers.get('content-type'), expectedType, `${route} returned the wrong content type`);
+    assert.equal(response.headers.get('x-planr-edge'), 'agent-asset', `${route} bypassed the agent MIME worker`);
   }
 
   const missing = await fetch(`${baseUrl}/release-readiness-missing-route`);
@@ -189,6 +210,9 @@ if (live) {
     searchCases: searchCases.length,
     custom404: true,
     sitemapRoutes: routeMap.size,
+    humanRoutesBypassedWorker: checkedRoutes.length,
+    queryPreservingRedirect: true,
+    agentContentTypes: true,
   };
 }
 

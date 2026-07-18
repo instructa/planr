@@ -2,6 +2,8 @@ import * as Alchemy from "alchemy";
 import * as AdoptPolicy from "alchemy/AdoptPolicy";
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Effect from "effect/Effect";
+// @ts-expect-error The executable redirect inventory is intentionally shared with Node verification scripts.
+import { legacyRedirects } from "./redirects.mjs";
 
 const productionDomain = "planr.so";
 
@@ -17,6 +19,7 @@ const Website = Cloudflare.Website.StaticSite(
       name: `planr-docs-${stage}`,
       command: "pnpm run build",
       outdir: "out",
+      main: "worker.mjs",
       domain: stage === "prod" ? productionDomain : undefined,
       compatibility: {
         date: "2026-04-24",
@@ -25,6 +28,13 @@ const Website = Cloudflare.Website.StaticSite(
       assets: {
         htmlHandling: "auto-trailing-slash",
         notFoundHandling: "404-page",
+        runWorkerFirst: [
+          ...legacyRedirects.map(({ source }: { source: string }) => source),
+          "/docs/*.md",
+          "/api/search",
+          "/llms.txt",
+          "/llms-full.txt",
+        ],
       },
       env: {
         NEXT_PUBLIC_SITE_URL: siteUrl,
