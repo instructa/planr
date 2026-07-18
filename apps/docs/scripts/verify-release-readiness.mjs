@@ -114,7 +114,7 @@ assert.doesNotMatch(coverage, /\b(?:TODO|TBD|FIXME)\b|lorem ipsum|under construc
 for (const route of routeMap.keys()) assert.ok(coverage.includes(`\`${route}\``), `coverage matrix omits ${route}`);
 
 const rootReadme = await readFile(path.join(repositoryRoot, 'README.md'), 'utf8');
-assert.ok(rootReadme.includes('[`apps/docs`](apps/docs/README.md)') && rootReadme.includes('http://localhost:3000/docs'), 'root README lacks an actionable docs entry point');
+assert.ok(rootReadme.includes('[**Documentation →**](https://planr.so/docs)'), 'root README lacks an actionable docs entry point');
 
 const requirementAudit = [
   { id: 1, requirement: 'Latest stable compatible Fumadocs app, pinned and integrated', evidence: 'exact dependency gate, lockfile install, CONTRACT stack decision, CI scripts' },
