@@ -192,6 +192,14 @@ for (const redirect of legacyRedirects) {
 const nextConfig = await read('apps/docs/next.config.mjs');
 requireMarkers(nextConfig, 'Next.js static export wiring', ["output: 'export'", 'createMDX()', 'withMDX(config)']);
 
+const rootLayout = await read('apps/docs/app/layout.tsx');
+const plausibleScript = '<script defer data-domain="planr.so" src="https://analytics.int.macherjek.com/js/script.js" />';
+assert(rootLayout.includes(plausibleScript), 'root layout must include the exact deferred Plausible script');
+assert(
+  (rootLayout.match(/https:\/\/analytics\.int\.macherjek\.com\/js\/script\.js/g) ?? []).length === 1,
+  'root layout must include the Plausible script URL exactly once',
+);
+
 const alchemyConfig = await read('apps/docs/alchemy.run.ts');
 requireMarkers(alchemyConfig, 'Alchemy deployment wiring', [
   'Alchemy.Stack(', 'Cloudflare.providers()', 'Cloudflare.state()',
@@ -242,3 +250,4 @@ console.log(`published_routes=${routeMap.size} coverage_targets=${coverageTarget
 console.log(`redirects=${legacyRedirects.length} redirect_destinations=${new Set(legacyRedirects.map(({ destination }) => destination)).size}`);
 console.log(`exact_dependencies=${Object.keys(packageJson.dependencies).length + Object.keys(packageJson.devDependencies).length}`);
 console.log(`source_contracts=${sourceChecks.length}`);
+console.log('plausible_script_contract=passed');

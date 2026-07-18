@@ -41,6 +41,9 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
+      <head>
+        <script defer data-domain="planr.so" src="https://analytics.int.macherjek.com/js/script.js" />
+      </head>
       <body className="flex min-h-screen flex-col">
         <RootProvider
           components={{ Link: NoPrefetchLink }}
