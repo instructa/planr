@@ -242,6 +242,7 @@ try {
   const home = await navigate('/');
   assert(home.h1?.includes('Give every agent a plan.'), 'Homepage hero heading is missing');
   const homeContract = await evaluate(`({
+    plausibleScripts: [...document.querySelectorAll('script[data-domain="planr.so"][src="https://analytics.int.macherjek.com/js/script.js"]')].map((script) => ({ defer: script.defer })),
     nav: [...document.querySelectorAll('header a')].map((link) => link.textContent.trim()),
     heroActions: [...document.querySelectorAll('.hero-actions a')].map((link) => ({ label: link.textContent.trim(), href: link.getAttribute('href') })),
     paths: [...document.querySelectorAll('.path-card')].length,
@@ -262,6 +263,7 @@ try {
     lifecycle: [...document.querySelectorAll('.lifecycle-preview li')].length,
     copyButton: document.querySelector('[data-testid="copy-command"]')?.getAttribute('aria-label')
   })`);
+  assert(JSON.stringify(homeContract.plausibleScripts) === JSON.stringify([{ defer: true }]), 'Homepage must render exactly one deferred Plausible script');
   assert(homeContract.nav.some((label) => label.includes('Docs')), 'Global Docs navigation is missing');
   assert(JSON.stringify(homeContract.heroActions) === JSON.stringify([
     { label: 'Set up with your agent', href: '#agent-setup' },
