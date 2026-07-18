@@ -6,6 +6,8 @@ Planr is a local-first planning and execution coordination tool for coding agent
 
 [**View the Demo →**](https://x.com/kevinkern/status/2066957434564808884?s=20)
 
+[**Documentation →**](http://localhost:3000/docs) · Source: [`apps/docs`](apps/docs/README.md)
+
 ```text
 idea -> product plan -> build plan -> map -> pick -> log -> review/evidence -> close
 ```
