@@ -54,7 +54,7 @@ for (const client of ['codex', 'claude', 'cursor']) {
   assert(quickstart.includes(`<AgentRecipe client="${client}" />`));
 }
 assert(quickstart.includes('<PromptBlock prompt="first"'));
-assert.match(quickstart, /only entry skill you need/i);
+assert.match(quickstart, /Start with the right entry/);
 assert.match(quickstart, /planr doctor --client <client> --json/);
 
 const recipes = await read('agents/prompt-recipes.mdx');

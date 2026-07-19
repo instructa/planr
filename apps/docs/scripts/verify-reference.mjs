@@ -94,6 +94,7 @@ try {
   const resources = responses[2].result.resources;
   const prompts = responses[3].result.prompts;
   const mcpPage = await readFile(path.join(docsRoot, 'content', 'docs', 'reference', 'mcp.mdx'), 'utf8');
+  const configurationPage = await readFile(path.join(docsRoot, 'content', 'docs', 'reference', 'configuration-and-storage.mdx'), 'utf8');
 
   for (const tool of tools) {
     const line = mcpPage.split('\n').find((candidate) => candidate.includes(`\`${tool.name}\``));
@@ -101,6 +102,16 @@ try {
     for (const required of tool.inputSchema.required ?? []) {
       check(line.includes(`\`${required}\``), `MCP reference records required field ${tool.name}.${required}`);
     }
+  }
+
+  for (const link of [
+    'https://switchloom.ai',
+    'https://github.com/instructa/switchloom',
+    'https://github.com/instructa/switchloom/releases/tag/v0.2.1',
+    'https://github.com/instructa/switchloom/blob/v0.2.1/README.md#setup-from-the-website',
+    'https://github.com/instructa/switchloom/blob/v0.2.1/docs/preset-composition.md#repository-lifecycle-commands',
+  ]) {
+    check(configurationPage.includes(link), `Configuration reference links external Switchloom ownership: ${link}`);
   }
   for (const resource of resources) check(mcpPage.includes(`\`${resource.uri}\``), `MCP reference covers resource ${resource.uri}`);
   for (const prompt of prompts) check(mcpPage.includes(`\`${prompt.name}\``), `MCP reference covers prompt ${prompt.name}`);

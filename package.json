@@ -23,7 +23,6 @@
     "build:native": "cargo build --release",
     "test": "cargo test",
     "pack:check": "npm pack --dry-run",
-    "routing": "cargo run --manifest-path planr-routing/Cargo.toml --",
     "docs:dev": "pnpm --filter @planr/docs dev",
     "docs:alchemy:dev": "pnpm --filter @planr/docs alchemy:dev",
     "docs:build": "pnpm --filter @planr/docs build",
@@ -45,6 +44,7 @@
     "docs:verify-release": "pnpm --filter @planr/docs verify:release",
     "docs:verify-release-live": "pnpm --filter @planr/docs verify:release-live",
     "docs:verify-clean-install": "pnpm --filter @planr/docs verify:clean-install",
+    "verify:switchloom-cross-product": "node scripts/verify-switchloom-cross-product.mjs",
     "docs:reference:generate": "cargo build --bin planr && pnpm --filter @planr/docs reference:generate",
     "docs:verify-reference": "cargo build --bin planr && pnpm --filter @planr/docs reference:check && pnpm --filter @planr/docs verify:reference"
   },

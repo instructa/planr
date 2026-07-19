@@ -1,7 +1,6 @@
 packages:
   - "."
   - "apps/*"
-  - "planr-routing"
 
 enableGlobalVirtualStore: false
 verifyDepsBeforeRun: error
@@ -13,6 +12,7 @@ overrides:
 allowBuilds:
   esbuild: true
   msgpackr-extract: true
+  msw: false
   rclone.js: true
   sharp: false
   unrs-resolver: true

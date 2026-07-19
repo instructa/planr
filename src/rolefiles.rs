@@ -1,5 +1,5 @@
 //! Static workflow role files and skills installed for supported hosts.
-//! Model selection and generated routing artifacts are owned by routing bundles.
+//! Model selection and generated routing artifacts are owned by external tools.
 
 /// Subagent role files installed into a project so loop dispatches work
 /// without the host plugin system (Codex plugins cannot register agents).

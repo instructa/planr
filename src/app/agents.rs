@@ -287,7 +287,7 @@ impl App {
     /// The `doctor` registry block. Never fails the command: absent is
     /// informational, a parse failure is a warning with the parser's line
     /// context, and a loaded registry reports counts, validation
-    /// warnings. Host artifacts are owned and verified by routing bundles.
+    /// warnings. Host artifacts are owned and verified by external tools.
     pub(crate) fn registry_doctor_value(&self) -> Result<Value> {
         let registry = match load_registry(&self.root) {
             RegistryLoad::Missing => {
@@ -503,7 +503,7 @@ impl App {
     }
 
     /// Static workflow role files for `planr install <client>`. Model and
-    /// effort pins belong to routing bundles, never to Planr Core.
+    /// effort pins belong to external routing tools, never to Planr Core.
     pub(crate) fn agent_role_contents(&self, client: &str) -> Vec<(&'static str, String)> {
         agent_roles(client)
             .iter()
@@ -640,7 +640,7 @@ impl App {
         let generic_guidance = [
             "Dispatch the selected repository profile through the active host.",
             "Treat declared model and effort as requested until effective run evidence confirms them.",
-            "Apply host-specific roles and skills only through a validated repository-local routing bundle.",
+            "Apply host-specific roles and skills only through externally generated repository declarations.",
         ];
         prompt.push_str("\n### Host dispatch\n");
         for line in generic_guidance {

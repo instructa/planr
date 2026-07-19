@@ -236,7 +236,7 @@ fn build_registry(spec: &InitSpec) -> String {
          # `planr agents check` and `planr install <client> --force`.\n\
          #\n\
          # Profiles and routes are opaque declarations. Host-specific policy\n\
-         # and repository role artifacts arrive through routing bundles.\n",
+         # and repository role artifacts arrive from external tools such as Switchloom.\n",
     );
     for profile in &spec.profiles {
         out.push_str(&format!(
@@ -456,9 +456,9 @@ impl App {
                 "path": REGISTRY_RELATIVE_PATH,
                 "created": true,
                 "mode": mode,
-                "next": ["edit .planr/agents.toml or apply a routing bundle", "planr agents check"],
+                "next": ["edit .planr/agents.toml or generate declarations with Switchloom", "planr agents check"],
             }),
-            format!("wrote provider-neutral {REGISTRY_RELATIVE_PATH}\nnext: edit it or apply a routing bundle, then run `planr agents check`"),
+            format!("wrote provider-neutral {REGISTRY_RELATIVE_PATH}\nnext: edit it or generate declarations with Switchloom, then run `planr agents check`"),
         )
     }
 

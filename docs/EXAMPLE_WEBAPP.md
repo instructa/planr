@@ -53,12 +53,11 @@ planr agents check
 planr agents list
 ```
 
-Alternatively, an external policy package can compile a strict RoutingBundle v1. Preview and apply it through the generic Core boundary:
+Alternatively, an external routing tool such as [Switchloom v0.2.1](https://github.com/instructa/switchloom/releases/tag/v0.2.1) can manage repository-local declarations and host roles outside Planr. After that external lifecycle step, Planr still sees only provider-neutral declarations:
 
 ```bash
-planr routing bundle inspect routing-bundle.json
-planr routing bundle preview routing-bundle.json
-planr routing bundle apply routing-bundle.json
+planr agents check
+planr agents list --json
 ```
 
 ## 2. Tag items by use case
@@ -101,4 +100,4 @@ planr trace item <item-id>
 
 A mismatch is recorded as advisory evidence instead of silently rewritten. Missing effective-host evidence stays unavailable and is never inferred from the registry.
 
-One-off exceptions use `planr item route <id> --set <profile>`; `--clear` restores policy resolution. See [Model Routing](MODEL_ROUTING.md) and [Routing Bundles](ROUTING_BUNDLES.md).
+One-off exceptions use `planr item route <id> --set <profile>`; `--clear` restores policy resolution. See [Model Routing](MODEL_ROUTING.md) and [External Routing Declarations](ROUTING_BUNDLES.md).

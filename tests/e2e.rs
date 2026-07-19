@@ -9125,6 +9125,42 @@ fn planr_native_skills_are_packaged_and_cli_first() {
             "retired Codex fallback remains: {removed}"
         );
     }
+    let loop_skill =
+        fs::read_to_string(root.join("plugins/planr/skills/planr-loop/SKILL.md")).unwrap();
+    assert!(
+        loop_skill.contains("Pick packets expose provider-neutral `routing.profile`; they do not expose a host-owned `routing.agent_type`"),
+        "planr-loop must document that pick packets expose routing.profile, not routing.agent_type"
+    );
+    assert!(
+        loop_skill
+            .contains("dispatch that profile identifier as the host-native role/`agent_type`"),
+        "planr-loop must use matching external profile identifiers as native agent_type"
+    );
+    assert!(
+        loop_skill.contains(
+            "If no matching repository role exists, keep the host's default dispatch contract"
+        ),
+        "planr-loop must preserve default host dispatch when no matching role exists"
+    );
+    assert!(
+        loop_skill.contains("Model, effort, profile, client, and fallback fields are advisory declarations and evidence labels only"),
+        "planr-loop must keep model/profile/fallback fields advisory"
+    );
+    assert!(
+        loop_skill.contains("attach route observations when available"),
+        "planr-loop must preserve effective route evidence recording"
+    );
+    for removed in [
+        "dispatch through the routing skill",
+        "resolved native `agent_type`",
+        "named profile's client and model",
+        "move down the `fallbacks` chain",
+    ] {
+        assert!(
+            !loop_skill.contains(removed),
+            "planr-loop reintroduced Planr-owned routing dispatch language: {removed}"
+        );
+    }
 }
 
 #[test]
@@ -9247,7 +9283,7 @@ fn project_init_and_install_provision_loop_agent_roles() {
     );
 
     // `planr install codex` is MCP-only; optional model-specific role files
-    // remain exclusively owned by externally compiled routing bundles.
+    // remain exclusively owned by external routing tools.
     let dir2 = tempdir().unwrap();
     let db2 = dir2.path().join(".planr/planr.sqlite");
     planr()

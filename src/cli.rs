@@ -26,8 +26,6 @@ pub(crate) enum Command {
     /// Inspect the agent profile registry (.planr/agents.toml) that
     /// drives advisory model routing in pick packets.
     Agents(AgentsArgs),
-    /// Inspect, preview, or apply a provider-neutral routing bundle.
-    Routing(RoutingArgs),
     Policy {
         #[command(subcommand)]
         command: PolicyCommand,
@@ -63,44 +61,6 @@ pub(crate) enum Command {
     Recover(RecoverArgs),
     Export(ExportArgs),
     Import(ImportArgs),
-}
-
-#[derive(Args, Debug)]
-pub(crate) struct RoutingArgs {
-    #[command(subcommand)]
-    pub(crate) command: RoutingCommand,
-}
-
-#[derive(Subcommand, Debug)]
-pub(crate) enum RoutingCommand {
-    Bundle(RoutingBundleArgs),
-}
-
-#[derive(Args, Debug)]
-pub(crate) struct RoutingBundleArgs {
-    #[command(subcommand)]
-    pub(crate) command: RoutingBundleCommand,
-}
-
-#[derive(Subcommand, Debug)]
-pub(crate) enum RoutingBundleCommand {
-    /// Parse and validate a bundle without inspecting repository targets.
-    Inspect(RoutingBundleFileArgs),
-    /// Show exact repository-local actions without writing.
-    Preview(RoutingBundleFileArgs),
-    /// Apply the already validated bundle transactionally inside this repository.
-    Apply(RoutingBundleFileArgs),
-}
-
-#[derive(Args, Debug)]
-pub(crate) struct RoutingBundleFileArgs {
-    pub(crate) bundle: PathBuf,
-    /// Expected signer id for a signed bundle (paired with --trusted-public-key-file).
-    #[arg(long)]
-    pub(crate) trusted_signer: Option<String>,
-    /// External Ed25519 public-key file for a signed bundle.
-    #[arg(long)]
-    pub(crate) trusted_public_key_file: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]

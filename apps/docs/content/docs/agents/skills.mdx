@@ -5,7 +5,7 @@ description: Understand the one public entry skill and the advanced stage skills
 
 ## One skill to remember
 
-`$planr` is the public router. It reads project, map, review, and approval state, combines that state with your intent, and dispatches exactly one appropriate workflow. Use it for features, fixes, plans, autonomous preparation, implementation, reviews, status, summaries, and recovery.
+`$planr` is the public router for ordinary work. It reads project, map, review, and approval state, combines that state with your intent, and dispatches exactly one appropriate workflow for features, fixes, plans, implementation, reviews, status, summaries, and recovery. Autonomous runs use the explicit `$planr-goal` then `$planr-loop` handoff.
 
 <PromptBlock prompt="first" label="Default entry" />
 
@@ -27,7 +27,7 @@ Use a direct skill only when you deliberately want its narrower boundary.
 ## Routing examples
 
 - “Use `$planr`. Plan this only; do not implement.” routes to planning.
-- “Use `$planr` to prepare this as an autonomous goal; do not implement during preparation.” routes to goal compilation.
+- “Use `$planr-goal` to prepare this as an autonomous goal; do not implement during preparation.” compiles the goal and prints the `$planr-loop` handoff.
 - “Use `$planr`. What remains blocked?” routes to status.
 - “Use `$planr`. Continue the next verified item.” routes from live readiness to work or reports the blocker.
 

@@ -19,7 +19,7 @@ planr [--db <path>] [--json] [--no-color] <command>
 | Graph execution | `item`, `link`, `pick`, `done`, `close`, `recover` |
 | Evidence and gates | `log`, `review`, `approval`, `context`, `note`, `artifact`, `event`, `trace` |
 | Inspection | `search`, `doctor`, `prime`, `debug`, `scrub` |
-| Routing and policy | `agents`, `routing`, `policy` |
+| Routing and policy | `agents`, `policy` |
 | Integration | `install`, `prompt`, `mcp`, `serve` |
 | Portability | `export`, `import`, plus low-level `map export`/`map import` |
 
@@ -30,7 +30,7 @@ The [generated CLI reference](/docs/reference/cli-generated) contains every curr
 - Set `PLANR_WORKER_ID` for stable lease ownership.
 - Use `--plan` and `--work-type` on picks instead of filtering results afterward.
 - Treat a null pick as a successful query with a `reason`, not as a process crash.
-- Preview `recover`, package import, item insert/replan/cancel, scrub, and routing bundle changes before confirmation/apply.
+- Preview `recover`, package import, item insert/replan/cancel, and scrub before confirmation/apply.
 - Record commands actually run in logs; `--cmd` does not execute its string.
 - Never parse human tables when `--json` exists.
 

@@ -16,7 +16,6 @@ mod model;
 mod planpack;
 mod rolefiles;
 mod route_audit;
-mod routing_bundle;
 mod secrets;
 mod storage;
 pub mod usage_policy;

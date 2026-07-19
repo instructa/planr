@@ -87,15 +87,13 @@ Iteration 1 reads the map and the stored contract: items already settled stay se
 
 ### Codex with `/goal`
 
-Install the plugin, initialize the repository, and optionally apply a repository routing bundle:
+Install the plugin and initialize the repository. Optional routing declarations are repository-local and may be edited directly or managed by an external tool such as [Switchloom v0.2.1](https://github.com/instructa/switchloom/releases/tag/v0.2.1) before the run:
 
 ```bash
 codex plugin marketplace add instructa/planr
 codex plugin add planr@planr
 planr project init "My Product"
-planr-routing compile balanced --host codex-openai --output routing-bundle.json
-planr routing bundle preview routing-bundle.json
-planr routing bundle apply routing-bundle.json
+planr agents check
 ```
 
 Then:
@@ -105,7 +103,7 @@ $planr-goal <your goal>          # prep: plan, map, contract, starter command
 /goal Use $planr-loop on plan <plan-id>. The loop contract is stored in planr context (tag: goal-contract).
 ```
 
-When a routing bundle is applied, the `/goal` PM follows its generated repository skill and roles. The bundle owner decides exact models, effort, role names, and fork policy; Planr only carries the resulting opaque route in pick packets. Codex Automations use the same starter line.
+When repository routing declarations exist, the `/goal` PM treats them as advisory dispatch input. The external routing owner decides exact models, effort, role names, fallback policy, and lifecycle; Planr only carries the resulting opaque route in pick packets and records observed evidence when workers provide it. Codex Automations use the same starter line.
 
 ### Claude Code
 
@@ -147,7 +145,7 @@ Any MCP-capable agent uses the same flow over `planr mcp`. Every session starts 
 
 A goal run has distinct roles with different intelligence needs. Planr represents those decisions as opaque profiles and routes; it does not choose providers, models, effort levels, fallback chains, or host-native role names.
 
-An optional routing-policy package can map planning, exploration, implementation, mechanical work, and independent review onto different cost or quality tiers. If a routing bundle generated repository roles, follow its generated instructions and verify effective child metadata because declarations alone are not proof. The official package and its host-specific caveats live under [`planr-routing`](../planr-routing/docs/MODEL_ROUTING_POLICY.md); the Core contract is documented in [Model Routing](MODEL_ROUTING.md).
+An optional external routing tool can map planning, exploration, implementation, mechanical work, and independent review onto different cost or quality tiers. If [Switchloom v0.2.1](https://github.com/instructa/switchloom/releases/tag/v0.2.1) or another repository-local process writes routing declarations or host roles, follow that tool's generated instructions outside Planr and verify effective child metadata because declarations alone are not proof. The Core contract is documented in [Model Routing](MODEL_ROUTING.md).
 
 ## Coming From Other Goal Tools
 

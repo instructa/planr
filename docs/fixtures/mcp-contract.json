@@ -103,9 +103,6 @@
     "planr recover sweep",
     "planr agents list",
     "planr agents check",
-    "planr routing bundle inspect",
-    "planr routing bundle preview",
-    "planr routing bundle apply",
     "planr item route",
     "planr trace item",
     "planr serve --port"
