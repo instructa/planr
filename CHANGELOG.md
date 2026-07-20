@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-07-20
+
+### Changed
+
+- Completed the routing-ownership hard cut: Planr Core now remains only the provider-neutral consumer of repository declarations, route resolution, route evidence, and route-audit metadata. It does not own provider policy, host bindings, generated role files, routing-bundle application, catalog publication, or lifecycle cleanup.
+- Kept Switchloom optional and external. The verified handoff fixture is Switchloom v0.2.1, which may manage repository-local routing artifacts outside Planr; Planr does not install, invoke, compile, download, apply, or uninstall Switchloom output.
+- Tightened public release wording around the standalone path: Planr works with no routing declaration, and requested-only routing metadata is never treated as proof that a model, effort, role, or fallback actually ran.
+- Audited README and routing docs so current guidance names provider-neutral declarations and evidence as Planr's boundary, while preserving historical changelog entries as historical release notes.
+
 ## [1.5.1] - 2026-07-18
 
 ### Fixed
@@ -420,7 +429,9 @@ Initial Planr product release.
 - Tag-driven release pipeline with multi-target builds (darwin/linux, arm64/x86_64) and Homebrew tap automation.
 - Skill workflow documentation for Codex, Claude Code, Cursor, and MCP-only clients.
 
-[Unreleased]: https://github.com/instructa/planr/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/instructa/planr/compare/v1.5.2...HEAD
+[1.5.2]: https://github.com/instructa/planr/compare/v1.5.1...v1.5.2
+[1.5.1]: https://github.com/instructa/planr/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/instructa/planr/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/instructa/planr/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/instructa/planr/compare/v1.3.0-alpha.1...v1.3.0
