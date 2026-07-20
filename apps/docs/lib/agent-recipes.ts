@@ -65,7 +65,7 @@ export const agentPrompts: AgentPrompts = {
   planOnly:
     'Use $planr. Create and check the smallest build plan for my request, build its map, and do not implement yet.',
   autonomousPreparation:
-    'Use $planr to prepare an autonomous goal for my request. Capture the outcome and observable proof, create and check the plan and map, store the goal contract, and return the plan-bound loop handoff. Do not implement during preparation.',
+    'Use $planr-goal to prepare an autonomous goal for my request. Capture the outcome and observable proof, create and check the plan and map, store the goal contract, and return the plan-bound loop handoff. Do not implement during preparation.',
   generatedLoopHandoff:
     '/goal Use $planr-loop on plan <plan-id>. The loop contract is stored in planr context (tag: goal-contract). Continue until the contract holds or the iteration budget is exhausted.',
   portableLoopHandoff:

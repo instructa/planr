@@ -42,7 +42,7 @@ Required groups:
 - artifact add, list, and show
 - event list and debug bundle preview
 - trace item, log add, and log read (including three-stage route observations)
-- provider-neutral RoutingBundle v1 inspection, repository-safe preview/apply, and durable application evidence
+- provider-neutral agent registry reads and route overrides
 - review annotate, ingest, artifact, evidence, and close
 - item close, context create, and search
 

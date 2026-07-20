@@ -239,8 +239,9 @@ try {
     mobile: false,
   });
 
-  const home = await navigate('/');
-  assert(home.h1?.includes('Give every agent a plan.'), 'Homepage hero heading is missing');
+  await navigate('/');
+  const homeTitle = await evaluate(`document.getElementById('home-title')?.textContent?.trim()`);
+  assert(homeTitle?.includes('Give every agent a plan.'), 'Homepage hero heading is missing');
   const homeContract = await evaluate(`({
     plausibleScripts: [...document.querySelectorAll('script[data-domain="planr.so"][src="https://analytics.int.macherjek.com/js/script.js"]')].map((script) => ({ defer: script.defer })),
     nav: [...document.querySelectorAll('header a')].map((link) => link.textContent.trim()),
@@ -450,7 +451,7 @@ try {
   })`);
   assert(JSON.stringify(agentQuickstartContract.clients) === JSON.stringify(['codex', 'claude', 'cursor']), 'Agent Quickstart client recipes are incomplete');
   assert(agentQuickstartContract.copyButtons === 4, 'Agent Quickstart prompt copy controls are incomplete');
-  assert(agentQuickstartContract.body?.includes('The only entry skill you need'), 'Agent Quickstart does not teach the public entry skill');
+  assert(agentQuickstartContract.body?.includes('Start with the right entry'), 'Agent Quickstart does not teach the public entry boundary');
   assert(agentQuickstartContract.breadcrumb === 'For Agents', 'Agent Quickstart breadcrumb did not render its collection');
   await click('[data-agent-recipe="codex"] [data-testid="copy-command"]');
   const setupPrompt = await waitFor(() => evaluate(`navigator.clipboard.readText()`), 'copied Codex setup prompt');
@@ -519,7 +520,7 @@ try {
 
   const referenceRoutes = [
     ['/docs/reference', 'Reference', ['Source-to-page coverage', 'Generated CLI help', 'Support matrix']],
-    ['/docs/reference/cli-generated', 'Generated CLI Reference', ['planr routing bundle apply', 'planr review close', 'planr recover sweep']],
+    ['/docs/reference/cli-generated', 'Generated CLI Reference', ['planr review close', 'planr recover sweep']],
     ['/docs/reference/mcp', 'MCP Reference', ['planr_pick_item', 'planr://project/map', 'planr-summary']],
     ['/docs/reference/mcp-schemas-generated', 'Generated MCP Tool Schemas', ['additionalProperties', 'planr_pick_item', 'close_target']],
     ['/docs/reference/http-api', 'Local HTTP API', ['/health', '/v1/events/stream', '/v1/reviews/{id}/close', '127.0.0.1']],

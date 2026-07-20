@@ -22,15 +22,13 @@ $planr-goal <your goal>
 
 The stop condition lives in Planr (`--tag goal-contract`), so a dead session resumes with the same starter line from zero chat context.
 
-Optionally compile and apply a repository-local Codex routing bundle before starting the driver:
+Optionally prepare repository-local routing declarations before starting the driver. Planr reads `.planr/agents.toml` and `.planr/policy.toml`; external tools such as [Switchloom v0.2.1](https://github.com/instructa/switchloom/releases/tag/v0.2.1) own any generated roles, application, or uninstall lifecycle:
 
 ```bash
-planr-routing compile balanced --host codex-openai --output routing-bundle.json
-planr routing bundle preview routing-bundle.json
-planr routing bundle apply routing-bundle.json
+planr agents check
 ```
 
-The bundle generates repository-local roles and a routing skill. Follow that generated skill exactly, restart after role changes, and confirm child metadata reports the expected model, effort, role path, and context-fork behavior. Full workflow: [Long-Running Goals](GOALS.md).
+Follow any externally generated repository role instructions outside Planr, restart after role changes when your host requires it, and confirm child metadata reports the expected model, effort, role path, and context-fork behavior. Full workflow: [Long-Running Goals](GOALS.md).
 
 ## MCP
 

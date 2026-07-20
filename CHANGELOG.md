@@ -11,15 +11,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 
 - Locked the client provisioning contract in CLI help, generated reference, docs, and E2E tests: Codex installs project MCP/hooks but no project roles or skills; Claude Code installs project MCP/standalone roles/hooks while its plugin owns skills; Cursor installs project MCP/roles/skills/hooks. `--no-mcp` skips only MCP, and `--no-hooks` independently skips hooks.
+- Removed the current routing-bundle application surface from Planr docs, generated references, tests, and release wording. Planr now documents only provider-neutral repository declarations and route evidence; optional routing lifecycle is external and repository-local, with Switchloom v0.2.0 as an external tool rather than something Planr invokes, installs, or uninstalls.
 
 ## [1.5.0] - 2026-07-17
 
-Routing policy becomes an optional package instead of a responsibility compiled into Planr Core. Planr keeps the provider-neutral declaration, evidence, and safe repository transaction boundary; `planr-routing` owns volatile model and host knowledge.
+Routing policy became an optional package instead of a responsibility compiled into Planr Core. This section is historical: the routing-bundle application boundary described here was removed in 1.5.1.
 
 ### Changed
 
-- Hard-cut opinionated model routing out of Planr Core. Core now owns only the provider-neutral registry, route resolution and evidence, plus strict RoutingBundle v1 inspect/preview/apply. The independently buildable `planr-routing` workspace package owns named policies, exact models and effort, Codex/Claude Code/Cursor/mixed-host bindings, generated roles and skills, evaluation, signing, registry data, and catalog publication.
-- Removed the legacy preset CLI, MCP tools, Rust modules, root policy fixtures, and root website ownership without aliases or compatibility layers. The replacement flow compiles a bundle with `planr-routing` and applies it through `planr routing bundle`; no command edits user configuration.
+- Hard-cut opinionated model routing out of Planr Core. At the time, Core owned the provider-neutral registry, route resolution and evidence, plus strict RoutingBundle v1 inspect/preview/apply. The independently buildable `planr-routing` workspace package owned named policies, exact models and effort, Codex/Claude Code/Cursor/mixed-host bindings, generated roles and skills, evaluation, signing, registry data, and catalog publication.
+- Removed the legacy preset CLI, MCP tools, Rust modules, root policy fixtures, and root website ownership without aliases or compatibility layers. The historical replacement flow compiled a bundle with `planr-routing` and applied it through `planr routing bundle`; no command edited user configuration.
 - Catalog entries remain deterministic, experimental, and unrecommended. Offline or caller-asserted evidence cannot promote them. Detached signatures and signed bundles require an independently supplied trusted signer and Ed25519 public key.
 - Hardened repository application against parent/child artifact collisions and rollback residue. Global Codex, Claude Code, Cursor, shell, keychain, credential, and XDG sentinels remain unchanged across bundle application.
 
@@ -34,7 +35,7 @@ Verified presets turn model routing from a hand-authored host configuration into
 - Reproducible preset evaluation through `planr agents preset evaluate`: versioned challenge tasks, Planr-read artifact hashes, task-bound outcome oracles, lifecycle thresholds, optional live-host execution, and independently pinned Ed25519 telemetry receipts. Recommendations require complete, current, trusted route and usage evidence; offline estimates and incomplete runs cannot recommend.
 - Optional signed preset registry commands (`verify`, preview-first `import`, and offline `list`) with immutable manifest-hash-addressed caching, lifecycle and compatibility checks, separately provisioned maintainer trust, and re-verification of cached content. Active projects and previously imported packs continue working when the registry is unavailable.
 - Public [Planr Preset Catalog](https://planr-test-catalog.office-35d.workers.dev/) generated from the canonical verifier and evaluation report. Repository-owned Alchemy/Cloudflare tooling builds an allowlisted static publication, deploys an isolated `test` stage, and ships restrictive response headers without storing private signing keys in the site or deployment environment.
-- Detailed guides for [preset composition](planr-routing/docs/PRESET_COMPOSITION.md), [evaluation](planr-routing/docs/PRESET_EVALUATION.md), and the [registry](planr-routing/docs/PRESET_REGISTRY.md), plus CLI, MCP-contract, architecture, and deployment documentation.
+- Historical guides covered preset composition, evaluation, and the registry, plus CLI, MCP-contract, architecture, and deployment documentation.
 
 ### Security
 

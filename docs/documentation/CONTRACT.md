@@ -13,7 +13,7 @@ When sources disagree, authors must use this order and disclose the disagreement
 1. **Product intent and invariants:** `AGENTS.md` and `docs/planr-spec/`, especially `PRODUCT_SPEC.md`, `TECH_ARCHITECTURE.md`, and `API_AND_DATA_MODEL.md`.
 2. **Released executable behavior:** compiled `planr --help` output, `src/cli.rs`, `src/app/mcp.rs`, `src/app/http.rs`, `src/model.rs`, and the tested fixture `docs/fixtures/mcp-contract.json`. Runtime sources decide whether a command, option, schema, endpoint, state, or error exists in the current release.
 3. **Distribution contract:** `Cargo.toml`, `package.json`, `pnpm-workspace.yaml`, release workflows, installers, and release tests. These decide supported versions, artifacts, operating systems, and install commands.
-4. **Existing explanatory material:** `README.md`, `docs/*.md`, `plugins/planr/skills/`, examples, and routing-package docs. These are migration inputs, not independent sources of truth.
+4. **Existing explanatory material:** `README.md`, `docs/*.md`, `plugins/planr/skills/`, and examples. These are migration inputs, not independent sources of truth.
 5. **External references:** official upstream documentation and inspected local projects may influence structure and implementation, but never define Planr behavior.
 
 If product intent is ahead of runtime, the public page must label the behavior as planned or omit it from executable instructions. If runtime is ahead of an older specification sentence, the public page documents the tested runtime and the discrepancy is added to the conflict register below.
@@ -41,7 +41,7 @@ Use these terms exactly. Prefer the lowercase form in prose unless it starts a s
 | artifact | Item-linked or project evidence such as a report, screenshot, or review file. | attachment when referring to the stored object |
 | recovery sweep | A preview/apply operation for stale, timed-out, and retryable work. | automatic retry loop |
 | package | A reusable export/import bundle of graph and optional Planr artifacts. | backup unless that is the user's intent |
-| routing bundle | A provider-neutral, validated set of repository-local routing artifacts. | model config |
+| routing declaration | Provider-neutral repository data in `.planr/agents.toml` or `.planr/policy.toml`. | model config |
 | goal contract | Durable Planr context defining the completion oracle and stop condition. | prompt-only instruction |
 
 The canonical lifecycle is always:
@@ -92,7 +92,7 @@ Use Next.js 16 App Router, Fumadocs MDX, and content under `apps/docs/content/do
 Rejected for this scope:
 
 - TanStack Start: AgentRig proves it is viable, but it adds routing/build decisions that Planr does not otherwise own and is not needed for a documentation-only app.
-- A bespoke Rust-rendered site or the `planr-routing/website` static implementation: neither supplies the requested polished docs authoring/search system.
+- A bespoke Rust-rendered site or an external routing-catalog static implementation: neither supplies the requested polished docs authoring/search system.
 
 ### DOC-ADR-003: Deploy direct static assets with Alchemy on Cloudflare
 
@@ -137,7 +137,7 @@ These findings are explicit inputs to implementation and content review.
 | --- | --- | --- |
 | GAP-001 | `docs/CLI_REFERENCE.md` says it is generated from help but omits current commands including `project delete`, `plan list`, `map export/import`, `item show/cancel`, `link remove`, `log show/list`, `review request/list/show`, `note`, and `scrub`. | Replace the list with generated/mechanically checked reference data; retain editorial detail around it. |
 | GAP-002 | `docs/planr-spec/PRODUCT_SPEC.md` still calls Rust and the HTTP server open decisions, but the repository ships a Rust binary and `planr serve`. | Document current released behavior; update product specs only in a separately scoped product-spec change. |
-| GAP-003 | `docs/ARCHITECTURE.md` describes one crate and one deployable while the root Cargo workspace includes the independent `planr-routing` member/package. | The architecture page must describe Planr Core and optional `planr-routing` ownership separately. |
+| GAP-003 | Resolved on 2026-07-18: `docs/ARCHITECTURE.md` now describes Planr as one Rust binary plus wrappers/docs, with provider-neutral routing declarations owned in Core and external routing lifecycle outside Planr. | Keep architecture ownership aligned with current runtime modules and do not reintroduce routing-package ownership wording. |
 | GAP-004 | README leads with Homebrew, while `docs/INSTALL.md` calls GitHub Releases/repo installer canonical and Homebrew preferred day-to-day. | Say “Homebrew recommended on macOS”; GitHub Releases are the canonical artifact source; npm is the cross-package-manager native-binary path. |
 | GAP-005 | The CLI npm wrapper supports Node 18, while latest Fumadocs requires Node 22. | Keep separate requirement callouts: Planr CLI Node 18; docs contributors Node 22. |
 | GAP-006 | Product personas mention Gemini CLI and generic clients, but install helpers exist only for Codex, Claude Code, and Cursor. | Give the three supported clients first-class setup pages; route Gemini/opencode/other tools through clearly labeled generic CLI or stdio MCP instructions. Do not imply a native installer. |
@@ -148,7 +148,7 @@ These findings are explicit inputs to implementation and content review.
 | GAP-011 | The requested AgentRig path is stale. | Use `agentrig-public/apps/docs` only as recorded prior art; never make it a build dependency. |
 | GAP-012 | Windows native assets are not in the public install contract. | Installation clearly labels macOS/Linux native support and WSL/source alternatives; no unsupported Windows-native promise. |
 | GAP-013 | `opencode` appears in README but is not a first-class install target. | Include it only as an example on the generic CLI/MCP page, with no plugin or installer guarantee. |
-| GAP-014 | The optional `planr-routing` package has its own CLI, catalog, policies, bindings, and website artifacts outside the core CLI reference. | Give routing its own concept/guide/reference pages and label the package optional. |
+| GAP-014 | Resolved on 2026-07-18: Planr no longer documents a routing package CLI, catalog, compiler, bundle, or application lifecycle as current product surface. | Document only provider-neutral declarations, policy checks, pick-packet routing, and route evidence; external tools such as Switchloom remain outside Planr execution. |
 
 ## Explicit exclusions
 

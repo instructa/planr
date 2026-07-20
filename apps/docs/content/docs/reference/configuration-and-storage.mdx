@@ -35,7 +35,9 @@ Precedence is explicit CLI flag, then environment, then workspace default where 
 | `.mcp.json` | Claude project MCP configuration |
 | `.cursor/mcp.json`, `.cursor/agents/`, `.cursor/skills/` | Cursor project integration |
 
-`planr install ... --dry-run` previews generated client paths. Routing bundles may write only allowlisted repository-local targets and refuse traversal, symlinks, conflicts, or user-global configuration.
+`planr install ... --dry-run` previews generated client paths. Optional routing lifecycle is external to Planr; Planr only reads repository-local provider-neutral declarations and never edits user-global routing configuration.
+
+[Switchloom](https://switchloom.ai) owns published external routing lifecycle for its [repository](https://github.com/instructa/switchloom), [v0.2.1 release](https://github.com/instructa/switchloom/releases/tag/v0.2.1), [setup quickstart](https://github.com/instructa/switchloom/blob/v0.2.1/README.md#setup-from-the-website), and [repository lifecycle docs](https://github.com/instructa/switchloom/blob/v0.2.1/docs/preset-composition.md#repository-lifecycle-commands). Follow those external docs for Switchloom commands; Planr consumes only the resulting `.planr/agents.toml`, `.planr/policy.toml`, and route evidence.
 
 ## Privacy and backup
 

@@ -54,7 +54,7 @@ Manual downloads, from-source builds, and client wiring details: [Install Guide]
 
 ## Install The Plugin (Skills)
 
-The plugin under `plugins/planr` carries the ten Planr workflow skills. Optional model-routing roles come from repository-local routing bundles. The `planr` CLI (above) is required separately.
+The plugin under `plugins/planr` carries the ten Planr workflow skills. Optional model-routing declarations live in repository-local files such as `.planr/agents.toml` and `.planr/policy.toml`; external tools may manage those files, but Planr does not install or invoke a routing engine. The `planr` CLI (above) is required separately.
 
 <a id="install-plugin-codex"></a>
 <details>
@@ -112,7 +112,7 @@ planr prompt cli
 
 ## Tell Your Agent
 
-Remember one public entry point: `$planr`. It routes the request from live Planr state, including planning-only work and autonomous-goal preparation. Stage skills are advanced surfaces selected by the router.
+Remember one public entry point: `$planr`. It routes ordinary planning and status work from live Planr state. For long autonomous runs, use the explicit two-step workflow: `$planr-goal` prepares durable state, then `$planr-loop` executes the resulting plan.
 
 Start a new product from an idea:
 
@@ -126,7 +126,7 @@ split an MVP build plan, check it, then build the Planr map. Do not implement ye
 For a long autonomous run, prepare outside the driver first. The preparation result prints a real plan id; Codex or Claude Code then starts only the plan-bound loop driver:
 
 ```text
-Use $planr to prepare an autonomous goal for the weekly overview feature.
+Use $planr-goal to prepare an autonomous goal for the weekly overview feature.
 
 /goal Use $planr-loop on plan <plan-id>. The loop contract is stored in planr
 context (tag: goal-contract).
@@ -140,7 +140,7 @@ Mid-project work (a new feature, refactor, or fix on an existing project) works 
 
 ## What's new
 
-- **1.5.0 — Optional routing policies:** Planr Core stays provider-neutral while the independently buildable `planr-routing` package owns model policies and host bindings for Codex, Claude Code, Cursor, and mixed-host setups. Start with [Routing Bundles](docs/ROUTING_BUNDLES.md), the [`planr-routing` guide](planr-routing/docs/MODEL_ROUTING_POLICY.md), and the [1.5.0 release notes](https://github.com/instructa/planr/releases/tag/v1.5.0).
+- **1.5.1 — External routing boundary:** Planr consumes provider-neutral repository declarations and route evidence only. Optional model-routing lifecycle is external, for example [Switchloom v0.2.1](https://github.com/instructa/switchloom/releases/tag/v0.2.1) managing repository-local files outside Planr. Start with [Model Routing](docs/MODEL_ROUTING.md), [Switchloom](https://switchloom.ai), the [Switchloom repository](https://github.com/instructa/switchloom), its tagged [setup quickstart](https://github.com/instructa/switchloom/blob/v0.2.1/README.md#setup-from-the-website) and [lifecycle docs](https://github.com/instructa/switchloom/blob/v0.2.1/docs/preset-composition.md#repository-lifecycle-commands), and the [Changelog](CHANGELOG.md).
 - **1.4.0 — Verified presets:** Added policy-driven composition, evaluation, signed registry evidence, and the public catalog. See the [1.4.0 release notes](https://github.com/instructa/planr/releases/tag/v1.4.0).
 - **1.3.0 — Native host hooks:** Added automatic session-state injection and loop recovery for supported hosts. See the [Hooks guide](docs/HOOKS.md) and [1.3.0 release notes](https://github.com/instructa/planr/releases/tag/v1.3.0).
 

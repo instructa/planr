@@ -3,7 +3,7 @@ title: Architecture and Ownership
 description: Put changes in Planr's canonical runtime, storage, integration, or documentation owner.
 ---
 
-Planr V1 has one Rust binary, an independently buildable `planr-routing` workspace package, distribution wrappers, and one Next.js documentation application. Ownership follows behavior, not whichever file is easiest to edit.
+Planr V1 has one Rust binary, distribution wrappers, and one Next.js documentation application. Ownership follows behavior, not whichever file is easiest to edit.
 
 ## Runtime owners
 
@@ -18,7 +18,7 @@ Planr V1 has one Rust binary, an independently buildable `planr-routing` workspa
 | SQLite schema and additive upgrades | `src/storage/schema.rs` |
 | Row mapping and data access | `src/storage/rows.rs`, `src/app/repository/` |
 | Install metadata and MCP schemas | `src/integrations.rs` |
-| Routing policy, host artifacts, and bundles | `planr-routing/` plus `src/routing_bundle.rs` |
+| Provider-neutral agent registry and route evidence | `src/agents.rs`, `src/route_audit.rs`, `src/app/agents.rs` |
 
 Do not copy a shared mutation into each transport. Do not add catch-all `common`, `shared`, or broad utility modules. A new module must name a durable behavior or data boundary.
 

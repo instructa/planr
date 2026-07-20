@@ -28,12 +28,6 @@ Resolution order is per-item override, work type, plan, then default route. Unkn
 
 Workers may report observed routing with logs and route-audit evidence. Requested-only values never become effective proof; missing effective evidence remains explicitly unavailable.
 
-Host-specific model policies and generated repository roles are optional. The `planr-routing` workspace package compiles them into RoutingBundle v1, and Core safely previews and applies that bundle:
+Host-specific model policies, generated repository roles, and uninstall/application lifecycle are external to Planr. [Switchloom](https://switchloom.ai) [v0.2.1](https://github.com/instructa/switchloom/releases/tag/v0.2.1) can manage repository-local routing artifacts from its [repository](https://github.com/instructa/switchloom), [setup quickstart](https://github.com/instructa/switchloom/blob/v0.2.1/README.md#setup-from-the-website), and [repository lifecycle docs](https://github.com/instructa/switchloom/blob/v0.2.1/docs/preset-composition.md#repository-lifecycle-commands), but Planr does not install, invoke, compile, apply, or uninstall Switchloom output. After an external tool or operator changes `.planr/agents.toml` or `.planr/policy.toml`, run `planr agents check` and capture observed route evidence through `planr log add` or `planr done`.
 
-```bash
-planr-routing compile balanced --host codex-openai --output routing-bundle.json
-planr routing bundle preview routing-bundle.json
-planr routing bundle apply routing-bundle.json
-```
-
-Bundle application is restricted to the repository. Planr never edits user configuration such as `~/.codex/config.toml`. See [Routing Bundles](ROUTING_BUNDLES.md).
+The hard boundary is provider-neutral: Planr consumes declarations and evidence; hosts and external routing tools decide whether any requested model, effort, role, or fallback actually ran. See [External Routing Declarations](ROUTING_BUNDLES.md).

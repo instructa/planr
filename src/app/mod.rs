@@ -26,7 +26,6 @@ mod render;
 mod repository;
 mod review;
 mod review_workspace;
-mod routing;
 mod surfaces;
 
 pub(crate) use flow::LogInput;
@@ -97,7 +96,6 @@ impl App {
     pub(crate) fn dispatch(&self, command: Command) -> Result<()> {
         match command {
             Command::Agents(args) => self.agents(args.command),
-            Command::Routing(args) => self.routing(args.command),
             Command::Policy { command } => self.policy(command),
             Command::Project(args) => self.project(args.command),
             Command::Plan(args) => self.plan(args.command),
