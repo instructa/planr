@@ -7,6 +7,10 @@ use crate::util::{collect_rows, item_id, print_json, short_id, worker_id};
 use anyhow::{Result, bail};
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
+use std::env;
+use std::io::{IsTerminal, Write, stdout};
+use std::thread;
+use std::time::Duration;
 
 mod context;
 mod evidence;
@@ -423,11 +427,89 @@ impl App {
             .collect()
     }
 
-    pub(crate) fn map_show(&self, plan: Option<&str>) -> Result<()> {
+    pub(crate) fn map_show(
+        &self,
+        plan: Option<&str>,
+        view: crate::cli::MapViewArg,
+        full: bool,
+    ) -> Result<()> {
+        Self::validate_map_detail(view, full)?;
         let value = self.map_value(plan)?;
         if self.json {
             return self.emit(value, String::new());
         }
+        let human = self.render_map_human(&value, view, full)?;
+        self.emit(value, human)
+    }
+
+    pub(crate) fn map_watch(&self, args: crate::cli::MapWatchArgs) -> Result<()> {
+        Self::validate_map_detail(args.view, args.full)?;
+        if self.json {
+            bail!(
+                "refusing JSON map watch: use `planr map show --json` for snapshots or `planr serve` with `/v1/events/stream` for machine event streaming"
+            );
+        }
+
+        let clear_screen = !args.no_clear
+            && stdout().is_terminal()
+            && env::var("TERM").ok().as_deref() != Some("dumb");
+        let mut previous = None;
+        let mut polls = 0u64;
+        let mut frames = 0u64;
+        loop {
+            let value = self.map_value(args.plan.as_deref())?;
+            let key = serde_json::to_string(&value)?;
+            if previous.as_deref() != Some(key.as_str()) {
+                frames += 1;
+                let human = self.render_map_human(&value, args.view, args.full)?;
+                let view = match args.view {
+                    crate::cli::MapViewArg::Tree => "tree",
+                    crate::cli::MapViewArg::Diagram => "diagram",
+                };
+                let scope = args
+                    .plan
+                    .as_deref()
+                    .map(|plan| format!(" · plan {plan}"))
+                    .unwrap_or_default();
+                let mut output = stdout().lock();
+                if clear_screen {
+                    write!(output, "\x1b[2J\x1b[H")?;
+                }
+                writeln!(
+                    output,
+                    "watching map · {view}{scope} · every {}ms · update {frames} · Ctrl-C to stop",
+                    args.interval_ms
+                )?;
+                writeln!(output)?;
+                writeln!(output, "{human}")?;
+                output.flush()?;
+                previous = Some(key);
+            }
+
+            polls += 1;
+            let settled = value["settled"].as_u64() == value["total"].as_u64();
+            if (args.until_settled && settled)
+                || args.iterations.is_some_and(|limit| polls >= limit)
+            {
+                return Ok(());
+            }
+            thread::sleep(Duration::from_millis(args.interval_ms));
+        }
+    }
+
+    fn validate_map_detail(view: crate::cli::MapViewArg, full: bool) -> Result<()> {
+        if full && !matches!(view, crate::cli::MapViewArg::Diagram) {
+            bail!("`--full` requires `--view diagram`");
+        }
+        Ok(())
+    }
+
+    fn render_map_human(
+        &self,
+        value: &Value,
+        view: crate::cli::MapViewArg,
+        full: bool,
+    ) -> Result<String> {
         let project_name = self
             .default_project()
             .map(|project| project.name)
@@ -458,8 +540,21 @@ impl App {
             .map(|lane| lane.into_iter().map(|item| item.id).collect())
             .unwrap_or_default();
         let cycles = self.graph_cycles().unwrap_or_default();
-        let human = super::render::render_map(&project_name, &items, &edges, &critical, &cycles);
-        self.emit(value, human)
+        let human = match view {
+            crate::cli::MapViewArg::Tree => {
+                super::render::render_map(&project_name, &items, &edges, &critical, &cycles)
+            }
+            crate::cli::MapViewArg::Diagram => super::render::render_diagram_map(
+                &project_name,
+                &items,
+                &edges,
+                &critical,
+                &cycles,
+                full,
+            ),
+        };
+        let human = super::render::colorize_map(&human, self.color);
+        Ok(human)
     }
 
     /// `plan` narrows the map to one plan's items and the links among them —

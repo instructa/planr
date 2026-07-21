@@ -9,7 +9,7 @@ description: Invoke Planr reliably and navigate its complete generated command r
 planr [--db <path>] [--json] [--no-color] <command>
 ```
 
-`--db` selects an explicit SQLite database. Otherwise `PLANR_DB` wins, then Planr discovers `.planr/planr.sqlite` from the workspace. Use `--json` for scripts and agent calls; human output can change presentation without changing the JSON contract.
+`--db` selects an explicit SQLite database. Otherwise `PLANR_DB` wins, then Planr discovers `.planr/planr.sqlite` from the workspace. Use `--json` for scripts and agent calls; human output can change presentation without changing the JSON contract. In particular, `map show --view diagram` and `map watch` are exclusively human-supervision surfaces and coding agents must not invoke them. Agents use the default tree or `map show --json`. Interactive map output uses ANSI state colors automatically. `--no-color`, `NO_COLOR`, `TERM=dumb`, redirected output, and JSON keep it plain.
 
 ## Command families
 

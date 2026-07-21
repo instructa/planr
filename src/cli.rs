@@ -237,11 +237,60 @@ pub(crate) struct MapShowArgs {
     /// Only show items and links belonging to this plan (plan id)
     #[arg(long)]
     pub(crate) plan: Option<String>,
+    /// Human output layout. `diagram` is for human supervision only; coding agents should use `tree` or `--json`.
+    #[arg(long, value_enum, default_value_t = MapViewArg::Tree)]
+    pub(crate) view: MapViewArg,
+    /// Show the complete multi-line node details (diagram view only).
+    #[arg(long)]
+    pub(crate) full: bool,
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct MapWatchArgs {
+    /// Only watch items and links belonging to this plan (plan id)
+    #[arg(long)]
+    pub(crate) plan: Option<String>,
+    /// Human-only observation layout. Coding agents should use `map show --json` instead.
+    #[arg(long, value_enum, default_value_t = MapViewArg::Diagram)]
+    pub(crate) view: MapViewArg,
+    /// Show the complete multi-line node details (diagram view only).
+    #[arg(long)]
+    pub(crate) full: bool,
+    /// Poll interval in milliseconds.
+    #[arg(
+        long,
+        default_value_t = 1000,
+        value_parser = clap::value_parser!(u64).range(100..)
+    )]
+    pub(crate) interval_ms: u64,
+    /// Append changed frames instead of clearing an interactive terminal.
+    #[arg(long)]
+    pub(crate) no_clear: bool,
+    /// Exit after rendering a fully settled scoped map.
+    #[arg(long)]
+    pub(crate) until_settled: bool,
+    /// Bound polling for deterministic smoke tests.
+    #[arg(
+        long,
+        hide = true,
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
+    pub(crate) iterations: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Default, ValueEnum)]
+pub(crate) enum MapViewArg {
+    #[default]
+    Tree,
+    Diagram,
 }
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum MapCommand {
+    /// Inspect map state. The diagram view is for humans; coding agents should use the default tree or JSON.
     Show(MapShowArgs),
+    /// Human-only live observer. Coding agents should use `map show --json` or the event stream.
+    Watch(MapWatchArgs),
     Build(MapBuildArgs),
     Lane(MapLaneArgs),
     Pressure,

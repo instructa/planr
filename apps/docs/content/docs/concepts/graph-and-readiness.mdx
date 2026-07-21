@@ -30,6 +30,27 @@ The direct lifecycle is `pending → ready → picked → closed`; `running` is 
 
 For readiness links, only an upstream `closed` or `closed_partial` status satisfies `blocks` and `hands_to`. A `cancelled` item counts as settled in aggregate progress, but it does **not** satisfy either readiness link; downstream remains pending until the graph is explicitly adapted. This prevents cancellation from silently authorizing dependent work.
 
+Coding agents use the compact default `planr map show` tree or, preferably, `planr map show --json`. They must not invoke the diagram renderer. When a person is supervising a branched workflow, the optional diagram view renders the same scoped map as boxes and labeled routes:
+
+```bash
+planr map show --view diagram
+planr map show --plan <plan-id> --view diagram
+planr map show --plan <plan-id> --view diagram --full
+```
+
+This is exclusively a human-supervision surface. Diagram nodes are condensed by default to at most two content lines in `ICON ITEM-ID → TITLE` form. An active dependency renders as red `blocks`; after its upstream reaches `closed` or `closed_partial`, the same stored edge renders as neutral `then`. Open, failed, and cancelled upstream items remain active `blocks`. The compact tree keeps the underlying kind explicit as `blocks✓` when satisfied, and structured output always remains `kind: "blocks"`. Humans can add `--full` when they need status words, complete wrapped titles, worker ownership, critical-lane markers, and downstream pressure. Shared joins, disconnected components, and cycle warnings remain visible in either detail mode. Interactive terminals color ready, active, review, closed, blocked, failed, pending, and cancelled states automatically. Use `--no-color` or `NO_COLOR` for plain output. The renderer does not create another graph representation: `tree` remains the default, SQLite remains authoritative, and JSON output is unchanged by diagram detail.
+
+For a person to observe agents from a second terminal, watch the whole map or one plan scope:
+
+```bash
+planr map watch
+planr map watch --plan <plan-id>
+planr map watch --plan <plan-id> --until-settled
+planr map watch --plan <plan-id> --full
+```
+
+Watch defaults to the condensed diagram view, polls once per second, and redraws only after graph state changes. `--full`, `--view tree`, `--interval-ms`, and `--no-clear` adjust the human presentation; Ctrl-C stops it. Watch is read-only and human-only. Coding agents must not invoke it; they use `planr map show --json` for structured snapshots or `planr serve` with `/v1/events/stream` for an event stream.
+
 ```bash
 planr map show --json
 planr map status --json

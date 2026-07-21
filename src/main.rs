@@ -48,6 +48,7 @@ fn run() -> Result<()> {
     }
     let conn = open_db(&db_path)?;
     ensure_schema(&conn)?;
-    let app = App::new(conn, root, db_path, cli.json);
+    let color = util::color_enabled(cli.no_color, cli.json);
+    let app = App::new(conn, root, db_path, cli.json, color);
     app.dispatch(cli.command)
 }

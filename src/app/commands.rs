@@ -228,8 +228,11 @@ impl App {
         match command.unwrap_or(MapCommand::Show(crate::cli::MapShowArgs {
             json: false,
             plan: None,
+            view: crate::cli::MapViewArg::Tree,
+            full: false,
         })) {
-            MapCommand::Show(args) => self.map_show(args.plan.as_deref()),
+            MapCommand::Show(args) => self.map_show(args.plan.as_deref(), args.view, args.full),
+            MapCommand::Watch(args) => self.map_watch(args),
             MapCommand::Build(args) => {
                 let plan = self.get_plan(&args.from)?;
                 let created = self.seed_items_from_plan(&plan)?;

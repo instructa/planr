@@ -3,11 +3,12 @@ use predicates::prelude::*;
 use rusqlite::Connection;
 use serde_json::{Value, json};
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::Command as StdCommand;
+use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tempfile::tempdir;
 
 fn planr() -> Command {
@@ -5454,6 +5455,25 @@ fn map_show_renders_visual_dag_tree_and_state_line() {
         .get_output()
         .stdout
         .clone();
+    let explicit_tree = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "map",
+            "show",
+            "--view",
+            "tree",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(
+        output, explicit_tree,
+        "the explicit tree view must be byte-identical to the default"
+    );
     let human = String::from_utf8(output).unwrap();
     assert!(
         human.contains("Graph View: 0/3 done (0%) | ready 1 | active 0 | in_review 0 | blocked 2"),
@@ -5487,6 +5507,520 @@ fn map_show_renders_visual_dag_tree_and_state_line() {
         value["counts"]["ready"], 1,
         "blocked downstream items must not count as ready"
     );
+}
+
+#[test]
+fn map_show_diagram_renders_shared_routes_and_preserves_json_contract() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "project",
+            "init",
+            "Diagram View",
+        ])
+        .assert()
+        .success();
+
+    let root_a = create_test_item(dir.path(), &db, "Root A", "root a");
+    let root_b = create_test_item(dir.path(), &db, "Root B", "root b");
+    let join = create_test_item_after(dir.path(), &db, "Shared join", "join", &root_a);
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "link",
+            "add",
+            &root_b,
+            &join,
+            "--type",
+            "hands_to",
+        ])
+        .assert()
+        .success();
+
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "map",
+            "show",
+            "--view",
+            "diagram",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let human = String::from_utf8(output).unwrap();
+    assert!(human.contains("── Diagram View · WORKFLOW MAP"), "{human}");
+    assert_eq!(human.matches("component ").count(), 1, "{human}");
+    assert!(human.contains("┌────────────────"), "{human}");
+    assert!(human.contains("blocks ─▶"), "{human}");
+    assert!(human.contains("hands_to ─▶"), "{human}");
+    assert!(!human.contains("READY"), "{human}");
+    assert!(!human.contains("PENDING"), "{human}");
+    assert!(human.contains(&root_a), "{human}");
+    assert!(human.contains(&root_b), "{human}");
+    assert!(human.contains(&join), "{human}");
+    let mut content_rows = 0;
+    let mut boxes = 0;
+    for line in human.lines() {
+        if line.contains('┌') {
+            content_rows = 0;
+        } else if line.contains('└') && line.contains('┘') {
+            assert!(
+                (1..=2).contains(&content_rows),
+                "compact box contained {content_rows} content rows:\n{human}"
+            );
+            boxes += 1;
+        } else if line.contains('│') && line.ends_with('│') {
+            content_rows += 1;
+        }
+    }
+    assert!(boxes >= 3, "expected compact boxes in:\n{human}");
+
+    let full = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "map",
+            "show",
+            "--view",
+            "diagram",
+            "--full",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let full = String::from_utf8(full).unwrap();
+    assert!(full.contains("○ READY"), "{full}");
+    assert!(
+        full.contains("↳ joins a node already shown above"),
+        "{full}"
+    );
+
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "map", "show", "--full"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--view diagram"));
+
+    let default_json = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "map", "show"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let diagram_json = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "map",
+            "show",
+            "--view",
+            "diagram",
+            "--full",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(default_json, diagram_json);
+
+    planr()
+        .args(["map", "show", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("for human supervision only"))
+        .stdout(predicate::str::contains(
+            "agents should use `tree` or `--json`",
+        ));
+    planr()
+        .args(["map", "watch", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Human-only live observer"))
+        .stdout(predicate::str::contains("map show --json"));
+}
+
+#[test]
+fn map_human_edges_distinguish_satisfied_dependencies_without_changing_json() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    let db_arg = db.to_str().unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db_arg, "project", "init", "Edge State"])
+        .assert()
+        .success();
+
+    let source = create_test_item(dir.path(), &db, "Source", "source");
+    let target = create_test_item_after(dir.path(), &db, "Target", "target", &source);
+    let conn = Connection::open(&db).unwrap();
+    conn.execute(
+        "UPDATE items SET status = 'closed' WHERE id = ?1",
+        [&source],
+    )
+    .unwrap();
+
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db_arg, "map", "show"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "blocks✓─▶ · pending {target}"
+        )))
+        .stdout(predicate::str::contains("blocks─▶").not());
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db_arg, "map", "show", "--view", "diagram"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("└─ then ─▶"))
+        .stdout(predicate::str::contains("└─ blocks ─▶").not());
+    planr()
+        .current_dir(dir.path())
+        .env_remove("NO_COLOR")
+        .env("TERM", "xterm")
+        .env("PLANR_FORCE_COLOR", "1")
+        .args(["--db", db_arg, "map", "show"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\x1b[2mblocks✓─▶\x1b[0m"))
+        .stdout(predicate::str::contains("\x1b[31mblocks✓─▶").not());
+
+    let json = planr()
+        .current_dir(dir.path())
+        .args(["--db", db_arg, "--json", "map", "show"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&json).unwrap();
+    assert_eq!(json["links"][0]["kind"], "blocks");
+    assert!(!serde_json::to_string(&json).unwrap().contains("blocks✓"));
+    assert!(!serde_json::to_string(&json).unwrap().contains("then"));
+
+    conn.execute(
+        "UPDATE items SET status = 'cancelled' WHERE id = ?1",
+        [&source],
+    )
+    .unwrap();
+    planr()
+        .current_dir(dir.path())
+        .env_remove("NO_COLOR")
+        .env("TERM", "xterm")
+        .env("PLANR_FORCE_COLOR", "1")
+        .args(["--db", db_arg, "map", "show", "--view", "diagram"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("└─ \x1b[31mblocks ─▶\x1b[0m"))
+        .stdout(predicate::str::contains("└─ \x1b[2mthen ─▶").not());
+}
+
+#[test]
+fn map_colors_cover_states_and_all_opt_outs_remain_plain() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    let db_arg = db.to_str().unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db_arg, "project", "init", "Color View"])
+        .assert()
+        .success();
+
+    let states = [
+        ("Ready", "ready"),
+        ("Pending", "pending"),
+        ("Picked", "picked"),
+        ("Running", "running"),
+        ("Review", "in_review"),
+        ("Blocked", "blocked"),
+        ("Closed", "closed"),
+        ("Failed", "failed"),
+        ("Cancelled", "cancelled"),
+    ];
+    let items = states
+        .iter()
+        .map(|(title, status)| (create_test_item(dir.path(), &db, title, status), *status))
+        .collect::<Vec<_>>();
+    let conn = Connection::open(&db).unwrap();
+    for (id, status) in items {
+        conn.execute(
+            "UPDATE items SET status = ?1, worker_id = CASE WHEN ?1 IN ('picked','running') THEN 'worker-color' ELSE NULL END WHERE id = ?2",
+            rusqlite::params![status, id],
+        )
+        .unwrap();
+    }
+
+    let forced = planr()
+        .current_dir(dir.path())
+        .env_remove("NO_COLOR")
+        .env("TERM", "xterm")
+        .env("PLANR_FORCE_COLOR", "1")
+        .args(["--db", db_arg, "map", "show"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let forced = String::from_utf8(forced).unwrap();
+    for token in [
+        "\x1b[36m○ ready\x1b[0m",
+        "\x1b[2m· pending\x1b[0m",
+        "\x1b[33m◎ picked\x1b[0m",
+        "\x1b[1;33m◉ running\x1b[0m",
+        "\x1b[35m◇ in_review\x1b[0m",
+        "\x1b[31m⊖ blocked\x1b[0m",
+        "\x1b[32m✓ closed\x1b[0m",
+        "\x1b[1;31m✗ failed\x1b[0m",
+        "\x1b[2m⊘ cancelled\x1b[0m",
+    ] {
+        assert!(forced.contains(token), "missing {token:?} in {forced:?}");
+    }
+
+    let plain = |extra: &[&str], envs: &[(&str, &str)]| {
+        let mut command = planr();
+        command
+            .current_dir(dir.path())
+            .env_remove("NO_COLOR")
+            .env("TERM", "xterm")
+            .env("PLANR_FORCE_COLOR", "1")
+            .args(["--db", db_arg])
+            .args(extra);
+        for (name, value) in envs {
+            command.env(name, value);
+        }
+        command
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Color View"))
+            .stdout(predicate::str::contains("\x1b[").not());
+    };
+    plain(&["--no-color", "map", "show"], &[]);
+    plain(&["map", "show"], &[("NO_COLOR", "")]);
+    plain(&["map", "show"], &[("TERM", "dumb")]);
+
+    planr()
+        .current_dir(dir.path())
+        .env_remove("NO_COLOR")
+        .env_remove("PLANR_FORCE_COLOR")
+        .env("TERM", "xterm")
+        .args(["--db", db_arg, "map", "show"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\x1b[").not());
+
+    let json_output = planr()
+        .current_dir(dir.path())
+        .env_remove("NO_COLOR")
+        .env("TERM", "xterm")
+        .env("PLANR_FORCE_COLOR", "1")
+        .args(["--db", db_arg, "--json", "map", "show"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert!(!json_output.windows(2).any(|pair| pair == b"\x1b["));
+    serde_json::from_slice::<Value>(&json_output).unwrap();
+}
+
+#[test]
+fn map_watch_observes_an_external_process_change_and_stays_machine_safe() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    let db_arg = db.to_str().unwrap().to_string();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "project", "init", "Live View"])
+        .assert()
+        .success();
+    let item = create_test_item(dir.path(), &db, "Observed work", "watch me");
+
+    let bin = assert_cmd::cargo::cargo_bin("planr");
+    let mut watcher = StdCommand::new(&bin)
+        .current_dir(dir.path())
+        .env("NO_COLOR", "1")
+        .args([
+            "--db",
+            &db_arg,
+            "map",
+            "watch",
+            "--view",
+            "tree",
+            "--interval-ms",
+            "100",
+            "--iterations",
+            "20",
+            "--no-clear",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stdout = watcher.stdout.take().unwrap();
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let reader = thread::spawn(move || {
+        let mut human = String::new();
+        let mut saw_first_update = false;
+        let mut readiness_sent = false;
+        for line in BufReader::new(stdout).lines() {
+            let line = line.unwrap();
+            saw_first_update |= line.contains("update 1");
+            if saw_first_update && line.contains("○ ready") && !readiness_sent {
+                readiness_sent = true;
+                let _ = ready_tx.send(());
+            }
+            human.push_str(&line);
+            human.push('\n');
+        }
+        human
+    });
+    if let Err(error) = ready_rx.recv_timeout(Duration::from_secs(5)) {
+        let _ = watcher.kill();
+        let _ = watcher.wait();
+        let human = reader.join().unwrap();
+        let mut stderr = String::new();
+        watcher
+            .stderr
+            .take()
+            .unwrap()
+            .read_to_string(&mut stderr)
+            .unwrap();
+        panic!(
+            "watcher did not emit its ready frame: {error}; stdout={human:?}; stderr={stderr:?}"
+        );
+    }
+
+    let pick = planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "external-agent")
+        .args(["--db", &db_arg, "--json", "pick"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let pick: Value = serde_json::from_slice(&pick).unwrap();
+    assert_eq!(pick["item"]["id"], item);
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        match watcher.try_wait().unwrap() {
+            Some(status) => break status,
+            None if Instant::now() >= deadline => {
+                let _ = watcher.kill();
+                let status = watcher.wait().unwrap();
+                let human = reader.join().unwrap();
+                let mut stderr = String::new();
+                watcher
+                    .stderr
+                    .take()
+                    .unwrap()
+                    .read_to_string(&mut stderr)
+                    .unwrap();
+                panic!(
+                    "watcher exceeded its deadline ({status}); stdout={human:?}; stderr={stderr:?}"
+                );
+            }
+            None => thread::sleep(Duration::from_millis(10)),
+        }
+    };
+    let human = reader.join().unwrap();
+    let mut stderr = String::new();
+    watcher
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    assert!(status.success(), "{stderr}");
+    assert_eq!(human.matches("watching map").count(), 2, "{human}");
+    assert!(human.contains("update 1"), "{human}");
+    assert!(human.contains("update 2"), "{human}");
+    assert!(human.contains("○ ready"), "{human}");
+    assert!(human.contains("◎ picked"), "{human}");
+    assert!(human.contains("external-agent"), "{human}");
+    assert!(!human.contains("\x1b[2J"), "{human:?}");
+
+    planr()
+        .current_dir(dir.path())
+        .env("NO_COLOR", "1")
+        .args([
+            "--db",
+            &db_arg,
+            "map",
+            "watch",
+            "--iterations",
+            "1",
+            "--no-clear",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "◎ {item} → Observed work"
+        )))
+        .stdout(predicate::str::contains("PICKED").not())
+        .stdout(predicate::str::contains("worker: external-agent").not());
+
+    planr()
+        .current_dir(dir.path())
+        .env("NO_COLOR", "1")
+        .args([
+            "--db",
+            &db_arg,
+            "map",
+            "watch",
+            "--iterations",
+            "1",
+            "--no-clear",
+            "--full",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("◎ PICKED"))
+        .stdout(predicate::str::contains("worker: external-agent"));
+
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "--json",
+            "map",
+            "watch",
+            "--iterations",
+            "1",
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("bad_request"))
+        .stdout(predicate::str::contains("/v1/events/stream"));
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "map", "watch", "--interval-ms", "99"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid value '99'"));
 }
 
 #[test]
@@ -10198,6 +10732,30 @@ fn symmetry_pack_tag_filter_plan_scoped_map_and_audit_next_command() {
     assert_eq!(scoped["total"], 2, "counts must be plan-scoped: {scoped}");
     let unscoped = run(&["map", "show"]);
     assert_eq!(unscoped["items"].as_array().unwrap().len(), 3);
+
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db", &db_arg, "map", "show", "--plan", &build_id, "--view", "diagram",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let scoped_diagram = String::from_utf8(output).unwrap();
+    for item in scoped["items"].as_array().unwrap() {
+        let id = item["id"].as_str().unwrap();
+        assert!(
+            scoped_diagram.contains(id),
+            "scoped diagram omitted {id}: {scoped_diagram}"
+        );
+    }
+    assert!(scoped_diagram.contains("blocks ─▶"), "{scoped_diagram}");
+    assert!(
+        !scoped_diagram.contains("Off-plan chore"),
+        "scoped diagram leaked an off-plan item: {scoped_diagram}"
+    );
     planr()
         .current_dir(dir.path())
         .args([

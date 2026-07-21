@@ -136,10 +136,23 @@ with log evidence, all reviews are closed complete, and a live verification log 
 the feature working in the browser. Iteration budget: 10.
 ```
 
-Mid-project work (a new feature, refactor, or fix on an existing project) works the same — it gets its own feature-scoped plan and extends the existing map. Both journeys with example prompts: [Two Journeys](docs/SKILLS.md#two-journeys-new-project-vs-existing-project). Watch progress anytime with `planr map show`.
+Mid-project work (a new feature, refactor, or fix on an existing project) works the same — it gets its own feature-scoped plan and extends the existing map. Both journeys with example prompts: [Two Journeys](docs/SKILLS.md#two-journeys-new-project-vs-existing-project). Coding agents inspect progress with the compact default `planr map show` or, preferably, `planr map show --json`. The tree preserves exact dependency vocabulary while marking satisfied edges as `blocks✓`; active `blocks` stay red. The boxed `planr map show --view diagram` renderer is exclusively for human supervision and uses neutral `then` routes once those dependencies are satisfied. Agents must not invoke it. Humans can add `--full` for complete status, title, worker, critical-lane, and pressure details. Interactive map output colors states automatically; `--no-color` and `NO_COLOR` keep it plain.
+
+To supervise an agent from a second terminal, leave the agent running in terminal A and watch its scoped graph in terminal B:
+
+```bash
+planr map watch --plan <plan-id>
+# optional: exit after every scoped item settles
+planr map watch --plan <plan-id> --until-settled
+# optional: inspect complete node details
+planr map watch --plan <plan-id> --full
+```
+
+The watcher is likewise a human-only observer. It defaults to the condensed diagram view, polls the local SQLite graph once per second, and redraws only when state changes. Coding agents must not invoke `map watch`; they should use `map show --json` snapshots or the `/v1/events/stream` SSE endpoint instead. Use Ctrl-C to stop.
 
 ## What's new
 
+- **1.6.0 — Human map observation:** Added a condensed boxed diagram, live two-terminal watching, accessible state colors, and clearer satisfied dependency routes. These views are intentionally for human supervision; agents keep using the default tree or JSON snapshots. See [Task Graph Model](docs/TASK_GRAPH_MODEL.md), [CLI Reference](docs/CLI_REFERENCE.md), and the [1.6.0 changelog](CHANGELOG.md#160---2026-07-21).
 - **1.5.2 — Standalone core, optional Switchloom:** Planr consumes provider-neutral repository declarations and route evidence only; it works without any routing files, and requested-only routing metadata is not execution proof. Optional model-routing lifecycle is external, with [Switchloom v0.2.1](https://github.com/instructa/switchloom/releases/tag/v0.2.1) verified as the repository-local handoff outside Planr. Start with [Model Routing](docs/MODEL_ROUTING.md), [Switchloom](https://switchloom.ai), the [Switchloom repository](https://github.com/instructa/switchloom), its tagged [setup quickstart](https://github.com/instructa/switchloom/blob/v0.2.1/README.md#setup-from-the-website) and [lifecycle docs](https://github.com/instructa/switchloom/blob/v0.2.1/docs/preset-composition.md#repository-lifecycle-commands), and the [Changelog](CHANGELOG.md).
 - **1.4.0 — Verified presets:** Added policy-driven composition, evaluation, signed registry evidence, and the public catalog. See the [1.4.0 release notes](https://github.com/instructa/planr/releases/tag/v1.4.0).
 - **1.3.0 — Native host hooks:** Added automatic session-state injection and loop recovery for supported hosts. See the [Hooks guide](docs/HOOKS.md) and [1.3.0 release notes](https://github.com/instructa/planr/releases/tag/v1.3.0).

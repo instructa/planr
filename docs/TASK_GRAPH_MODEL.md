@@ -60,6 +60,12 @@ planr link add <design-item> <implementation-item> --type blocks
 
 Use `blocks` for hard ordering. Use softer link types only when the product contract for that type is documented and tested.
 
+Structured output always keeps that canonical `blocks` kind. Human rendering adds
+current satisfaction state without mutating it: an upstream `closed` or
+`closed_partial` item renders as dim `blocks✓` in the compact tree and neutral `then`
+in the human-only diagram. Open, failed, and cancelled upstream items still render as
+red `blocks`; cancellation does not satisfy readiness.
+
 ## Picking
 
 Picking is the concurrency boundary:
@@ -154,6 +160,50 @@ planr log add --item <item-id> --kind verification \
 Settling commands (`done`, `close`, `review close`) report what they `unlocked` — every item that became ready because of that settlement — plus the item's `post_condition` and an evidence hint when downstream work depends on an item closed without `--cmd`/`--tests`.
 
 ## Graph Inspection
+
+Coding agents use the compact default tree or `map show --json`. They must not
+invoke the diagram renderer. The boxed workflow diagram is exclusively for a
+person scanning the graph shape and current state:
+
+```bash
+planr map show
+planr map show --view diagram
+planr map show --plan <plan-id> --view diagram
+planr map show --plan <plan-id> --view diagram --full
+```
+
+The default diagram keeps every box to at most two content lines in
+`ICON ITEM-ID → TITLE` form. It still labels readiness-blocking routes, joins,
+disconnected components, and cycles. Active dependencies use `blocks`; satisfied
+dependencies use neutral `then`. Add `--full` for the previous verbose node
+layout with status words, complete wrapped titles, critical items, downstream
+pressure, and active workers. It is only a human renderer: coding agents do not
+invoke it, the SQLite map
+remains authoritative, the default `map show` view stays `tree`, and `--json`
+returns the same projection regardless of diagram detail.
+
+Human map states are colorized automatically on an interactive terminal while
+retaining their symbols and words. `--no-color`, `NO_COLOR`, `TERM=dumb`, pipes,
+and JSON stay plain.
+
+For a person to observe an agent live, use a second terminal:
+
+```bash
+# terminal A: agent/worker continues to pick, log, review, and close work
+# terminal B:
+planr map watch --plan <plan-id>
+planr map watch --plan <plan-id> --until-settled
+planr map watch --plan <plan-id> --full
+```
+
+`map watch` is human-only; coding agents must not invoke it. Watch defaults to
+the condensed diagram, polls once per second, and redraws only
+after a canonical graph change. `--full`, `--view tree`, `--interval-ms`, and
+`--no-clear` are available for detailed, compact-tree, or append-only
+observation. It records no graph events. Agents use `map show --json` or the
+local `/v1/events/stream` SSE endpoint instead.
+Machine consumers should use JSON snapshots or the local
+`/v1/events/stream` SSE endpoint.
 
 Use critical lane for ordering risk:
 

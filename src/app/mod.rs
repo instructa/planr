@@ -36,15 +36,23 @@ pub(crate) struct App {
     pub(crate) root: PathBuf,
     pub(crate) db_path: PathBuf,
     pub(crate) json: bool,
+    pub(crate) color: bool,
 }
 
 impl App {
-    pub(crate) fn new(conn: Connection, root: PathBuf, db_path: PathBuf, json: bool) -> Self {
+    pub(crate) fn new(
+        conn: Connection,
+        root: PathBuf,
+        db_path: PathBuf,
+        json: bool,
+        color: bool,
+    ) -> Self {
         Self {
             conn,
             root,
             db_path,
             json,
+            color,
         }
     }
 }
