@@ -13,7 +13,8 @@ planr plan check <plan-id>
 planr plan audit <plan-id>
 planr plan show <plan-id>
 planr plan archive <plan-id>
-planr map show [--plan <plan-id>]
+planr map show [--plan <plan-id>] [--view tree|diagram] [--full]
+planr map watch [--plan <plan-id>] [--view tree|diagram] [--full] [--interval-ms 1000] [--no-clear] [--until-settled]
 planr map build --from <plan-id>
 planr map lane --critical
 planr map pressure
@@ -77,7 +78,7 @@ planr import <file> [--preview] [--confirm]
 planr export --out planr.json [--include-plans] [--include-logs] [--template-name "..."] [--tag tag]
 ```
 
-Global flags: `--db <path>`, `--json`, `--no-color`. They are valid in both positions: `planr --json pick` and `planr pick --json` behave identically.
+Global flags: `--db <path>`, `--json`, `--no-color`. They are valid in both positions: `planr --json pick` and `planr pick --json` behave identically. Human map output uses ANSI status colors only when stdout is an interactive terminal. `--no-color`, `NO_COLOR` (even when empty), `TERM=dumb`, redirected stdout, and JSON disable color; `PLANR_FORCE_COLOR=1` is available for compatible terminal wrappers and tests, but never overrides an explicit opt-out.
 
 ## JSON Envelope Convention
 
@@ -94,7 +95,11 @@ With `--json`, responses follow one convention so agents never guess where data 
 
 `plan audit <plan-id>` is the one-call contract verdict for a plan's map scope. JSON shape for machine consumers: top-level `holds` (bool) and `clauses[]` with `clause` (name) and `pass` (bool) — e.g. `planr plan audit <id> --json | jq '.holds, (.clauses[] | {clause, pass})'`. It evaluates four clauses with evidence: `items_settled` (open items listed), `reviews_complete` (open review items listed), `approvals_clear` (requested/denied approvals listed), and `verification_logged` (logs with `--kind verification` on scope items). The stored goal contract (`planr context --tag goal-contract` mentioning the plan id) is included; the verification clause is binding only when such a contract exists. `holds: true` means the contract is satisfied — loop agents use this as their stop condition instead of stitching the verdict together from `map status`, `log list`, and `approval list`. When the contract is open, `next` carries the exact next command derived from the first actionable gap: build the map, pick the ready review or work item (plan-scoped), resolve the blocking approval, inspect stalled leases, or log the missing verification. Also available as MCP `planr_plan_audit`.
 
-`map show --plan <plan-id>` narrows the map to one plan's items and the links among them, with plan-scoped counts — plan-scoped goal runs on shared boards audit their slice, not the whole board. An unknown plan id is an error, never a silent unscoped view. Also available on MCP `planr_map_show` (`plan`) and HTTP `GET /v1/projects/{id}/map?plan=<plan-id>`.
+`map show` defaults to the compact `tree` view used by agents and existing terminal workflows; coding agents should prefer `map show --json` when they need structured state. The tree keeps the canonical edge vocabulary visible: active dependencies render as red `blocks`, while an edge satisfied by a `closed` or `closed_partial` upstream renders as dim `blocks✓`. `map show --view diagram` is exclusively a human-supervision view and coding agents must not invoke it. It provides fixed-width boxes with at most two content lines in `ICON ITEM-ID → TITLE` form, translating satisfied `blocks` edges to neutral `then` while active or cancelled blockers remain `blocks`; `hands_to`, joins, disconnected components, and cycle warnings remain explicit. Humans can add `--full` for verbose nodes with status words, complete wrapped titles, active workers, critical-lane markers, and downstream pressure. `--full` is rejected with tree view. This is a read-only presentation over the same canonical map projection; JSON/MCP/HTTP always retain the stored `kind: "blocks"` and are identical across diagram detail choices.
+
+`map show --plan <plan-id>` narrows either human view to one plan's items and the links among them, with plan-scoped counts — plan-scoped goal runs on shared boards audit their slice, not the whole board. An unknown plan id is an error, never a silent unscoped view. Also available on MCP `planr_map_show` (`plan`) and HTTP `GET /v1/projects/{id}/map?plan=<plan-id>`.
+
+`map watch` is the read-only live companion for a second human terminal. Coding agents must not invoke it; they should use `map show --json` snapshots or `planr serve` plus `/v1/events/stream`. Watch defaults to the condensed `--view diagram`, polls every 1000 ms, compares the canonical scoped projection, and clears/redraws an interactive terminal only when graph state changes. `--full`, `--view tree`, `--plan <plan-id>`, `--interval-ms <n>` (minimum 100), `--no-clear`, and `--until-settled` control presentation and lifetime; Ctrl-C uses normal process interruption. JSON mode remains rejected because watch is intentionally human-only.
 
 `context list --tag <tag>` filters notes by the tag they were stored with (`context add --tag`), so e.g. the goal contract is recoverable with `planr context list --tag goal-contract` instead of scanning all notes.
 

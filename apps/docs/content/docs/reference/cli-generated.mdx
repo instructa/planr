@@ -433,7 +433,8 @@ Options:
 Usage: planr map [OPTIONS] [COMMAND]
 
 Commands:
-  show
+  show       Inspect map state. The diagram view is for humans; coding agents should use the default tree or JSON
+  watch      Human-only live observer. Coding agents should use `map show --json` or the event stream
   build
   lane
   pressure
@@ -455,6 +456,8 @@ Options:
 #### `planr map show`
 
 ```text
+Inspect map state. The diagram view is for humans; coding agents should use the default tree or JSON
+
 Usage: planr map show [OPTIONS]
 
 Options:
@@ -462,7 +465,29 @@ Options:
       --json
       --plan <PLAN>  Only show items and links belonging to this plan (plan id)
       --no-color     Disable color in human output
+      --view <VIEW>  Human output layout. `diagram` is for human supervision only; coding agents should use `tree` or `--json` [default: tree] [possible values: tree, diagram]
+      --full         Show the complete multi-line node details (diagram view only)
   -h, --help         Print help
+```
+
+#### `planr map watch`
+
+```text
+Human-only live observer. Coding agents should use `map show --json` or the event stream
+
+Usage: planr map watch [OPTIONS]
+
+Options:
+      --db <DB>                    Path to Planr SQLite database
+      --plan <PLAN>                Only watch items and links belonging to this plan (plan id)
+      --json                       Emit JSON output
+      --view <VIEW>                Human-only observation layout. Coding agents should use `map show --json` instead [default: diagram] [possible values: tree, diagram]
+      --full                       Show the complete multi-line node details (diagram view only)
+      --no-color                   Disable color in human output
+      --interval-ms <INTERVAL_MS>  Poll interval in milliseconds [default: 1000]
+      --no-clear                   Append changed frames instead of clearing an interactive terminal
+      --until-settled              Exit after rendering a fully settled scoped map
+  -h, --help                       Print help
 ```
 
 #### `planr map build`

@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-07-21
+
+### Added
+
+- Added a human-only boxed graph observer with `planr map show --view diagram`. Its condensed nodes keep status, id, and title to at most two content lines, while `--full` restores complete node details.
+- Added `planr map watch` for live, change-driven graph supervision from a second terminal, with plan scoping, configurable polling, optional screen clearing, and `--until-settled` support.
+
+### Changed
+
+- Added an accessible terminal palette for map states and routes, with automatic TTY detection plus `--no-color` and `NO_COLOR` opt-outs.
+- Clarified dependency progress in human output: satisfied `blocks` edges render as `blocks✓` in the agent-adjacent tree and neutral `then` routes in the diagram, while unresolved dependencies remain red `blocks` routes.
+- Documented diagram and watch output as human supervision surfaces. Coding agents continue to use the compact default tree, `planr map show --json`, or the event-stream API.
+
+### Compatibility
+
+- Kept map status, link kinds, JSON output, readiness computation, and persistence unchanged; the new labels and colors are presentation-only.
+
 ## [1.5.2] - 2026-07-20
 
 ### Changed

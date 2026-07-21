@@ -3,7 +3,11 @@ use anyhow::{Result, anyhow};
 use rusqlite::Connection;
 use serde_json::{Value, json};
 use slug::slugify;
-use std::{env, fs, path::Path};
+use std::{
+    env, fs,
+    io::{IsTerminal, stdout},
+    path::Path,
+};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -41,6 +45,37 @@ pub fn query_json(
 pub fn print_json(value: &Value) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
+}
+
+/// Resolve the process-wide human-output color policy once at startup.
+/// Explicit opt-outs always beat the force flag; redirected output stays
+/// plain unless a terminal wrapper deliberately opts in.
+pub fn color_enabled(no_color: bool, json: bool) -> bool {
+    resolve_color(
+        no_color,
+        json,
+        env::var_os("NO_COLOR").is_some(),
+        env::var("TERM").ok().as_deref(),
+        env::var("PLANR_FORCE_COLOR").ok().as_deref(),
+        stdout().is_terminal(),
+    )
+}
+
+fn resolve_color(
+    no_color: bool,
+    json: bool,
+    no_color_env: bool,
+    term: Option<&str>,
+    force: Option<&str>,
+    stdout_is_terminal: bool,
+) -> bool {
+    if no_color || json || no_color_env || term == Some("dumb") {
+        return false;
+    }
+    if force.is_some_and(|value| !value.is_empty() && value != "0") {
+        return true;
+    }
+    stdout_is_terminal
 }
 
 /// The breakdown title contract: repeated `--into` flags each carry one
@@ -286,5 +321,70 @@ pub fn mime_for_path(path: &str) -> &'static str {
         Some("zip") => "application/zip",
         Some("txt") | Some("log") => "text/plain",
         _ => "application/octet-stream",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_color;
+
+    #[test]
+    fn color_policy_prioritizes_explicit_opt_outs() {
+        assert!(resolve_color(
+            false,
+            false,
+            false,
+            Some("xterm"),
+            None,
+            true
+        ));
+        assert!(resolve_color(
+            false,
+            false,
+            false,
+            Some("xterm"),
+            Some("1"),
+            false
+        ));
+        assert!(!resolve_color(
+            true,
+            false,
+            false,
+            Some("xterm"),
+            Some("1"),
+            true
+        ));
+        assert!(!resolve_color(
+            false,
+            true,
+            false,
+            Some("xterm"),
+            Some("1"),
+            true
+        ));
+        assert!(!resolve_color(
+            false,
+            false,
+            true,
+            Some("xterm"),
+            Some("1"),
+            true
+        ));
+        assert!(!resolve_color(
+            false,
+            false,
+            false,
+            Some("dumb"),
+            Some("1"),
+            true
+        ));
+        assert!(!resolve_color(
+            false,
+            false,
+            false,
+            Some("xterm"),
+            Some("0"),
+            false
+        ));
     }
 }

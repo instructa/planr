@@ -31,7 +31,7 @@ impl App {
             let json = self.json;
             std::thread::spawn(move || {
                 let app = match crate::storage::open_db(&db_path) {
-                    Ok(conn) => App::new(conn, root, db_path, json),
+                    Ok(conn) => App::new(conn, root, db_path, json, false),
                     Err(error) => {
                         eprintln!("planr serve: database open error: {error:#}");
                         return;
