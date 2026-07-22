@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-07-22
+
+### Added
+
+- Added durable evaluation suites, runs, comparisons, and replayable evidence across CLI and MCP, including correctness, quality, performance, and regression gates.
+- Added cost-per-verified-success reporting and effort recommendations so model choices are evaluated by successful task outcomes instead of token prices alone.
+- Added resumable live-evaluation dogfood contracts with invalidation and rescoring support, preserving provenance when inputs, graders, or pricing assumptions change.
+
+### Security
+
+- Added repository leak, dependency, workflow, privacy, and forbidden-staged-file gates with BetterLeaks, Trivy, and hardened GitHub Actions permissions.
+- Sanitized temporary oracle output and cleanup paths so evaluation logs do not retain secrets or personally identifiable workspace data.
+
+### Fixed
+
+- Stabilized the live-evaluation timing fixture and pruned ignored workspace state from dependency lock evidence.
+
 ## [1.6.0] - 2026-07-21
 
 ### Added
@@ -446,7 +463,9 @@ Initial Planr product release.
 - Tag-driven release pipeline with multi-target builds (darwin/linux, arm64/x86_64) and Homebrew tap automation.
 - Skill workflow documentation for Codex, Claude Code, Cursor, and MCP-only clients.
 
-[Unreleased]: https://github.com/instructa/planr/compare/v1.5.2...HEAD
+[Unreleased]: https://github.com/instructa/planr/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/instructa/planr/compare/v1.6.0...v1.7.0
+[1.6.0]: https://github.com/instructa/planr/compare/v1.5.2...v1.6.0
 [1.5.2]: https://github.com/instructa/planr/compare/v1.5.1...v1.5.2
 [1.5.1]: https://github.com/instructa/planr/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/instructa/planr/compare/v1.4.0...v1.5.0
