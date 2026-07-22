@@ -1,5 +1,7 @@
 # Technical Architecture
 
+Eval Contract v1 is frozen in [EVAL_CONTRACT_V1.md](EVAL_CONTRACT_V1.md). Eval implementation work must preserve its ownership split: repository manifests are authored inputs, SQLite owns immutable eval evidence, and Planr map state remains authoritative for work closure.
+
 ## Architecture Goals
 
 - REQ-ARCH-001: Keep item state, picks, worker runtime state, approval gates, links, log, reviews, and events in one local SQLite source of truth.

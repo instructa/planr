@@ -1,5 +1,7 @@
 # API And Data Model
 
+Eval Contract v1, including the additive v1.1 efficiency-evidence amendment, is frozen in [EVAL_CONTRACT_V1.md](EVAL_CONTRACT_V1.md). That document owns the canonical eval manifest fields, normalized snapshot, stored objects, attempt lineage, metering basis, effective treatment identity, derived efficiency metrics, status values, reason codes, evidence identities, response examples, exit codes, database rules, and safety constraints. This file keeps the higher-level product API summary.
+
 ## Storage Locations
 
 - SQLite: authoritative map graph state, picks, contexts, logs, runs, events, search indexes.

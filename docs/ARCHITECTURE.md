@@ -49,6 +49,16 @@ Planr V1 is a single Rust binary with explicit module ownership. The crate stays
 - `src/rolefiles.rs`: static host workflow roles and Cursor skill payloads. It does not select or pin models; externally generated routing artifacts stay outside Planr ownership.
 - `src/util.rs`: small CLI-boundary utilities. Owns ids, timestamps, path helpers, output formatting, and safe file writes.
 
+## Eval Contract V1/V1.1 Ownership
+
+The frozen product contract lives in `docs/planr-spec/EVAL_CONTRACT_V1.md` until implementation promotes it into code. Its V1.1 efficiency-evidence amendment is additive and keeps the same owner split:
+
+- repository EvalSuite manifests and fixtures are authored inputs;
+- the suite loader owns validation, safe path resolution, normalization, canonical ordering, and digests;
+- SQLite owns immutable suite snapshots, runs, case results, samples, attempt lineage, metering-basis provenance, comparisons, invalidations, rescoring provenance, and eval evidence references;
+- the comparison engine owns verdicts, reason codes, matched effective-treatment compatibility, and derived failure-inclusive efficiency metrics;
+- existing map/log/review/approval state remains authoritative for work closure, so eval evidence may support a review but must never close or reopen items by itself.
+
 ## Boundary Rules
 
 - Command parsing belongs in `src/cli.rs`; process startup belongs in `src/main.rs`; command execution belongs under `src/app/`.

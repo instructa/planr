@@ -41,6 +41,7 @@ Required groups:
 - approval request, approve, deny, and list
 - artifact add, list, and show
 - event list and debug bundle preview
+- eval suite check, run, show, compare, gate, invalidate, rescore, and evidence refs
 - trace item, log add, and log read (including three-stage route observations)
 - provider-neutral agent registry reads and route overrides
 - review annotate, ingest, artifact, evidence, and close
@@ -59,6 +60,10 @@ Review feedback ingestion is advisory:
 - `planr_review_close` records the final verdict, writes a review artifact, and creates fix/follow-up review work when the verdict is not clean.
 
 HTTP mirrors the same rule: `GET /v1/reviews/:id/artifact` is read-only; `POST /v1/reviews/:id/artifact` writes an artifact explicitly.
+
+## Eval Evidence Contract
+
+`planr_eval_evidence_ref` mirrors `planr eval evidence-ref`: it attaches an eval run or comparison id to an existing log, review item, or artifact. The returned eval envelope records `closure_authority: false`; eval verdicts are audit evidence only and never close, approve, or otherwise mutate map item status.
 
 ## Install Contract
 

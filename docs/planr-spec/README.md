@@ -16,6 +16,7 @@ This package defines Planr as a production-grade, local-first planning and execu
 - AI_SPEC.md: agent behavior, prompts, context, and evals.
 - SAFETY_PRIVACY_SECURITY.md: data, privacy, security, and tool execution boundaries.
 - API_AND_DATA_MODEL.md: project, plan, map, item, log, review, and API contracts.
+- EVAL_CONTRACT_V1.md: frozen EvalSuite, evidence, v1.1 attempt-lineage and efficiency metrics, verdict, reason, CLI/MCP, database, and safety contract.
 - CLIENT_IMPLEMENTATION_SPEC.md: CLI, TUI, editor, and agent-client surfaces.
 - BACKEND_IMPLEMENTATION_SPEC.md: local service, MCP server, HTTP/SSE, and storage implementation.
 - ANALYTICS_OBSERVABILITY_SPEC.md: no-content telemetry, local logs, and diagnostics.
