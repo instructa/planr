@@ -10,6 +10,8 @@ use util::{infer_error_code, print_json};
 mod agents;
 mod app;
 mod cli;
+pub(crate) mod eval_compare;
+pub(crate) mod eval_runner;
 pub mod execution_policy;
 mod integrations;
 mod model;
@@ -23,6 +25,12 @@ mod util;
 
 fn main() {
     if let Err(err) = run() {
+        if let Some(exit) = err.downcast_ref::<app::EvalCliExit>() {
+            if !exit.emitted() {
+                eprintln!("error: {}", exit.message());
+            }
+            std::process::exit(exit.code());
+        }
         let json_mode = env::args().any(|arg| arg == "--json");
         if json_mode {
             let message = err.to_string();

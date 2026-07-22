@@ -27,10 +27,11 @@ Run the full local gate:
 scripts/ci-local.sh
 ```
 
-`scripts/ci-local.sh` also runs the external consumer E2E project when `/Users/kregenrek/projects/planr-test` exists:
+`scripts/ci-local.sh` also runs the external consumer E2E project when the sibling `planr-test` checkout exists. Override its location with `PLANR_TEST_DIR`:
 
 ```bash
-cd /Users/kregenrek/projects/planr-test
+PLANR_TEST_DIR=/path/to/planr-test scripts/ci-local.sh
+cd /path/to/planr-test
 npm test
 npm run test:npm-planr
 ```
@@ -38,10 +39,10 @@ npm run test:npm-planr
 Run local security and leak checks:
 
 ```bash
-scripts/security-local.sh
+npm run security:check
 ```
 
-This uses BetterLeaks for secret history scanning and Trivy for filesystem vulnerability, secret, and misconfiguration scanning.
+This checks tracked files for machine-specific home paths, rejects forbidden staged paths, uses BetterLeaks for secret history scanning, and runs Trivy for filesystem vulnerability, secret, and misconfiguration scanning. If Lefthook is installed, run `lefthook install` once to activate the staged-path guard for commits and pushes.
 
 ## Supply Chain
 

@@ -2,9 +2,11 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use rusqlite::Connection;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::Path;
 use std::process::Command as StdCommand;
 use std::sync::mpsc;
 use std::thread;
@@ -27,6 +29,92 @@ fn planr() -> Command {
         cmd.env_remove(var);
     }
     cmd
+}
+
+fn single_json_document(bytes: &[u8]) -> Value {
+    serde_json::from_slice(bytes).expect("stdout must be exactly one JSON document")
+}
+
+fn assert_eval_envelope(value: &Value, command: &str, ok: bool) {
+    assert_eq!(value["command"], command, "{command} command");
+    assert_eq!(value["ok"], ok, "{command} ok: {value}");
+    assert!(value.get("object").is_some(), "{command} missing object");
+    assert!(value["warnings"].is_array(), "{command} warnings");
+    assert!(value["reasons"].is_array(), "{command} reasons");
+    assert!(value.get("error").is_some(), "{command} missing error");
+    if ok {
+        assert!(value["error"].is_null(), "{command} successful error");
+    } else if value["error"].is_object() {
+        assert!(
+            value["error"]["reasons"].is_array(),
+            "{command} error.reasons"
+        );
+        assert!(
+            value["error"].get("field").is_some(),
+            "{command} error.field"
+        );
+    }
+}
+
+fn canonical_json_value(value: &Value) -> Value {
+    match value {
+        Value::Array(values) => Value::Array(values.iter().map(canonical_json_value).collect()),
+        Value::Object(object) => {
+            let mut entries = object
+                .iter()
+                .map(|(key, value)| (key.clone(), canonical_json_value(value)))
+                .collect::<Vec<_>>();
+            entries.sort_by(|left, right| left.0.cmp(&right.0));
+            let mut sorted = serde_json::Map::new();
+            for (key, value) in entries {
+                sorted.insert(key, value);
+            }
+            Value::Object(sorted)
+        }
+        scalar => scalar.clone(),
+    }
+}
+
+fn replace_json_string(value: &Value, from: &str, to: &str) -> Value {
+    match value {
+        Value::Array(values) => Value::Array(
+            values
+                .iter()
+                .map(|value| replace_json_string(value, from, to))
+                .collect(),
+        ),
+        Value::Object(object) => Value::Object(
+            object
+                .iter()
+                .map(|(key, value)| (key.clone(), replace_json_string(value, from, to)))
+                .collect(),
+        ),
+        Value::String(text) => Value::String(text.replace(from, to)),
+        scalar => scalar.clone(),
+    }
+}
+
+fn with_canonical_digest(mut value: Value) -> Value {
+    if let Some(object) = value.as_object_mut() {
+        object.remove("digest");
+    }
+    let bytes = serde_json::to_vec(&canonical_json_value(&value)).unwrap();
+    let digest = format!("sha256:{:x}", Sha256::digest(&bytes));
+    value["digest"] = json!(digest);
+    value
+}
+
+fn sha256_prefixed(bytes: &[u8]) -> String {
+    format!("sha256:{:x}", Sha256::digest(bytes))
+}
+
+fn mcp_text_value(response: &Value) -> Value {
+    serde_json::from_str(
+        response["result"]["content"][0]["text"]
+            .as_str()
+            .expect("MCP text content"),
+    )
+    .expect("MCP text content must be JSON")
 }
 
 #[test]
@@ -487,6 +575,2193 @@ fn mcp_contract_install_fixtures_and_cli_docs_do_not_drift() {
     for subcommand in ["annotate", "ingest", "artifact", "evidence", "close"] {
         assert!(review_help.contains(subcommand));
     }
+}
+
+#[test]
+fn eval_cli_and_mcp_share_one_surface() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Eval app"])
+        .assert()
+        .success();
+    let evidence_item = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "item",
+            "create",
+            "Eval evidence owner",
+            "--description",
+            "owns eval evidence refs",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let evidence_item: Value = serde_json::from_slice(&evidence_item).unwrap();
+    let evidence_item_id = evidence_item["item"]["id"].as_str().unwrap();
+    let evidence_log = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "log",
+            "add",
+            "--item",
+            evidence_item_id,
+            "--summary",
+            "Eval comparison evidence is attached here",
+            "--kind",
+            "verification",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let evidence_log: Value = serde_json::from_slice(&evidence_log).unwrap();
+    let evidence_log_id = evidence_log["log"]["id"].as_str().unwrap();
+
+    let suite = with_canonical_digest(json!({
+        "suite_id": "eval-suite",
+        "suite_version": "v1",
+        "schema_version": "eval.suite.v1",
+        "fixtures": [{"id": "fixture", "path": "fixture.json", "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"}],
+        "scorers": [{"id": "score", "version": "v1", "kind": "test"}],
+        "cases": [{
+            "case_id": "case-a",
+            "fixture_id": "fixture",
+            "fixture_ids": ["fixture"],
+            "scorer_id": "score",
+            "scorer_ids": ["score@v1"],
+            "measures": ["duration_ms", "cost_micros"],
+            "sampling": {"repetitions": 3, "warmups": 0, "seed": 1, "min_successful_samples": 3}
+        }],
+        "safety": {"allow_shell": false, "max_concurrency": 1, "allow_environment_capture": false},
+        "comparison_policy_digest": "default"
+    }));
+    let suite_digest = suite["digest"].as_str().unwrap().to_string();
+    let suite_fixture_digest = suite["fixtures"][0]["digest"].as_str().unwrap().to_string();
+    let suite_path = dir.path().join("suite.json");
+    fs::write(&suite_path, serde_json::to_vec_pretty(&suite).unwrap()).unwrap();
+    let suite_output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "suite-check",
+            "--input",
+            suite_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let suite_value = single_json_document(&suite_output);
+    assert_eval_envelope(&suite_value, "eval.suite.check", true);
+    assert_eq!(suite_value["object"]["verdict"], "valid");
+    assert_eq!(suite_value["object"]["suite"]["digest"], suite_digest);
+
+    let mut bad_suite = suite.clone();
+    bad_suite["digest"] = json!("suite-a");
+    let bad_suite_path = dir.path().join("bad-suite.json");
+    fs::write(
+        &bad_suite_path,
+        serde_json::to_vec_pretty(&bad_suite).unwrap(),
+    )
+    .unwrap();
+    let bad_suite_output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "suite-check",
+            "--input",
+            bad_suite_path.to_str().unwrap(),
+        ])
+        .assert()
+        .code(3)
+        .get_output()
+        .stdout
+        .clone();
+    let bad_suite_value = single_json_document(&bad_suite_output);
+    assert_eq!(bad_suite_value["error"]["code"], "invalid_input");
+    assert!(
+        bad_suite_value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("expected sha256")
+    );
+
+    let sample_suite_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("examples/eval/planr-lifecycle-smoke.suite.json");
+    let sample_suite_output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "suite-check",
+            "--input",
+            sample_suite_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let sample_suite_value = single_json_document(&sample_suite_output);
+    assert_eval_envelope(&sample_suite_value, "eval.suite.check", true);
+    assert_eq!(
+        sample_suite_value["object"]["suite"]["normalized_manifest"]["schema_version"],
+        "eval.suite.v1"
+    );
+    assert_eq!(
+        sample_suite_value["object"]["suite"]["digest"],
+        "sha256:65c096c54bf89c49a151321a84b28d6419aa08930c8a78ac92f0df3641a6b8ed"
+    );
+
+    let runner_fixture = dir.path().join("fixture.json");
+    let runner_fixture_bytes = br#"{"fixture":true}"#;
+    fs::write(&runner_fixture, runner_fixture_bytes).unwrap();
+    let runner_fixture_digest = sha256_prefixed(runner_fixture_bytes);
+    let runner_manifest = with_canonical_digest(json!({
+        "schema_version": "eval.suite.v1",
+        "suite_id": "runner-suite",
+        "suite_version": "v1",
+        "fixtures": [{"id": "fixture", "path": "fixture.json", "digest": runner_fixture_digest}],
+        "scorers": [{"id": "score", "version": "v1", "kind": "test"}],
+        "cases": [{
+            "case_id": "case-a",
+            "fixture_id": "fixture",
+            "fixture_ids": ["fixture"],
+            "scorer_id": "score",
+            "scorer_ids": ["score@v1"],
+            "subject": {"kind": "binary", "argv": ["/bin/echo", "ok"]},
+            "assertions": [{"kind": "exit_code", "expected": 0}],
+            "measures": ["duration_ms"],
+            "sampling": {"repetitions": 1, "warmups": 0, "seed": 1, "min_successful_samples": 1},
+            "timeout_ms": 1000,
+            "output_limit_bytes": 4096
+        }],
+        "comparison_policy": {"required_case_coverage": 1.0},
+        "safety": {"allow_shell": false, "max_concurrency": 1, "allow_environment_capture": false}
+    }));
+    let runner_suite_digest = runner_manifest["digest"].as_str().unwrap().to_string();
+    let runner_suite_path = dir.path().join("runner-suite.json");
+    fs::write(
+        &runner_suite_path,
+        serde_json::to_vec_pretty(&runner_manifest).unwrap(),
+    )
+    .unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "suite-check",
+            "--input",
+            runner_suite_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let mut altered_runner_manifest = runner_manifest.clone();
+    altered_runner_manifest["cases"][0]["subject"]["argv"] = json!(["/bin/echo", "mutated"]);
+    let altered_runner_input = json!({
+        "id": "altered-runner",
+        "suite_digest": runner_suite_digest.clone(),
+        "subject": {"kind": "binary", "revision": "altered", "argv": ["/bin/echo", "ok"]},
+        "repo_root": ".",
+        "runner_manifest": altered_runner_manifest
+    });
+    let altered_runner_path = dir.path().join("altered-runner.json");
+    fs::write(
+        &altered_runner_path,
+        serde_json::to_vec_pretty(&altered_runner_input).unwrap(),
+    )
+    .unwrap();
+    let altered_runner_output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "run",
+            "--input",
+            altered_runner_path.to_str().unwrap(),
+        ])
+        .assert()
+        .code(3)
+        .get_output()
+        .stdout
+        .clone();
+    let altered_runner_value = single_json_document(&altered_runner_output);
+    assert_eq!(altered_runner_value["error"]["code"], "invalid_input");
+    assert!(
+        altered_runner_value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("does not match frozen suite")
+    );
+    let escaped_runner_input = json!({
+        "id": "escaped-runner",
+        "suite_digest": runner_suite_digest.clone(),
+        "subject": {"kind": "binary", "revision": "escaped", "argv": ["/bin/echo", "ok"]},
+        "repo_root": dir.path().to_str().unwrap(),
+        "runner_manifest": runner_manifest.clone()
+    });
+    let escaped_runner_path = dir.path().join("escaped-runner.json");
+    fs::write(
+        &escaped_runner_path,
+        serde_json::to_vec_pretty(&escaped_runner_input).unwrap(),
+    )
+    .unwrap();
+    let escaped_runner_output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "run",
+            "--input",
+            escaped_runner_path.to_str().unwrap(),
+        ])
+        .assert()
+        .code(3)
+        .get_output()
+        .stdout
+        .clone();
+    let escaped_runner_value = single_json_document(&escaped_runner_output);
+    assert_eq!(escaped_runner_value["error"]["code"], "invalid_input");
+    assert!(
+        escaped_runner_value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("repo_root must be relative")
+    );
+
+    fs::write(&runner_fixture, br#"{"fixture":false}"#).unwrap();
+    let mutated_fixture_input = json!({
+        "id": "mutated-fixture-runner",
+        "suite_digest": runner_suite_digest.clone(),
+        "subject": {"kind": "binary", "revision": "mutated-fixture", "argv": ["/bin/echo", "ok"]},
+        "repo_root": ".",
+        "runner_manifest": runner_manifest.clone()
+    });
+    let mutated_fixture_path = dir.path().join("mutated-fixture-runner.json");
+    fs::write(
+        &mutated_fixture_path,
+        serde_json::to_vec_pretty(&mutated_fixture_input).unwrap(),
+    )
+    .unwrap();
+    let mutated_fixture_output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "run",
+            "--input",
+            mutated_fixture_path.to_str().unwrap(),
+        ])
+        .assert()
+        .code(3)
+        .get_output()
+        .stdout
+        .clone();
+    let mutated_fixture_value = single_json_document(&mutated_fixture_output);
+    assert_eq!(mutated_fixture_value["error"]["code"], "invalid_input");
+    assert!(
+        mutated_fixture_value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("digest mismatch")
+    );
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "show",
+            "run",
+            "mutated-fixture-runner",
+        ])
+        .assert()
+        .failure();
+    let no_mutated_run_rows: i64 = Connection::open(&db)
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM eval_runs WHERE id = 'mutated-fixture-runner'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(no_mutated_run_rows, 0);
+
+    let run_payload = |id: &str, value: f64, samples: usize| {
+        let baseline_attempt = |index: usize,
+                                terminal_status: &str,
+                                parent: Option<(&str, &str)>| {
+            let attempt_id = format!("attempt-baseline-{index}");
+            let mut attempt = json!({
+                "id": attempt_id,
+                "attempt_index": index,
+                "terminal_status": terminal_status,
+                "countable": true,
+                "effective_client": "codex",
+                "effective_provider": "openai",
+                "effective_runtime": "codex-cli",
+                "effective_model": "gpt-5.6-terra",
+                "effective_effort": "high",
+                "effective_profile_id": "eval-terra-high",
+                "profile_config_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+                "runner_harness_version": "supplied-evidence-v1",
+                "route_observation": {
+                    "effective": {
+                        "client": "codex",
+                        "provider": "openai",
+                        "runtime": "codex-cli",
+                        "model": "gpt-5.6-terra",
+                        "effort": "high",
+                        "profile_id": "eval-terra-high",
+                        "profile_config_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+                    },
+                    "transition_reason": "fixture"
+                },
+                "outcome": {"status": terminal_status}
+            });
+            if let Some((field, parent_id)) = parent {
+                attempt[field] = json!(parent_id);
+            }
+            attempt
+        };
+        let sample = |index: usize, measure: &str, value: Value, unit: &str, attempt: Value| {
+            let metering_basis = if value.is_null() {
+                "unavailable"
+            } else {
+                "actual_trusted"
+            };
+            json!({
+                "repetition_index": index,
+                "seed": index,
+                "measure": measure,
+                "value": value,
+                "unit": unit,
+                "source": if measure == "duration_ms" { "process" } else { "metering" },
+                "metering_basis": metering_basis,
+                "basis_source": if measure == "duration_ms" { "process" } else { "metering" },
+                "basis_confidence": if metering_basis == "actual_trusted" { "verified" } else { "unavailable" },
+                "attempt": attempt
+            })
+        };
+        let baseline_samples = vec![
+            sample(
+                0,
+                "duration_ms",
+                json!(value),
+                "ms",
+                baseline_attempt(0, "fail", None),
+            ),
+            sample(
+                1,
+                "duration_ms",
+                json!(value),
+                "ms",
+                baseline_attempt(
+                    1,
+                    "pass",
+                    Some(("retry_of_attempt_id", "attempt-baseline-0")),
+                ),
+            ),
+            sample(
+                2,
+                "duration_ms",
+                json!(value),
+                "ms",
+                baseline_attempt(
+                    2,
+                    "pass",
+                    Some(("fallback_of_attempt_id", "attempt-baseline-1")),
+                ),
+            ),
+            sample(
+                2,
+                "cost_micros",
+                Value::Null,
+                "micros",
+                baseline_attempt(
+                    2,
+                    "pass",
+                    Some(("fallback_of_attempt_id", "attempt-baseline-1")),
+                ),
+            ),
+        ];
+        let samples_value = if id == "baseline-run" {
+            baseline_samples
+        } else {
+            (0..samples)
+                .map(|index| {
+                    json!({
+                        "repetition_index": index,
+                        "seed": index,
+                        "measure": "duration_ms",
+                        "value": value,
+                        "unit": "ms",
+                        "source": "process",
+                        "metering_basis": "actual_trusted",
+                        "basis_source": "process",
+                        "basis_confidence": "verified"
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        let declared_samples = samples_value.len();
+        json!({
+            "id": id,
+            "suite_digest": suite_digest,
+            "subject": {"kind": "binary", "revision": id, "argv": ["planr", "eval"]},
+            "runner_version": "eval-runner-v1",
+            "testbed_fingerprint": {"os": "test"},
+            "source_state": {"commit": id},
+            "status": "success",
+            "cases": [{
+                "case": {
+                    "case_id": "case-a",
+                    "scorer_id": "score",
+                    "scorer_version": "v1",
+                    "fixture_digest": suite_fixture_digest,
+                    "status": "pass",
+                    "repetition_count": declared_samples,
+                    "assertions": [
+                        {"kind": "safety_pass", "status": "pass"},
+                        {"kind": "quality_pass", "status": "pass"}
+                    ]
+                },
+                "samples": samples_value
+            }]
+        })
+    };
+    let invalid_supplied_payload = json!({
+        "id": "supplied-extra-case-run",
+        "suite_digest": suite_digest,
+        "subject": {"kind": "binary", "revision": "supplied-extra-case-run", "argv": ["planr", "eval"]},
+        "runner_version": "eval-runner-v1",
+        "testbed_fingerprint": {"os": "test"},
+        "source_state": {"commit": "supplied-extra-case-run"},
+        "status": "success",
+        "cases": [{
+            "case": {
+                "case_id": "case-extra",
+                "scorer_id": "score",
+                "scorer_version": "v1",
+                "fixture_digest": suite_fixture_digest,
+                "status": "pass",
+                "repetition_count": 1
+            },
+            "samples": [{
+                "repetition_index": 0,
+                "seed": 0,
+                "measure": "duration_ms",
+                "value": 10.0,
+                "unit": "ms",
+                "source": "process"
+            }]
+        }]
+    });
+    let invalid_supplied_path = dir.path().join("supplied-extra-case-run.json");
+    fs::write(
+        &invalid_supplied_path,
+        serde_json::to_vec_pretty(&invalid_supplied_payload).unwrap(),
+    )
+    .unwrap();
+    let invalid_supplied_output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "run",
+            "--input",
+            invalid_supplied_path.to_str().unwrap(),
+        ])
+        .assert()
+        .code(3)
+        .get_output()
+        .stdout
+        .clone();
+    let invalid_supplied_value = single_json_document(&invalid_supplied_output);
+    assert_eq!(invalid_supplied_value["error"]["code"], "invalid_input");
+    assert!(
+        invalid_supplied_value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("is not in frozen suite")
+    );
+    let no_invalid_supplied_rows: i64 = Connection::open(&db)
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM eval_runs WHERE id = 'supplied-extra-case-run'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(no_invalid_supplied_rows, 0);
+    let mut cli_mcp_run = None;
+    for (name, payload) in [
+        ("baseline.json", run_payload("baseline-run", 100.0, 3)),
+        ("better.json", run_payload("better-run", 80.0, 3)),
+        ("worse.json", run_payload("worse-run", 130.0, 3)),
+        ("thin.json", run_payload("thin-run", 100.0, 1)),
+        ("cli-mcp-run.json", run_payload("cli-mcp-run", 90.0, 3)),
+    ] {
+        let path = dir.path().join(name);
+        fs::write(&path, serde_json::to_vec_pretty(&payload).unwrap()).unwrap();
+        let run_output = planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "eval",
+                "run",
+                "--input",
+                path.to_str().unwrap(),
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let run_value = single_json_document(&run_output);
+        assert_eval_envelope(&run_value, "eval.run", true);
+        assert_eq!(run_value["object"]["run"]["status"], "success");
+        if name == "cli-mcp-run.json" {
+            cli_mcp_run = Some(run_value.clone());
+        }
+    }
+
+    let show_run_output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "show",
+            "run",
+            "baseline-run",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let show_run = single_json_document(&show_run_output);
+    assert_eval_envelope(&show_run, "eval.show", true);
+    assert_eq!(show_run["object"]["run"]["id"], "baseline-run");
+    let cli_run_semantics = |run: &Value| {
+        let attempt_semantics = |attempt: &Value| {
+            json!({
+                "id": attempt["id"],
+                "attempt_index": attempt["attempt_index"],
+                "terminal_status": attempt["terminal_status"],
+                "countable": attempt["countable"],
+                "retry_of_attempt_id": attempt["retry_of_attempt_id"],
+                "fallback_of_attempt_id": attempt["fallback_of_attempt_id"],
+                "escalation_of_attempt_id": attempt["escalation_of_attempt_id"],
+                "resume_of_attempt_id": attempt["resume_of_attempt_id"],
+                "effective_client": attempt["effective_client"],
+                "effective_provider": attempt["effective_provider"],
+                "effective_runtime": attempt["effective_runtime"],
+                "effective_model": attempt["effective_model"],
+                "effective_effort": attempt["effective_effort"],
+                "effective_profile_id": attempt["effective_profile_id"],
+                "profile_config_digest": attempt["profile_config_digest"],
+                "runner_harness_version": attempt["runner_harness_version"],
+                "route_observation": attempt["route_observation"],
+                "outcome": attempt["outcome"]
+            })
+        };
+        let sample_semantics = |sample: &Value| {
+            json!({
+                "repetition_index": sample["repetition_index"],
+                "seed": sample["seed"],
+                "warmup": sample["warmup"],
+                "measure": sample["measure"],
+                "value": sample["value"],
+                "unit": sample["unit"],
+                "source": sample["source"],
+                "attempt_id": sample["attempt_id"],
+                "attempt_index": sample["attempt_index"],
+                "metering_basis": sample["metering_basis"],
+                "basis_source": sample["basis_source"],
+                "basis_confidence": sample["basis_confidence"],
+                "estimate_provenance": sample["estimate_provenance"]
+            })
+        };
+        json!({
+            "attempt_lineage": run["object"]["run"]["attempt_lineage"],
+            "sample_metering": run["object"]["run"]["sample_metering"],
+            "efficiency_summary": run["object"]["run"]["efficiency_summary"],
+            "case_attempts": run["object"]["run"]["cases"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|case| {
+                    json!({
+                        "case_id": case["case_id"],
+                        "attempts": case["attempts"].as_array().unwrap().iter().map(attempt_semantics).collect::<Vec<_>>(),
+                        "samples": case["samples"].as_array().unwrap().iter().map(sample_semantics).collect::<Vec<_>>()
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+    };
+    let cli_mcp_run = cli_mcp_run.expect("cli-mcp-run response");
+    let cli_mcp_run_semantics =
+        replace_json_string(&cli_run_semantics(&cli_mcp_run), "cli-mcp-run", "mcp-run");
+
+    let improved_output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "compare",
+            "baseline-run",
+            "better-run",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let improved = single_json_document(&improved_output);
+    assert_eval_envelope(&improved, "eval.compare", true);
+    assert_eq!(improved["object"]["verdict"], "improved");
+    let improved_id = improved["object"]["comparison"]["id"].as_str().unwrap();
+    let gate_improved_output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "gate",
+            improved_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let gate_improved = single_json_document(&gate_improved_output);
+    assert_eval_envelope(&gate_improved, "eval.gate", true);
+
+    let regressed_output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "compare",
+            "baseline-run",
+            "worse-run",
+        ])
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let regressed = single_json_document(&regressed_output);
+    assert_eval_envelope(&regressed, "eval.compare", false);
+    assert_eq!(regressed["object"]["verdict"], "regressed");
+    let regressed_id = regressed["object"]["comparison"]["id"].as_str().unwrap();
+    let cli_compare_semantics = |value: &Value| {
+        json!({
+            "verdict": value["object"]["verdict"],
+            "reasons": value["object"]["comparison"]["reasons"],
+            "baseline_run_id": value["object"]["comparison"]["baseline_run_id"],
+            "candidate_run_id": value["object"]["comparison"]["candidate_run_id"],
+            "baseline_efficiency_summary": value["object"]["baseline_efficiency_summary"],
+            "candidate_efficiency_summary": value["object"]["candidate_efficiency_summary"],
+            "efficiency_summary": value["object"]["efficiency_summary"],
+            "effort_recommendation": value["object"]["effort_recommendation"]
+        })
+    };
+    let improved_semantics = cli_compare_semantics(&improved);
+    let regressed_semantics = cli_compare_semantics(&regressed);
+    let show_regressed_output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "show",
+            "comparison",
+            regressed_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let show_regressed = single_json_document(&show_regressed_output);
+    let show_regressed_semantics = cli_compare_semantics(&show_regressed);
+    let gate_output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "gate",
+            regressed_id,
+        ])
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let gate = single_json_document(&gate_output);
+    assert_eval_envelope(&gate, "eval.gate", false);
+    assert_eq!(gate["ok"], false);
+    assert_eq!(gate["object"]["verdict"], "regressed");
+    let before_ref = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "item",
+            "show",
+            evidence_item_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let before_ref: Value = serde_json::from_slice(&before_ref).unwrap();
+    let evidence_ref_output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "evidence-ref",
+            "comparison",
+            regressed_id,
+            "log",
+            evidence_log_id,
+            "--item",
+            evidence_item_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let evidence_ref = single_json_document(&evidence_ref_output);
+    assert_eval_envelope(&evidence_ref, "eval.evidence.ref", true);
+    assert_eq!(
+        evidence_ref["object"]["evidence_ref"]["target_id"],
+        regressed_id
+    );
+    assert_eq!(
+        evidence_ref["object"]["evidence_ref"]["closure_authority"],
+        false
+    );
+    let after_ref = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "item",
+            "show",
+            evidence_item_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let after_ref: Value = serde_json::from_slice(&after_ref).unwrap();
+    assert_eq!(after_ref["item"]["status"], before_ref["item"]["status"]);
+
+    let non_review_item = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "item",
+            "create",
+            "Not a review",
+            "--description",
+            "ordinary item",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let non_review_item: Value = serde_json::from_slice(&non_review_item).unwrap();
+    let non_review_item_id = non_review_item["item"]["id"].as_str().unwrap();
+    let non_review_attachment = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "evidence-ref",
+            "run",
+            "baseline-run",
+            "review",
+            non_review_item_id,
+            "--item",
+            evidence_item_id,
+        ])
+        .assert()
+        .code(3)
+        .get_output()
+        .stdout
+        .clone();
+    let non_review_attachment = single_json_document(&non_review_attachment);
+    assert_eq!(non_review_attachment["error"]["code"], "invalid_input");
+    assert!(
+        non_review_attachment["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("must be a review item")
+    );
+
+    let unrelated_review_target = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "item",
+            "create",
+            "Unrelated review target",
+            "--description",
+            "reviewed elsewhere",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let unrelated_review_target: Value = serde_json::from_slice(&unrelated_review_target).unwrap();
+    let unrelated_review_target_id = unrelated_review_target["item"]["id"].as_str().unwrap();
+    let unrelated_review = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "review",
+            "request",
+            unrelated_review_target_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let unrelated_review: Value = serde_json::from_slice(&unrelated_review).unwrap();
+    let unrelated_review_id = unrelated_review["review"]["id"].as_str().unwrap();
+    let wrong_review_target = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "evidence-ref",
+            "run",
+            "baseline-run",
+            "review",
+            unrelated_review_id,
+            "--item",
+            evidence_item_id,
+        ])
+        .assert()
+        .code(3)
+        .get_output()
+        .stdout
+        .clone();
+    let wrong_review_target = single_json_document(&wrong_review_target);
+    assert_eq!(wrong_review_target["error"]["code"], "invalid_input");
+    assert!(
+        wrong_review_target["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("must review item")
+    );
+
+    let owned_review = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "review",
+            "request",
+            evidence_item_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let owned_review: Value = serde_json::from_slice(&owned_review).unwrap();
+    let owned_review_id = owned_review["review"]["id"].as_str().unwrap();
+    let review_ref_output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "evidence-ref",
+            "run",
+            "baseline-run",
+            "review",
+            owned_review_id,
+            "--item",
+            evidence_item_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let review_ref = single_json_document(&review_ref_output);
+    assert_eval_envelope(&review_ref, "eval.evidence.ref", true);
+
+    let insufficient_output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "compare",
+            "baseline-run",
+            "thin-run",
+        ])
+        .assert()
+        .code(2)
+        .get_output()
+        .stdout
+        .clone();
+    let insufficient = single_json_document(&insufficient_output);
+    assert_eval_envelope(&insufficient, "eval.compare", false);
+    assert_eq!(insufficient["object"]["verdict"], "insufficient_evidence");
+    let insufficient_id = insufficient["object"]["comparison"]["id"].as_str().unwrap();
+
+    let invalid_path = dir.path().join("invalid-run.json");
+    fs::write(
+        &invalid_path,
+        format!(r#"{{"suite_digest":"{suite_digest}"}}"#),
+    )
+    .unwrap();
+    let invalid_output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "run",
+            "--input",
+            invalid_path.to_str().unwrap(),
+        ])
+        .assert()
+        .code(3)
+        .get_output()
+        .stdout
+        .clone();
+    let invalid = single_json_document(&invalid_output);
+    assert_eval_envelope(&invalid, "eval.run", false);
+    assert_eq!(invalid["error"]["code"], "invalid_input");
+    assert_eq!(
+        invalid["error"]["reasons"],
+        json!(["missing_required_field"])
+    );
+    assert_eq!(invalid["error"]["field"], "subject");
+    assert!(
+        invalid["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("missing required eval field: subject")
+    );
+
+    let missing_output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "compare",
+            "baseline-run",
+            "missing-run",
+        ])
+        .assert()
+        .code(4)
+        .get_output()
+        .stdout
+        .clone();
+    let missing = single_json_document(&missing_output);
+    assert_eval_envelope(&missing, "eval.compare", false);
+    assert_eq!(missing["error"]["code"], "infrastructure_error");
+    assert_eq!(missing["error"]["reasons"], json!(["not_found"]));
+    assert_eq!(missing["error"]["field"], Value::Null);
+
+    let invalidation_output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "invalidate",
+            "comparison",
+            regressed_id,
+            "--reason",
+            "reviewed stale comparison",
+            "--reason-code",
+            "stale",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let invalidation = single_json_document(&invalidation_output);
+    assert_eval_envelope(&invalidation, "eval.invalidate", true);
+    let invalidation_id = invalidation["object"]["invalidation"]["id"]
+        .as_str()
+        .unwrap();
+    assert_eq!(invalidation["object"]["verdict"], "invalidated");
+
+    let show_invalidation_output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "show",
+            "invalidation",
+            invalidation_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let show_invalidation = single_json_document(&show_invalidation_output);
+    assert_eval_envelope(&show_invalidation, "eval.show", true);
+
+    let rescore_output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "rescore",
+            "baseline-run",
+            "--id",
+            "rescore-run",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let rescore = single_json_document(&rescore_output);
+    assert_eval_envelope(&rescore, "eval.rescore", true);
+    assert_eq!(rescore["object"]["run"]["rescore_of"], "baseline-run");
+    let package = dir.path().join("eval-package.json");
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "export",
+            "--include-logs",
+            "--out",
+            package.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let package_json: Value = serde_json::from_slice(&fs::read(&package).unwrap()).unwrap();
+    let refs = package_json["eval_evidence_refs"].as_array().unwrap();
+    assert_eq!(refs.len(), 2);
+    assert!(
+        refs.iter()
+            .any(|reference| reference["target_id"] == regressed_id)
+    );
+    assert!(
+        refs.iter()
+            .any(|reference| reference["target_id"] == "baseline-run")
+    );
+    assert!(
+        refs.iter()
+            .all(|reference| reference["closure_authority"] == false)
+    );
+    assert!(
+        package_json["eval_runs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|run| run["id"] == "baseline-run")
+    );
+    let packaged_baseline = package_json["eval_runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|run| run["id"] == "baseline-run")
+        .unwrap();
+    assert_eq!(packaged_baseline["cases"].as_array().unwrap().len(), 1);
+    let packaged_baseline_attempts = packaged_baseline["cases"][0]["attempts"]
+        .as_array()
+        .expect("eval package exports attempts");
+    assert!(
+        !packaged_baseline_attempts.is_empty(),
+        "eval package must export first-class attempts"
+    );
+    assert_eq!(
+        packaged_baseline["cases"][0]["samples"]
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
+    let packaged_sample_attempt_id = packaged_baseline["cases"][0]["samples"][0]["attempt_id"]
+        .as_str()
+        .unwrap();
+    assert!(
+        packaged_baseline_attempts
+            .iter()
+            .any(|attempt| attempt["id"] == packaged_sample_attempt_id),
+        "sample attempt_id must resolve to packaged attempt evidence"
+    );
+    assert!(
+        package_json["eval_comparisons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|comparison| comparison["id"] == regressed_id)
+    );
+    let packaged_suite = package_json["eval_suite_snapshots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|suite| suite["digest"] == suite_digest)
+        .unwrap();
+    let packaged_regressed_comparison = package_json["eval_comparisons"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|comparison| comparison["id"] == regressed_id)
+        .unwrap();
+    let packaged_invalidation = package_json["eval_invalidations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|invalidation| invalidation["id"] == invalidation_id)
+        .unwrap();
+    let packaged_regressed_ref = refs
+        .iter()
+        .find(|reference| reference["target_id"] == regressed_id)
+        .unwrap();
+    assert!(package_json["plan_files"].is_null());
+    let assert_rejected_empty_import =
+        |name: &str, package_value: Value, expected_message: &str| {
+            let rejected_package = dir.path().join(name);
+            fs::write(
+                &rejected_package,
+                serde_json::to_vec_pretty(&package_value).unwrap(),
+            )
+            .unwrap();
+            let rejected_target = tempdir().unwrap();
+            let rejected_db = rejected_target.path().join(".planr/planr.sqlite");
+            planr()
+                .current_dir(rejected_target.path())
+                .args([
+                    "--db",
+                    rejected_db.to_str().unwrap(),
+                    "project",
+                    "init",
+                    "Rejected eval import target",
+                ])
+                .assert()
+                .success();
+            planr()
+                .current_dir(rejected_target.path())
+                .args([
+                    "--db",
+                    rejected_db.to_str().unwrap(),
+                    "import",
+                    rejected_package.to_str().unwrap(),
+                    "--confirm",
+                ])
+                .assert()
+                .failure()
+                .stderr(predicate::str::contains(expected_message));
+            planr()
+                .current_dir(rejected_target.path())
+                .args([
+                    "--db",
+                    rejected_db.to_str().unwrap(),
+                    "--json",
+                    "item",
+                    "show",
+                    evidence_item_id,
+                ])
+                .assert()
+                .failure();
+            planr()
+                .current_dir(rejected_target.path())
+                .args([
+                    "--db",
+                    rejected_db.to_str().unwrap(),
+                    "--json",
+                    "eval",
+                    "show",
+                    "suite",
+                    &suite_digest,
+                ])
+                .assert()
+                .failure();
+            planr()
+                .current_dir(rejected_target.path())
+                .args([
+                    "--db",
+                    rejected_db.to_str().unwrap(),
+                    "--json",
+                    "eval",
+                    "show",
+                    "run",
+                    "baseline-run",
+                ])
+                .assert()
+                .failure();
+        };
+    let assert_rejected_preview = |name: &str, package_value: Value, expected_message: &str| {
+        let rejected_package = dir.path().join(name);
+        fs::write(
+            &rejected_package,
+            serde_json::to_vec_pretty(&package_value).unwrap(),
+        )
+        .unwrap();
+        let rejected_target = tempdir().unwrap();
+        let rejected_db = rejected_target.path().join(".planr/planr.sqlite");
+        planr()
+            .current_dir(rejected_target.path())
+            .args([
+                "--db",
+                rejected_db.to_str().unwrap(),
+                "project",
+                "init",
+                "Rejected eval preview target",
+            ])
+            .assert()
+            .success();
+        planr()
+            .current_dir(rejected_target.path())
+            .args([
+                "--db",
+                rejected_db.to_str().unwrap(),
+                "import",
+                rejected_package.to_str().unwrap(),
+                "--preview",
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(expected_message));
+    };
+    let mut duplicate_run_package = package_json.clone();
+    let mut conflicting_run = duplicate_run_package["eval_runs"][0].clone();
+    conflicting_run["subject_revision"] = json!("conflicting-duplicate");
+    duplicate_run_package["eval_runs"]
+        .as_array_mut()
+        .unwrap()
+        .push(conflicting_run);
+    assert_rejected_empty_import(
+        "eval-package-duplicate-run.json",
+        duplicate_run_package,
+        "conflicting eval run id",
+    );
+    let mut missing_suite_package = package_json.clone();
+    missing_suite_package["eval_suite_snapshots"] = json!([]);
+    assert_rejected_empty_import(
+        "eval-package-missing-suite.json",
+        missing_suite_package,
+        &format!("suite_digest {suite_digest} is unresolved"),
+    );
+    let mut missing_comparison_run_package = package_json.clone();
+    missing_comparison_run_package["eval_runs"] = json!([]);
+    missing_comparison_run_package["eval_invalidations"] = json!([]);
+    missing_comparison_run_package["eval_evidence_refs"] = json!([]);
+    assert_rejected_empty_import(
+        "eval-package-missing-comparison-run.json",
+        missing_comparison_run_package,
+        "run dependency baseline-run is unresolved",
+    );
+    let mut missing_invalidation_target_package = package_json.clone();
+    let invalidation_index = missing_invalidation_target_package["eval_invalidations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|invalidation| invalidation["id"] == invalidation_id)
+        .unwrap();
+    missing_invalidation_target_package["eval_invalidations"][invalidation_index]["target_id"] =
+        json!("missing-comparison-target");
+    missing_invalidation_target_package["eval_evidence_refs"] = json!([]);
+    assert_rejected_empty_import(
+        "eval-package-missing-invalidation-target.json",
+        missing_invalidation_target_package,
+        "comparison target missing-comparison-target is unresolved",
+    );
+    let mut closure_authority_package = package_json.clone();
+    closure_authority_package["eval_evidence_refs"][0]["closure_authority"] = json!(true);
+    assert_rejected_empty_import(
+        "eval-package-closure-authority.json",
+        closure_authority_package,
+        "closure_authority must be false",
+    );
+    let mut mismatched_attempt_package = package_json.clone();
+    mismatched_attempt_package["eval_runs"][0]["cases"][0]["samples"][0]["repetition_index"] =
+        json!(99);
+    assert_rejected_empty_import(
+        "eval-package-sample-attempt-mismatch.json",
+        mismatched_attempt_package,
+        "identity does not match referenced attempt",
+    );
+    let mut invalid_confidence_package = package_json.clone();
+    invalid_confidence_package["eval_runs"][0]["cases"][0]["samples"][0]["basis_confidence"] =
+        json!("actual_trusted");
+    assert_rejected_preview(
+        "eval-package-invalid-basis-confidence-preview.json",
+        invalid_confidence_package.clone(),
+        "invalid eval basis confidence: actual_trusted",
+    );
+    assert_rejected_empty_import(
+        "eval-package-invalid-basis-confidence.json",
+        invalid_confidence_package,
+        "invalid eval basis confidence: actual_trusted",
+    );
+    let mut unavailable_value_package = package_json.clone();
+    unavailable_value_package["eval_runs"][0]["cases"][0]["samples"][0]["metering_basis"] =
+        json!("unavailable");
+    unavailable_value_package["eval_runs"][0]["cases"][0]["samples"][0]["basis_confidence"] =
+        json!("unavailable");
+    unavailable_value_package["eval_runs"][0]["cases"][0]["samples"][0]["value"] = json!(42);
+    assert_rejected_preview(
+        "eval-package-unavailable-numeric-preview.json",
+        unavailable_value_package.clone(),
+        "unavailable eval sample values must be null",
+    );
+    assert_rejected_empty_import(
+        "eval-package-unavailable-numeric.json",
+        unavailable_value_package,
+        "unavailable eval sample values must be null",
+    );
+    let mut missing_estimate_package = package_json.clone();
+    missing_estimate_package["eval_runs"][0]["cases"][0]["samples"][0]["metering_basis"] =
+        json!("estimated");
+    missing_estimate_package["eval_runs"][0]["cases"][0]["samples"][0]["basis_confidence"] =
+        json!("estimated");
+    missing_estimate_package["eval_runs"][0]["cases"][0]["samples"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("estimate_provenance");
+    assert_rejected_preview(
+        "eval-package-missing-estimate-provenance-preview.json",
+        missing_estimate_package.clone(),
+        "estimated eval samples require estimate_provenance",
+    );
+    assert_rejected_empty_import(
+        "eval-package-missing-estimate-provenance.json",
+        missing_estimate_package,
+        "estimated eval samples require estimate_provenance",
+    );
+    let mut malformed_estimate_package = package_json.clone();
+    malformed_estimate_package["eval_runs"][0]["cases"][0]["samples"][0]["metering_basis"] =
+        json!("estimated");
+    malformed_estimate_package["eval_runs"][0]["cases"][0]["samples"][0]["basis_confidence"] =
+        json!("estimated");
+    malformed_estimate_package["eval_runs"][0]["cases"][0]["samples"][0]["estimate_provenance"] = json!({
+        "method": "fixture-rate-card",
+        "version": "live-oracle-v1",
+        "rate_micros_per_attempt": 42
+    });
+    assert_rejected_preview(
+        "eval-package-malformed-estimate-provenance-preview.json",
+        malformed_estimate_package.clone(),
+        "estimated eval samples require estimate_provenance.pricing_reference_id",
+    );
+    assert_rejected_empty_import(
+        "eval-package-malformed-estimate-provenance.json",
+        malformed_estimate_package,
+        "estimated eval samples require estimate_provenance.pricing_reference_id",
+    );
+    let mut invalid_run_status_package = package_json.clone();
+    invalid_run_status_package["eval_runs"][0]["status"] = json!("not-a-status");
+    assert_rejected_empty_import(
+        "eval-package-invalid-run-status.json",
+        invalid_run_status_package,
+        "FOREIGN KEY constraint failed",
+    );
+
+    let import_target = tempdir().unwrap();
+    let import_db = import_target.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(import_target.path())
+        .args([
+            "--db",
+            import_db.to_str().unwrap(),
+            "project",
+            "init",
+            "Eval import target",
+        ])
+        .assert()
+        .success();
+    let import_preview = planr()
+        .current_dir(import_target.path())
+        .args([
+            "--db",
+            import_db.to_str().unwrap(),
+            "--json",
+            "import",
+            package.to_str().unwrap(),
+            "--preview",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let import_preview: Value = serde_json::from_slice(&import_preview).unwrap();
+    assert_eq!(
+        import_preview["report"]["would_create"]["eval_evidence_refs"],
+        2
+    );
+    assert!(
+        import_preview["report"]["would_create"]["eval_case_results"]
+            .as_u64()
+            .unwrap()
+            >= 4
+    );
+    assert!(
+        import_preview["report"]["would_create"]["eval_samples"]
+            .as_u64()
+            .unwrap()
+            >= 10
+    );
+    assert!(
+        import_preview["report"]["would_create"]["eval_runs"]
+            .as_u64()
+            .unwrap()
+            >= 4
+    );
+    assert!(
+        import_preview["report"]["would_create"]["eval_comparisons"]
+            .as_u64()
+            .unwrap()
+            >= 3
+    );
+    let import_apply = planr()
+        .current_dir(import_target.path())
+        .args([
+            "--db",
+            import_db.to_str().unwrap(),
+            "--json",
+            "import",
+            package.to_str().unwrap(),
+            "--confirm",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let import_apply: Value = serde_json::from_slice(&import_apply).unwrap();
+    assert_eq!(import_apply["imported"]["eval_evidence_refs"], 2);
+    let imported_comparison_output = planr()
+        .current_dir(import_target.path())
+        .args([
+            "--db",
+            import_db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "show",
+            "comparison",
+            regressed_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let imported_comparison = single_json_document(&imported_comparison_output);
+    assert_eq!(imported_comparison["object"]["verdict"], "regressed");
+    assert_eq!(
+        imported_comparison["object"]["comparison"]["created_at"],
+        packaged_regressed_comparison["created_at"]
+    );
+    let imported_suite_output = planr()
+        .current_dir(import_target.path())
+        .args([
+            "--db",
+            import_db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "show",
+            "suite",
+            &suite_digest,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let imported_suite = single_json_document(&imported_suite_output);
+    assert_eq!(
+        imported_suite["object"]["suite"]["created_at"],
+        packaged_suite["created_at"]
+    );
+    let imported_run_output = planr()
+        .current_dir(import_target.path())
+        .args([
+            "--db",
+            import_db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "show",
+            "run",
+            "baseline-run",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let imported_run = single_json_document(&imported_run_output);
+    assert_eq!(
+        imported_run["object"]["run"]["created_at"],
+        packaged_baseline["created_at"]
+    );
+    assert_eq!(
+        imported_run["object"]["run"]["cases"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        imported_run["object"]["run"]["cases"][0]["samples"]
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
+    assert_eq!(
+        imported_run["object"]["run"]["cases"][0]["attempts"],
+        packaged_baseline["cases"][0]["attempts"]
+    );
+    assert_eq!(
+        imported_run["object"]["run"]["cases"][0]["samples"],
+        packaged_baseline["cases"][0]["samples"]
+    );
+    assert_eq!(
+        imported_run["object"]["run"]["cases"][0]["created_at"],
+        packaged_baseline["cases"][0]["created_at"]
+    );
+    assert_eq!(
+        imported_run["object"]["run"]["cases"][0]["updated_at"],
+        packaged_baseline["cases"][0]["updated_at"]
+    );
+    assert_eq!(
+        imported_run["object"]["run"]["cases"][0]["samples"][0]["captured_at"],
+        packaged_baseline["cases"][0]["samples"][0]["captured_at"]
+    );
+    let imported_attempts = imported_run["object"]["run"]["cases"][0]["attempts"]
+        .as_array()
+        .unwrap();
+    let retry_attempt = imported_attempts
+        .iter()
+        .find(|attempt| attempt["id"] == "attempt-baseline-1")
+        .unwrap();
+    let fallback_attempt = imported_attempts
+        .iter()
+        .find(|attempt| attempt["id"] == "attempt-baseline-2")
+        .unwrap();
+    assert_eq!(
+        retry_attempt["retry_of_attempt_id"],
+        json!("attempt-baseline-0")
+    );
+    assert_eq!(
+        fallback_attempt["fallback_of_attempt_id"],
+        json!("attempt-baseline-1")
+    );
+    assert_eq!(fallback_attempt["effective_model"], json!("gpt-5.6-terra"));
+    assert_eq!(
+        fallback_attempt["route_observation"]["effective"]["effort"],
+        json!("high")
+    );
+    let imported_samples = imported_run["object"]["run"]["cases"][0]["samples"]
+        .as_array()
+        .unwrap();
+    let unavailable_cost = imported_samples
+        .iter()
+        .find(|sample| sample["measure"] == "cost_micros")
+        .unwrap();
+    assert_eq!(unavailable_cost["value"], Value::Null);
+    assert_eq!(unavailable_cost["metering_basis"], json!("unavailable"));
+    assert_eq!(unavailable_cost["basis_confidence"], json!("unavailable"));
+    let reproduced_comparison_output = planr()
+        .current_dir(import_target.path())
+        .args([
+            "--db",
+            import_db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "compare",
+            "baseline-run",
+            "worse-run",
+        ])
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let reproduced_comparison = single_json_document(&reproduced_comparison_output);
+    assert_eq!(reproduced_comparison["object"]["verdict"], "regressed");
+    let imported_invalidation_output = planr()
+        .current_dir(import_target.path())
+        .args([
+            "--db",
+            import_db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "show",
+            "invalidation",
+            invalidation_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let imported_invalidation = single_json_document(&imported_invalidation_output);
+    assert_eq!(
+        imported_invalidation["object"]["invalidation"]["created_at"],
+        packaged_invalidation["created_at"]
+    );
+    let imported_package = import_target.path().join("eval-package-imported.json");
+    planr()
+        .current_dir(import_target.path())
+        .args([
+            "--db",
+            import_db.to_str().unwrap(),
+            "export",
+            "--include-logs",
+            "--out",
+            imported_package.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let imported_package_json: Value =
+        serde_json::from_slice(&fs::read(&imported_package).unwrap()).unwrap();
+    let imported_refs = imported_package_json["eval_evidence_refs"]
+        .as_array()
+        .unwrap();
+    let imported_regressed_ref = imported_refs
+        .iter()
+        .find(|reference| reference["target_id"] == regressed_id)
+        .unwrap();
+    assert_eq!(
+        imported_regressed_ref["created_at"],
+        packaged_regressed_ref["created_at"]
+    );
+    let run_collision_package = dir.path().join("eval-package-run-collision.json");
+    let mut run_collision_json = package_json.clone();
+    run_collision_json["eval_runs"][0]["subject_revision"] = json!("conflicting-revision");
+    fs::write(
+        &run_collision_package,
+        serde_json::to_vec_pretty(&run_collision_json).unwrap(),
+    )
+    .unwrap();
+    planr()
+        .current_dir(import_target.path())
+        .args([
+            "--db",
+            import_db.to_str().unwrap(),
+            "import",
+            run_collision_package.to_str().unwrap(),
+            "--confirm",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("conflicting eval run id"));
+    let comparison_collision_package = dir.path().join("eval-package-comparison-collision.json");
+    let mut comparison_collision_json = package_json.clone();
+    let comparison_index = comparison_collision_json["eval_comparisons"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|comparison| comparison["id"] == regressed_id)
+        .unwrap();
+    comparison_collision_json["eval_comparisons"][comparison_index]["verdict"] = json!("improved");
+    fs::write(
+        &comparison_collision_package,
+        serde_json::to_vec_pretty(&comparison_collision_json).unwrap(),
+    )
+    .unwrap();
+    planr()
+        .current_dir(import_target.path())
+        .args([
+            "--db",
+            import_db.to_str().unwrap(),
+            "import",
+            comparison_collision_package.to_str().unwrap(),
+            "--confirm",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("conflicting eval comparison id"));
+    let sample_collision_package = dir.path().join("eval-package-sample-collision.json");
+    let mut sample_collision_json = package_json.clone();
+    let run_index = sample_collision_json["eval_runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|run| run["id"] == "baseline-run")
+        .unwrap();
+    sample_collision_json["eval_runs"][run_index]["id"] = json!("new-run-with-colliding-sample");
+    sample_collision_json["eval_runs"][run_index]["subject_revision"] =
+        json!("new-run-with-colliding-sample");
+    sample_collision_json["eval_runs"][run_index]["cases"][0]["id"] =
+        json!("evcase-new-run-with-colliding-sample-case-a-score");
+    sample_collision_json["eval_comparisons"] = json!([]);
+    sample_collision_json["eval_invalidations"] = json!([]);
+    sample_collision_json["eval_evidence_refs"] = json!([]);
+    fs::write(
+        &sample_collision_package,
+        serde_json::to_vec_pretty(&sample_collision_json).unwrap(),
+    )
+    .unwrap();
+    planr()
+        .current_dir(import_target.path())
+        .args([
+            "--db",
+            import_db.to_str().unwrap(),
+            "import",
+            sample_collision_package.to_str().unwrap(),
+            "--confirm",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("conflicting eval attempt id"));
+    planr()
+        .current_dir(import_target.path())
+        .args([
+            "--db",
+            import_db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "show",
+            "run",
+            "new-run-with-colliding-sample",
+        ])
+        .assert()
+        .failure();
+    let imported_review_output = planr()
+        .current_dir(import_target.path())
+        .args([
+            "--db",
+            import_db.to_str().unwrap(),
+            "--json",
+            "item",
+            "show",
+            owned_review_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let imported_review: Value = serde_json::from_slice(&imported_review_output).unwrap();
+    assert_eq!(imported_review["item"]["work_type"], "review");
+
+    let dangling_package = dir.path().join("eval-package-dangling.json");
+    let mut dangling_json = package_json.clone();
+    dangling_json["eval_comparisons"] = json!([]);
+    dangling_json["eval_invalidations"] = json!([]);
+    fs::write(
+        &dangling_package,
+        serde_json::to_vec_pretty(&dangling_json).unwrap(),
+    )
+    .unwrap();
+    let dangling_target = tempdir().unwrap();
+    let dangling_db = dangling_target.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dangling_target.path())
+        .args([
+            "--db",
+            dangling_db.to_str().unwrap(),
+            "project",
+            "init",
+            "Dangling eval import target",
+        ])
+        .assert()
+        .success();
+    planr()
+        .current_dir(dangling_target.path())
+        .args([
+            "--db",
+            dangling_db.to_str().unwrap(),
+            "import",
+            dangling_package.to_str().unwrap(),
+            "--confirm",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "eval evidence ref comparison target",
+        ));
+    planr()
+        .current_dir(dangling_target.path())
+        .args([
+            "--db",
+            dangling_db.to_str().unwrap(),
+            "--json",
+            "item",
+            "show",
+            evidence_item_id,
+        ])
+        .assert()
+        .failure();
+    planr()
+        .current_dir(dangling_target.path())
+        .args([
+            "--db",
+            dangling_db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "show",
+            "run",
+            "baseline-run",
+        ])
+        .assert()
+        .failure();
+
+    let foreign_artifact_item = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "item",
+            "create",
+            "Foreign artifact owner",
+            "--description",
+            "owns a different artifact",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let foreign_artifact_item: Value = serde_json::from_slice(&foreign_artifact_item).unwrap();
+    let foreign_artifact_item_id = foreign_artifact_item["item"]["id"].as_str().unwrap();
+    let foreign_artifact = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "artifact",
+            "add",
+            "foreign eval artifact",
+            "--item",
+            foreign_artifact_item_id,
+            "--content",
+            "foreign proof",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let foreign_artifact: Value = serde_json::from_slice(&foreign_artifact).unwrap();
+    let foreign_artifact_id = foreign_artifact["artifact"]["id"].as_str().unwrap();
+    let foreign_artifact_ref = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "evidence-ref",
+            "run",
+            "better-run",
+            "artifact",
+            foreign_artifact_id,
+            "--item",
+            evidence_item_id,
+        ])
+        .assert()
+        .code(3)
+        .get_output()
+        .stdout
+        .clone();
+    let foreign_artifact_ref = single_json_document(&foreign_artifact_ref);
+    assert_eq!(foreign_artifact_ref["error"]["code"], "invalid_input");
+    assert!(
+        foreign_artifact_ref["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("artifact attachment must belong")
+    );
+    let owned_artifact = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "artifact",
+            "add",
+            "owned eval artifact",
+            "--item",
+            evidence_item_id,
+            "--content",
+            "owned proof",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let owned_artifact: Value = serde_json::from_slice(&owned_artifact).unwrap();
+    let owned_artifact_id = owned_artifact["artifact"]["id"].as_str().unwrap();
+    let owned_artifact_ref = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "evidence-ref",
+            "run",
+            "better-run",
+            "artifact",
+            owned_artifact_id,
+            "--item",
+            evidence_item_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let owned_artifact_ref = single_json_document(&owned_artifact_ref);
+    assert_eval_envelope(&owned_artifact_ref, "eval.evidence.ref", true);
+
+    let mut mcp_mutated_fixture_input = mutated_fixture_input.clone();
+    mcp_mutated_fixture_input["id"] = json!("mcp-mutated-fixture-runner");
+    mcp_mutated_fixture_input["subject"]["revision"] = json!("mcp-mutated-fixture");
+    let mut mcp_invalid_supplied_payload = invalid_supplied_payload.clone();
+    mcp_invalid_supplied_payload["id"] = json!("mcp-supplied-extra-case-run");
+    mcp_invalid_supplied_payload["subject"]["revision"] = json!("mcp-supplied-extra-case-run");
+    mcp_invalid_supplied_payload["source_state"]["commit"] = json!("mcp-supplied-extra-case-run");
+
+    let mcp_input = [
+        json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"planr_eval_suite_check","arguments":{"input": suite, "source_path": "mcp"}}}).to_string(),
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"planr_eval_run","arguments":{"input": run_payload("mcp-run", 90.0, 3)}}}).to_string(),
+        json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"planr_eval_show","arguments":{"kind":"comparison","id":regressed_id}}}).to_string(),
+        json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"planr_eval_compare","arguments":{"baseline_run_id":"baseline-run","candidate_run_id":"better-run"}}}).to_string(),
+        json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"planr_eval_gate","arguments":{"comparison_id":improved_id}}}).to_string(),
+        json!({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"planr_eval_compare","arguments":{"baseline_run_id":"baseline-run","candidate_run_id":"worse-run"}}}).to_string(),
+        json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"planr_eval_gate","arguments":{"comparison_id":regressed_id}}}).to_string(),
+        json!({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"planr_eval_compare","arguments":{"baseline_run_id":"baseline-run","candidate_run_id":"thin-run"}}}).to_string(),
+        json!({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"planr_eval_gate","arguments":{"comparison_id":insufficient_id}}}).to_string(),
+        json!({"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"planr_eval_evidence_ref","arguments":{"target_kind":"run","target_id":"mcp-run","attachment_kind":"log","attachment_id":evidence_log_id,"item_id":evidence_item_id}}}).to_string(),
+        json!({"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"planr_eval_invalidate","arguments":{"target_kind":"run","target_id":"mcp-run","reason":"mcp parity invalidation","reason_codes":["parity"]}}}).to_string(),
+        json!({"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"planr_eval_rescore","arguments":{"run_id":"baseline-run","id":"mcp-rescore-run"}}}).to_string(),
+        json!({"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"planr_eval_show","arguments":{"kind":"bogus","id":regressed_id}}}).to_string(),
+        json!({"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"planr_eval_compare","arguments":{"baseline_run_id":"baseline-run","candidate_run_id":"missing-run"}}}).to_string(),
+        json!({"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"planr_eval_run","arguments":{"input":altered_runner_input}}}).to_string(),
+        json!({"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"planr_eval_run","arguments":{"input":escaped_runner_input}}}).to_string(),
+        json!({"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"planr_eval_run","arguments":{"input":mcp_mutated_fixture_input}}}).to_string(),
+        json!({"jsonrpc":"2.0","id":18,"method":"tools/call","params":{"name":"planr_eval_run","arguments":{"input":mcp_invalid_supplied_payload}}}).to_string(),
+    ]
+    .join("\n")
+        + "\n";
+    let mcp_output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "mcp"])
+        .write_stdin(mcp_input)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let responses = String::from_utf8(mcp_output)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    for (index, command) in [
+        "eval.suite.check",
+        "eval.run",
+        "eval.show",
+        "eval.compare",
+        "eval.gate",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let envelope = mcp_text_value(&responses[index]);
+        assert_eval_envelope(&envelope, command, true);
+    }
+    let mcp_show = mcp_text_value(&responses[2]);
+    assert_eq!(
+        cli_compare_semantics(&mcp_show),
+        show_regressed_semantics,
+        "MCP comparison show must preserve CLI semantic fields"
+    );
+    let mcp_run = mcp_text_value(&responses[1]);
+    assert_eq!(
+        cli_run_semantics(&mcp_run),
+        cli_mcp_run_semantics,
+        "Direct CLI and MCP eval.run responses must project equivalent lineage, sample metering, and efficiency semantics"
+    );
+    let mcp_gate = mcp_text_value(&responses[4]);
+    assert_eq!(mcp_show["object"]["verdict"], "regressed");
+    assert_eq!(mcp_gate["object"]["ok"], true);
+    let mcp_regressed_compare = mcp_text_value(&responses[5]);
+    assert_eval_envelope(&mcp_regressed_compare, "eval.compare", false);
+    assert_eq!(mcp_regressed_compare["object"]["verdict"], "regressed");
+    assert_eq!(
+        cli_compare_semantics(&mcp_regressed_compare),
+        regressed_semantics
+    );
+    let mcp_improved_compare = mcp_text_value(&responses[3]);
+    assert_eq!(
+        cli_compare_semantics(&mcp_improved_compare),
+        improved_semantics
+    );
+    let mcp_regressed_gate = mcp_text_value(&responses[6]);
+    assert_eval_envelope(&mcp_regressed_gate, "eval.gate", false);
+    assert_eq!(mcp_regressed_gate["object"]["verdict"], "regressed");
+    let mcp_insufficient_compare = mcp_text_value(&responses[7]);
+    assert_eval_envelope(&mcp_insufficient_compare, "eval.compare", false);
+    assert_eq!(
+        mcp_insufficient_compare["object"]["verdict"],
+        "insufficient_evidence"
+    );
+    let mcp_insufficient_gate = mcp_text_value(&responses[8]);
+    assert_eval_envelope(&mcp_insufficient_gate, "eval.gate", false);
+    assert_eq!(
+        mcp_insufficient_gate["object"]["verdict"],
+        "insufficient_evidence"
+    );
+    assert_eval_envelope(&mcp_text_value(&responses[9]), "eval.evidence.ref", true);
+    assert_eval_envelope(&mcp_text_value(&responses[10]), "eval.invalidate", true);
+    assert_eval_envelope(&mcp_text_value(&responses[11]), "eval.rescore", true);
+    assert_eq!(responses[12]["result"]["isError"], true);
+    let mcp_invalid = mcp_text_value(&responses[12]);
+    assert_eval_envelope(&mcp_invalid, "eval.show", false);
+    assert_eq!(mcp_invalid["error"]["code"], "invalid_input");
+    assert_eq!(mcp_invalid["error"]["reasons"], json!(["invalid_value"]));
+    assert_eq!(responses[13]["result"]["isError"], true);
+    let mcp_missing = mcp_text_value(&responses[13]);
+    assert_eval_envelope(&mcp_missing, "eval.compare", false);
+    assert_eq!(mcp_missing["error"]["code"], "infrastructure_error");
+    assert_eq!(responses[14]["result"]["isError"], true);
+    let mcp_altered_runner = mcp_text_value(&responses[14]);
+    assert_eval_envelope(&mcp_altered_runner, "eval.run", false);
+    assert_eq!(mcp_altered_runner["error"]["code"], "invalid_input");
+    assert!(
+        mcp_altered_runner["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("does not match frozen suite")
+    );
+    assert_eq!(responses[15]["result"]["isError"], true);
+    let mcp_escaped_runner = mcp_text_value(&responses[15]);
+    assert_eval_envelope(&mcp_escaped_runner, "eval.run", false);
+    assert_eq!(mcp_escaped_runner["error"]["code"], "invalid_input");
+    assert!(
+        mcp_escaped_runner["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("repo_root must be relative")
+    );
+    assert_eq!(responses[16]["result"]["isError"], true);
+    let mcp_mutated_fixture = mcp_text_value(&responses[16]);
+    assert_eval_envelope(&mcp_mutated_fixture, "eval.run", false);
+    assert_eq!(mcp_mutated_fixture["error"]["code"], "invalid_input");
+    assert!(
+        mcp_mutated_fixture["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("digest mismatch")
+    );
+    assert_eq!(responses[17]["result"]["isError"], true);
+    let mcp_invalid_supplied = mcp_text_value(&responses[17]);
+    assert_eval_envelope(&mcp_invalid_supplied, "eval.run", false);
+    assert_eq!(mcp_invalid_supplied["error"]["code"], "invalid_input");
+    assert!(
+        mcp_invalid_supplied["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("is not in frozen suite")
+    );
+    let no_mcp_invalid_rows: i64 = Connection::open(&db)
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM eval_runs WHERE id IN ('mcp-mutated-fixture-runner', 'mcp-supplied-extra-case-run')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(no_mcp_invalid_rows, 0);
 }
 
 #[test]

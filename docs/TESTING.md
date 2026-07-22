@@ -67,7 +67,7 @@ npm pack --dry-run
 Installer changes also require:
 
 ```bash
-/Users/kregenrek/.agents/skills/shellck/scripts/run_shellck.sh scripts/install.sh
+$HOME/.agents/skills/shellck/scripts/run_shellck.sh scripts/install.sh
 PREFIX="$(mktemp -d)" PLANR_DOWNLOAD=1 PLANR_RELEASE_BASE_URL="file://$PWD/dist" scripts/install.sh
 ```
 

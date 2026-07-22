@@ -1,6 +1,9 @@
 #!/usr/bin/env sh
 set -eu
 
+repo_root=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)
+planr_test_dir=${PLANR_TEST_DIR:-"$(dirname "$repo_root")/planr-test"}
+
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
@@ -22,12 +25,12 @@ else
   exit 1
 fi
 
-if [ -d /Users/kregenrek/projects/planr-test ]; then
+if [ -d "$planr_test_dir" ]; then
   (
-    cd /Users/kregenrek/projects/planr-test
+    cd "$planr_test_dir"
     npm test
     npm run test:npm-planr
   )
 else
-  echo "planr-test not found; skipping external consumer E2E"
+  echo "planr-test not found at $planr_test_dir; skipping external consumer E2E"
 fi

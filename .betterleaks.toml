@@ -1,0 +1,30 @@
+title = "Planr BetterLeaks configuration"
+
+prefilter = '''
+matchesAny(attributes[?"path"].orValue(""), [
+  r"""(?:^|/)node_modules(?:/.*)?$""",
+  r"""(?:^|/)dist(?:/.*)?$""",
+  r"""(?:^|/)target(?:/.*)?$"""
+])
+'''
+
+filter = '''
+containsAny(finding["secret"], [
+  "EXAMPLE",
+  "CHANGEME",
+  "YOUR_API_KEY_HERE"
+])
+'''
+
+[[rules]]
+id = "ssh-test-headers"
+description = "SSH private-key headers outside test fixtures"
+regex = '''-----BEGIN (OPENSSH |RSA )?PRIVATE KEY-----'''
+keywords = ["PRIVATE KEY"]
+filter = '''
+matchesAny(attributes[?"path"].orValue(""), [
+  r""".*\.test\.[cm]?[jt]s$""",
+  r""".*\.spec\.[cm]?[jt]s$""",
+  r""".*fixtures.*"""
+])
+'''

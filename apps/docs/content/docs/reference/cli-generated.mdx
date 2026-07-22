@@ -1,6 +1,6 @@
 ---
 title: Generated CLI Reference
-description: Complete compiled Planr 1.5.2 command and option help, checked against the repository binary.
+description: Complete compiled Planr 1.6.0 command and option help, checked against the repository binary.
 ---
 
 <Callout type="info" title="Generated executable contract">
@@ -30,6 +30,7 @@ Commands:
   close
   done      Log evidence and finish the step in one command: completion log, then review request (--review) or close, optionally pick the next item
   review
+  eval      Evaluate stored run evidence: suite check, run, show, compare, gate, invalidate, and rescore through the shared eval services
   context
   note
   search
@@ -1322,6 +1323,177 @@ Options:
       --json      Emit JSON output
       --no-color  Disable color in human output
   -h, --help      Print help
+```
+
+### `planr eval`
+
+```text
+Evaluate stored run evidence: suite check, run, show, compare, gate, invalidate, and rescore through the shared eval services
+
+Usage: planr eval [OPTIONS] <COMMAND>
+
+Commands:
+  suite-check   Store or verify an immutable suite snapshot from a normalized manifest
+  run           Start a run, optionally record case evidence, and optionally finish it
+  show          Show a stored suite, run, comparison, or invalidation
+  compare       Compare two stored eval runs and persist the comparison
+  gate          Gate on a stored comparison verdict
+  invalidate    Invalidate a run or comparison
+  rescore       Start a rescore run from an existing run
+  evidence-ref  Attach an eval run/comparison to an existing Planr log, review, or artifact
+  help          Print this message or the help of the given subcommand(s)
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr eval suite-check`
+
+```text
+Store or verify an immutable suite snapshot from a normalized manifest
+
+Usage: planr eval suite-check [OPTIONS] --input <INPUT>
+
+Options:
+      --db <DB>        Path to Planr SQLite database
+      --input <INPUT>  JSON file containing suite_id, suite_version, digest, and normalized_manifest
+      --json           Emit JSON output
+      --no-color       Disable color in human output
+  -h, --help           Print help
+```
+
+#### `planr eval run`
+
+```text
+Start a run, optionally record case evidence, and optionally finish it
+
+Usage: planr eval run [OPTIONS] --input <INPUT>
+
+Options:
+      --db <DB>        Path to Planr SQLite database
+      --input <INPUT>  JSON file containing suite_digest, subject, testbed_fingerprint, and optional cases/status
+      --json           Emit JSON output
+      --no-color       Disable color in human output
+  -h, --help           Print help
+```
+
+#### `planr eval show`
+
+```text
+Show a stored suite, run, comparison, or invalidation
+
+Usage: planr eval show [OPTIONS] <KIND> <ID>
+
+Arguments:
+  <KIND>  [possible values: suite, run, comparison, invalidation]
+  <ID>
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr eval compare`
+
+```text
+Compare two stored eval runs and persist the comparison
+
+Usage: planr eval compare [OPTIONS] <BASELINE_RUN_ID> <CANDIDATE_RUN_ID>
+
+Arguments:
+  <BASELINE_RUN_ID>
+  <CANDIDATE_RUN_ID>
+
+Options:
+      --db <DB>                        Path to Planr SQLite database
+      --policy-digest <POLICY_DIGEST>  [default: default]
+      --json                           Emit JSON output
+      --recompute-of <RECOMPUTE_OF>    Existing comparison id this comparison recomputes
+      --no-color                       Disable color in human output
+      --rescore-of <RESCORE_OF>        Existing run id whose completed rescore this comparison evaluates
+  -h, --help                           Print help
+```
+
+#### `planr eval gate`
+
+```text
+Gate on a stored comparison verdict
+
+Usage: planr eval gate [OPTIONS] <COMPARISON_ID>
+
+Arguments:
+  <COMPARISON_ID>
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr eval invalidate`
+
+```text
+Invalidate a run or comparison
+
+Usage: planr eval invalidate [OPTIONS] --reason <REASON> <TARGET_KIND> <TARGET_ID>
+
+Arguments:
+  <TARGET_KIND>  [possible values: run, comparison]
+  <TARGET_ID>
+
+Options:
+      --db <DB>                              Path to Planr SQLite database
+      --reason <REASON>
+      --json                                 Emit JSON output
+      --reason-code <REASON_CODES>
+      --no-color                             Disable color in human output
+      --replacement-hint <REPLACEMENT_HINT>
+  -h, --help                                 Print help
+```
+
+#### `planr eval rescore`
+
+```text
+Start a rescore run from an existing run
+
+Usage: planr eval rescore [OPTIONS] <RUN_ID>
+
+Arguments:
+  <RUN_ID>
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --id <ID>
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr eval evidence-ref`
+
+```text
+Attach an eval run/comparison to an existing Planr log, review, or artifact
+
+Usage: planr eval evidence-ref [OPTIONS] --item <ITEM> <TARGET_KIND> <TARGET_ID> <ATTACHMENT_KIND> <ATTACHMENT_ID>
+
+Arguments:
+  <TARGET_KIND>      [possible values: run, comparison]
+  <TARGET_ID>
+  <ATTACHMENT_KIND>  [possible values: log, review, artifact]
+  <ATTACHMENT_ID>
+
+Options:
+      --db <DB>      Path to Planr SQLite database
+      --item <ITEM>
+      --json         Emit JSON output
+      --no-color     Disable color in human output
+  -h, --help         Print help
 ```
 
 ### `planr context`

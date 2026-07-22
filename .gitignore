@@ -33,12 +33,49 @@ apps/web/
 tmp/
 temp/
 
+# Local credentials, private keys, and machine-specific auth
+.aws/
+.npmrc
+.netrc
+.git-credentials
+.docker/config.json
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.agekey
+id_rsa
+id_ed25519
+id_ecdsa
+id_dsa
+credentials.json
+secrets.json
+tokens.json
+service-account*.json
+
+# Local infrastructure state and databases
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+!*.tfvars.example
+*.sqlite
+*.sqlite3
+*.db
+
 # Local agent/runtime state
 .alchemy/
 .codex/
+.claude/
+.claude.json
 .planr/
 docs/planr-spec.zip
 
 # provisioned local copies (single source: plugins/planr); hooks stay committed
 .cursor/skills/
 .cursor/agents/
+.cursor/settings.json
+.cursor/launch.json
+.cursor/mcp.json

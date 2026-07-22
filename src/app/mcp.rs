@@ -576,6 +576,96 @@ impl App {
             "planr_debug_bundle" => Ok(mcp_json(
                 self.debug_bundle(args.get("item").and_then(Value::as_str))?,
             )),
+            "planr_eval_suite_check" => Ok(mcp_eval_json(
+                "eval.suite.check",
+                self.eval_suite_check_value(
+                    args.get("input").cloned().unwrap_or_else(|| json!({})),
+                    args.get("source_path")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned),
+                ),
+            )),
+            "planr_eval_run" => Ok(mcp_eval_json(
+                "eval.run",
+                self.eval_run_value_from_input(
+                    args.get("input").cloned().unwrap_or_else(|| json!({})),
+                ),
+            )),
+            "planr_eval_show" => Ok(mcp_eval_json(
+                "eval.show",
+                required_arg(&args, "kind")
+                    .and_then(|kind| self.eval_show_value(kind, required_arg(&args, "id")?)),
+            )),
+            "planr_eval_compare" => Ok(mcp_eval_json(
+                "eval.compare",
+                required_arg(&args, "baseline_run_id").and_then(|baseline_run_id| {
+                    required_arg(&args, "candidate_run_id").and_then(|candidate_run_id| {
+                        self.eval_compare_value(
+                            baseline_run_id,
+                            candidate_run_id,
+                            args.get("policy_digest")
+                                .and_then(Value::as_str)
+                                .unwrap_or("default"),
+                            args.get("recompute_of").and_then(Value::as_str),
+                            args.get("rescore_of").and_then(Value::as_str),
+                        )
+                    })
+                }),
+            )),
+            "planr_eval_gate" => Ok(mcp_eval_json(
+                "eval.gate",
+                required_arg(&args, "comparison_id")
+                    .and_then(|comparison_id| self.eval_gate_value(comparison_id)),
+            )),
+            "planr_eval_invalidate" => Ok(mcp_eval_json(
+                "eval.invalidate",
+                required_arg(&args, "target_kind").and_then(|target_kind| {
+                    required_arg(&args, "target_id").and_then(|target_id| {
+                        required_arg(&args, "reason").and_then(|reason| {
+                            self.eval_invalidate_value(
+                                target_kind,
+                                target_id,
+                                reason,
+                                args.get("reason_codes")
+                                    .cloned()
+                                    .unwrap_or_else(|| json!([])),
+                                args.get("replacement_hint").and_then(Value::as_str),
+                            )
+                        })
+                    })
+                }),
+            )),
+            "planr_eval_rescore" => Ok(mcp_eval_json(
+                "eval.rescore",
+                required_arg(&args, "run_id").and_then(|run_id| {
+                    self.eval_rescore_value(
+                        run_id,
+                        args.get("id")
+                            .and_then(Value::as_str)
+                            .map(ToOwned::to_owned),
+                    )
+                }),
+            )),
+            "planr_eval_evidence_ref" => Ok(mcp_eval_json(
+                "eval.evidence.ref",
+                required_arg(&args, "target_kind").and_then(|target_kind| {
+                    required_arg(&args, "target_id").and_then(|target_id| {
+                        required_arg(&args, "attachment_kind").and_then(|attachment_kind| {
+                            required_arg(&args, "attachment_id").and_then(|attachment_id| {
+                                required_arg(&args, "item_id").and_then(|item_id| {
+                                    self.eval_evidence_ref_value(
+                                        target_kind,
+                                        target_id,
+                                        attachment_kind,
+                                        attachment_id,
+                                        item_id,
+                                    )
+                                })
+                            })
+                        })
+                    })
+                }),
+            )),
             "planr_review_annotate" => {
                 let item_id = required_arg(&args, "item_id")?;
                 let message = required_arg(&args, "message")?;
@@ -755,6 +845,20 @@ fn write_rpc_error(stdout: &mut io::Stdout, id: Value, code: i64, message: &str)
     )?;
     stdout.flush()?;
     Ok(())
+}
+
+fn mcp_eval_json(command: &str, result: Result<Value>) -> Value {
+    match result {
+        Ok(object) => mcp_json(super::eval_surface::eval_success_envelope(command, object)),
+        Err(error) => {
+            let message = error.to_string();
+            let envelope = super::eval_surface::eval_error_envelope(command, &message);
+            json!({
+                "content": [{"type": "text", "text": envelope.to_string()}],
+                "isError": true
+            })
+        }
+    }
 }
 
 fn string_array_arg(args: &Value, name: &str) -> Vec<String> {

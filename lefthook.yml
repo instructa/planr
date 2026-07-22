@@ -1,0 +1,15 @@
+pre-commit:
+  parallel: true
+  commands:
+    block-forbidden-files:
+      run: node scripts/hooks/block-forbidden-staged-files.mjs
+    check-repository-privacy:
+      run: sh scripts/check-repository-privacy.sh
+
+pre-push:
+  parallel: false
+  commands:
+    block-forbidden-files:
+      run: node scripts/hooks/block-forbidden-staged-files.mjs
+    check-repository-privacy:
+      run: sh scripts/check-repository-privacy.sh

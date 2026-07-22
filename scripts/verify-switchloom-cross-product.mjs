@@ -182,7 +182,7 @@ function assertUserConfigSentinelsUnchanged(before) {
 }
 
 function switchloomSourceRoot() {
-  return resolve(process.env.SWITCHLOOM_SOURCE_ROOT || "/Users/kregenrek/projects/model-routing");
+  return resolve(process.env.SWITCHLOOM_SOURCE_ROOT || join(dirname(root), "model-routing"));
 }
 
 function snapshotSwitchloomSourceWorktree() {
@@ -1001,7 +1001,7 @@ function assertParentUsedRepoLocalPlanrLoop(parent, repo) {
   assertOk(text.includes(".codex/skills/planr-loop/SKILL.md"), "parent rollout did not show a repo-local planr-loop file read", {
     parent: parent.path,
   });
-  assertOk(!text.includes("/Users/kregenrek/.agents/skills/planr-loop/SKILL.md"), "parent rollout used global stale planr-loop skill", {
+  assertOk(!text.includes(join(homedir(), ".agents/skills/planr-loop/SKILL.md")), "parent rollout used global stale planr-loop skill", {
     parent: parent.path,
   });
   assertOk(!text.includes("dispatch through the routing skill"), "parent rollout included stale routing-skill instruction", {
