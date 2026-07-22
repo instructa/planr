@@ -1665,7 +1665,13 @@ mod tests {
     fn test_app() -> App {
         let conn = Connection::open_in_memory().unwrap();
         ensure_schema(&conn).unwrap();
-        let app = App::new(conn, PathBuf::from("."), PathBuf::from(":memory:"), true);
+        let app = App::new(
+            conn,
+            PathBuf::from("."),
+            PathBuf::from(":memory:"),
+            true,
+            false,
+        );
         app.conn
             .execute(
                 "INSERT INTO projects(id, name, root_path, status, created_at, updated_at) VALUES ('p-test', 'Test', '.', 'active', datetime('now'), datetime('now'))",
@@ -1678,7 +1684,7 @@ mod tests {
     fn test_app_at(db_path: PathBuf) -> App {
         let conn = Connection::open(&db_path).unwrap();
         ensure_schema(&conn).unwrap();
-        let app = App::new(conn, PathBuf::from("."), db_path, true);
+        let app = App::new(conn, PathBuf::from("."), db_path, true, false);
         app.conn
             .execute(
                 "INSERT OR IGNORE INTO projects(id, name, root_path, status, created_at, updated_at) VALUES ('p-test', 'Test', '.', 'active', datetime('now'), datetime('now'))",
