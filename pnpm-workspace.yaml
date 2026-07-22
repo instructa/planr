@@ -7,7 +7,10 @@ verifyDepsBeforeRun: error
 
 overrides:
   '@cloudflare/workers-types': 5.20260717.1
+  '@hono/node-server@<2.0.10': 2.0.10
+  'fast-uri@<3.1.4': 3.1.4
   postcss: 8.5.19
+  'sharp@<0.35.0': 0.35.3
 
 allowBuilds:
   esbuild: true

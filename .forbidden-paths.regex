@@ -1,0 +1,47 @@
+# Local runtime state
+(^|/)\.planr/
+(^|/)\.codex/
+(^|/)\.claude/
+(^|/)\.claude\.json$
+
+# Environment files
+(^|/)\.env$
+(^|/)\.env\.
+(^|/)\.envrc$
+
+# Credential files
+(^|/)\.aws/credentials$
+(^|/)\.npmrc$
+(^|/)\.netrc$
+(^|/)\.git-credentials$
+(^|/)\.docker/config\.json$
+
+# Private keys
+\.pem$
+\.key$
+\.p12$
+\.pfx$
+\.jks$
+\.keystore$
+\.agekey$
+(^|/)id_rsa$
+(^|/)id_ed25519$
+(^|/)id_ecdsa$
+(^|/)id_dsa$
+
+# Infrastructure state
+\.tfstate($|\.|/)
+\.tfplan$
+\.tfvars$
+
+# Secrets and tokens
+(^|/)secrets\.json$
+(^|/)tokens\.json$
+(^|/)credentials\.json$
+(^|/)service-account.*\.json$
+
+# IDE/editor local files
+(^|/)\.idea/
+(^|/)\.vscode/settings\.json$
+(^|/)\.vscode/launch\.json$
+(^|/)\.cursor/(settings|launch|mcp)\.json$

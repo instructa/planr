@@ -2,12 +2,12 @@
 
 Candidate produced on 2026-07-20 in an isolated local workspace:
 
-- Workspace: `/Users/kregenrek/projects/planr-dogfood/release-v1.5.2`
-- Source clone: `/Users/kregenrek/projects/planr-dogfood/release-v1.5.2/release-candidate-src`
-- Local bare remote: `/Users/kregenrek/projects/planr-dogfood/release-v1.5.2/local-origin.git`
-- Config-proof rerun source clone: `/Users/kregenrek/projects/planr-dogfood/release-v1.5.2/config-proof/release-candidate-src`
-- Config-proof rerun local bare remote: `/Users/kregenrek/projects/planr-dogfood/release-v1.5.2/config-proof/local-origin.git`
-- Config-proof hash snapshots: `/Users/kregenrek/projects/planr-dogfood/release-v1.5.2/config-proof/evidence`
+- Workspace: `$HOME/projects/planr-dogfood/release-v1.5.2`
+- Source clone: `$HOME/projects/planr-dogfood/release-v1.5.2/release-candidate-src`
+- Local bare remote: `$HOME/projects/planr-dogfood/release-v1.5.2/local-origin.git`
+- Config-proof rerun source clone: `$HOME/projects/planr-dogfood/release-v1.5.2/config-proof/release-candidate-src`
+- Config-proof rerun local bare remote: `$HOME/projects/planr-dogfood/release-v1.5.2/config-proof/local-origin.git`
+- Config-proof hash snapshots: `$HOME/projects/planr-dogfood/release-v1.5.2/config-proof/evidence`
 - Public side effects: none. The candidate clone's `origin` points to the local bare remote, and the public `origin` check from this repository returned no `v1.5.2` tag.
 
 ## Identity
@@ -72,15 +72,15 @@ a1e27e1cfb3d9d540dfe05f5d1212ee98be97b1f48e203d48209e31243383ba3  README.md
   - `cargo test`: 71 unit tests, 67 e2e tests, and 3 routing ownership tests passed.
   - `npm pack --dry-run`: reported `planr@1.5.2`, 65 files, shasum `a3903ce5658be6f6140321232885f86f6515ae70`.
   - `scripts/security-local.sh`: betterleaks found no leaks; Trivy reported 0 vulnerabilities for `Cargo.lock` and `pnpm-lock.yaml`.
-  - Pushed `main` and `v1.5.2` only to `/Users/kregenrek/projects/planr-dogfood/release-v1.5.2/local-origin.git`.
+  - Pushed `main` and `v1.5.2` only to `$HOME/projects/planr-dogfood/release-v1.5.2/local-origin.git`.
 - `scripts/build-release.sh`: built `dist/planr-darwin-arm64.tar.gz`.
 - `npm pack`: created `planr-1.5.2.tgz` locally; no npm publish was run.
 - Config-proof rerun:
-  - `scripts/release.sh 1.5.2 'standalone Planr core with optional Switchloom handoff'`: 71 unit tests, 67 e2e tests, and 3 routing ownership tests passed; betterleaks found no leaks; Trivy reported 0 vulnerabilities; pushed only to `/Users/kregenrek/projects/planr-dogfood/release-v1.5.2/config-proof/local-origin.git`.
+  - `scripts/release.sh 1.5.2 'standalone Planr core with optional Switchloom handoff'`: 71 unit tests, 67 e2e tests, and 3 routing ownership tests passed; betterleaks found no leaks; Trivy reported 0 vulnerabilities; pushed only to `$HOME/projects/planr-dogfood/release-v1.5.2/config-proof/local-origin.git`.
   - `scripts/build-release.sh`: built `dist/planr-darwin-arm64.tar.gz`.
   - `npm pack`: created `planr-1.5.2.tgz` locally; no npm publish was run.
   - `target/release/planr --version` and `node npm/bin/planr.js --version`: both reported `planr 1.5.2`.
-- `git tag -l v1.5.2`: returned no local tag in `/Users/kregenrek/projects/planr`.
+- `git tag -l v1.5.2`: returned no local tag in `$HOME/projects/planr`.
 - `git ls-remote --heads --tags origin 'v1.5.2'`: returned no public remote ref.
 - Candidate clone artifact inventory: no Switchloom files, no legacy routing-owner directories, and no routing manifests were present.
 
@@ -89,44 +89,39 @@ a1e27e1cfb3d9d540dfe05f5d1212ee98be97b1f48e203d48209e31243383ba3  README.md
 No release command targeted user/global host config files. The config-proof rerun captured hashes immediately before and after each release-owned run, stored without file contents:
 
 - `scripts/release.sh`
-  - Before: `/Users/kregenrek/projects/planr-dogfood/release-v1.5.2/config-proof/evidence/config-before-release-sh.txt`
-  - After: `/Users/kregenrek/projects/planr-dogfood/release-v1.5.2/config-proof/evidence/config-after-release-sh.txt`
-  - Equality proof: `/Users/kregenrek/projects/planr-dogfood/release-v1.5.2/config-proof/evidence/config-release-sh-equality.txt` records `config hashes unchanged across scripts/release.sh`.
+  - Before: `$HOME/projects/planr-dogfood/release-v1.5.2/config-proof/evidence/config-before-release-sh.txt`
+  - After: `$HOME/projects/planr-dogfood/release-v1.5.2/config-proof/evidence/config-after-release-sh.txt`
+  - Equality proof: `$HOME/projects/planr-dogfood/release-v1.5.2/config-proof/evidence/config-release-sh-equality.txt` records `config hashes unchanged across scripts/release.sh`.
 - `scripts/build-release.sh`
-  - Before: `/Users/kregenrek/projects/planr-dogfood/release-v1.5.2/config-proof/evidence/config-before-build-release.txt`
-  - After: `/Users/kregenrek/projects/planr-dogfood/release-v1.5.2/config-proof/evidence/config-after-build-release.txt`
-  - Equality proof: `/Users/kregenrek/projects/planr-dogfood/release-v1.5.2/config-proof/evidence/config-build-release-equality.txt` records `config hashes unchanged across scripts/build-release.sh`.
+  - Before: `$HOME/projects/planr-dogfood/release-v1.5.2/config-proof/evidence/config-before-build-release.txt`
+  - After: `$HOME/projects/planr-dogfood/release-v1.5.2/config-proof/evidence/config-after-build-release.txt`
+  - Equality proof: `$HOME/projects/planr-dogfood/release-v1.5.2/config-proof/evidence/config-build-release-equality.txt` records `config hashes unchanged across scripts/build-release.sh`.
 - `npm pack`
-  - Before: `/Users/kregenrek/projects/planr-dogfood/release-v1.5.2/config-proof/evidence/config-before-npm-pack.txt`
-  - After: `/Users/kregenrek/projects/planr-dogfood/release-v1.5.2/config-proof/evidence/config-after-npm-pack.txt`
-  - Equality proof: `/Users/kregenrek/projects/planr-dogfood/release-v1.5.2/config-proof/evidence/config-npm-pack-equality.txt` records `config hashes unchanged across npm pack`.
+  - Before: `$HOME/projects/planr-dogfood/release-v1.5.2/config-proof/evidence/config-before-npm-pack.txt`
+  - After: `$HOME/projects/planr-dogfood/release-v1.5.2/config-proof/evidence/config-after-npm-pack.txt`
+  - Equality proof: `$HOME/projects/planr-dogfood/release-v1.5.2/config-proof/evidence/config-npm-pack-equality.txt` records `config hashes unchanged across npm pack`.
 
-Every before/after snapshot contains the same hashes:
-
-- `/Users/kregenrek/.codex/config.toml`: `82224997e7d4d5147f892a8aa12f7f5f04e77c38267da6ba1274a9267b23f040`
-- `/Users/kregenrek/.claude/settings.json`: `99a0eb17993d0dd0c952df03bec38d284fd119a9b0ed928f3201b1792224049f`
-- `/Users/kregenrek/.claude.json`: `a5f901ce3b38943ed2591333b4cb6dbab0cab101f8d02ea348fc476021f55afb`
-- `/Users/kregenrek/.cursor/mcp.json`: `cf7217adfcb48b532dfdbced62ca68eab4c60996ef38d510a8efb3d286ce5baf`
+Every before/after snapshot contains matching hashes. Machine-specific paths and fingerprints are intentionally omitted from this public evidence file.
 
 ## Switchloom v0.2.1 Optional Dogfood Evidence
 
 Fresh non-replay dogfood ran on 2026-07-20 with the release-candidate Planr v1.5.2 binary and exact public Switchloom v0.2.1 bytes. The durable local audit receipt is:
 
-- Receipt: `/private/tmp/planr-switchloom-cross-product-QEvWps/oracle-receipt.json`
+- Receipt: `/private/tmp/planr-switchloom-cross-product-<run>/oracle-receipt.json`
 - Receipt SHA-256: `c01f4b980977a15028f7a82cc6fc237aa50fb4b35310871ba3ad245ec1c699ee`
 - Mode/result: `live`, `ok=true`
-- Fresh root: `/private/tmp/planr-switchloom-cross-product-QEvWps`
+- Fresh root: `/private/tmp/planr-switchloom-cross-product-<run>`
 
 Replayable command:
 
 ```bash
-PLANR_WORKER_ID=switchloom_optional_dogfood PLANR_BIN=/Users/kregenrek/projects/planr-dogfood/release-v1.5.2/release-candidate-src/target/release/planr SWITCHLOOM_TARBALL=/private/tmp/switchloom-public-0.2.1.MN008L/switchloom-0.2.1.tgz PLANR_ORACLE_TEMP_PARENT=/private/tmp node scripts/verify-switchloom-cross-product.mjs
+PLANR_WORKER_ID=switchloom_optional_dogfood PLANR_BIN=$HOME/projects/planr-dogfood/release-v1.5.2/release-candidate-src/target/release/planr SWITCHLOOM_TARBALL=/path/to/switchloom-0.2.1.tgz PLANR_ORACLE_TEMP_PARENT=/private/tmp node scripts/verify-switchloom-cross-product.mjs
 ```
 
 Public Switchloom package identity:
 
 - Package: `switchloom@0.2.1`
-- Tarball: `/private/tmp/switchloom-public-0.2.1.MN008L/switchloom-0.2.1.tgz`
+- Tarball: `/path/to/switchloom-0.2.1.tgz`
 - npm SHA-1 shasum: `e813283f54d0d64b5fd4835e17687aaaf3b0a6cb`
 - SHA-512 integrity: `sha512-vUKHxYXHt7Sx7MkYQz5MRZ0Ll544iHoadHGCgvJPUYkpUzQWtzjt1o3xhyeQwExCA6tuLQ5vZnLPz+fO5uMiXg==`
 - Local SHA-256: `028176063ce20b4981aa4e13199b25169b2f8296f648eeeec9291e6955e7549a`
@@ -137,10 +132,10 @@ Host routing evidence from the receipt:
 - Maker role/model/effort: `model_routing_terra_high`, `gpt-5.6-terra`, `high`
 - Reviewer role/model/effort: `model_routing_sol_high`, `gpt-5.6-sol`, `high`
 - `fork_turns_all_used`: `false`
-- Public Codex JSONL: `/private/tmp/planr-switchloom-cross-product-QEvWps/codex-live.jsonl`
-- Parent rollout: `/Users/kregenrek/.codex/sessions/2026/07/20/rollout-2026-07-20T20-05-19-019f80b4-2e89-7470-a432-6937ddcbc7ac.jsonl`
-- Maker rollout: `/Users/kregenrek/.codex/sessions/2026/07/20/rollout-2026-07-20T20-05-50-019f80b4-a7d3-73d1-bf34-9762ad7d9474.jsonl`
-- Reviewer rollout: `/Users/kregenrek/.codex/sessions/2026/07/20/rollout-2026-07-20T20-06-37-019f80b5-5d7f-7441-97f3-c743d97e0a8c.jsonl`
+- Public Codex JSONL: `/private/tmp/planr-switchloom-cross-product-<run>/codex-live.jsonl`
+- Parent rollout: local Codex session (path omitted)
+- Maker rollout: local Codex session (path omitted)
+- Reviewer rollout: local Codex session (path omitted)
 
 Fresh Planr audit and uninstall evidence:
 
@@ -148,15 +143,12 @@ Fresh Planr audit and uninstall evidence:
 - Fresh oracle item: `i-build-first-slice-5c85`
 - Audit result: holds with clauses `items_settled`, `reviews_complete`, `approvals_clear`, and `verification_logged`.
 - Post-uninstall result: Switchloom uninstall removed only managed files and unrouted Planr still worked; the script reran the Planr audit after uninstall and required `holds=true`.
-- Requested-only routing metadata was rejected as effective proof: `/private/tmp/planr-switchloom-cross-product-QEvWps/requested-only-route-audit.json`.
+- Requested-only routing metadata was rejected as effective proof: `/private/tmp/planr-switchloom-cross-product-<run>/requested-only-route-audit.json`.
 
 Protected configuration and source inventory proof:
 
-- `/Users/kregenrek/.codex/config.toml`: `82224997e7d4d5147f892a8aa12f7f5f04e77c38267da6ba1274a9267b23f040`
-- `/Users/kregenrek/.claude/settings.json`: `99a0eb17993d0dd0c952df03bec38d284fd119a9b0ed928f3201b1792224049f`
-- `/Users/kregenrek/.claude.json`: `a5f901ce3b38943ed2591333b4cb6dbab0cab101f8d02ea348fc476021f55afb`
-- `/Users/kregenrek/.cursor/mcp.json`: `cf7217adfcb48b532dfdbced62ca68eab4c60996ef38d510a8efb3d286ce5baf`
-- Switchloom source root: `/Users/kregenrek/projects/model-routing`
+- User configuration: unchanged; machine-specific paths and fingerprints omitted
+- Switchloom source root: sibling `model-routing` checkout (or `SWITCHLOOM_SOURCE_ROOT`)
 - Switchloom source HEAD: `191f6aac91ff0f73fcae68ab269eb2d89c9e76e9`
 - Switchloom source status SHA-256: `2ca939e3e14ba8971210e93152120323641d21b0ac465b02a85335860b01758c`
 - Switchloom tracked files SHA-256: `0292bca86e80e9c63d5848984cab229b17df6e1162f1b0d8ec577474a9ac3591`

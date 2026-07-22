@@ -20,6 +20,9 @@
     "docs"
   ],
   "scripts": {
+    "security:check": "sh scripts/security-local.sh",
+    "security:privacy": "sh scripts/check-repository-privacy.sh",
+    "security:staged": "node scripts/hooks/block-forbidden-staged-files.mjs",
     "build:native": "cargo build --release",
     "test": "cargo test",
     "pack:check": "npm pack --dry-run",

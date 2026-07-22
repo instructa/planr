@@ -23,6 +23,9 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
 
+      - name: Check repository privacy boundaries
+        run: sh scripts/check-repository-privacy.sh
+
       - name: TruffleHog verified secrets
         uses: trufflesecurity/trufflehog@d411fff7b8879a62509f3fa98c07f247ac089a51 # v3.95.5
         with:
