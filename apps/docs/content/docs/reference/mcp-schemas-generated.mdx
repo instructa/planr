@@ -1,6 +1,6 @@
 ---
 title: Generated MCP Tool Schemas
-description: Complete Planr 1.5.2 tools/list inventory with every property, type, description, required field, enum/default declaration, and additionalProperties rule.
+description: Complete Planr 1.6.0 tools/list inventory with every property, type, description, required field, enum/default declaration, and additionalProperties rule.
 ---
 
 <Callout type="info" title="Generated runtime contract">
@@ -979,6 +979,229 @@ Preview a privacy-minimized debug bundle
     }
   },
   "required": [],
+  "type": "object"
+}
+```
+
+## `planr_eval_suite_check`
+
+Store or verify an immutable eval suite snapshot
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "input": {
+      "description": "Suite snapshot object with digest and normalized_manifest",
+      "type": "object"
+    },
+    "source_path": {
+      "description": "Optional source path for the suite manifest",
+      "type": "string"
+    }
+  },
+  "required": [
+    "input"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_eval_run`
+
+Start an eval run, optionally record case evidence, and optionally finish it
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "input": {
+      "description": "Run object with suite_digest, subject, optional cases, and optional status",
+      "type": "object"
+    }
+  },
+  "required": [
+    "input"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_eval_show`
+
+Show a stored eval suite, run, comparison, or invalidation
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "description": "Eval record id",
+      "type": "string"
+    },
+    "kind": {
+      "description": "suite, run, comparison, or invalidation",
+      "type": "string"
+    }
+  },
+  "required": [
+    "kind",
+    "id"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_eval_compare`
+
+Compare two stored eval runs and persist the comparison
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "baseline_run_id": {
+      "description": "Baseline eval run id",
+      "type": "string"
+    },
+    "candidate_run_id": {
+      "description": "Candidate eval run id",
+      "type": "string"
+    },
+    "policy_digest": {
+      "description": "Comparison policy digest (default)",
+      "type": "string"
+    }
+  },
+  "required": [
+    "baseline_run_id",
+    "candidate_run_id"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_eval_gate`
+
+Gate on a stored eval comparison verdict
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "comparison_id": {
+      "description": "Eval comparison id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "comparison_id"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_eval_invalidate`
+
+Invalidate an eval run or comparison
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "reason": {
+      "description": "Invalidation reason",
+      "type": "string"
+    },
+    "reason_codes": {
+      "description": "Machine-readable reason codes",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "replacement_hint": {
+      "description": "Optional replacement hint",
+      "type": "string"
+    },
+    "target_id": {
+      "description": "Target id",
+      "type": "string"
+    },
+    "target_kind": {
+      "description": "run or comparison",
+      "type": "string"
+    }
+  },
+  "required": [
+    "target_kind",
+    "target_id",
+    "reason"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_eval_rescore`
+
+Start a rescore eval run from an existing run
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "description": "Optional id for the rescore run",
+      "type": "string"
+    },
+    "run_id": {
+      "description": "Source eval run id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_eval_evidence_ref`
+
+Attach an eval run or comparison to an existing Planr log, review, or artifact without closing work
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "attachment_id": {
+      "description": "Planr attachment id",
+      "type": "string"
+    },
+    "attachment_kind": {
+      "description": "log, review, or artifact",
+      "type": "string"
+    },
+    "item_id": {
+      "description": "Item id that owns the evidence",
+      "type": "string"
+    },
+    "target_id": {
+      "description": "Eval target id",
+      "type": "string"
+    },
+    "target_kind": {
+      "description": "run or comparison",
+      "type": "string"
+    }
+  },
+  "required": [
+    "target_kind",
+    "target_id",
+    "attachment_kind",
+    "attachment_id",
+    "item_id"
+  ],
   "type": "object"
 }
 ```
