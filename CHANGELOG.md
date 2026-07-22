@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- Clarified that Planr's complete evaluation workflow is CLI-first and does not require MCP; MCP remains an optional mirrored integration surface.
+
 ## [1.7.0] - 2026-07-22
 
 ### Added
