@@ -1,0 +1,175 @@
+{
+  "digest": "sha256:65c096c54bf89c49a151321a84b28d6419aa08930c8a78ac92f0df3641a6b8ed",
+  "schema_version": "eval.suite.v1",
+  "suite_id": "planr-lifecycle-smoke",
+  "suite_version": "1.0.0",
+  "description": "Planr lifecycle smoke cases for feature-promotion eval evidence.",
+  "metadata": {
+    "owner": "planr-core",
+    "purpose": "Repository-owned smoke suite for baseline/candidate lifecycle evidence examples."
+  },
+  "fixtures": [
+    {
+      "id": "lifecycle-fixture",
+      "role": "repository",
+      "path": "examples/eval/fixtures/lifecycle-input.json",
+      "digest_algorithm": "sha256",
+      "digest": "sha256:9982445dbdee32cc1865b9811a253d1c05e727e9791385cac80db42e495a77a2"
+    }
+  ],
+  "scorers": [
+    {
+      "id": "planr-lifecycle-scorer",
+      "version": "1.0.0",
+      "kind": "planr_lifecycle",
+      "config": {
+        "required_events": [
+          "project_created",
+          "map_built",
+          "item_closed"
+        ]
+      }
+    }
+  ],
+  "cases": [
+    {
+      "case_id": "planr-lifecycle-baseline",
+      "title": "Create a project, build a map, and close one item",
+      "fixture_id": "lifecycle-fixture",
+      "scorer_id": "planr-lifecycle-scorer",
+      "fixture_ids": [
+        "lifecycle-fixture"
+      ],
+      "scorer_ids": [
+        "planr-lifecycle-scorer@1.0.0"
+      ],
+      "subject": {
+        "kind": "planr_cli",
+        "argv": [
+          "node",
+          "examples/eval/subjects/lifecycle-subject.mjs",
+          "planr-lifecycle-baseline",
+          ".planr/eval-lifecycle-counts.json",
+          "from-file"
+        ]
+      },
+      "assertions": [
+        {
+          "kind": "exit_code",
+          "expected": 0
+        },
+        {
+          "kind": "event_sequence",
+          "expected": [
+            "project_created",
+            "map_built",
+            "item_closed"
+          ]
+        }
+      ],
+      "tags": [
+        "baseline",
+        "candidate",
+        "resume",
+        "invalidation"
+      ],
+      "measures": [
+        "duration_ms"
+      ],
+      "budgets": {
+        "duration_ms_p95": 1000
+      },
+      "sampling": {
+        "repetitions": 3,
+        "warmups": 0,
+        "seed": 21,
+        "min_successful_samples": 3
+      },
+      "timeout_ms": 30000,
+      "output_limit_bytes": 65536
+    },
+    {
+      "case_id": "planr-lifecycle-follow-up",
+      "title": "Run a second lifecycle item for resume proof",
+      "fixture_id": "lifecycle-fixture",
+      "scorer_id": "planr-lifecycle-scorer",
+      "fixture_ids": [
+        "lifecycle-fixture"
+      ],
+      "scorer_ids": [
+        "planr-lifecycle-scorer@1.0.0"
+      ],
+      "subject": {
+        "kind": "planr_cli",
+        "argv": [
+          "node",
+          "examples/eval/subjects/lifecycle-subject.mjs",
+          "planr-lifecycle-follow-up",
+          ".planr/eval-lifecycle-counts.json",
+          "from-file"
+        ]
+      },
+      "assertions": [
+        {
+          "kind": "exit_code",
+          "expected": 0
+        },
+        {
+          "kind": "event_sequence",
+          "expected": [
+            "project_created",
+            "map_built",
+            "item_closed"
+          ]
+        }
+      ],
+      "tags": [
+        "baseline",
+        "candidate",
+        "resume",
+        "invalidation"
+      ],
+      "measures": [
+        "duration_ms"
+      ],
+      "budgets": {
+        "duration_ms_p95": 1000
+      },
+      "sampling": {
+        "repetitions": 3,
+        "warmups": 0,
+        "seed": 21,
+        "min_successful_samples": 3
+      },
+      "timeout_ms": 30000,
+      "output_limit_bytes": 65536
+    }
+  ],
+  "comparison_policy": {
+    "freshness_max_age_hours": 168,
+    "required_case_coverage": 1.0,
+    "compatible_testbed_fields": [
+      "os",
+      "arch",
+      "planr_version"
+    ],
+    "quality_non_inferiority_margin": 0.0,
+    "material_improvement": {
+      "duration_ms_p95_relative": -0.1
+    },
+    "material_regression": {
+      "duration_ms_p95_relative": 0.1
+    },
+    "protected_dimensions": {}
+  },
+  "safety": {
+    "allow_network": false,
+    "allow_shell": false,
+    "max_concurrency": 1,
+    "capture_stdout": "digest_and_bounded_excerpt",
+    "capture_stderr": "digest_and_bounded_excerpt",
+    "forbid_prompt_capture": true,
+    "forbid_source_capture": true,
+    "forbid_secret_capture": true
+  }
+}
