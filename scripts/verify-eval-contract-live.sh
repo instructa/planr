@@ -13,6 +13,11 @@ COMPARISONS="$TMP/comparisons.jsonl"
 CONFIG_BEFORE="$TMP/config-before.txt"
 CONFIG_AFTER="$TMP/config-after.txt"
 
+cleanup() {
+  rm -rf -- "$TMP"
+}
+trap cleanup EXIT
+
 hash_file() {
   if [ -f "$1" ]; then
     shasum -a 256 "$1" | awk '{print $1}'
@@ -521,10 +526,10 @@ mkdir -p "$IMPORT_REPO"
 fingerprint_scoped_config > "$CONFIG_AFTER"
 cmp "$CONFIG_BEFORE" "$CONFIG_AFTER"
 
-node - "$COMPARISONS" "$DB" "$PACKAGE" "$FRESH" "$IMPORT_REPO" "$EVIDENCE_ITEM" "$LOG_ID" "$INVALIDATION_JSON" "$RECOMPUTED_ID" "$RESCORE_COMPARISON_ID" "$INVALIDATED_COMPARISON_ID" "$CONFIG_BEFORE" "$BIN" <<'NODE'
+node - "$COMPARISONS" "$DB" "$PACKAGE" "$FRESH" "$IMPORT_REPO" "$EVIDENCE_ITEM" "$LOG_ID" "$INVALIDATION_JSON" "$RECOMPUTED_ID" "$RESCORE_COMPARISON_ID" "$INVALIDATED_COMPARISON_ID" "$BIN" <<'NODE'
 const fs = require('fs');
 const {execFileSync} = require('child_process');
-const [comparisonsPath, db, pkg, fresh, imported, item, log, invalidationRaw, recomputedId, rescoreComparisonId, invalidatedComparisonId, configPath, bin] = process.argv.slice(2);
+const [comparisonsPath, db, pkg, fresh, imported, item, log, invalidationRaw, recomputedId, rescoreComparisonId, invalidatedComparisonId, bin] = process.argv.slice(2);
 const ESTIMATE_PROVENANCE = {
   pricing_reference_id: 'openai-prices',
   pricing_reference_version: '2026-07-01',
@@ -739,5 +744,5 @@ if (sql(`SELECT rescore_of FROM eval_comparisons WHERE id = '${rescoreComparison
 if (sql("SELECT COUNT(*) FROM eval_samples WHERE run_id = 'baseline-run'") !== '48') throw new Error('original baseline raw samples changed');
 if (sql("SELECT COUNT(*) FROM eval_samples WHERE run_id = 'rescored-baseline-run'") !== '48') throw new Error('completed rescore samples missing');
 const invalidation = JSON.parse(invalidationRaw);
-console.log(JSON.stringify({verdict:'pass', testbed_id:'fresh-repo-live', fresh_repo:fresh, import_repo:imported, db, package:pkg, evidence_item_id:item, seed_log_id:log, config_fingerprints:fs.readFileSync(configPath,'utf8').trim().split('\n'), suite_digest:suiteDigest, comparisons:rows, asserted_remediations: remediation, recomputed_comparison_id:recomputedId, rescore_comparison_id:rescoreComparisonId, invalidated_comparison_id:invalidatedComparisonId, invalidation_id:invalidation.object.invalidation.id, metering_oracle:{actual_trusted:actualRun.efficiency_summary.cost_per_verified_success_micros, estimated:estimatedRun.efficiency_summary.cost_per_verified_success_micros, unavailable:unavailableRun.efficiency_summary.cost_per_verified_success_micros}, source_import_projection_compared:['baseline-run','metering-actual-run','metering-estimated-run','metering-unavailable-run',improvedId,recomputedId,rescoreComparisonId,invalidatedComparisonId], resume:{parent_run_id:'interrupted-run', resumed_run_id:'resumed-run', reused_parent_case:'planr-lifecycle-baseline', execution_counts:counts}, rescore_run_id:'rescored-baseline-run'}, null, 2));
+console.log(JSON.stringify({verdict:'pass', testbed_id:'fresh-repo-live', config_unchanged:true, temporary_artifacts_removed_on_exit:true, evidence_item_id:item, seed_log_id:log, suite_digest:suiteDigest, comparisons:rows, asserted_remediations: remediation, recomputed_comparison_id:recomputedId, rescore_comparison_id:rescoreComparisonId, invalidated_comparison_id:invalidatedComparisonId, invalidation_id:invalidation.object.invalidation.id, metering_oracle:{actual_trusted:actualRun.efficiency_summary.cost_per_verified_success_micros, estimated:estimatedRun.efficiency_summary.cost_per_verified_success_micros, unavailable:unavailableRun.efficiency_summary.cost_per_verified_success_micros}, source_import_projection_compared:['baseline-run','metering-actual-run','metering-estimated-run','metering-unavailable-run',improvedId,recomputedId,rescoreComparisonId,invalidatedComparisonId], resume:{parent_run_id:'interrupted-run', resumed_run_id:'resumed-run', reused_parent_case:'planr-lifecycle-baseline', execution_counts:counts}, rescore_run_id:'rescored-baseline-run'}, null, 2));
 NODE

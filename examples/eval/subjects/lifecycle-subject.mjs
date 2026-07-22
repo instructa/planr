@@ -20,10 +20,12 @@ try {
 }
 
 const delays = {
-  baseline: 60,
+  // Keep the measured work comfortably above process-startup jitter so a
+  // replay of the same treatment does not cross the 10% regression gate.
+  baseline: 300,
   better: 5,
-  same: 60,
-  worse: 500,
+  same: 300,
+  worse: 1000,
 };
 const delayMs = delays[effectiveMode] ?? delays.baseline;
 const started = Date.now();
