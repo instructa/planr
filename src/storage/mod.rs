@@ -1,3 +1,4 @@
+mod eval_schema;
 mod rows;
 mod schema;
 

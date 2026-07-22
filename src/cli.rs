@@ -1,7 +1,9 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
+mod eval;
 mod policy;
+pub(crate) use eval::*;
 pub(crate) use policy::PolicyCommand;
 
 #[derive(Parser, Debug)]
@@ -43,6 +45,9 @@ pub(crate) enum Command {
     /// then review request (--review) or close, optionally pick the next item.
     Done(DoneArgs),
     Review(ReviewArgs),
+    /// Evaluate stored run evidence: suite check, run, show, compare, gate,
+    /// invalidate, and rescore through the shared eval services.
+    Eval(EvalArgs),
     Context(ContextArgs),
     Note(NoteArgs),
     Search(SearchArgs),

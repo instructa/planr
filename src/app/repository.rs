@@ -13,6 +13,7 @@ use std::thread;
 use std::time::Duration;
 
 mod context;
+pub(crate) mod eval;
 mod evidence;
 mod item;
 mod link;

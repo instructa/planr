@@ -9,6 +9,7 @@ mod agents_init;
 mod application;
 mod audit;
 mod commands;
+mod eval_surface;
 mod flow;
 mod git_review;
 mod graph;
@@ -28,7 +29,9 @@ mod review;
 mod review_workspace;
 mod surfaces;
 
+pub(crate) use eval_surface::EvalCliExit;
 pub(crate) use flow::LogInput;
+pub(crate) use repository::eval::EvalReusableCaseEvidence;
 pub(crate) use review::ReviewArtifactInput;
 
 pub(crate) struct App {
@@ -116,6 +119,7 @@ impl App {
             Command::Close(args) => self.close(args),
             Command::Done(args) => self.done(args),
             Command::Review(args) => self.review(args.command),
+            Command::Eval(args) => self.eval(args.command),
             Command::Context(args) => self.context(args.command),
             Command::Note(args) => self.context(args.command),
             Command::Search(args) => self.search(args),

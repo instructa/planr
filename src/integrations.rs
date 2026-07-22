@@ -2,6 +2,9 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use std::path::Path;
 
+mod cursor;
+pub use cursor::cursor_deeplink;
+
 pub fn install_snippet(client: &str, db: &Path) -> String {
     match client {
         "codex" => format!(
@@ -20,46 +23,6 @@ pub fn install_snippet(client: &str, db: &Path) -> String {
         ),
         _ => String::new(),
     }
-}
-
-/// One-click Cursor MCP install link (cursor://anysphere.cursor-deeplink).
-/// The embedded config carries no --db path on purpose: Cursor spawns stdio
-/// servers with the workspace as working directory, so each project resolves
-/// its own `.planr/planr.sqlite`, making the link safe at user scope.
-pub fn cursor_deeplink() -> String {
-    let config = json!({"command": "planr", "args": ["mcp"]});
-    format!(
-        "cursor://anysphere.cursor-deeplink/mcp/install?name=planr&config={}",
-        base64_url(config.to_string().as_bytes())
-    )
-}
-
-/// URL-safe base64 (RFC 4648 section 5, with padding), matching what Cursor's
-/// deeplink handler accepts. Small enough that a dependency is not warranted.
-fn base64_url(input: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
-    for chunk in input.chunks(3) {
-        let b = [
-            chunk[0],
-            *chunk.get(1).unwrap_or(&0),
-            *chunk.get(2).unwrap_or(&0),
-        ];
-        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
-        out.push(ALPHABET[(n >> 18) as usize & 63] as char);
-        out.push(ALPHABET[(n >> 12) as usize & 63] as char);
-        out.push(if chunk.len() > 1 {
-            ALPHABET[(n >> 6) as usize & 63] as char
-        } else {
-            '='
-        });
-        out.push(if chunk.len() > 2 {
-            ALPHABET[n as usize & 63] as char
-        } else {
-            '='
-        });
-    }
-    out
 }
 
 pub fn mcp_json_config(db: &Path) -> String {
@@ -340,6 +303,60 @@ pub fn mcp_tools() -> Vec<Value> {
             &[],
         ),
         tool(
+            "planr_eval_suite_check",
+            "Store or verify an immutable eval suite snapshot",
+            json!({"input": prop("object", "Suite snapshot object with digest and normalized_manifest"), "source_path": prop("string", "Optional source path for the suite manifest")}),
+            &["input"],
+        ),
+        tool(
+            "planr_eval_run",
+            "Start an eval run, optionally record case evidence, and optionally finish it",
+            json!({"input": prop("object", "Run object with suite_digest, subject, optional cases, and optional status")}),
+            &["input"],
+        ),
+        tool(
+            "planr_eval_show",
+            "Show a stored eval suite, run, comparison, or invalidation",
+            json!({"kind": prop("string", "suite, run, comparison, or invalidation"), "id": prop("string", "Eval record id")}),
+            &["kind", "id"],
+        ),
+        tool(
+            "planr_eval_compare",
+            "Compare two stored eval runs and persist the comparison",
+            json!({"baseline_run_id": prop("string", "Baseline eval run id"), "candidate_run_id": prop("string", "Candidate eval run id"), "policy_digest": prop("string", "Comparison policy digest (default)")}),
+            &["baseline_run_id", "candidate_run_id"],
+        ),
+        tool(
+            "planr_eval_gate",
+            "Gate on a stored eval comparison verdict",
+            json!({"comparison_id": prop("string", "Eval comparison id")}),
+            &["comparison_id"],
+        ),
+        tool(
+            "planr_eval_invalidate",
+            "Invalidate an eval run or comparison",
+            json!({"target_kind": prop("string", "run or comparison"), "target_id": prop("string", "Target id"), "reason": prop("string", "Invalidation reason"), "reason_codes": string_array("Machine-readable reason codes"), "replacement_hint": prop("string", "Optional replacement hint")}),
+            &["target_kind", "target_id", "reason"],
+        ),
+        tool(
+            "planr_eval_rescore",
+            "Start a rescore eval run from an existing run",
+            json!({"run_id": prop("string", "Source eval run id"), "id": prop("string", "Optional id for the rescore run")}),
+            &["run_id"],
+        ),
+        tool(
+            "planr_eval_evidence_ref",
+            "Attach an eval run or comparison to an existing Planr log, review, or artifact without closing work",
+            json!({"target_kind": prop("string", "run or comparison"), "target_id": prop("string", "Eval target id"), "attachment_kind": prop("string", "log, review, or artifact"), "attachment_id": prop("string", "Planr attachment id"), "item_id": prop("string", "Item id that owns the evidence")}),
+            &[
+                "target_kind",
+                "target_id",
+                "attachment_kind",
+                "attachment_id",
+                "item_id",
+            ],
+        ),
+        tool(
             "planr_log_add",
             "Add evidence log to an item",
             json!({"item": prop("string", "Item id"), "summary": prop("string", "What was done"), "kind": prop("string", "Log kind (default completion)"), "files": string_array("Changed file paths"), "commands": string_array("Commands run"), "tests": string_array("Tests run with results"), "profile": prop("string", "Registry profile the run actually executed on (advisory mismatch check)"), "route_observation": prop("object", "Requested/resolved/effective route, transition, policy/binding provenance, and metering")}),
@@ -422,36 +439,4 @@ pub fn mcp_resources() -> Vec<Value> {
 
 pub fn mcp_json(value: impl Serialize) -> Value {
     json!({"content": [{"type": "text", "text": serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string())}]})
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{base64_url, cursor_deeplink};
-
-    #[test]
-    fn base64_url_matches_rfc4648_vectors() {
-        assert_eq!(base64_url(b""), "");
-        assert_eq!(base64_url(b"f"), "Zg==");
-        assert_eq!(base64_url(b"fo"), "Zm8=");
-        assert_eq!(base64_url(b"foo"), "Zm9v");
-        assert_eq!(base64_url(b"foob"), "Zm9vYg==");
-        assert_eq!(base64_url(b"fooba"), "Zm9vYmE=");
-        assert_eq!(base64_url(b"foobar"), "Zm9vYmFy");
-        // URL-safe alphabet: 0xfb 0xff maps to -_ instead of +/.
-        assert_eq!(base64_url(&[0xfb, 0xff]), "-_8=");
-    }
-
-    #[test]
-    fn cursor_deeplink_encodes_portable_stdio_config() {
-        let link = cursor_deeplink();
-        assert!(
-            link.starts_with("cursor://anysphere.cursor-deeplink/mcp/install?name=planr&config=")
-        );
-        let encoded = link.split("config=").nth(1).unwrap();
-        assert_eq!(
-            encoded,
-            base64_url(br#"{"args":["mcp"],"command":"planr"}"#),
-            "deeplink config must be the portable stdio server object"
-        );
-    }
 }
