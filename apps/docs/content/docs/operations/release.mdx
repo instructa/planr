@@ -19,9 +19,11 @@ Versions must use `x.y.z`, optionally followed by `-alpha.N`, `-beta.N`, or `-rc
 
 <CommandBlock command={'PLANR_RELEASE_EVAL_SUITE=/path/to/planr-evals/suite.json PLANR_RELEASE_EVAL_DB=/path/to/planr-evals/eval.sqlite PLANR_RELEASE_EVAL_RECEIPT=/path/to/planr-evals/receipt.json scripts/release.sh 1.7.2 "one-line release summary"'} label="Release" />
 
-The script synchronizes Cargo, npm, Codex, Claude, Cursor, and `Cargo.lock`
-versions; builds the candidate; regenerates and strictly verifies both generated
-references; validates the receipt against Planr-owned route
+The script synchronizes Cargo, npm, Codex, Claude, and Cursor manifests;
+refreshes pnpm's installed workspace metadata from the frozen lockfile and
+rejects any lockfile byte change; builds the candidate and synchronizes
+`Cargo.lock`; regenerates and strictly verifies both generated references;
+validates the receipt against Planr-owned route
 evidence and the explicitly supplied external suite/database; recomputes and
 gates the stored comparison; runs Rust, deterministic release-gate, package,
 and security checks; then stages the six version files plus both generated

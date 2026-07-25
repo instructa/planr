@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 
 - Made `scripts/release.sh` the sole writer for version-derived CLI/MCP references during a release: pre-merge references stay aligned with current manifests, while the atomic release commit regenerates, verifies, and stages both after the version bump.
+- Refresh pnpm's derived workspace metadata from the frozen lockfile after the release version bump, fail on any lockfile byte change, and stop before references, gates, or Git mutation when synchronization fails.
 
 ### Security
 
