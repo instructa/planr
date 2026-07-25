@@ -60,9 +60,16 @@ replace plugins/planr/.codex-plugin/plugin.json "s/\"version\": \".*\"/\"version
 replace plugins/planr/.claude-plugin/plugin.json "s/\"version\": \".*\"/\"version\": \"$version\"/"
 replace .cursor-plugin/plugin.json "s/\"version\": \".*\"/\"version\": \"$version\"/"
 
+# Generated references are version-derived release artifacts. Build the bumped
+# binary first, then regenerate and strictly check both references before any
+# release gate or Git mutation. The release commit owns these files together
+# with every synchronized version manifest.
+cargo build --quiet
+pnpm --filter @planr/docs reference:generate
+pnpm --filter @planr/docs reference:check
+
 # The candidate binary owns eval semantics. The local receipt contains only
 # identifiers/digests; model-backed evidence remains in the local Planr DB.
-cargo build --quiet
 eval_receipt="${PLANR_RELEASE_EVAL_RECEIPT:-}"
 if [ -z "$eval_receipt" ]; then
   echo "PLANR_RELEASE_EVAL_RECEIPT is required; capture fresh local eval evidence before release" >&2
@@ -94,7 +101,9 @@ scripts/security-local.sh
 git add Cargo.toml Cargo.lock package.json \
   plugins/planr/.codex-plugin/plugin.json \
   plugins/planr/.claude-plugin/plugin.json \
-  .cursor-plugin/plugin.json
+  .cursor-plugin/plugin.json \
+  apps/docs/content/docs/reference/cli-generated.mdx \
+  apps/docs/content/docs/reference/mcp-schemas-generated.mdx
 git commit -m "release $version: $summary"
 git tag -a "v$version" -m "planr v$version: $summary"
 git push origin HEAD "v$version"

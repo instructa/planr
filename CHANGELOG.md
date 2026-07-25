@@ -14,6 +14,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Made external release-eval fixtures self-contained by resolving their paths from the external suite directory and binding candidate binaries and databases to explicit absolute paths.
 - Required every published architecture, including macOS x86_64 under Rosetta, to execute and report the exact tagged version before its release asset can upload.
 
+### Fixed
+
+- Made `scripts/release.sh` the sole writer for version-derived CLI/MCP references during a release: pre-merge references stay aligned with current manifests, while the atomic release commit regenerates, verifies, and stages both after the version bump.
+
 ### Security
 
 - Refreshed immutable GitHub Action pins to their reviewed Node 24 releases and added a repository-owned workflow contract check that rejects unpinned or unreviewed actions.

@@ -10,6 +10,7 @@ cargo test
 npm run verify:github-actions
 npm run verify:pnpm-workspace
 npm run verify:release-eval-gate
+npm run verify:release-script
 PLANR_ORACLE_SELF_TEST=source-provenance node scripts/verify-switchloom-cross-product.mjs
 cargo build --release
 npm pack --dry-run

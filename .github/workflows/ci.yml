@@ -120,6 +120,9 @@ jobs:
       - name: Deterministic local release-eval contract
         run: npm run verify:release-eval-gate
 
+      - name: Deterministic release orchestration contract
+        run: npm run verify:release-script
+
       - name: Shell lint
         run: shellcheck scripts/*.sh
 
