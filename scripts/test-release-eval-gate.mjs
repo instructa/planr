@@ -25,6 +25,7 @@ const kind = args.at(-2);
 const id = args.at(-1);
 const revision = process.env.FAKE_REVISION;
 if (args.includes('suite-check')) {
+  if (process.cwd() !== process.env.FAKE_SUITE_DIR) process.exit(5);
   if (scenario === 'tampered-suite-content') process.exit(3);
   console.log(JSON.stringify({ok:true,object:{suite:{digest:process.env.FAKE_SUITE}}}));
 } else if (args.includes('compare')) {
@@ -65,7 +66,7 @@ function runCase(name, mutate = (receipt) => receipt) {
   return spawnSync(process.execPath, [verifier, "--receipt", receiptPath, "--db", path.join(tmp, "eval.sqlite"), "--suite", suitePath, "--planr-bin", fakePlanr], {
     cwd: repo,
     encoding: "utf8",
-    env: { ...process.env, FAKE_SCENARIO: name, FAKE_REVISION: revision, FAKE_SUITE: suiteDigest, FAKE_CALL_LOG: callLog },
+    env: { ...process.env, FAKE_SCENARIO: name, FAKE_REVISION: revision, FAKE_SUITE: suiteDigest, FAKE_SUITE_DIR: path.dirname(suitePath), FAKE_CALL_LOG: callLog },
   });
 }
 
@@ -110,4 +111,4 @@ for (const forbidden of ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "NPM_TOKEN", "ve
 assert.ok(workflow.includes("id-token: write"), "npm Trusted Publishing OIDC permission must remain");
 assert.ok(workflow.includes("npm publish --access public"), "npm publication step must remain OIDC-compatible");
 
-console.log(JSON.stringify({verdict:"pass", positive:1, negative:10, gate_before_git_mutations:true, comparison_recomputed:true, current_suite_canonicalized:true, material_improvement_required:true, planr_route_validation_required:true, second_verdict_engine:false}, null, 2));
+console.log(JSON.stringify({verdict:"pass", positive:1, negative:10, gate_before_git_mutations:true, comparison_recomputed:true, current_suite_canonicalized:true, suite_fixtures_resolve_from_external_workspace:true, material_improvement_required:true, planr_route_validation_required:true, second_verdict_engine:false}, null, 2));

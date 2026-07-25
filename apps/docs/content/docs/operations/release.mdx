@@ -10,20 +10,22 @@ description: Prepare, publish, verify, and diagnose a Planr binary release throu
 1. Work on `main` with a clean worktree.
 2. Add and commit a `CHANGELOG.md` section named exactly `## [<version>]`.
 3. Confirm the `v<version>` tag does not exist.
-4. Run the repository and docs gates appropriate to the release. Any public behavior change must update its canonical docs and generated references before tagging.
+4. Run the repository and docs gates appropriate to the release. Any public behavior change must update its canonical docs. The committed generated CLI/MCP references must still match the branch's current version; do not pre-generate a future release version.
 5. Produce fresh local Planr eval evidence in the external `~/projects/planr-evals` maintainer workspace and a sanitized, short-lived receipt. Provider credentials, private suites, raw runs, and model evidence stay on the maintainer machine; they never enter CI or the receipt.
 
 Versions must use `x.y.z`, optionally followed by `-alpha.N`, `-beta.N`, or `-rc.N`.
 
 ## Release
 
-<CommandBlock command={'PLANR_RELEASE_EVAL_SUITE=/path/to/planr-evals/suite.json PLANR_RELEASE_EVAL_DB=/path/to/planr-evals/eval.sqlite PLANR_RELEASE_EVAL_RECEIPT=/path/to/planr-evals/receipt.json scripts/release.sh 1.7.1 "one-line release summary"'} label="Release" />
+<CommandBlock command={'PLANR_RELEASE_EVAL_SUITE=/path/to/planr-evals/suite.json PLANR_RELEASE_EVAL_DB=/path/to/planr-evals/eval.sqlite PLANR_RELEASE_EVAL_RECEIPT=/path/to/planr-evals/receipt.json scripts/release.sh 1.7.2 "one-line release summary"'} label="Release" />
 
 The script synchronizes Cargo, npm, Codex, Claude, Cursor, and `Cargo.lock`
-versions; builds the candidate; validates the receipt against Planr-owned route
+versions; builds the candidate; regenerates and strictly verifies both generated
+references; validates the receipt against Planr-owned route
 evidence and the explicitly supplied external suite/database; recomputes and
 gates the stored comparison; runs Rust, deterministic release-gate, package,
-and security checks; then creates the release commit and
+and security checks; then stages the six version files plus both generated
+references in one release commit and
 annotated Git tag and pushes both. Every check runs before the first Git
 commit, tag, or push.
 

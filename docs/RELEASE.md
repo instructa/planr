@@ -16,8 +16,12 @@ Published npm versions bundle platform-native binaries; see <https://planr.so/do
 
 `scripts/release.sh` is the only supported release path. The version lives in
 `Cargo.toml`; `package.json`, both plugin manifests under `plugins/planr/`, and
-`.cursor-plugin/plugin.json` must match it. Manual tagging skips this sync and
-ships stale versions.
+`.cursor-plugin/plugin.json` must match it. Generated CLI and MCP references
+must match the currently committed version before the release branch merges.
+After bumping and building on clean `main`, the script regenerates and strictly
+checks both references, then stages them in the same atomic release commit as
+the six synchronized version files. Manual tagging or pre-generating a future
+version skips this ownership boundary and can ship stale references.
 
 ```bash
 export PLANR_RELEASE_EVAL_SUITE="$HOME/projects/planr-evals/suites/planr-lean-skills-dogfood.suite.json"
@@ -36,6 +40,11 @@ candidate-revision digests, and creation/expiry timestamps. Prompts,
 completions, credentials, personal paths, raw runs, reports, databases, and the
 receipt itself are never committed to Planr.
 
+Fixture paths inside the private suite resolve relative to the suite file's
+directory. The external eval workspace must therefore contain its complete
+fixture tree; release verification does not read ignored files from the Planr
+checkout.
+
 Generate the candidate revision with
 `node scripts/verify-release-eval-receipt.mjs --print-candidate-revision`. At
 release time the candidate binary canonicalizes the explicitly supplied suite,
@@ -49,9 +58,10 @@ The script enforces, in order:
 
 1. branch is `main`, worktree is clean, `CHANGELOG.md` already has a committed `## [x.y.z]` section, and the tag does not exist;
 2. the version is written into all synchronized manifests plus `Cargo.lock`;
-3. the candidate binary validates the sanitized receipt, observed effective treatment, candidate binding, and existing Planr comparison/gate before any Git mutation;
-4. deterministic gates: `cargo test` (including manifest drift), `npm pack --dry-run`, and `scripts/security-local.sh` (betterleaks + trivy);
-5. one mechanical commit `release x.y.z: <summary>`, an annotated `vx.y.z` tag carrying that summary, and a single push of branch plus tag.
+3. the bumped candidate regenerates and strictly verifies both generated references before any later gate or Git mutation;
+4. the candidate binary validates the sanitized receipt, observed effective treatment, candidate binding, and existing Planr comparison/gate before any Git mutation;
+5. deterministic gates: `cargo test` (including manifest drift), `npm pack --dry-run`, and `scripts/security-local.sh` (betterleaks + trivy);
+6. one mechanical commit containing the six version files plus both generated references, an annotated `vx.y.z` tag carrying that summary, and a single push of branch plus tag.
 
 Two independent gates back the script:
 
