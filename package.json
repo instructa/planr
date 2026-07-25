@@ -25,6 +25,8 @@
     "security:staged": "node scripts/hooks/block-forbidden-staged-files.mjs",
     "build:native": "cargo build --release",
     "test": "cargo test",
+    "verify:github-actions": "node scripts/verify-github-actions.mjs && node scripts/test-verify-github-actions.mjs",
+    "verify:pnpm-workspace": "node scripts/verify-pnpm-workspace.mjs",
     "verify:release-eval-gate": "node scripts/test-release-eval-gate.mjs",
     "pack:check": "npm pack --dry-run",
     "docs:dev": "pnpm --filter @planr/docs dev",

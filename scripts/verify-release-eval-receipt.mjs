@@ -43,9 +43,13 @@ const receiptPath = option("--receipt");
 const dbPath = option("--db");
 const suitePath = option("--suite");
 const planrBin = option("--planr-bin");
+const receiptPathResolved = path.resolve(repo, receiptPath);
+const dbPathResolved = path.resolve(repo, dbPath);
+const suitePathResolved = path.resolve(repo, suitePath);
+const planrBinPath = path.resolve(repo, planrBin);
 let receipt;
 try {
-  receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8"));
+  receipt = JSON.parse(fs.readFileSync(receiptPathResolved, "utf8"));
 } catch {
   throw new Error("release eval receipt is unreadable or invalid JSON");
 }
@@ -75,9 +79,9 @@ assert.ok(expiresAt - createdAt <= 7 * 24 * 60 * 60 * 1000, "release eval receip
 
 assert.equal(receipt.candidate_revision, candidateRevision(), "release eval receipt does not bind the current candidate");
 
-function planrJson(args, acceptedStatuses = [0]) {
-  const result = spawnSync(planrBin, ["--db", dbPath, "--json", ...args], {
-    cwd: repo,
+function planrJson(args, acceptedStatuses = [0], cwd = repo) {
+  const result = spawnSync(planrBinPath, ["--db", dbPathResolved, "--json", ...args], {
+    cwd,
     encoding: "utf8",
     env: process.env,
   });
@@ -89,7 +93,13 @@ function planrJson(args, acceptedStatuses = [0]) {
   }
 }
 
-const suiteEnvelope = planrJson(["eval", "suite-check", "--input", suitePath]);
+// Fixture paths belong to the external suite workspace, never to the Planr
+// product checkout. Other eval lookups stay rooted in the candidate checkout.
+const suiteEnvelope = planrJson(
+  ["eval", "suite-check", "--input", suitePathResolved],
+  [0],
+  path.dirname(suitePathResolved),
+);
 assert.equal(suiteEnvelope.ok, true, "current suite canonicalization failed");
 assert.equal(suiteEnvelope.object?.suite?.digest, receipt.suite_digest, "canonical current suite digest mismatch");
 

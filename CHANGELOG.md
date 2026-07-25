@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.7.2] - 2026-07-25
+
+### Changed
+
+- Made the release workspace inventory deterministic: only the Planr root and documentation application participate in the tracked pnpm workspace, while ignored local experiments cannot change the lockfile.
+- Made external release-eval fixtures self-contained by resolving their paths from the external suite directory and binding candidate binaries and databases to explicit absolute paths.
+- Required every published architecture, including macOS x86_64 under Rosetta, to execute and report the exact tagged version before its release asset can upload.
+
+### Security
+
+- Refreshed immutable GitHub Action pins to their reviewed Node 24 releases and added a repository-owned workflow contract check that rejects unpinned or unreviewed actions.
+- Kept provider keys and private evaluation content out of CI: model-backed release evidence remains a candidate-bound local maintainer gate, while CI exercises only deterministic synthetic cases.
+
 ## [1.7.1] - 2026-07-25
 
 ### Changed
@@ -482,7 +495,8 @@ Initial Planr product release.
 - Tag-driven release pipeline with multi-target builds (darwin/linux, arm64/x86_64) and Homebrew tap automation.
 - Skill workflow documentation for Codex, Claude Code, Cursor, and MCP-only clients.
 
-[Unreleased]: https://github.com/instructa/planr/compare/v1.7.1...HEAD
+[Unreleased]: https://github.com/instructa/planr/compare/v1.7.2...HEAD
+[1.7.2]: https://github.com/instructa/planr/compare/v1.7.1...v1.7.2
 [1.7.1]: https://github.com/instructa/planr/compare/v1.7.0...v1.7.1
 [1.7.0]: https://github.com/instructa/planr/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/instructa/planr/compare/v1.5.2...v1.6.0

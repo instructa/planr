@@ -36,6 +36,11 @@ candidate-revision digests, and creation/expiry timestamps. Prompts,
 completions, credentials, personal paths, raw runs, reports, databases, and the
 receipt itself are never committed to Planr.
 
+Fixture paths inside the private suite resolve relative to the suite file's
+directory. The external eval workspace must therefore contain its complete
+fixture tree; release verification does not read ignored files from the Planr
+checkout.
+
 Generate the candidate revision with
 `node scripts/verify-release-eval-receipt.mjs --print-candidate-revision`. At
 release time the candidate binary canonicalizes the explicitly supplied suite,

@@ -1,6 +1,6 @@
 packages:
   - "."
-  - "apps/*"
+  - "apps/docs"
 
 enableGlobalVirtualStore: false
 verifyDepsBeforeRun: error
