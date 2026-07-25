@@ -14,6 +14,53 @@ const release = fs.readFileSync(releasePath, "utf8");
 const docsPackage = JSON.parse(fs.readFileSync(path.join(repo, "apps/docs/package.json"), "utf8"));
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "planr-release-script-contract-"));
 const version = "9.9.9";
+const referenceCheckCommand = "pnpm --filter @planr/docs reference:check";
+const laterReleaseCommands = [
+  ["local eval receipt gate", "node scripts/verify-release-eval-receipt.mjs"],
+  ["cargo test", "cargo test"],
+  ["deterministic release-eval gate", "npm run verify:release-eval-gate"],
+  ["npm package dry-run", "npm pack --dry-run"],
+  ["security gate", "scripts/security-local.sh"],
+  ["exact Git staging", "git add Cargo.toml"],
+  ["release commit", "git commit -m"],
+  ["annotated release tag", "git tag -a"],
+  ["release push", "git push origin"],
+];
+
+function commandIndex(source, command) {
+  const marker = `\n${command}`;
+  const index = source.indexOf(marker);
+  assert.ok(index >= 0, `release script must contain command line: ${command}`);
+  return index + 1;
+}
+
+function assertReferenceCheckBeforeEveryLaterCommand(source) {
+  const checkIndex = commandIndex(source, referenceCheckCommand);
+  for (const [label, marker] of laterReleaseCommands) {
+    const markerIndex = commandIndex(source, marker);
+    assert.ok(checkIndex < markerIndex, `reference:check must precede ${label}`);
+  }
+}
+
+function commandBlock(source, marker) {
+  const markerIndex = commandIndex(source, marker);
+  const start = source.lastIndexOf("\n", markerIndex) + 1;
+  let end = source.indexOf("\n", markerIndex);
+  assert.ok(end >= 0, `command has no line ending: ${marker}`);
+  while (source.slice(start, end).trimEnd().endsWith("\\")) {
+    end = source.indexOf("\n", end + 1);
+    assert.ok(end >= 0, `continued command has no final line: ${marker}`);
+  }
+  return source.slice(start, end + 1);
+}
+
+function moveCommandBeforeReferenceCheck(source, marker) {
+  const block = commandBlock(source, marker);
+  const withoutBlock = source.replace(block, "");
+  const checkIndex = commandIndex(withoutBlock, referenceCheckCommand);
+  const checkLineStart = withoutBlock.lastIndexOf("\n", checkIndex) + 1;
+  return `${withoutBlock.slice(0, checkLineStart)}${block}${withoutBlock.slice(checkLineStart)}`;
+}
 
 function write(file, content, mode) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -111,6 +158,19 @@ assert.ok(buildIndex < generateIndex, "reference generation must follow the bump
 assert.ok(generateIndex < checkIndex, "strict reference verification must follow generation");
 assert.ok(checkIndex < gateIndex, "reference verification must precede the local eval gate");
 assert.ok(gateIndex < addIndex, "all release gates must precede Git staging");
+assertReferenceCheckBeforeEveryLaterCommand(release);
+for (const [label, marker] of laterReleaseCommands) {
+  const reordered = moveCommandBeforeReferenceCheck(release, marker);
+  assert.ok(
+    commandIndex(reordered, marker) < commandIndex(reordered, referenceCheckCommand),
+    `seeded mutation must move the actual ${label} command before reference:check`,
+  );
+  assert.throws(
+    () => assertReferenceCheckBeforeEveryLaterCommand(reordered),
+    new RegExp(`reference:check must precede ${label.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}`, "u"),
+    `seeded ${label} reorder must fail the release contract`,
+  );
+}
 assert.equal(
   docsPackage.scripts["reference:generate"],
   "node scripts/generate-cli-reference.mjs && node scripts/generate-mcp-reference.mjs",
@@ -127,6 +187,23 @@ assert.equal(passing.result.status, 0, `release contract fixture must pass: ${pa
 const expectedAdd = "git add Cargo.toml Cargo.lock package.json plugins/planr/.codex-plugin/plugin.json plugins/planr/.claude-plugin/plugin.json .cursor-plugin/plugin.json apps/docs/content/docs/reference/cli-generated.mdx apps/docs/content/docs/reference/mcp-schemas-generated.mdx";
 assert.equal(passing.calls.filter((call) => call.startsWith("git add ")).length, 1, "release must stage exactly once");
 assert.ok(passing.calls.includes(expectedAdd), "release must stage the six version files and exactly both generated references");
+const passingCheckIndex = passing.calls.findIndex((call) => call.endsWith("reference:check"));
+assert.ok(passingCheckIndex >= 0, "passing release must execute strict reference verification");
+const laterCallPrefixes = [
+  "node scripts/verify-release-eval-receipt.mjs --receipt",
+  "cargo test",
+  "npm run verify:release-eval-gate",
+  "npm pack --dry-run",
+  "security-local",
+  expectedAdd,
+  `git commit -m release ${version}: contract test`,
+  `git tag -a v${version} -m planr v${version}: contract test`,
+  `git push origin HEAD v${version}`,
+];
+for (const prefix of laterCallPrefixes) {
+  const laterIndex = passing.calls.findIndex((call) => call.startsWith(prefix));
+  assert.ok(laterIndex > passingCheckIndex, `reference:check must execute before ${prefix}`);
+}
 for (const [before, after] of [
   ["cargo build --quiet", "pnpm --filter @planr/docs reference:generate"],
   ["pnpm --filter @planr/docs reference:generate", "pnpm --filter @planr/docs reference:check"],
@@ -146,8 +223,9 @@ assert.equal(fs.readFileSync(path.join(passing.root, "apps/docs/content/docs/ref
 const failing = runCase("failing-reference-check", { FAIL_REFERENCE_CHECK: "1" });
 assert.equal(failing.result.status, 42, "reference drift must fail closed with the checker status");
 assert.ok(failing.calls.some((call) => call.endsWith("reference:check")), "failing checker must execute");
-assert.ok(!failing.calls.some((call) => /^(git add|git commit|git tag|git push) /u.test(call)), "reference failure must precede every Git mutation");
-assert.ok(!failing.calls.some((call) => call.startsWith("node scripts/verify-release-eval-receipt.mjs")), "reference failure must stop before later release gates");
+for (const prefix of laterCallPrefixes) {
+  assert.ok(!failing.calls.some((call) => call.startsWith(prefix)), `reference failure must stop before ${prefix}`);
+}
 
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(JSON.stringify({
@@ -156,5 +234,7 @@ console.log(JSON.stringify({
   order: ["bump", "build", "generate", "check", "gates", "stage", "commit", "tag", "push"],
   staged_version_files: 6,
   staged_generated_references: 2,
+  later_commands_guarded: laterReleaseCommands.length,
+  seeded_reorder_cases: laterReleaseCommands.length,
   reference_failure_before_git_mutation: true,
 }, null, 2));
