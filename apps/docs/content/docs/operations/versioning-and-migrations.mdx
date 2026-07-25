@@ -3,7 +3,7 @@ title: Versioning and Migrations
 description: Keep distribution versions aligned and upgrade local Planr data without promising unsafe downgrades.
 ---
 
-The Planr release version is synchronized across `Cargo.toml`, the root npm package, Codex and Claude plugin manifests, the Cursor manifest, and `Cargo.lock` by `scripts/release.sh`. Generated CLI and MCP references follow the currently committed version: release branches keep them at the pre-release manifest version, then the release script regenerates, verifies, and stages both after its atomic version bump. Rust tests, docs CI, the release-script contract test, and the tag workflow reject drift. The private docs package remains independently marked `0.0.0`; its deploy identity should be the Git commit or immutable build artifact, not the Planr binary version.
+The Planr release version is synchronized across `Cargo.toml`, the root npm package, Codex and Claude plugin manifests, the Cursor manifest, and `Cargo.lock` by `scripts/release.sh`. Immediately after the manifest bump, the script refreshes pnpm's derived workspace metadata with `pnpm install --frozen-lockfile` and fails if `pnpm-lock.yaml` changes at all. Generated CLI and MCP references follow the currently committed version: release branches keep them at the pre-release manifest version, then the release script regenerates, verifies, and stages both after its atomic version bump. Rust tests, docs CI, the release-script contract test, and the tag workflow reject drift. The private docs package remains independently marked `0.0.0`; its deploy identity should be the Git commit or immutable build artifact, not the Planr binary version.
 
 ## Dependency policy
 

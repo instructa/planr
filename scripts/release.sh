@@ -60,6 +60,15 @@ replace plugins/planr/.codex-plugin/plugin.json "s/\"version\": \".*\"/\"version
 replace plugins/planr/.claude-plugin/plugin.json "s/\"version\": \".*\"/\"version\": \"$version\"/"
 replace .cursor-plugin/plugin.json "s/\"version\": \".*\"/\"version\": \"$version\"/"
 
+# pnpm 11 verifies installed workspace metadata before running scripts. Refresh
+# that derived state after the root manifest bump, using only the committed
+# lockfile, and fail closed if synchronization changes a single lockfile byte.
+pnpm install --frozen-lockfile
+if ! git diff --quiet -- pnpm-lock.yaml; then
+  echo "pnpm-lock.yaml changed during frozen workspace synchronization" >&2
+  exit 1
+fi
+
 # Generated references are version-derived release artifacts. Build the bumped
 # binary first, then regenerate and strictly check both references before any
 # release gate or Git mutation. The release commit owns these files together
