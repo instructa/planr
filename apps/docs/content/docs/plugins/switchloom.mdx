@@ -1,0 +1,71 @@
+---
+title: Switchloom
+description: Use Switchloom v0.3.2 as an optional external model-routing lifecycle for Planr declarations and Codex roles.
+---
+
+Switchloom is an optional external routing tool. Planr does not install, invoke, compile, apply, or uninstall Switchloom output. Planr reads the resulting `.planr/agents.toml` and `.planr/policy.toml`, exposes provider-neutral routes in pick packets, and records observed route evidence when workers attach it to logs.
+
+## Verified Package
+
+Use the exact package version that Planr has verified:
+
+```bash
+npx switchloom@0.3.2 --version
+```
+
+Reference links:
+
+- [Switchloom v0.3.2 release](https://github.com/instructa/switchloom/releases/tag/v0.3.2)
+- [Current corrected Switchloom quickstart](https://github.com/instructa/switchloom#setup-from-the-website)
+- [v0.3.2 tagged quickstart](https://github.com/instructa/switchloom/blob/v0.3.2/README.md#setup-from-the-website)
+- [v0.3.2 lifecycle docs](https://github.com/instructa/switchloom/blob/v0.3.2/docs/preset-composition.md#repository-lifecycle-commands)
+
+The v0.3.2 tagged README quickstart includes command examples that predate the corrected package-version guidance. Prefer the current quickstart plus explicit `switchloom@0.3.2` commands when operating against this verified Planr contract.
+
+## Compile And Apply
+
+Run Switchloom outside Planr, from the repository that should receive generated declarations:
+
+```bash
+npx switchloom@0.3.2 compile balanced --host codex-openai --integration planr --output balanced-planr-codex.json
+npx switchloom@0.3.2 apply balanced-planr-codex.json --repository .
+```
+
+The external bundle should generate repository-local Planr declarations and Codex-native roles. After application, verify what Planr can consume:
+
+```bash
+planr agents check
+planr agents list --json
+```
+
+If Codex roles changed, reload the host configuration before dispatching native `agent_type` roles. Planr never infers that a requested model, effort, role, fallback, or context fork actually ran; it records requested values separately from observed evidence.
+
+## Work With Evidence
+
+Continue using normal Planr commands:
+
+```bash
+planr pick --json
+planr done <item-id> --summary "Implemented; reported requested profile model_routing_terra_high" --profile model_routing_terra_high --review
+```
+
+`--profile` records the profile the worker reports for the run. It is requested or claimed routing metadata, not proof that a host actually used that profile, model, effort, role, fallback, or context fork.
+
+For genuine runtime proof, attach route-audit evidence that separates requested, host-resolved, and effective execution values:
+
+```bash
+planr done <item-id> --summary "Implemented with route-audit evidence" --route-audit .planr/artifacts/route-audit.json --review
+```
+
+Requested-only routing metadata is not effective execution proof. If the host cannot provide effective runtime evidence, keep that field unavailable rather than inferring it from `.planr/agents.toml`, `.planr/policy.toml`, or `--profile`.
+
+## Uninstall
+
+Removal is also external to Planr:
+
+```bash
+npx switchloom@0.3.2 uninstall --repository .
+planr agents check
+```
+
+After uninstall, Planr should continue to operate without routing declarations, using its unrouted fallback behavior.

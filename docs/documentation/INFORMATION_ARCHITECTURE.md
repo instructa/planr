@@ -13,13 +13,14 @@ This file records the implemented route and navigation contract. Routes are publ
 | worker/operator | `/docs/guides/daily-worker-loop` -> `/docs/guides/parallel-coordination` | Picks without collisions and records durable evidence. |
 | reviewer | `/docs/concepts/reviews-and-approvals` -> `/docs/guides/review-and-fix-loops` | Closes a complete gate or creates a bounded fix chain. |
 | client integrator | `/docs/integrations` -> one client page | Connects through a supported CLI or stdio MCP path. |
+| plugin operator | `/docs/plugins` -> one plugin page | Uses an optional external lifecycle without confusing it with Planr Core ownership. |
 | API toolsmith | `/docs/reference/mcp` or `/docs/reference/http-api` | Uses the current schema and transport boundary. |
 | contributor | `/docs/contributing` -> setup/architecture/testing | Places and verifies a change without tribal knowledge. |
 | maintainer | `/docs/operations` | Can release, deploy, diagnose, roll back, and review freshness. |
 
 ## Implemented route tree
 
-The 59 MDX files below are the current page tree and must agree with every `meta.json` file and `COVERAGE.md`.
+The 61 MDX files below are the current page tree and must agree with every `meta.json` file and `COVERAGE.md`.
 
 ```text
 /docs
@@ -39,6 +40,8 @@ The 59 MDX files below are the current page tree and must agree with every `meta
 │   ├── cursor
 │   ├── generic-mcp
 │   └── cli-only
+├── plugins
+│   └── switchloom
 ├── concepts
 │   ├── local-first-model
 │   ├── plans-and-map
@@ -142,6 +145,6 @@ The inventory covers these retired route families:
 | `/docs/reference/routing-bundles` | `/docs/reference/configuration-and-storage` |
 | `/docs/reference/platform-support` | `/docs/reference/support-matrix` |
 
-Repository files such as `docs/INSTALL.md` are not former website URLs. They remain GitHub-readable source material and must link to the current site rather than pretending a Next.js redirect can intercept a repository path.
+Repository Markdown files are not former website URLs, so a Next.js redirect can never intercept a repository path. The flat topic guides that once duplicated site pages were removed on 2026-07-25; `README.md` and the remaining repository files link to the current site instead of restating it. `docs/` now keeps only what the site does not own: `docs/ARCHITECTURE.md`, `docs/RELEASE.md`, `docs/contracts/`, `docs/documentation/`, and `docs/fixtures/`.
 
 To retire another route: add exactly one alias, choose the closest current outcome page, update this table, repair internal links, run the maintenance and browser gates, and retain the redirect while supported inbound links may exist. Never redirect an unknown path to a generic landing page merely to hide a 404.

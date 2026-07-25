@@ -163,7 +163,7 @@ impl App {
                 Some(value) if value.is_object() => value,
                 _ => {
                     result.warnings.push(format!(
-                        "{relative} exists but is not a JSON object planr can merge into; hooks skipped — add them manually (docs/HOOKS.md)"
+                        "{relative} exists but is not a JSON object planr can merge into; hooks skipped — add them manually (https://planr.so/docs/integrations)"
                     ));
                     return Ok(());
                 }
@@ -179,7 +179,7 @@ impl App {
                     Some(events) => events,
                     None => {
                         result.warnings.push(format!(
-                            "{relative} has a non-object `{key}` section; hooks skipped — add them manually (docs/HOOKS.md)"
+                            "{relative} has a non-object `{key}` section; hooks skipped — add them manually (https://planr.so/docs/integrations)"
                         ));
                         return Ok(());
                     }

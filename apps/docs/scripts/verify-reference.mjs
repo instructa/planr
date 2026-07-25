@@ -107,12 +107,14 @@ try {
   for (const link of [
     'https://switchloom.ai',
     'https://github.com/instructa/switchloom',
-    'https://github.com/instructa/switchloom/releases/tag/v0.2.1',
-    'https://github.com/instructa/switchloom/blob/v0.2.1/README.md#setup-from-the-website',
-    'https://github.com/instructa/switchloom/blob/v0.2.1/docs/preset-composition.md#repository-lifecycle-commands',
+    'https://github.com/instructa/switchloom/releases/tag/v0.3.2',
+    'https://github.com/instructa/switchloom#setup-from-the-website',
+    'https://github.com/instructa/switchloom/blob/v0.3.2/README.md#setup-from-the-website',
+    'https://github.com/instructa/switchloom/blob/v0.3.2/docs/preset-composition.md#repository-lifecycle-commands',
   ]) {
     check(configurationPage.includes(link), `Configuration reference links external Switchloom ownership: ${link}`);
   }
+  check(configurationPage.includes('/docs/plugins/switchloom'), 'Configuration reference links Switchloom plugin operator flow');
   for (const resource of resources) check(mcpPage.includes(`\`${resource.uri}\``), `MCP reference covers resource ${resource.uri}`);
   for (const prompt of prompts) check(mcpPage.includes(`\`${prompt.name}\``), `MCP reference covers prompt ${prompt.name}`);
   check(responses[0].result.protocolVersion === '2025-03-26', 'MCP protocol version matches documented 2025-03-26');

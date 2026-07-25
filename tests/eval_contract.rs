@@ -5,7 +5,7 @@ use std::process::{Command, Stdio};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
-const CONTRACT_PATH: &str = "docs/planr-spec/EVAL_CONTRACT_V1.md";
+const CONTRACT_PATH: &str = "docs/contracts/EVAL_CONTRACT_V1.md";
 
 fn contract_text() -> String {
     fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(CONTRACT_PATH))

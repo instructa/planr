@@ -3,7 +3,7 @@ name: planr-worker
 description: Implements exactly one picked Planr map item to evidence-backed completion, then requests review and stops. Dispatch with the item id.
 # Cost tiering: the pick packet bounds the worker's scope, so it can run on a
 # cheaper tier than the driver. Replace inherit with a cheaper Cursor model id
-# when dispatch cost matters. See docs/GOALS.md "Cost Tiering".
+# when dispatch cost matters. See https://planr.so/docs/agents/skills#cost-tiering.
 model: inherit
 ---
 

@@ -16,15 +16,15 @@ This package defines Planr as a production-grade, local-first planning and execu
 - AI_SPEC.md: agent behavior, prompts, context, and evals.
 - SAFETY_PRIVACY_SECURITY.md: data, privacy, security, and tool execution boundaries.
 - API_AND_DATA_MODEL.md: project, plan, map, item, log, review, and API contracts.
-- EVAL_CONTRACT_V1.md: frozen EvalSuite, evidence, v1.1 attempt-lineage and efficiency metrics, verdict, reason, CLI/MCP, database, and safety contract.
 - CLIENT_IMPLEMENTATION_SPEC.md: CLI, TUI, editor, and agent-client surfaces.
 - BACKEND_IMPLEMENTATION_SPEC.md: local service, MCP server, HTTP/SSE, and storage implementation.
 - ANALYTICS_OBSERVABILITY_SPEC.md: no-content telemetry, local logs, and diagnostics.
 - QA_ACCEPTANCE_TESTS.md: acceptance suites and regression strategy.
 - RELEASE_READINESS.md: packaging, install, upgrade, and release checks.
-- V1_1_DIFFERENTIATION_CONTRACT.md: V1.1 product differentiation requirements, acceptance criteria, and final verification contract.
 - TASKS.md: executable implementation tasks for coding agents.
 - REFERENCES.md: sources and source-derived assumptions.
+
+Two frozen contracts were split out of this package because CI gates them directly: `docs/contracts/EVAL_CONTRACT_V1.md` (EvalSuite, evidence, attempt lineage, efficiency metrics, verdicts, CLI/MCP, database, and safety) and `docs/contracts/V1_1_DIFFERENTIATION_CONTRACT.md` (V1.1 differentiation requirements and final verification).
 
 ## Global Assumptions
 
@@ -63,6 +63,6 @@ This package defines Planr as a production-grade, local-first planning and execu
 
 ## Operating References
 
-- `../OPERATING_MODEL.md`: daily operator flow, parent gates, completion rules, and recovery.
-- `../TASK_GRAPH_MODEL.md`: map objects, readiness, links, picks, reviews, and evidence.
-- `../HANDOFFS_AND_STORIES.md`: log, context, note, story, and handoff policy.
+- <https://planr.so/docs/guides/daily-worker-loop>: daily operator flow, parent gates, completion rules, and recovery.
+- <https://planr.so/docs/concepts/graph-and-readiness>: map objects, readiness, links, picks, reviews, and evidence.
+- <https://planr.so/docs/guides/handoff-and-resume>: log, context, note, story, and handoff policy.

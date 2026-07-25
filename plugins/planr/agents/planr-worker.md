@@ -6,7 +6,7 @@ skills:
 # Cost tiering: the pick packet bounds the worker's scope, so it runs on a
 # cheaper tier than the driver. Aliases track the current generation; pin a
 # full model id (e.g. claude-opus-4-8) only if you need determinism. Budget
-# alternative: model: sonnet. See docs/GOALS.md "Cost Tiering".
+# alternative: model: sonnet. See https://planr.so/docs/agents/skills#cost-tiering.
 model: opus
 effort: medium
 ---

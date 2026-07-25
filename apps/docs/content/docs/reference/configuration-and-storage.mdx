@@ -35,9 +35,13 @@ Precedence is explicit CLI flag, then environment, then workspace default where 
 | `.mcp.json` | Claude project MCP configuration |
 | `.cursor/mcp.json`, `.cursor/agents/`, `.cursor/skills/` | Cursor project integration |
 
+## npm wrapper binary resolution
+
+The npm wrapper resolves a native binary in this order: `PLANR_NATIVE_BIN`, then `npm/native/<os>-<arch>/planr` from the published package, then `target/release/planr` followed by `target/debug/planr` in a repository checkout. A repository checkout ships no `npm/native/` binaries, so local `npm link` usage falls back to your cargo build.
+
 `planr install ... --dry-run` previews generated client paths. Optional routing lifecycle is external to Planr; Planr only reads repository-local provider-neutral declarations and never edits user-global routing configuration.
 
-[Switchloom](https://switchloom.ai) owns published external routing lifecycle for its [repository](https://github.com/instructa/switchloom), [v0.2.1 release](https://github.com/instructa/switchloom/releases/tag/v0.2.1), [setup quickstart](https://github.com/instructa/switchloom/blob/v0.2.1/README.md#setup-from-the-website), and [repository lifecycle docs](https://github.com/instructa/switchloom/blob/v0.2.1/docs/preset-composition.md#repository-lifecycle-commands). Follow those external docs for Switchloom commands; Planr consumes only the resulting `.planr/agents.toml`, `.planr/policy.toml`, and route evidence.
+[Switchloom](https://switchloom.ai) owns published external routing lifecycle for its [repository](https://github.com/instructa/switchloom), [v0.3.2 release](https://github.com/instructa/switchloom/releases/tag/v0.3.2), [current corrected quickstart](https://github.com/instructa/switchloom#setup-from-the-website), [v0.3.2 tagged quickstart](https://github.com/instructa/switchloom/blob/v0.3.2/README.md#setup-from-the-website), and [v0.3.2 repository lifecycle docs](https://github.com/instructa/switchloom/blob/v0.3.2/docs/preset-composition.md#repository-lifecycle-commands). Follow those external docs for Switchloom lifecycle, use explicit `switchloom@0.3.2` commands for the verified Planr contract, and remember that Planr consumes only the resulting `.planr/agents.toml`, `.planr/policy.toml`, and route evidence. The tagged v0.3.2 README quickstart preserves stale `0.3.1` command examples, so prefer the current corrected quickstart and the pinned operator flow in [Switchloom plugins](/docs/plugins/switchloom).
 
 ## Privacy and backup
 

@@ -4,16 +4,16 @@ Status: approved implementation contract for the Planr documentation site
 Last audited: 2026-07-17
 Scope owner: `apps/docs` (site and English product documentation)
 
-This contract turns the current product, runtime, and repository documentation into one maintainable public documentation system. It is intentionally separate from the product specification package: `docs/planr-spec/` remains the product source of truth, while the site explains the released product to users and contributors.
+This contract turns the current product, runtime, and repository documentation into one maintainable public documentation system. It is intentionally separate from the product specification package: `.planr/plans/product/planr/` remains the product source of truth, while the site explains the released product to users and contributors.
 
 ## Source hierarchy
 
 When sources disagree, authors must use this order and disclose the disagreement instead of silently choosing convenient copy:
 
-1. **Product intent and invariants:** `AGENTS.md` and `docs/planr-spec/`, especially `PRODUCT_SPEC.md`, `TECH_ARCHITECTURE.md`, and `API_AND_DATA_MODEL.md`.
+1. **Product intent and invariants:** `AGENTS.md` and `.planr/plans/product/planr/`, especially `PRODUCT_SPEC.md`, `TECH_ARCHITECTURE.md`, and `API_AND_DATA_MODEL.md`.
 2. **Released executable behavior:** compiled `planr --help` output, `src/cli.rs`, `src/app/mcp.rs`, `src/app/http.rs`, `src/model.rs`, and the tested fixture `docs/fixtures/mcp-contract.json`. Runtime sources decide whether a command, option, schema, endpoint, state, or error exists in the current release.
 3. **Distribution contract:** `Cargo.toml`, `package.json`, `pnpm-workspace.yaml`, release workflows, installers, and release tests. These decide supported versions, artifacts, operating systems, and install commands.
-4. **Existing explanatory material:** `README.md`, `docs/*.md`, `plugins/planr/skills/`, and examples. These are migration inputs, not independent sources of truth.
+4. **Existing explanatory material:** `README.md`, `plugins/planr/skills/`, and examples. These explain and point at the site; they are not independent sources of truth.
 5. **External references:** official upstream documentation and inspected local projects may influence structure and implementation, but never define Planr behavior.
 
 If product intent is ahead of runtime, the public page must label the behavior as planned or omit it from executable instructions. If runtime is ahead of an older specification sentence, the public page documents the tested runtime and the discrepancy is added to the conflict register below.
@@ -83,7 +83,7 @@ Do not use `latest`, caret, tilde, or wildcard ranges for direct docs dependenci
 
 ### DOC-ADR-001: One first-class workspace app
 
-Create one English documentation application at `apps/docs`. It owns the public landing page, guides, reference, search, metadata, and deployment. Existing `docs/*.md` files remain source/reference material during migration; once a topic has a canonical site page, the old file becomes either a concise pointer or a checked redirect source, not a second maintained copy.
+Create one English documentation application at `apps/docs`. It owns the public landing page, guides, reference, search, metadata, and deployment. The migration completed on 2026-07-25: the flat topic guides under `docs/` were removed once the site owned their topics, so no topic has a second maintained copy. `docs/` retains only non-site material — architecture ownership, the release runbook, frozen contracts, documentation governance, and test fixtures.
 
 ### DOC-ADR-002: Next.js App Router with local MDX
 
@@ -135,10 +135,10 @@ These findings are explicit inputs to implementation and content review.
 
 | ID | Finding | Resolution in the site |
 | --- | --- | --- |
-| GAP-001 | `docs/CLI_REFERENCE.md` says it is generated from help but omits current commands including `project delete`, `plan list`, `map export/import`, `item show/cancel`, `link remove`, `log show/list`, `review request/list/show`, `note`, and `scrub`. | Replace the list with generated/mechanically checked reference data; retain editorial detail around it. |
-| GAP-002 | `docs/planr-spec/PRODUCT_SPEC.md` still calls Rust and the HTTP server open decisions, but the repository ships a Rust binary and `planr serve`. | Document current released behavior; update product specs only in a separately scoped product-spec change. |
+| GAP-001 | Resolved on 2026-07-25: the flat `docs/CLI_REFERENCE.md` was removed after `/docs/reference/cli` plus the mechanically checked `/docs/reference/cli-generated` took over command coverage. | Keep command inventory generated from the binary; never reintroduce a hand-maintained command list. |
+| GAP-002 | `.planr/plans/product/planr/PRODUCT_SPEC.md` still calls Rust and the HTTP server open decisions, but the repository ships a Rust binary and `planr serve`. | Document current released behavior; update product specs only in a separately scoped product-spec change. |
 | GAP-003 | Resolved on 2026-07-18: `docs/ARCHITECTURE.md` now describes Planr as one Rust binary plus wrappers/docs, with provider-neutral routing declarations owned in Core and external routing lifecycle outside Planr. | Keep architecture ownership aligned with current runtime modules and do not reintroduce routing-package ownership wording. |
-| GAP-004 | README leads with Homebrew, while `docs/INSTALL.md` calls GitHub Releases/repo installer canonical and Homebrew preferred day-to-day. | Say “Homebrew recommended on macOS”; GitHub Releases are the canonical artifact source; npm is the cross-package-manager native-binary path. |
+| GAP-004 | Resolved on 2026-07-25: the flat install guide was removed, so `/docs/getting-started/installation` is the single install owner. | Say “Homebrew recommended on macOS”; GitHub Releases are the canonical artifact source; npm is the cross-package-manager native-binary path. |
 | GAP-005 | The CLI npm wrapper supports Node 18, while latest Fumadocs requires Node 22. | Keep separate requirement callouts: Planr CLI Node 18; docs contributors Node 22. |
 | GAP-006 | Product personas mention Gemini CLI and generic clients, but install helpers exist only for Codex, Claude Code, and Cursor. | Give the three supported clients first-class setup pages; route Gemini/opencode/other tools through clearly labeled generic CLI or stdio MCP instructions. Do not imply a native installer. |
 | GAP-007 | `planr install` uses the subcommand `claude`, while product prose often says “Claude Code”. | Use “Claude Code” in headings and `planr install claude` in commands. |

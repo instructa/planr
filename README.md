@@ -24,7 +24,7 @@ Flat todo lists break down the moment real work has structure. Planr models work
 - **State survives sessions.** Markdown plans hold scope and acceptance criteria; the SQLite graph holds live status across handoffs, restarts, and agent switches.
 - **Failure is structured.** Stale picks, timeouts, and retries are detectable and recoverable (`planr recover sweep`).
 
-Three layers make that work: **Plans** (reviewable Markdown packages), the **Map** (live dependency graph with picks, reviews, logs), and **Agent loops** (skills, CLI, and MCP workflows for every major coding agent). Full model: [Task Graph Model](docs/TASK_GRAPH_MODEL.md) and [Operating Model](docs/OPERATING_MODEL.md).
+Three layers make that work: **Plans** (reviewable Markdown packages), the **Map** (live dependency graph with picks, reviews, logs), and **Agent loops** (skills, CLI, and MCP workflows for every major coding agent). Full model: [Task Graph Model](https://planr.so/docs/concepts/graph-and-readiness) and [Operating Model](https://planr.so/docs/guides/daily-worker-loop).
 
 ## Install
 
@@ -50,7 +50,7 @@ Then initialize a project. When selected, Claude Code and Cursor also receive st
 planr project init "My Product" --client all
 ```
 
-Manual downloads, from-source builds, and client wiring details: [Install Guide](docs/INSTALL.md).
+Manual downloads, from-source builds, and client wiring details: [Install Guide](https://planr.so/docs/getting-started/installation).
 
 ## Install The Plugin (Skills)
 
@@ -93,7 +93,7 @@ planr install cursor            # writes .cursor/mcp.json, .cursor/agents/, and 
 planr install cursor --no-mcp   # project skills, subagents, and hooks; no MCP config
 ```
 
-The dry-run also prints a one-click `cursor://` deeplink for user-level MCP install. Marketplace listing is pending review. Multitasking with Cursor subagents: [Cursor guide](docs/CURSOR.md).
+The dry-run also prints a one-click `cursor://` deeplink for user-level MCP install. Marketplace listing is pending review. Multitasking with Cursor subagents: [Cursor guide](https://planr.so/docs/integrations/cursor).
 
 </details>
 
@@ -109,6 +109,28 @@ planr prompt cli
 ```
 
 </details>
+
+## Plugins
+
+Planr plugins extend coding-agent setup around the same local-first graph. They do not move ownership of Planr Core: maps, picks, logs, reviews, approvals, and closure evidence still live in Planr, while optional integrations own their own install, generated files, and uninstall lifecycle.
+
+Switchloom is an optional external routing plugin for repository-local model-routing declarations. Use the corrected current quickstart command with the exact verified package version:
+
+```bash
+npx switchloom@0.3.2 compile balanced --host codex-openai --integration planr --output balanced-planr-codex.json
+npx switchloom@0.3.2 apply balanced-planr-codex.json --repository .
+planr agents check
+planr agents list --json
+```
+
+Planr consumes the resulting `.planr/agents.toml`, `.planr/policy.toml`, and route evidence; Codex consumes generated native roles after the host reloads its repository config. Switchloom remains responsible for its external lifecycle, including uninstall:
+
+```bash
+npx switchloom@0.3.2 uninstall --repository .
+planr agents check
+```
+
+References: [Plugins docs](https://planr.so/docs/plugins/switchloom), [Switchloom v0.3.2 release](https://github.com/instructa/switchloom/releases/tag/v0.3.2), [current corrected Switchloom quickstart](https://github.com/instructa/switchloom#setup-from-the-website), [v0.3.2 tagged quickstart](https://github.com/instructa/switchloom/blob/v0.3.2/README.md#setup-from-the-website), and [v0.3.2 lifecycle docs](https://github.com/instructa/switchloom/blob/v0.3.2/docs/preset-composition.md#repository-lifecycle-commands). The tagged v0.3.2 README quickstart preserves stale `0.3.1` command examples, so use the explicit `switchloom@0.3.2` commands above for the verified Planr contract.
 
 ## Tell Your Agent
 
@@ -136,7 +158,7 @@ with log evidence, all reviews are closed complete, and a live verification log 
 the feature working in the browser. Iteration budget: 10.
 ```
 
-Mid-project work (a new feature, refactor, or fix on an existing project) works the same — it gets its own feature-scoped plan and extends the existing map. Both journeys with example prompts: [Two Journeys](docs/SKILLS.md#two-journeys-new-project-vs-existing-project). Coding agents inspect progress with the compact default `planr map show` or, preferably, `planr map show --json`. The tree preserves exact dependency vocabulary while marking satisfied edges as `blocks✓`; active `blocks` stay red. The boxed `planr map show --view diagram` renderer is exclusively for human supervision and uses neutral `then` routes once those dependencies are satisfied. Agents must not invoke it. Humans can add `--full` for complete status, title, worker, critical-lane, and pressure details. Interactive map output colors states automatically; `--no-color` and `NO_COLOR` keep it plain.
+Mid-project work (a new feature, refactor, or fix on an existing project) works the same — it gets its own feature-scoped plan and extends the existing map. Both journeys with example prompts: [Prompt Recipes](https://planr.so/docs/agents/prompt-recipes). Coding agents inspect progress with the compact default `planr map show` or, preferably, `planr map show --json`. The tree preserves exact dependency vocabulary while marking satisfied edges as `blocks✓`; active `blocks` stay red. The boxed `planr map show --view diagram` renderer is exclusively for human supervision and uses neutral `then` routes once those dependencies are satisfied. Agents must not invoke it. Humans can add `--full` for complete status, title, worker, critical-lane, and pressure details. Interactive map output colors states automatically; `--no-color` and `NO_COLOR` keep it plain.
 
 To supervise an agent from a second terminal, leave the agent running in terminal A and watch its scoped graph in terminal B:
 
@@ -152,31 +174,32 @@ The watcher is likewise a human-only observer. It defaults to the condensed diag
 
 ## What's new
 
-- **1.7.0 — Evidence-backed evaluations:** Added durable eval suites, runs, comparisons, invalidation and rescoring, correctness/quality/performance gates, cost per verified success, and effort recommendations. The complete workflow is available through the CLI; MCP only mirrors selected surfaces and is optional. Security gates now cover repository leaks, vulnerable dependencies, workflow hardening, privacy, and forbidden staged files. See the [Eval Contract](docs/planr-spec/EVAL_CONTRACT_V1.md), [CLI Reference](docs/CLI_REFERENCE.md), and the [1.7.0 changelog](CHANGELOG.md#170---2026-07-22).
-- **1.6.0 — Human map observation:** Added a condensed boxed diagram, live two-terminal watching, accessible state colors, and clearer satisfied dependency routes. These views are intentionally for human supervision; agents keep using the default tree or JSON snapshots. See [Task Graph Model](docs/TASK_GRAPH_MODEL.md), [CLI Reference](docs/CLI_REFERENCE.md), and the [1.6.0 changelog](CHANGELOG.md#160---2026-07-21).
-- **1.5.2 — Standalone core, optional Switchloom:** Planr consumes provider-neutral repository declarations and route evidence only; it works without any routing files, and requested-only routing metadata is not execution proof. Optional model-routing lifecycle is external, with [Switchloom v0.2.1](https://github.com/instructa/switchloom/releases/tag/v0.2.1) verified as the repository-local handoff outside Planr. Start with [Model Routing](docs/MODEL_ROUTING.md), [Switchloom](https://switchloom.ai), the [Switchloom repository](https://github.com/instructa/switchloom), its tagged [setup quickstart](https://github.com/instructa/switchloom/blob/v0.2.1/README.md#setup-from-the-website) and [lifecycle docs](https://github.com/instructa/switchloom/blob/v0.2.1/docs/preset-composition.md#repository-lifecycle-commands), and the [Changelog](CHANGELOG.md).
+- **1.7.1 — Leaner agent guidance and safer local releases:** Slimmed the hot-path Planr skills while preserving their execution and review contracts, moved maintainer benchmark inputs and results outside the public repository, added a fail-closed local release-evidence gate without API keys in CI, and verified the optional external Switchloom v0.3.2 integration. The public 1.7 eval CLI remains available in this patch. See the [1.7.1 changelog](CHANGELOG.md#171---2026-07-25) and [release guidance](https://planr.so/docs/operations/release).
+- **1.7.0 — Evidence-backed evaluations:** Added durable eval suites, runs, comparisons, invalidation and rescoring, correctness/quality/performance gates, cost per verified success, and effort recommendations. The complete workflow is available through the CLI; MCP only mirrors selected surfaces and is optional. Security gates now cover repository leaks, vulnerable dependencies, workflow hardening, privacy, and forbidden staged files. See the [Eval Contract](docs/contracts/EVAL_CONTRACT_V1.md), [CLI Reference](https://planr.so/docs/reference/cli), and the [1.7.0 changelog](CHANGELOG.md#170---2026-07-22).
+- **1.6.0 — Human map observation:** Added a condensed boxed diagram, live two-terminal watching, accessible state colors, and clearer satisfied dependency routes. These views are intentionally for human supervision; agents keep using the default tree or JSON snapshots. See [Task Graph Model](https://planr.so/docs/concepts/graph-and-readiness), [CLI Reference](https://planr.so/docs/reference/cli), and the [1.6.0 changelog](CHANGELOG.md#160---2026-07-21).
+- **1.5.2 — Standalone core, optional Switchloom:** Planr consumes provider-neutral repository declarations and route evidence only; it works without any routing files, and requested-only routing metadata is not execution proof. Optional model-routing lifecycle is external, with [Switchloom v0.3.2](https://github.com/instructa/switchloom/releases/tag/v0.3.2) verified as the current repository-local handoff outside Planr. Start with [Plugins](https://planr.so/docs/plugins), [Switchloom](https://switchloom.ai), the [Switchloom repository](https://github.com/instructa/switchloom), the [current corrected quickstart](https://github.com/instructa/switchloom#setup-from-the-website), the [v0.3.2 tagged quickstart](https://github.com/instructa/switchloom/blob/v0.3.2/README.md#setup-from-the-website), [v0.3.2 lifecycle docs](https://github.com/instructa/switchloom/blob/v0.3.2/docs/preset-composition.md#repository-lifecycle-commands), and the [Changelog](CHANGELOG.md). The tagged v0.3.2 README quickstart keeps stale `0.3.1` command examples; use explicit `switchloom@0.3.2` commands when following Planr's verified contract.
 - **1.4.0 — Verified presets:** Added policy-driven composition, evaluation, signed registry evidence, and the public catalog. See the [1.4.0 release notes](https://github.com/instructa/planr/releases/tag/v1.4.0).
-- **1.3.0 — Native host hooks:** Added automatic session-state injection and loop recovery for supported hosts. See the [Hooks guide](docs/HOOKS.md) and [1.3.0 release notes](https://github.com/instructa/planr/releases/tag/v1.3.0).
+- **1.3.0 — Native host hooks:** Added automatic session-state injection and loop recovery for supported hosts. See the [Integrations guide](https://planr.so/docs/integrations) and [1.3.0 release notes](https://github.com/instructa/planr/releases/tag/v1.3.0).
 
 For the complete release history, see the [Changelog](CHANGELOG.md).
 
 ## Docs
 
-- [Install](docs/INSTALL.md)
-- [Skills](docs/SKILLS.md)
-- [Long-Running Goals](docs/GOALS.md)
-- [Model Routing](docs/MODEL_ROUTING.md) · [Worked Example: Web App](docs/EXAMPLE_WEBAPP.md)
-- [Host Hooks](docs/HOOKS.md)
-- [CLI Reference](docs/CLI_REFERENCE.md)
-- [MCP Guide](docs/MCP_GUIDE.md)
-- [Codex](docs/CODEX.md) · [Claude Code](docs/CLAUDE_CODE.md) · [Cursor](docs/CURSOR.md)
-- [Operating Model](docs/OPERATING_MODEL.md)
-- [Task Graph Model](docs/TASK_GRAPH_MODEL.md)
-- [Architecture](docs/ARCHITECTURE.md)
-- [Testing](docs/TESTING.md)
-- [Troubleshooting](docs/TROUBLESHOOTING.md)
-- [Specification Package](docs/planr-spec/README.md)
-- More: [Changelog](CHANGELOG.md), [Import](docs/IMPORT.md), [Security](docs/SECURITY.md), [Handoffs And Stories](docs/HANDOFFS_AND_STORIES.md), [npm Package](docs/NPM.md)
+Full documentation lives at [planr.so/docs](https://planr.so/docs).
+
+- [Install](https://planr.so/docs/getting-started/installation)
+- [Skills](https://planr.so/docs/agents/skills) · [Prompt Recipes](https://planr.so/docs/agents/prompt-recipes)
+- [Plugins and Model Routing](https://planr.so/docs/plugins) · [Recipes](https://planr.so/docs/guides/recipes)
+- [Integrations and Host Hooks](https://planr.so/docs/integrations)
+- [CLI Reference](https://planr.so/docs/reference/cli) · [MCP Reference](https://planr.so/docs/reference/mcp)
+- [Codex](https://planr.so/docs/integrations/codex) · [Claude Code](https://planr.so/docs/integrations/claude-code) · [Cursor](https://planr.so/docs/integrations/cursor)
+- [Daily Worker Loop](https://planr.so/docs/guides/daily-worker-loop)
+- [Task Graph Model](https://planr.so/docs/concepts/graph-and-readiness)
+- [Architecture](https://planr.so/docs/contributing/architecture)
+- [Testing](https://planr.so/docs/contributing/testing)
+- [Troubleshooting](https://planr.so/docs/troubleshooting)
+- [Specification Package](.planr/plans/product/planr/README.md)
+- More: [Changelog](CHANGELOG.md), [Packages and Reuse](https://planr.so/docs/guides/packages-and-reuse), [Security and Privacy](https://planr.so/docs/contributing/security-and-privacy), [Handoff and Resume](https://planr.so/docs/guides/handoff-and-resume)
 
 ## License
 

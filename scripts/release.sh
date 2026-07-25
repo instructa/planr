@@ -60,10 +60,34 @@ replace plugins/planr/.codex-plugin/plugin.json "s/\"version\": \".*\"/\"version
 replace plugins/planr/.claude-plugin/plugin.json "s/\"version\": \".*\"/\"version\": \"$version\"/"
 replace .cursor-plugin/plugin.json "s/\"version\": \".*\"/\"version\": \"$version\"/"
 
-# Gates. cargo test includes the drift guard that asserts every manifest
-# carries the crate version; the leak gate mirrors CI secret scanning.
+# The candidate binary owns eval semantics. The local receipt contains only
+# identifiers/digests; model-backed evidence remains in the local Planr DB.
 cargo build --quiet
+eval_receipt="${PLANR_RELEASE_EVAL_RECEIPT:-}"
+if [ -z "$eval_receipt" ]; then
+  echo "PLANR_RELEASE_EVAL_RECEIPT is required; capture fresh local eval evidence before release" >&2
+  exit 1
+fi
+eval_suite="${PLANR_RELEASE_EVAL_SUITE:-}"
+if [ -z "$eval_suite" ]; then
+  echo "PLANR_RELEASE_EVAL_SUITE is required; point it at the externally maintained suite" >&2
+  exit 1
+fi
+eval_db="${PLANR_RELEASE_EVAL_DB:-}"
+if [ -z "$eval_db" ]; then
+  echo "PLANR_RELEASE_EVAL_DB is required; point it at the external eval result database" >&2
+  exit 1
+fi
+node scripts/verify-release-eval-receipt.mjs \
+  --receipt "$eval_receipt" \
+  --db "$eval_db" \
+  --suite "$eval_suite" \
+  --planr-bin target/debug/planr
+
+# Deterministic gates. cargo test includes the manifest drift guard; the leak
+# gate mirrors CI secret scanning. All remain before commit, tag, and push.
 cargo test
+npm run verify:release-eval-gate
 npm pack --dry-run
 scripts/security-local.sh
 

@@ -24,6 +24,12 @@ Use a direct skill only when you deliberately want its narrower boundary.
 | `$planr-status` | You require an explicitly read-only state or goal-contract verdict. | Reports map evidence without implementing. |
 | `$planr-summary` | Work is complete or paused and needs an evidence-backed handoff. | Summarizes recorded changes, verification, and remaining state. |
 
+## Cost tiering
+
+An autonomous run has distinct roles with different intelligence needs. The loop driver plans and decides; a worker executes one item whose scope is already bounded by its pick packet. That bound is what makes a cheaper model tier safe for the installed `planr-worker` and `planr-reviewer` roles, which is where you set it.
+
+Planr represents those decisions as opaque profiles and routes. It does not choose providers, models, effort levels, fallback chains, or host-native role names. An optional external routing tool can map planning, exploration, implementation, mechanical work, and independent review onto different cost or quality tiers; see [Switchloom](/docs/plugins/switchloom). Declarations alone are not proof that a tier ran, so verify effective child metadata instead of trusting requested values.
+
 ## Routing examples
 
 - “Use `$planr`. Plan this only; do not implement.” routes to planning.

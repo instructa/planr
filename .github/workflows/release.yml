@@ -35,7 +35,8 @@ jobs:
           for manifest in \
             package.json \
             plugins/planr/.codex-plugin/plugin.json \
-            plugins/planr/.claude-plugin/plugin.json; do
+            plugins/planr/.claude-plugin/plugin.json \
+            .cursor-plugin/plugin.json; do
             manifest_version="$(jq -r .version "$manifest")"
             if [ "$manifest_version" != "$crate_version" ]; then
               echo "$manifest version $manifest_version does not match Cargo.toml version $crate_version; release with scripts/release.sh" >&2

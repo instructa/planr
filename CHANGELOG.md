@@ -6,9 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-07-25
+
 ### Changed
 
 - Clarified that Planr's complete evaluation workflow is CLI-first and does not require MCP; MCP remains an optional mirrored integration surface.
+- Slimmed the goal, loop, and task-graph skills while preserving their planning, evidence, review, recovery, host-dispatch, and eval-authorization contracts in focused references.
+- Updated the optional external routing handoff and public documentation for the exact verified Switchloom v0.3.2 package without moving lifecycle ownership into Planr Core.
+- Separated maintainer-only lean-skill suites, baselines, model/effort runs, and results from the public repository while retaining Planr's provider-neutral eval CLI, generic lifecycle example, and deterministic release-gate contract.
+
+### Added
+
+- Added a local-only fail-closed release eval receipt gate that binds the current candidate and an explicitly supplied external suite/database to Planr-validated effective route evidence and a freshly recomputed comparison before any commit, tag, or push.
+- Added a self-contained, synthetic CI test for the release-evidence mechanism; it performs no provider call and requires no private suite, result database, receipt, or API key.
+
+### Security
+
+- Kept model/provider credentials, raw prompts, raw completions, mutable eval actions, and long-lived npm tokens out of CI; release evaluation remains a maintainer-local gate and npm publication remains OIDC-based.
+- Updated the documentation runtime to Next.js 16.2.11 and refreshed its locked dependency graph for the verified vulnerability-remediation baseline.
 
 ## [1.7.0] - 2026-07-22
 
@@ -467,7 +482,8 @@ Initial Planr product release.
 - Tag-driven release pipeline with multi-target builds (darwin/linux, arm64/x86_64) and Homebrew tap automation.
 - Skill workflow documentation for Codex, Claude Code, Cursor, and MCP-only clients.
 
-[Unreleased]: https://github.com/instructa/planr/compare/v1.7.0...HEAD
+[Unreleased]: https://github.com/instructa/planr/compare/v1.7.1...HEAD
+[1.7.1]: https://github.com/instructa/planr/compare/v1.7.0...v1.7.1
 [1.7.0]: https://github.com/instructa/planr/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/instructa/planr/compare/v1.5.2...v1.6.0
 [1.5.2]: https://github.com/instructa/planr/compare/v1.5.1...v1.5.2

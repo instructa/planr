@@ -8,6 +8,7 @@ use crate::eval_runner::{
     EvalCommandEvidence, EvalRunOptions, EvalRunnerCase, EvalRunnerManifest,
     eval_runner_manifest_from_value, run_eval_manifest, validate_eval_manifest,
 };
+use crate::route_audit::{EnforcementState, parse_route_observation};
 use crate::util::collect_rows;
 use anyhow::{Context, Result, anyhow, bail};
 use rusqlite::{OptionalExtension, params};
@@ -554,13 +555,16 @@ impl App {
         recompute_of: Option<&str>,
         rescore_of: Option<&str>,
     ) -> Result<Value> {
-        self.eval_run_record_value(baseline_run_id)?;
+        let baseline_run = self.eval_run_record_value(baseline_run_id)?;
         self.eval_run_record_value(candidate_run_id)?;
+        let suite_digest = required_string(&baseline_run, "suite_digest")?;
+        let suite_manifest = self.stored_eval_suite_manifest(&suite_digest)?;
+        let comparison_policy = eval_comparison_policy_from_manifest(&suite_manifest);
         let id = self.compare_stored_eval_runs(
             baseline_run_id,
             candidate_run_id,
             policy_digest,
-            &EvalComparisonPolicy::default(),
+            &comparison_policy,
             EvalComparisonProvenance {
                 recompute_of,
                 rescore_of,
@@ -1028,7 +1032,11 @@ impl App {
                 "created_at": row.get::<_, String>(21)?,
             }))
         })?;
-        collect_rows(rows)
+        let mut attempts = collect_rows(rows)?;
+        for attempt in &mut attempts {
+            attempt["route_observation_validation"] = eval_route_observation_validation(attempt);
+        }
+        Ok(attempts)
     }
 
     fn eval_sample_values(
@@ -1473,6 +1481,74 @@ impl App {
             .collect::<BTreeSet<_>>();
         Ok(Value::Array(bases.into_iter().map(Value::String).collect()))
     }
+}
+
+fn eval_comparison_policy_from_manifest(manifest: &Value) -> EvalComparisonPolicy {
+    let mut policy = EvalComparisonPolicy::default();
+    let Some(value) = manifest.get("comparison_policy") else {
+        return policy;
+    };
+    if let Some(number) = value.get("required_case_coverage").and_then(Value::as_f64) {
+        policy.required_case_coverage = number;
+    }
+    if let Some(hours) = value.get("freshness_max_age_hours").and_then(Value::as_i64) {
+        policy.freshness_max_age_hours = hours;
+    }
+    if let Some(number) = value
+        .get("quality_non_inferiority_margin")
+        .and_then(Value::as_f64)
+    {
+        policy.quality_non_inferiority_margin = number;
+    }
+    if let Some(number) = value.get("variance_cv_max").and_then(Value::as_f64) {
+        policy.variance_cv_max = number;
+    }
+    if let Some(iterations) = value.get("bootstrap_iterations").and_then(Value::as_u64) {
+        policy.bootstrap_iterations = iterations as usize;
+    }
+    if let Some(min_samples) = value.get("min_samples").and_then(Value::as_u64) {
+        policy.min_samples = min_samples as usize;
+    } else if let Some(min_samples) = manifest
+        .get("cases")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|case| {
+            case.get("sampling")?
+                .get("min_successful_samples")?
+                .as_u64()
+        })
+        .max()
+    {
+        policy.min_samples = min_samples as usize;
+    }
+    if value.get("material_improvement").is_some() {
+        policy.material_improvement = comparison_thresholds(value, "material_improvement");
+    }
+    if value.get("material_regression").is_some() {
+        policy.material_regression = comparison_thresholds(value, "material_regression");
+    }
+    if value.get("protected_relative_max").is_some() {
+        policy.protected_relative_max = comparison_thresholds(value, "protected_relative_max");
+    }
+    policy
+}
+
+fn comparison_thresholds(policy: &Value, field: &str) -> BTreeMap<String, f64> {
+    policy
+        .get(field)
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter_map(|(key, value)| {
+            let threshold = value.as_f64()?;
+            let canonical = key
+                .strip_suffix("_relative")
+                .map(|measure| format!("{measure}_p95_relative"))
+                .unwrap_or_else(|| key.clone());
+            Some((canonical, threshold))
+        })
+        .collect()
 }
 
 #[derive(Debug)]
@@ -2003,27 +2079,7 @@ fn runner_sample_inputs(
                 effective_profile_id: Some("eval-runner-local-process".to_string()),
                 profile_config_digest: Some("builtin:eval-runner-local-process-v1".to_string()),
                 runner_harness_version: "eval-runner-v1".to_string(),
-                route_observation: Some(json!({
-                    "source": "allowlisted_process_runner",
-                    "effective": {
-                        "client": "planr",
-                        "provider": "local_process",
-                        "runtime": "bounded-command",
-                        "model": "external-subject",
-                        "effort": "not-applicable",
-                        "profile_id": "eval-runner-local-process",
-                        "profile_config_digest": "builtin:eval-runner-local-process-v1"
-                    },
-                    "metering": {
-                        "wall_time_ms": {"basis": "actual_trusted", "confidence": "verified", "value": sample.duration_ms},
-                        "tool_calls": {"basis": "unavailable", "confidence": "unavailable"},
-                        "input_tokens": {"basis": "unavailable", "confidence": "unavailable"},
-                        "output_tokens": {"basis": "unavailable", "confidence": "unavailable"},
-                        "total_tokens": {"basis": "unavailable", "confidence": "unavailable"},
-                        "credits_micros": {"basis": "unavailable", "confidence": "unavailable"},
-                        "cost_micros": {"basis": "unavailable", "confidence": "unavailable"}
-                    }
-                })),
+                route_observation: Some(local_process_route_observation(sample.duration_ms)),
                 outcome,
             };
             let base = |measure: &str, value: Value, unit: &str, source: &str, basis: &str| {
@@ -2484,6 +2540,13 @@ fn eval_samples_input(samples: Option<&Vec<Value>>) -> Result<Vec<EvalSampleInpu
 
 fn eval_attempt_input(sample: &Value) -> Result<EvalAttemptInput> {
     let attempt = sample.get("attempt").unwrap_or(&Value::Null);
+    let route_observation = attempt
+        .get("route_observation")
+        .cloned()
+        .map(parse_route_observation)
+        .transpose()?
+        .map(serde_json::to_value)
+        .transpose()?;
     Ok(EvalAttemptInput {
         id: string_field(attempt, "id").or_else(|| string_field(sample, "attempt_id")),
         attempt_index: attempt
@@ -2515,8 +2578,139 @@ fn eval_attempt_input(sample: &Value) -> Result<EvalAttemptInput> {
         profile_config_digest: string_field(attempt, "profile_config_digest"),
         runner_harness_version: string_field(attempt, "runner_harness_version")
             .unwrap_or_else(|| "supplied-evidence-v1".to_string()),
-        route_observation: attempt.get("route_observation").cloned(),
+        route_observation,
         outcome: attempt.get("outcome").cloned().unwrap_or_else(|| json!({})),
+    })
+}
+
+fn eval_route_observation_validation(attempt: &Value) -> Value {
+    let Some(raw) = attempt
+        .get("route_observation")
+        .filter(|value| !value.is_null())
+    else {
+        return json!({"status": "unavailable", "source": "planr.route_audit.v1"});
+    };
+    let Ok(observation) = parse_route_observation(raw.clone()) else {
+        return json!({"status": "invalid", "source": "planr.route_audit.v1"});
+    };
+    let effective = &observation.effective;
+    let dimensions_verified = [
+        effective.agent_type.enforcement,
+        effective.model.enforcement,
+        effective.effort.enforcement,
+        effective.context_fork.enforcement,
+    ]
+    .into_iter()
+    .all(|enforcement| enforcement == EnforcementState::Verified)
+        && [
+            effective.provider.as_ref(),
+            effective.runtime.as_ref(),
+            effective.profile_config_digest.as_ref(),
+            effective.runner_harness_version.as_ref(),
+        ]
+        .into_iter()
+        .all(|dimension| {
+            dimension.is_some_and(|dimension| {
+                dimension.enforcement == EnforcementState::Verified
+                    && dimension
+                        .value
+                        .as_ref()
+                        .is_some_and(|value| !value.is_empty())
+            })
+        });
+    let identity_matches = [
+        (
+            effective.client.as_deref(),
+            attempt["effective_client"].as_str(),
+        ),
+        (
+            effective.profile.as_deref(),
+            attempt["effective_profile_id"].as_str(),
+        ),
+        (
+            effective.model.value.as_deref(),
+            attempt["effective_model"].as_str(),
+        ),
+        (
+            effective.effort.value.as_deref(),
+            attempt["effective_effort"].as_str(),
+        ),
+        (
+            effective
+                .provider
+                .as_ref()
+                .and_then(|field| field.value.as_deref()),
+            attempt["effective_provider"].as_str(),
+        ),
+        (
+            effective
+                .runtime
+                .as_ref()
+                .and_then(|field| field.value.as_deref()),
+            attempt["effective_runtime"].as_str(),
+        ),
+        (
+            effective
+                .profile_config_digest
+                .as_ref()
+                .and_then(|field| field.value.as_deref()),
+            attempt["profile_config_digest"].as_str(),
+        ),
+        (
+            effective
+                .runner_harness_version
+                .as_ref()
+                .and_then(|field| field.value.as_deref()),
+            attempt["runner_harness_version"].as_str(),
+        ),
+    ]
+    .into_iter()
+    .all(|(observed, recorded)| observed.is_some() && observed == recorded);
+    json!({
+        "status": if dimensions_verified && identity_matches { "verified" } else { "invalid" },
+        "source": "planr.route_audit.v1",
+        "effective": {
+            "client": effective.client,
+            "profile_id": effective.profile,
+            "agent_type": effective.agent_type.value,
+            "provider": effective.provider.as_ref().and_then(|field| field.value.as_ref()),
+            "runtime": effective.runtime.as_ref().and_then(|field| field.value.as_ref()),
+            "model": effective.model.value,
+            "effort": effective.effort.value,
+            "profile_config_digest": effective.profile_config_digest.as_ref().and_then(|field| field.value.as_ref()),
+            "runner_harness_version": effective.runner_harness_version.as_ref().and_then(|field| field.value.as_ref()),
+        }
+    })
+}
+
+fn local_process_route_observation(duration_ms: u128) -> Value {
+    let stage = |enforcement: &str, evidence: &str| {
+        json!({
+            "profile": "eval-runner-local-process",
+            "client": "planr",
+            "provider": {"value": "local_process", "enforcement": enforcement, "evidence": evidence},
+            "runtime": {"value": "bounded-command", "enforcement": enforcement, "evidence": evidence},
+            "profile_config_digest": {"value": "builtin:eval-runner-local-process-v1", "enforcement": enforcement, "evidence": evidence},
+            "runner_harness_version": {"value": "eval-runner-v1", "enforcement": enforcement, "evidence": evidence},
+            "agent_type": {"value": "bounded-command", "enforcement": enforcement, "evidence": evidence},
+            "model": {"value": "external-subject", "enforcement": enforcement, "evidence": evidence},
+            "effort": {"value": "not-applicable", "enforcement": enforcement, "evidence": evidence},
+            "context_fork": {"value": {"mode": "none"}, "enforcement": enforcement, "evidence": evidence}
+        })
+    };
+    json!({
+        "requested": stage("requested_only", "policy"),
+        "resolved": stage("verified", "binding"),
+        "effective": stage("verified", "process_exit"),
+        "transition": {"kind": "initial", "reason": "allowlisted process runner completed", "evidence": ["process_exit"]},
+        "policy": {"id": "eval-runner-local-process", "version": "v1"},
+        "binding": {"id": "bounded-command", "version": "v1"},
+        "metering": {
+            "wall_time_seconds": {"value": duration_ms.div_ceil(1000).min(u64::MAX as u128) as u64, "confidence": "trusted"},
+            "tool_calls": {"confidence": "unavailable"},
+            "tokens": {"confidence": "unavailable"},
+            "credits_micros": {"confidence": "unavailable"}
+        }
     })
 }
 
@@ -2658,6 +2852,10 @@ fn eval_error_field(message: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::eval_compare::{
+        EvalCaseEvidence as ComparisonCaseEvidence, EvalNumericSample,
+        EvalRunEvidence as ComparisonRunEvidence, compare_eval_runs,
+    };
     use crate::eval_runner::EvalRunOptions;
     use crate::storage::ensure_schema;
     use rusqlite::Connection;
@@ -2680,6 +2878,113 @@ mod tests {
             )
             .unwrap();
         app
+    }
+
+    fn comparison_run(id: &str, measure: &str, value: f64) -> ComparisonRunEvidence {
+        ComparisonRunEvidence {
+            run_id: id.to_string(),
+            suite_digest: "suite".to_string(),
+            subject_kind: "local_authenticated_agent".to_string(),
+            subject_path: None,
+            subject_argv: "[\"maintainer-eval\",\"lean-skills-dogfood\"]".to_string(),
+            testbed_fingerprint: "matched".to_string(),
+            status: "success".to_string(),
+            invalidated: false,
+            age_hours: 0,
+            cases: ["goal", "loop", "graph"]
+                .into_iter()
+                .map(|case_id| ComparisonCaseEvidence {
+                    case_id: case_id.to_string(),
+                    scorer_id: "invariant-scorer".to_string(),
+                    scorer_version: "1.0.0".to_string(),
+                    scorer_control: None,
+                    fixture_digest: "fixture".to_string(),
+                    status: "pass".to_string(),
+                    repetition_outcomes: Vec::new(),
+                    safety_pass: Some(true),
+                    quality_pass: Some(true),
+                    min_successful_samples: Some(3),
+                    required_repetitions: Some(3),
+                    samples: (0..3)
+                        .map(|repetition_index| EvalNumericSample {
+                            repetition_index,
+                            warmup: false,
+                            seed: repetition_index as i64,
+                            measure: measure.to_string(),
+                            value,
+                            valid: true,
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn manifest_policy_drives_material_efficiency_verdicts() {
+        let manifest = json!({
+            "cases": [{
+                "sampling": { "min_successful_samples": 3 }
+            }],
+            "comparison_policy": {
+                "required_case_coverage": 1.0,
+                "material_improvement": {
+                    "total_tokens_relative": -0.1,
+                    "wall_time_ms_relative": -0.1,
+                    "cost_per_verified_success_micros_relative": -0.1
+                },
+                "material_regression": {
+                    "total_tokens_relative": 0.1,
+                    "wall_time_ms_relative": 0.1,
+                    "cost_per_verified_success_micros_relative": 0.1
+                }
+            }
+        });
+        let policy = eval_comparison_policy_from_manifest(&manifest);
+
+        for measure in [
+            "total_tokens",
+            "wall_time_ms",
+            "cost_per_verified_success_micros",
+        ] {
+            let baseline = comparison_run("baseline", measure, 100.0);
+            let improved = comparison_run("improved", measure, 80.0);
+            let unchanged = comparison_run("unchanged", measure, 100.0);
+            let regressed = comparison_run("regressed", measure, 120.0);
+
+            assert_eq!(
+                compare_eval_runs(Some(&baseline), Some(&improved), &policy).verdict,
+                "improved",
+                "{measure} must use the immutable suite threshold"
+            );
+            assert_eq!(
+                compare_eval_runs(Some(&baseline), Some(&unchanged), &policy).verdict,
+                "no_material_difference",
+                "{measure} no-effect evidence must not claim improvement"
+            );
+            assert_eq!(
+                compare_eval_runs(Some(&baseline), Some(&regressed), &policy).verdict,
+                "regressed",
+                "{measure} regression must remain blocked"
+            );
+        }
+    }
+
+    #[test]
+    fn suites_without_comparison_policy_keep_default_behavior() {
+        let policy = eval_comparison_policy_from_manifest(&json!({}));
+        let default = EvalComparisonPolicy::default();
+        assert_eq!(
+            policy.required_case_coverage,
+            default.required_case_coverage
+        );
+        assert_eq!(
+            policy.freshness_max_age_hours,
+            default.freshness_max_age_hours
+        );
+        assert_eq!(policy.min_samples, default.min_samples);
+        assert_eq!(policy.material_improvement, default.material_improvement);
+        assert_eq!(policy.material_regression, default.material_regression);
     }
 
     fn supplied_control_manifest() -> Value {
@@ -2744,6 +3049,117 @@ mod tests {
                 }))
                 .collect::<Vec<_>>()
         })
+    }
+
+    fn verified_eval_route_observation() -> Value {
+        let stage = |enforcement: &str, evidence: &str| {
+            json!({
+                "profile": "observed-profile",
+                "client": "codex",
+                "provider": {"value": "openai", "enforcement": enforcement, "evidence": evidence},
+                "runtime": {"value": "codex-cli", "enforcement": enforcement, "evidence": evidence},
+                "profile_config_digest": {"value": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "enforcement": enforcement, "evidence": evidence},
+                "runner_harness_version": {"value": "release-eval-v1", "enforcement": enforcement, "evidence": evidence},
+                "agent_type": {"value": "codex-worker", "enforcement": enforcement, "evidence": evidence},
+                "model": {"value": "observed-model", "enforcement": enforcement, "evidence": evidence},
+                "effort": {"value": "high", "enforcement": enforcement, "evidence": evidence},
+                "context_fork": {"value": {"mode": "none"}, "enforcement": enforcement, "evidence": evidence}
+            })
+        };
+        json!({
+            "requested": stage("requested_only", "policy"),
+            "resolved": stage("verified", "binding"),
+            "effective": stage("verified", "host_report"),
+            "transition": {"kind": "initial", "reason": "host reported effective route", "evidence": ["host_report"]},
+            "policy": {"id": "route-policy", "version": "v1"},
+            "binding": {"id": "route-binding", "version": "v1"},
+            "metering": {
+                "wall_time_seconds": {"value": 1, "confidence": "trusted"},
+                "tool_calls": {"confidence": "unavailable"},
+                "tokens": {"confidence": "unavailable"},
+                "credits_micros": {"confidence": "unavailable"}
+            }
+        })
+    }
+
+    fn observed_attempt(observation: Value) -> Value {
+        json!({
+            "effective_client": "codex",
+            "effective_provider": "openai",
+            "effective_runtime": "codex-cli",
+            "effective_model": "observed-model",
+            "effective_effort": "high",
+            "effective_profile_id": "observed-profile",
+            "profile_config_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "runner_harness_version": "release-eval-v1",
+            "route_observation": observation
+        })
+    }
+
+    #[test]
+    fn supplied_eval_route_provenance_uses_canonical_route_audit_contract() {
+        let attempt = observed_attempt(verified_eval_route_observation());
+        let parsed = eval_attempt_input(&json!({"attempt": attempt.clone()})).unwrap();
+        assert!(parsed.route_observation.is_some());
+        assert_eq!(
+            eval_route_observation_validation(&attempt)["status"],
+            "verified"
+        );
+
+        let mut requested_only = verified_eval_route_observation();
+        requested_only["effective"]["model"]["enforcement"] = json!("requested_only");
+        assert!(eval_attempt_input(&json!({"attempt": observed_attempt(requested_only)})).is_err());
+
+        let mut policy_only = verified_eval_route_observation();
+        policy_only["effective"]["model"]["evidence"] = json!("policy");
+        assert!(eval_attempt_input(&json!({"attempt": observed_attempt(policy_only)})).is_err());
+
+        let mut invalid_confidence = verified_eval_route_observation();
+        invalid_confidence["metering"]["wall_time_seconds"]["confidence"] = json!("actual_trusted");
+        assert!(
+            eval_attempt_input(&json!({"attempt": observed_attempt(invalid_confidence)})).is_err()
+        );
+
+        let ad_hoc =
+            json!({"source": "host_report", "effective_treatment": {"confidence": "verified"}});
+        assert!(eval_attempt_input(&json!({"attempt": observed_attempt(ad_hoc)})).is_err());
+
+        for field in [
+            "provider",
+            "runtime",
+            "profile_config_digest",
+            "runner_harness_version",
+        ] {
+            let mut incomplete = verified_eval_route_observation();
+            incomplete["effective"]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            assert_eq!(
+                eval_route_observation_validation(&observed_attempt(incomplete))["status"],
+                "invalid",
+                "canonical effective {field} evidence is release-required"
+            );
+        }
+
+        for field in [
+            "effective_client",
+            "effective_provider",
+            "effective_runtime",
+            "effective_model",
+            "effective_effort",
+            "effective_profile_id",
+            "profile_config_digest",
+            "runner_harness_version",
+        ] {
+            let mut fabricated = observed_attempt(verified_eval_route_observation());
+            fabricated[field] = json!(format!("fabricated-{field}"));
+            assert_eq!(
+                eval_route_observation_validation(&fabricated)["status"],
+                "invalid",
+                "{field} must be bound to canonical route evidence"
+            );
+        }
     }
 
     #[test]

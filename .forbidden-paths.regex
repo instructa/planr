@@ -1,5 +1,6 @@
 # Local runtime state
-(^|/)\.planr/
+# The repository-owned product spec is the only tracked .planr subtree.
+(^|/)\.planr/(?!plans/product/planr(?:/|$))
 (^|/)\.codex/
 (^|/)\.claude/
 (^|/)\.claude\.json$
