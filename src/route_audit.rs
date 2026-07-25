@@ -30,6 +30,14 @@ pub struct RouteStage {
     pub profile: Option<String>,
     #[serde(default)]
     pub client: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<StringDimension>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<StringDimension>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_config_digest: Option<StringDimension>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runner_harness_version: Option<StringDimension>,
     pub agent_type: StringDimension,
     pub model: StringDimension,
     pub effort: StringDimension,
@@ -281,6 +289,28 @@ fn validate_stage(kind: RouteStageKind, stage: &RouteStage) -> Result<(), String
             return Err(format!("{field}.{name} must not be blank"));
         }
     }
+    for (name, dimension) in [
+        ("provider", stage.provider.as_ref()),
+        ("runtime", stage.runtime.as_ref()),
+        (
+            "profile_config_digest",
+            stage.profile_config_digest.as_ref(),
+        ),
+        (
+            "runner_harness_version",
+            stage.runner_harness_version.as_ref(),
+        ),
+    ] {
+        if let Some(dimension) = dimension {
+            validate_dimension(
+                &format!("{field}.{name}"),
+                dimension.value.as_deref(),
+                dimension.enforcement,
+                dimension.evidence,
+                kind,
+            )?;
+        }
+    }
     validate_dimension(
         &format!("{field}.agent_type"),
         stage.agent_type.value.as_deref(),
@@ -413,6 +443,10 @@ mod tests {
             role: Some("worker".to_string()),
             profile: Some("coder".to_string()),
             client: Some("codex".to_string()),
+            provider: None,
+            runtime: None,
+            profile_config_digest: None,
+            runner_harness_version: None,
             agent_type: field(Some("planr-terra-high"), enforcement),
             model: field(Some("model-primary"), enforcement),
             effort: field(Some("high"), enforcement),

@@ -230,7 +230,7 @@ pub(crate) fn compare_eval_runs(
             }
             if let Some(max_relative) = protected_threshold(policy, &measure) {
                 protected.insert(format!("{measure}_relative"), relative_value(relative));
-                if unbounded_positive_delta || ci.0 >= max_relative {
+                if unbounded_positive_delta || ci.0 > max_relative {
                     performance_reasons.push("protected_dimension_regressed".to_string());
                 }
             }
@@ -240,11 +240,11 @@ pub(crate) fn compare_eval_runs(
                 }
             }
             if let Some(threshold) = material_regression_threshold(policy, &measure) {
-                if unbounded_positive_delta || ci.0 >= threshold {
+                if unbounded_positive_delta || ci.0 > threshold {
                     performance_reasons.push(regression_reason_for_measure(&measure).to_string());
                 }
             } else if let Some(max_relative) = protected_threshold(policy, &measure) {
-                if unbounded_positive_delta || ci.0 >= max_relative {
+                if unbounded_positive_delta || ci.0 > max_relative {
                     performance_reasons.push(regression_reason_for_measure(&measure).to_string());
                 }
             }
@@ -1014,6 +1014,68 @@ mod tests {
                 .as_f64()
                 .unwrap()
                 >= 0.10
+        );
+    }
+
+    #[test]
+    fn eval_compare_regression_thresholds_allow_the_exact_boundary_only() {
+        let baseline = run("base", &[100.0, 100.0, 100.0], "pass");
+        let unchanged = run("unchanged", &[100.0, 100.0, 100.0], "pass");
+        let zero_policy = EvalComparisonPolicy {
+            material_improvement: BTreeMap::new(),
+            material_regression: BTreeMap::from([("duration_ms_p95_relative".to_string(), 0.0)]),
+            ..EvalComparisonPolicy::default()
+        };
+        let result = compare_eval_runs(Some(&baseline), Some(&unchanged), &zero_policy);
+        assert_eq!(result.verdict, "no_material_difference");
+        assert_eq!(result.reasons, vec!["no_material_effect"]);
+        assert_eq!(
+            result.uncertainty["duration_ms_p95_ci95"],
+            json!([0.0, 0.0])
+        );
+
+        let declined = run("declined", &[101.0, 101.0, 101.0], "pass");
+        let result = compare_eval_runs(Some(&baseline), Some(&declined), &zero_policy);
+        assert_eq!(result.verdict, "regressed");
+        assert_eq!(result.reasons, vec!["performance_regressed"]);
+
+        let ten_percent_policy = EvalComparisonPolicy {
+            material_improvement: BTreeMap::new(),
+            material_regression: BTreeMap::from([("duration_ms_p95_relative".to_string(), 0.10)]),
+            ..EvalComparisonPolicy::default()
+        };
+        let at_boundary = run("boundary", &[110.0, 110.0, 110.0], "pass");
+        let result = compare_eval_runs(Some(&baseline), Some(&at_boundary), &ten_percent_policy);
+        assert_eq!(result.verdict, "no_material_difference");
+        assert_eq!(result.reasons, vec!["no_material_effect"]);
+
+        let beyond_boundary = run("beyond", &[111.0, 111.0, 111.0], "pass");
+        let result =
+            compare_eval_runs(Some(&baseline), Some(&beyond_boundary), &ten_percent_policy);
+        assert_eq!(result.verdict, "regressed");
+        assert_eq!(result.reasons, vec!["performance_regressed"]);
+    }
+
+    #[test]
+    fn eval_compare_protected_max_allows_the_exact_boundary_only() {
+        let policy = EvalComparisonPolicy {
+            material_improvement: BTreeMap::new(),
+            material_regression: BTreeMap::new(),
+            protected_relative_max: BTreeMap::from([("tool_calls_relative_max".to_string(), 0.10)]),
+            ..EvalComparisonPolicy::default()
+        };
+        let baseline = run_with_measure("base", &[10.0, 10.0, 10.0], "pass", "tool_calls");
+        let at_boundary = run_with_measure("boundary", &[11.0, 11.0, 11.0], "pass", "tool_calls");
+        let result = compare_eval_runs(Some(&baseline), Some(&at_boundary), &policy);
+        assert_eq!(result.verdict, "no_material_difference");
+        assert_eq!(result.reasons, vec!["no_material_effect"]);
+
+        let beyond_boundary = run_with_measure("beyond", &[12.0, 12.0, 12.0], "pass", "tool_calls");
+        let result = compare_eval_runs(Some(&baseline), Some(&beyond_boundary), &policy);
+        assert_eq!(result.verdict, "regressed");
+        assert_eq!(
+            result.reasons,
+            vec!["protected_dimension_regressed", "cost_regressed"]
         );
     }
 

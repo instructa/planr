@@ -7,6 +7,8 @@ planr_test_dir=${PLANR_TEST_DIR:-"$(dirname "$repo_root")/planr-test"}
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
+npm run verify:release-eval-gate
+PLANR_ORACLE_SELF_TEST=source-provenance node scripts/verify-switchloom-cross-product.mjs
 cargo build --release
 npm pack --dry-run
 node npm/bin/planr.js --version

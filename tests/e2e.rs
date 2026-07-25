@@ -56,6 +56,42 @@ fn assert_eval_envelope(value: &Value, command: &str, ok: bool) {
     }
 }
 
+fn verified_eval_route_observation(
+    client: &str,
+    model: &str,
+    effort: &str,
+    profile: &str,
+) -> Value {
+    let stage = |enforcement: &str, evidence: &str| {
+        json!({
+            "profile": profile,
+            "client": client,
+            "provider": {"value": "openai", "enforcement": enforcement, "evidence": evidence},
+            "runtime": {"value": "codex-cli", "enforcement": enforcement, "evidence": evidence},
+            "profile_config_digest": {"value": "sha256:2222222222222222222222222222222222222222222222222222222222222222", "enforcement": enforcement, "evidence": evidence},
+            "runner_harness_version": {"value": "supplied-evidence-v1", "enforcement": enforcement, "evidence": evidence},
+            "agent_type": {"value": "codex-worker", "enforcement": enforcement, "evidence": evidence},
+            "model": {"value": model, "enforcement": enforcement, "evidence": evidence},
+            "effort": {"value": effort, "enforcement": enforcement, "evidence": evidence},
+            "context_fork": {"value": {"mode": "none"}, "enforcement": enforcement, "evidence": evidence}
+        })
+    };
+    json!({
+        "requested": stage("requested_only", "policy"),
+        "resolved": stage("verified", "binding"),
+        "effective": stage("verified", "host_report"),
+        "transition": {"kind": "initial", "reason": "host reported effective route", "evidence": ["host_report"]},
+        "policy": {"id": "eval-route-policy", "version": "v1"},
+        "binding": {"id": "eval-route-binding", "version": "v1"},
+        "metering": {
+            "wall_time_seconds": {"value": 1, "confidence": "trusted"},
+            "tool_calls": {"confidence": "unavailable"},
+            "tokens": {"confidence": "unavailable"},
+            "credits_micros": {"confidence": "unavailable"}
+        }
+    })
+}
+
 fn canonical_json_value(value: &Value) -> Value {
     match value {
         Value::Array(values) => Value::Array(values.iter().map(canonical_json_value).collect()),
@@ -556,7 +592,8 @@ fn mcp_contract_install_fixtures_and_cli_docs_do_not_drift() {
     let prompt_http: Value = serde_json::from_slice(&prompt_http).unwrap();
     assert!(prompt_http["prompt"].as_str().unwrap().contains("/review"));
 
-    let cli_reference = fs::read_to_string(root.join("docs/CLI_REFERENCE.md")).unwrap();
+    let cli_reference =
+        fs::read_to_string(root.join("apps/docs/content/docs/reference/cli.mdx")).unwrap();
     for command in fixture["cli_reference_commands"].as_array().unwrap() {
         assert!(
             cli_reference.contains(command.as_str().unwrap()),
@@ -935,18 +972,12 @@ fn eval_cli_and_mcp_share_one_surface() {
                 "effective_profile_id": "eval-terra-high",
                 "profile_config_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
                 "runner_harness_version": "supplied-evidence-v1",
-                "route_observation": {
-                    "effective": {
-                        "client": "codex",
-                        "provider": "openai",
-                        "runtime": "codex-cli",
-                        "model": "gpt-5.6-terra",
-                        "effort": "high",
-                        "profile_id": "eval-terra-high",
-                        "profile_config_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
-                    },
-                    "transition_reason": "fixture"
-                },
+                "route_observation": verified_eval_route_observation(
+                    "codex",
+                    "gpt-5.6-terra",
+                    "high",
+                    "eval-terra-high"
+                ),
                 "outcome": {"status": terminal_status}
             });
             if let Some((field, parent_id)) = parent {
@@ -2240,7 +2271,7 @@ fn eval_cli_and_mcp_share_one_surface() {
     );
     assert_eq!(fallback_attempt["effective_model"], json!("gpt-5.6-terra"));
     assert_eq!(
-        fallback_attempt["route_observation"]["effective"]["effort"],
+        fallback_attempt["route_observation"]["effective"]["effort"]["value"],
         json!("high")
     );
     let imported_samples = imported_run["object"]["run"]["cases"][0]["samples"]
@@ -11936,6 +11967,21 @@ fn planr_native_skills_are_packaged_and_cli_first() {
     }
     let loop_skill =
         fs::read_to_string(root.join("plugins/planr/skills/planr-loop/SKILL.md")).unwrap();
+    for reference in [
+        "references/host-dispatch.md",
+        "references/recovery-and-verification.md",
+    ] {
+        assert!(
+            loop_skill.contains(&format!("]({reference})")),
+            "planr-loop must link its progressive-disclosure reference {reference}"
+        );
+        assert!(
+            root.join("plugins/planr/skills/planr-loop")
+                .join(reference)
+                .is_file(),
+            "plugin skill reference must resolve: {reference}"
+        );
+    }
     assert!(
         loop_skill.contains("Pick packets expose provider-neutral `routing.profile`; they do not expose a host-owned `routing.agent_type`"),
         "planr-loop must document that pick packets expose routing.profile, not routing.agent_type"
@@ -11974,6 +12020,24 @@ fn planr_native_skills_are_packaged_and_cli_first() {
 
 #[test]
 fn project_init_and_install_provision_loop_agent_roles() {
+    fn assert_cursor_loop_references_resolve(root: &std::path::Path) {
+        let skill_path = root.join(".cursor/skills/planr-loop/SKILL.md");
+        let skill = fs::read_to_string(&skill_path).unwrap();
+        for reference in [
+            "references/host-dispatch.md",
+            "references/recovery-and-verification.md",
+        ] {
+            assert!(
+                skill.contains(&format!("]({reference})")),
+                "installed planr-loop must link {reference}"
+            );
+            assert!(
+                skill_path.parent().unwrap().join(reference).is_file(),
+                "installed planr-loop reference must resolve: {reference}"
+            );
+        }
+    }
+
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
 
@@ -12007,7 +12071,6 @@ fn project_init_and_install_provision_loop_agent_roles() {
             .join(".codex/agents/planr-reviewer.toml")
             .exists()
     );
-
     // Cursor owns project roles and skills even when MCP is omitted.
     let no_mcp = tempdir().unwrap();
     let no_mcp_db = no_mcp.path().join(".planr/planr.sqlite");
@@ -12037,6 +12100,8 @@ fn project_init_and_install_provision_loop_agent_roles() {
         ".cursor/agents/planr-worker.md",
         ".cursor/agents/planr-reviewer.md",
         ".cursor/skills/planr/SKILL.md",
+        ".cursor/skills/planr-loop/references/host-dispatch.md",
+        ".cursor/skills/planr-loop/references/recovery-and-verification.md",
         ".cursor/skills/planr-work/SKILL.md",
     ] {
         assert!(
@@ -12044,6 +12109,44 @@ fn project_init_and_install_provision_loop_agent_roles() {
             "install cursor --no-mcp should write {provisioned}"
         );
     }
+    assert_cursor_loop_references_resolve(no_mcp.path());
+    let installed_reference = no_mcp
+        .path()
+        .join(".cursor/skills/planr-loop/references/host-dispatch.md");
+    fs::write(&installed_reference, "local customization\n").unwrap();
+    planr()
+        .current_dir(no_mcp.path())
+        .args([
+            "--db",
+            no_mcp_db.to_str().unwrap(),
+            "install",
+            "cursor",
+            "--no-mcp",
+        ])
+        .assert()
+        .success();
+    assert_eq!(
+        fs::read_to_string(&installed_reference).unwrap(),
+        "local customization\n",
+        "ordinary reconciliation must preserve an existing reference"
+    );
+    planr()
+        .current_dir(no_mcp.path())
+        .args([
+            "--db",
+            no_mcp_db.to_str().unwrap(),
+            "install",
+            "cursor",
+            "--no-mcp",
+            "--force",
+        ])
+        .assert()
+        .success();
+    assert_eq!(
+        fs::read_to_string(&installed_reference).unwrap(),
+        include_str!("../plugins/planr/skills/planr-loop/references/host-dispatch.md"),
+        "forced reconciliation must restore the packaged reference"
+    );
     assert!(
         !no_mcp.path().join(".cursor/mcp.json").exists(),
         "install cursor --no-mcp must not write MCP config"
@@ -12144,6 +12247,8 @@ fn client_install_responsibilities_are_exact() {
                 ".cursor/skills/planr/SKILL.md",
                 ".cursor/skills/planr-goal/SKILL.md",
                 ".cursor/skills/planr-loop/SKILL.md",
+                ".cursor/skills/planr-loop/references/host-dispatch.md",
+                ".cursor/skills/planr-loop/references/recovery-and-verification.md",
                 ".cursor/skills/planr-verify-web/SKILL.md",
                 ".cursor/skills/planr-task-graph/SKILL.md",
                 ".cursor/skills/planr-plan/SKILL.md",
@@ -12237,6 +12342,8 @@ fn client_install_responsibilities_are_exact() {
                 ".cursor/agents/planr-worker.md",
                 ".cursor/agents/planr-reviewer.md",
                 ".cursor/skills/planr/SKILL.md",
+                ".cursor/skills/planr-loop/references/host-dispatch.md",
+                ".cursor/skills/planr-loop/references/recovery-and-verification.md",
                 ".cursor/hooks.json",
                 ".cursor/hooks/planr-evidence-guard.sh",
             ],
@@ -12302,7 +12409,8 @@ fn client_install_responsibilities_are_exact() {
         .stdout(predicate::str::contains("subagent roles and skills only").not());
 
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let install_contract = fs::read_to_string(root.join("docs/MCP_CONTRACT.md")).unwrap();
+    let install_contract =
+        fs::read_to_string(root.join("apps/docs/content/docs/reference/mcp.mdx")).unwrap();
     for required in [
         "complete client-owned MCP, role, skill, and hook-reconciliation paths",
         "Codex reconciles hooks only",
@@ -12316,7 +12424,8 @@ fn client_install_responsibilities_are_exact() {
             "canonical install contract is missing: {required}"
         );
     }
-    let skills_doc = fs::read_to_string(root.join("docs/SKILLS.md")).unwrap();
+    let skills_doc =
+        fs::read_to_string(root.join("apps/docs/content/docs/plugins/index.mdx")).unwrap();
     assert!(skills_doc.contains(
         "writes the provider-neutral .planr/agents.toml registry; it does not generate Codex roles"
     ));
@@ -12342,7 +12451,12 @@ fn public_examples_use_the_router_and_only_plan_bound_goal_drivers() {
 
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files = vec![root.join("README.md")];
-    for public_root in ["docs", "apps/docs/content", "plugins/planr"] {
+    for public_root in [
+        "docs",
+        "apps/docs/content",
+        "plugins/planr",
+        ".planr/plans/product/planr",
+    ] {
         collect_public_docs(&root.join(public_root), &mut files);
     }
     for path in files {

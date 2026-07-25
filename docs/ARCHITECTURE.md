@@ -8,7 +8,8 @@ Planr V1 is a single Rust binary with explicit module ownership. The crate stays
 - `tests/e2e.rs`: real CLI, MCP, HTTP, import, review-gate, run-log, and concurrent-pick tests.
 - `plugins/planr/`: the installable plugin payload — all ten skills, independent Claude/Cursor worker and reviewer role assets, and the per-host plugin manifests. Planr does not ship model-pinned Codex roles.
 - `.agents/plugins/marketplace.json`, `.claude-plugin/marketplace.json`: marketplace manifests pointing Codex and Claude Code at `plugins/planr`.
-- `docs/`: user and contributor guides; `docs/planr-spec/` is the production specification package for Planr V1.
+- `docs/`: user and contributor guides; `docs/contracts/` holds the frozen product contracts that gate CI.
+- `.planr/plans/product/planr/`: the production specification package for Planr V1, stored as a normal Planr product plan package. It is the only committed `.planr` path; all other runtime state stays local.
 - `examples/real-world-flow.md`: executable real-world operator flow.
 - `scripts/`: installer and release packaging scripts.
 - `npm/`: the npm wrapper package.
@@ -51,7 +52,7 @@ Planr V1 is a single Rust binary with explicit module ownership. The crate stays
 
 ## Eval Contract V1/V1.1 Ownership
 
-The frozen product contract lives in `docs/planr-spec/EVAL_CONTRACT_V1.md` until implementation promotes it into code. Its V1.1 efficiency-evidence amendment is additive and keeps the same owner split:
+The frozen product contract lives in `docs/contracts/EVAL_CONTRACT_V1.md` until implementation promotes it into code. Its V1.1 efficiency-evidence amendment is additive and keeps the same owner split:
 
 - repository EvalSuite manifests and fixtures are authored inputs;
 - the suite loader owns validation, safe path resolution, normalization, canonical ordering, and digests;

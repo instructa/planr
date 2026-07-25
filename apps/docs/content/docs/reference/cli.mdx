@@ -25,6 +25,36 @@ planr [--db <path>] [--json] [--no-color] <command>
 
 The [generated CLI reference](/docs/reference/cli-generated) contains every current subcommand, positional argument, option, default, and enum printed by the repository binary.
 
+## Agent-facing signatures
+
+These are the invocations agents and integration scripts rely on most; the generated reference remains authoritative for exact options:
+
+```text
+planr install codex|claude|cursor
+planr install codex|claude|cursor [--dry-run] [--no-mcp] [--force] [--no-hooks]
+planr prompt cli|mcp|http
+planr prompt routing
+planr mcp
+planr prime
+planr serve --port
+planr agents init
+planr agents init --profile|--skill|--route|--default-route|--interactive
+planr agents list
+planr agents check
+planr item route
+planr trace item
+planr recover sweep
+planr review annotate
+planr review ingest
+planr review artifact
+planr review evidence
+planr review close
+planr eval suite-check
+planr eval compare
+planr eval gate
+planr eval evidence-ref
+```
+
 ## Automation rules
 
 - Set `PLANR_WORKER_ID` for stable lease ownership.

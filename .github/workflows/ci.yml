@@ -114,6 +114,9 @@ jobs:
       - name: Rust tests
         run: cargo test
 
+      - name: Deterministic local release-eval contract
+        run: npm run verify:release-eval-gate
+
       - name: Shell lint
         run: shellcheck scripts/*.sh
 

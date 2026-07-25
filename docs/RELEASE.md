@@ -10,27 +10,58 @@ The v1 repository-owned public install order is:
 4. npm (`npm install -g planr`) with bundled platform binaries.
 5. Cargo/source builds for maintainers and contributors.
 
-Published npm versions bundle platform-native binaries; see `docs/NPM.md`.
+Published npm versions bundle platform-native binaries; see <https://planr.so/docs/operations/release>.
 
 ## Version Bump
 
-`scripts/release.sh` is the only supported release path. The version lives in one source (`Cargo.toml`) and four distribution manifests must carry it: `Cargo.toml`, `package.json`, `plugins/planr/.codex-plugin/plugin.json`, and `plugins/planr/.claude-plugin/plugin.json`. Manual tagging skips the manifest sync and ships stale plugin versions.
+`scripts/release.sh` is the only supported release path. The version lives in
+`Cargo.toml`; `package.json`, both plugin manifests under `plugins/planr/`, and
+`.cursor-plugin/plugin.json` must match it. Manual tagging skips this sync and
+ships stale versions.
 
 ```bash
+export PLANR_RELEASE_EVAL_SUITE="$HOME/projects/planr-evals/suites/planr-lean-skills-dogfood.suite.json"
+export PLANR_RELEASE_EVAL_RECEIPT=/path/to/sanitized-release-eval-receipt.json
+export PLANR_RELEASE_EVAL_DB=/path/to/planr-evals/results/eval.sqlite
 scripts/release.sh 1.2.0 "one-line release summary"
 ```
+
+Maintainer benchmarks, baselines, model/effort runs, and results live outside
+the public repository in `~/projects/planr-evals`; that workspace and its exact
+layout are not a Planr runtime contract. All three paths above are explicit so a
+release cannot silently use the product repository's ordinary `.planr` database
+or a stale bundled suite. The receipt is a short-lived local pointer containing
+only `schema_version`, comparison and candidate-run identities, suite and
+candidate-revision digests, and creation/expiry timestamps. Prompts,
+completions, credentials, personal paths, raw runs, reports, databases, and the
+receipt itself are never committed to Planr.
+
+Generate the candidate revision with
+`node scripts/verify-release-eval-receipt.mjs --print-candidate-revision`. At
+release time the candidate binary canonicalizes the explicitly supplied suite,
+requires a Planr-validated effective route observation (host report, telemetry
+receipt, process exit, or local observation), recomputes the comparison from its
+stored baseline/candidate/policy identities, and gates that fresh result.
+Requested-only values and policy or binding metadata are never
+effective-treatment proof.
 
 The script enforces, in order:
 
 1. branch is `main`, worktree is clean, `CHANGELOG.md` already has a committed `## [x.y.z]` section, and the tag does not exist;
-2. the version is written into all four manifests plus `Cargo.lock`;
-3. gates: `cargo test` (includes the manifest drift guard in `tests/e2e.rs`), `npm pack --dry-run`, and `scripts/security-local.sh` (betterleaks + trivy leak gate);
-4. one mechanical commit `release x.y.z: <summary>`, an annotated `vx.y.z` tag carrying that summary, and a single push of branch plus tag.
+2. the version is written into all synchronized manifests plus `Cargo.lock`;
+3. the candidate binary validates the sanitized receipt, observed effective treatment, candidate binding, and existing Planr comparison/gate before any Git mutation;
+4. deterministic gates: `cargo test` (including manifest drift), `npm pack --dry-run`, and `scripts/security-local.sh` (betterleaks + trivy);
+5. one mechanical commit `release x.y.z: <summary>`, an annotated `vx.y.z` tag carrying that summary, and a single push of branch plus tag.
 
 Two independent gates back the script:
 
 - `cargo test` fails on every push when any manifest version drifts from `Cargo.toml`.
 - The release workflow's `Verify release versions are consistent` step refuses the tag when the tag, any manifest, or the `CHANGELOG.md` section disagree.
+
+Public CI runs `npm run verify:release-eval-gate` with a synthetic suite, fake
+binary, and temporary database. It verifies the fail-closed mechanism without a
+provider call, private benchmark, API key, or release receipt. Model-backed
+quality decisions remain a local maintainer preflight.
 
 ## Alpha Channel (Pre-Releases)
 
@@ -55,7 +86,7 @@ Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`:
 1. `create-release` verifies the tag against `Cargo.toml`, all distribution manifests, and the changelog section, then creates a draft GitHub Release.
 2. `build` compiles and packages `planr-<os>-<arch>.tar.gz` for `darwin-arm64`, `darwin-x86_64`, `linux-x86_64`, and `linux-arm64`, then uploads each asset to the draft release.
 3. `finalize` downloads all uploaded assets, writes one aggregated `SHA256SUMS` covering every tarball, uploads it, and publishes the release.
-4. `npm-publish` downloads the release assets, verifies them against `SHA256SUMS`, bundles the four platform binaries into `npm/native/`, smoke-tests the wrapper, and publishes to npm via Trusted Publishing (OIDC). Runs only when the repository variable `NPM_PUBLISH_ENABLED` is `true`; requires the one-time Trusted Publisher setup described in `docs/NPM.md`.
+4. `npm-publish` downloads the release assets, verifies them against `SHA256SUMS`, bundles the four platform binaries into `npm/native/`, smoke-tests the wrapper, and publishes to npm via Trusted Publishing (OIDC). Runs only when the repository variable `NPM_PUBLISH_ENABLED` is `true`; requires the one-time Trusted Publisher setup described at <https://planr.so/docs/operations/release>.
 5. `homebrew-tap` regenerates `Formula/planr.rb` with `scripts/generate-formula.sh` and pushes it to `instructa/homebrew-tap` (installed as `brew install instructa/tap/planr`).
 
 ## Changelog
@@ -115,7 +146,6 @@ The package must include:
 
 - `npm/bin/planr.js`
 - `docs/`
-- `docs/MCP_CONTRACT.md`
 - `docs/fixtures/mcp-contract.json`
 - `plugins/`
 - `README.md`

@@ -294,7 +294,7 @@ impl App {
                 return Ok(json!({
                     "path": REGISTRY_RELATIVE_PATH,
                     "status": "absent",
-                    "hint": "no agent registry; create .planr/agents.toml to declare model routing (docs/MODEL_ROUTING.md)",
+                    "hint": "no agent registry; create .planr/agents.toml to declare model routing (https://planr.so/docs/plugins)",
                 }));
             }
             RegistryLoad::Degraded { error } => {
@@ -589,7 +589,7 @@ impl App {
         let mut prompt = String::from("## Model routing\n\n");
         match registry_status {
             "ok" if routes.is_empty() => prompt.push_str(
-                "The registry declares no routes; add `[[routes]]` entries to .planr/agents.toml (see docs/MODEL_ROUTING.md).\n",
+                "The registry declares no routes; add `[[routes]]` entries to .planr/agents.toml (see https://planr.so/docs/plugins).\n",
             ),
             "ok" => {
                 prompt.push_str("Dispatch priority from .planr/agents.toml (first match wins; per-item `planr item route` pins beat all of it):\n\n");
@@ -624,7 +624,7 @@ impl App {
                 }
             }
             "missing" => prompt.push_str(
-                "No .planr/agents.toml registry: routing is unset. Create one to declare profiles and routes (see docs/MODEL_ROUTING.md).\n",
+                "No .planr/agents.toml registry: routing is unset. Create one to declare profiles and routes (see https://planr.so/docs/plugins).\n",
             ),
             _ => prompt.push_str(
                 "The .planr/agents.toml registry is unreadable; fix it with `planr agents check` before trusting any pins.\n",

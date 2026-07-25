@@ -73,6 +73,15 @@ macro_rules! cursor_skill {
     };
 }
 
+macro_rules! cursor_skill_file {
+    ($relative:literal) => {
+        (
+            concat!(".cursor/skills/", $relative),
+            include_str!(concat!("../plugins/planr/skills/", $relative)),
+        )
+    };
+}
+
 /// Skills installed into `.cursor/skills/` by `planr install cursor`, so the
 /// full skill set works in one command without waiting on the marketplace
 /// listing. Cursor loads project skills from `.cursor/skills/<name>/SKILL.md`.
@@ -81,6 +90,8 @@ pub fn cursor_skills() -> &'static [(&'static str, &'static str)] {
         cursor_skill!("planr"),
         cursor_skill!("planr-goal"),
         cursor_skill!("planr-loop"),
+        cursor_skill_file!("planr-loop/references/host-dispatch.md"),
+        cursor_skill_file!("planr-loop/references/recovery-and-verification.md"),
         cursor_skill!("planr-verify-web"),
         cursor_skill!("planr-task-graph"),
         cursor_skill!("planr-plan"),

@@ -25,6 +25,7 @@
     "security:staged": "node scripts/hooks/block-forbidden-staged-files.mjs",
     "build:native": "cargo build --release",
     "test": "cargo test",
+    "verify:release-eval-gate": "node scripts/test-release-eval-gate.mjs",
     "pack:check": "npm pack --dry-run",
     "docs:dev": "pnpm --filter @planr/docs dev",
     "docs:alchemy:dev": "pnpm --filter @planr/docs alchemy:dev",

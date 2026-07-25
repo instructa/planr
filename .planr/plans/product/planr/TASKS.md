@@ -20,9 +20,9 @@ Requirements:
 - Keep the contract specific enough that coding agents can work each slice without hidden context.
 
 Files or areas likely involved:
-- `docs/planr-spec/V1_1_DIFFERENTIATION_CONTRACT.md`.
-- `docs/planr-spec/TASKS.md`.
-- `docs/planr-spec/README.md`.
+- `docs/contracts/V1_1_DIFFERENTIATION_CONTRACT.md`.
+- `.planr/plans/product/planr/TASKS.md`.
+- `.planr/plans/product/planr/README.md`.
 
 Acceptance criteria:
 - Contract exists with stable requirement ids.

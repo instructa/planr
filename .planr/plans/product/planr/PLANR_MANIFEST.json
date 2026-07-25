@@ -1,0 +1,33 @@
+{
+  "ai": true,
+  "assumptions": [
+    "V1 is a local-first developer tool, not a hosted SaaS.",
+    "The first implementation may be a Rust CLI and local daemon using SQLite.",
+    "Codex, Claude Code, and Cursor should all work through standard CLI and MCP integration paths.",
+    "Existing .planr data may be imported, but the V1 CLI, data model, and docs define the final product API.",
+    "Planr should ship with its own name, code, docs, and architecture."
+  ],
+  "backend": true,
+  "generated_at": "2026-06-09T00:00:00.000000Z",
+  "included_documents": [
+    "README.md",
+    "PRODUCT_SPEC.md",
+    "UX_FLOWS.md",
+    "DESIGN_SYSTEM_SPEC.md",
+    "TECH_ARCHITECTURE.md",
+    "ADRS.md",
+    "AI_SPEC.md",
+    "SAFETY_PRIVACY_SECURITY.md",
+    "API_AND_DATA_MODEL.md",
+    "CLIENT_IMPLEMENTATION_SPEC.md",
+    "BACKEND_IMPLEMENTATION_SPEC.md",
+    "ANALYTICS_OBSERVABILITY_SPEC.md",
+    "QA_ACCEPTANCE_TESTS.md",
+    "RELEASE_READINESS.md",
+    "TASKS.md",
+    "REFERENCES.md"
+  ],
+  "platform": "cli",
+  "source_prompt": "Planr Specification Package",
+  "title": "Planr"
+}

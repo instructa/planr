@@ -1,0 +1,28 @@
+---
+title: Plugins
+description: Optional external integrations that can write repository-local declarations while Planr remains the evidence and graph owner.
+---
+
+Plugins extend the environment around Planr. They may generate client files, repository-local declarations, or host-native roles, but Planr Core still owns plans, the map, picks, logs, reviews, approvals, and closure evidence.
+
+<Cards>
+  <Card title="Switchloom" href="/docs/plugins/switchloom" description="External model-routing declarations and Codex native-role generation for Planr projects." />
+</Cards>
+
+## Boundary
+
+Planr consumes repository-local data and worker evidence. A plugin owns its own commands, package identity, generated files, and uninstall lifecycle. If a plugin writes `.planr/agents.toml` or `.planr/policy.toml`, validate the resulting declarations with `planr agents check` and record observed runtime evidence through normal Planr logs.
+
+Planr Core stays provider-neutral: it parses `.planr/agents.toml`, resolves routes into pick packets, records declared-versus-observed evidence, and checks `.planr/policy.toml`. It does not own a bundle format, catalog, compiler, signer, installer, or uninstaller. `planr agents init` writes the provider-neutral .planr/agents.toml registry; it does not generate Codex roles.
+
+Because declarations are advisory, a requested model value never becomes proof on its own. Route observations keep requested, host-resolved, and effective execution separate, and use `unavailable` when the host cannot prove what ran:
+
+```bash
+planr agents init
+planr agents check
+planr agents list --json
+```
+
+## Adding More Plugins
+
+Add future optional integrations here only when their lifecycle is separate from Planr Core and their docs can state the exact owner of installation, generated files, verification, and removal.

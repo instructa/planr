@@ -2,12 +2,14 @@
 
 Planr is being shaped into a local-first planning and execution coordination tool for Codex, Claude Code, Cursor, and generic MCP clients.
 
-Use the specification package in `docs/planr-spec/` as the product source of truth for new implementation work:
+Use the product plan package in `.planr/plans/product/planr/` as the product source of truth for new implementation work:
 
 - `PRODUCT_SPEC.md` for scope and non-goals.
 - `TECH_ARCHITECTURE.md` for ownership boundaries.
 - `API_AND_DATA_MODEL.md` for project, plan, map, item, log, review, and API contracts.
 - `TASKS.md` for executable coding-agent tasks.
+
+Frozen contracts live in `docs/contracts/`.
 
 Core rules:
 

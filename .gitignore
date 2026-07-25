@@ -70,8 +70,19 @@ service-account*.json
 .codex/
 .claude/
 .claude.json
-.planr/
-docs/planr-spec.zip
+.planr/*
+
+# Exception: Planr's own product plan package is the committed product spec.
+# Every other .planr path (database, runtime plans, reviews, artifacts) stays local.
+!.planr/plans/
+.planr/plans/*
+!.planr/plans/product/
+.planr/plans/product/*
+!.planr/plans/product/planr/
+
+# Maintainer-only eval suite (owned by the external planr-evals workspace)
+/examples/eval/lean-skills/
+/scripts/verify-lean-skill-contract.mjs
 
 # provisioned local copies (single source: plugins/planr); hooks stay committed
 .cursor/skills/

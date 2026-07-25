@@ -291,7 +291,7 @@ fn wizard() -> Result<Option<InitSpec>> {
     cliclack::intro("planr agents init")?;
     cliclack::note(
         "Agent pool",
-        "Declare who runs what: a premium driver keeps planning and verdicts,\nper-use-case profiles implement. Everything here is advisory —\nhosts stay the dispatch authority. (docs/MODEL_ROUTING.md)",
+        "Declare who runs what: a premium driver keeps planning and verdicts,\nper-use-case profiles implement. Everything here is advisory —\nhosts stay the dispatch authority. (https://planr.so/docs/plugins)",
     )?;
     let mut spec = InitSpec::default();
 

@@ -15,7 +15,7 @@ Tests prove the owner you changed and every public surface that consumes it. Rec
 | Docs prose/navigation/UI | content generation, typecheck, lint, production build, and browser verification |
 | Onboarding commands | `pnpm docs:verify-onboarding` |
 | Graph semantics | `pnpm docs:verify-concepts` |
-| CLI or MCP contracts | `pnpm docs:verify-reference` and the MCP contract fixture tests |
+| CLI or MCP contracts | `pnpm docs:verify-reference` and the `docs/fixtures/mcp-contract.json` fixture tests |
 | Release or dependency changes | package dry-run, release build/checksums, and security gates |
 
 ## Documentation ladder
@@ -32,6 +32,10 @@ For live proof, run `pnpm docs:start` after a successful build, then run `pnpm d
 
 <CommandBlock command="scripts/ci-local.sh" label="Reproduce CI" />
 
-This includes formatting, Clippy with warnings denied, Rust tests, ShellCheck, a release build, package dry-run, version smoke test, and dependency audit. `scripts/security-local.sh` adds BetterLeaks and Trivy checks. The optional maintainer-local `~/projects/planr-test` consumer suite runs when present; contributors without it rely on the in-repo E2E suite.
+This includes formatting, Clippy with warnings denied, Rust tests, ShellCheck, a release build, package dry-run, version smoke test, and dependency audit. `scripts/security-local.sh` adds BetterLeaks and Trivy checks. The optional maintainer-local `~/projects/planr-test` consumer suite runs when present, and `PLANR_TEST_DIR` overrides its location; contributors without it rely on the in-repo E2E suite.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs the gates above, and `.github/workflows/security.yml` runs a GitHub Actions security scan with a pinned `zizmor`. Workflows use read-only default permissions and pin `checkout` by commit SHA. Dependabot covers Cargo, npm, and GitHub Actions dependencies through `.github/dependabot.yml`.
 
 If a required gate cannot run on your platform, mark it unverified and explain the replacement evidence. A skipped gate is not a pass.

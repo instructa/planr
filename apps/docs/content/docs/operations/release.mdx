@@ -11,20 +11,32 @@ description: Prepare, publish, verify, and diagnose a Planr binary release throu
 2. Add and commit a `CHANGELOG.md` section named exactly `## [<version>]`.
 3. Confirm the `v<version>` tag does not exist.
 4. Run the repository and docs gates appropriate to the release. Any public behavior change must update its canonical docs and generated references before tagging.
+5. Produce fresh local Planr eval evidence in the external `~/projects/planr-evals` maintainer workspace and a sanitized, short-lived receipt. Provider credentials, private suites, raw runs, and model evidence stay on the maintainer machine; they never enter CI or the receipt.
 
 Versions must use `x.y.z`, optionally followed by `-alpha.N`, `-beta.N`, or `-rc.N`.
 
 ## Release
 
-<CommandBlock command={'scripts/release.sh 1.6.0 "one-line release summary"'} label="Release" />
+<CommandBlock command={'PLANR_RELEASE_EVAL_SUITE=/path/to/planr-evals/suite.json PLANR_RELEASE_EVAL_DB=/path/to/planr-evals/eval.sqlite PLANR_RELEASE_EVAL_RECEIPT=/path/to/planr-evals/receipt.json scripts/release.sh 1.7.1 "one-line release summary"'} label="Release" />
 
-The script synchronizes Cargo, npm, Codex, Claude, Cursor, and `Cargo.lock` versions; runs build, tests, package dry-run, and security checks; then creates the release commit and annotated Git tag and pushes both.
+The script synchronizes Cargo, npm, Codex, Claude, Cursor, and `Cargo.lock`
+versions; builds the candidate; validates the receipt against Planr-owned route
+evidence and the explicitly supplied external suite/database; recomputes and
+gates the stored comparison; runs Rust, deterministic release-gate, package,
+and security checks; then creates the release commit and
+annotated Git tag and pushes both. Every check runs before the first Git
+commit, tag, or push.
+
+Public CI exercises only the synthetic, key-free release-gate contract. It does
+not receive provider credentials or execute the private maintainer benchmark.
 
 ## Watch the workflow
 
 The tag workflow verifies manifest and changelog drift, creates a draft GitHub release, and builds four archives: macOS arm64/x86_64 and Linux arm64/x86_64. It publishes `SHA256SUMS` only after every build succeeds, then makes the release public. npm publication uses OIDC when enabled; stable releases may update Homebrew when enabled.
 
 Pre-releases are marked as GitHub prereleases and publish npm under the `alpha` dist-tag. They do not move Homebrew or the stable installer.
+
+npm publication runs only from the `npm-publish` job in `.github/workflows/release.yml`, uses Trusted Publishing (OIDC, no long-lived token), and requires the repository variable `NPM_PUBLISH_ENABLED` to be `true`. It also requires a one-time Trusted Publisher configuration on npmjs.com: package `planr`, then Settings, then Publishing access, then a GitHub Actions publisher with repository `instructa/planr` and workflow `release.yml`. Published tarballs bundle checksum-verified platform binaries under `npm/native/<os>-<arch>/planr`, so there is no postinstall script and no download at install time.
 
 ## Verify and recover
 

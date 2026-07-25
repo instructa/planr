@@ -7,11 +7,92 @@ import { basename, dirname, join, resolve } from "node:path";
 
 const EXPECTED = {
   packageName: "switchloom",
-  version: "0.2.1",
-  integrity: "sha512-vUKHxYXHt7Sx7MkYQz5MRZ0Ll544iHoadHGCgvJPUYkpUzQWtzjt1o3xhyeQwExCA6tuLQ5vZnLPz+fO5uMiXg==",
-  shasum: "e813283f54d0d64b5fd4835e17687aaaf3b0a6cb",
+  version: "0.3.2",
+  integrity: "sha512-g96AZIFKXpG1toAO+Gri1sjD8q0SxFxtRSLAcRcSVRGDCZ/dUtERepsOB+cSHHH7hUsT0jSKZYPfNqiLvfKk9Q==",
+  shasum: "d7d72c74ac3ecd5a3e355edd8e297284cba04403",
+  sha256: "0c04e94fc4372845edf395b3ea51139b8a4b46f34404940e06b3f4ec3ce22d20",
   bundleId: "balanced-codex-openai@1.0.0+2.0.0",
+  bundleSha256: "bf48f502080ff444ccb67bc4eeacc9391e77dbf5f0f8f277814e9abc2443e6c8",
+  bundleSourcePackage: "model-routing",
 };
+
+const EXPECTED_TARBALL_ENTRIES = [
+  "package/LICENSE",
+  "package/README.md",
+  "package/npm/bin/model-routing.js",
+  "package/npm/native/darwin-arm64/model-routing",
+  "package/npm/native/darwin-x86_64/model-routing",
+  "package/npm/native/linux-arm64/model-routing",
+  "package/npm/native/linux-x86_64/model-routing",
+  "package/npm/native/provenance.json",
+  "package/package.json",
+].sort();
+
+const EXPECTED_ARTIFACTS = [
+  ".codex/agents/model-routing-luna-xhigh.toml",
+  ".codex/agents/model-routing-sol-high.toml",
+  ".codex/agents/model-routing-sol-medium.toml",
+  ".codex/agents/model-routing-sol-ultra.toml",
+  ".codex/agents/model-routing-terra-high.toml",
+  ".codex/agents/model-routing-terra-mechanical.toml",
+  ".codex/agents/model-routing-terra-medium.toml",
+  ".codex/config.toml",
+  ".planr/agents.toml",
+  ".planr/policy.toml",
+].sort();
+
+const EXPECTED_PROFILE_MAPPING = {
+  "codex-luna-xhigh-experimental": {
+    planrProfile: "model_routing_luna_xhigh",
+    agentType: "model_routing_luna_xhigh",
+    model: "gpt-5.6-luna",
+    effort: "xhigh",
+  },
+  "codex-sol-high": {
+    planrProfile: "model_routing_sol_high",
+    agentType: "model_routing_sol_high",
+    model: "gpt-5.6-sol",
+    effort: "high",
+  },
+  "codex-sol-medium": {
+    planrProfile: "model_routing_sol_medium",
+    agentType: "model_routing_sol_medium",
+    model: "gpt-5.6-sol",
+    effort: "medium",
+  },
+  "codex-sol-ultra": {
+    planrProfile: "model_routing_sol_ultra",
+    agentType: "model_routing_sol_ultra",
+    model: "gpt-5.6-sol",
+    effort: "ultra",
+  },
+  "codex-terra-high": {
+    planrProfile: "model_routing_terra_high",
+    agentType: "model_routing_terra_high",
+    model: "gpt-5.6-terra",
+    effort: "high",
+  },
+  "codex-terra-high-mechanical": {
+    planrProfile: "model_routing_terra_mechanical",
+    agentType: "model_routing_terra_mechanical",
+    model: "gpt-5.6-terra",
+    effort: "high",
+  },
+  "codex-terra-medium": {
+    planrProfile: "model_routing_terra_medium",
+    agentType: "model_routing_terra_medium",
+    model: "gpt-5.6-terra",
+    effort: "medium",
+  },
+};
+
+const EXPECTED_PLANR_ROUTES = [
+  ["exploration", "model_routing_terra_medium"],
+  ["research", "model_routing_terra_medium"],
+  ["code", "model_routing_terra_high"],
+  ["mechanical", "model_routing_terra_mechanical"],
+  ["review", "model_routing_sol_high"],
+];
 
 const root = resolve(new URL("..", import.meta.url).pathname);
 const planrBin = resolve(process.env.PLANR_BIN || join(root, "target/debug/planr"));
@@ -186,28 +267,115 @@ function switchloomSourceRoot() {
 }
 
 function snapshotSwitchloomSourceWorktree() {
-  const sourceRoot = switchloomSourceRoot();
+  return snapshotGitSourceWorktree(switchloomSourceRoot());
+}
+
+function snapshotGitSourceWorktree(sourceRoot) {
   if (!existsSync(sourceRoot)) {
     return { sourceRoot, exists: false };
   }
   const head = run("git", ["rev-parse", "HEAD"], { cwd: sourceRoot }).stdout.trim();
   const status = run("git", ["status", "--short"], { cwd: sourceRoot }).stdout;
-  const files = run("git", ["ls-files"], { cwd: sourceRoot }).stdout;
+  const files = run("git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], { cwd: sourceRoot }).stdout;
+  const sourcePaths = files.split("\0").filter(Boolean).sort();
+  const deletedPaths = sourcePaths.filter((relativePath) => !existsSync(join(sourceRoot, relativePath)));
+  const fileHashes = sourcePaths.map((relativePath) => {
+    const absolutePath = join(sourceRoot, relativePath);
+    return existsSync(absolutePath)
+      ? `present ${hashFile(absolutePath, "sha256")}  ${relativePath}`
+      : `deleted ${relativePath}`;
+  });
   return {
     sourceRoot,
     exists: true,
     head,
     statusSha256: hashText(status),
     statusLines: status.split(/\n/).filter(Boolean),
-    trackedFilesSha256: hashText(files),
-    trackedFileCount: files.split(/\n/).filter(Boolean).length,
+    sourceInventorySha256: hashText(files),
+    sourcePathCount: sourcePaths.length,
+    sourceDeletedPathCount: deletedPaths.length,
+    sourceDeletedPathsSha256: hashText(deletedPaths.join("\n")),
+    sourceFileHashesSha256: hashText(fileHashes.join("\n")),
   };
+}
+
+function switchloomSourceFingerprint(snapshot) {
+  return {
+    exists: snapshot.exists,
+    head: snapshot.head || null,
+    statusSha256: snapshot.statusSha256 || null,
+    statusLines: snapshot.statusLines || [],
+    sourceInventorySha256: snapshot.sourceInventorySha256 || null,
+    sourcePathCount: snapshot.sourcePathCount ?? null,
+    sourceDeletedPathCount: snapshot.sourceDeletedPathCount ?? null,
+    sourceDeletedPathsSha256: snapshot.sourceDeletedPathsSha256 || null,
+    sourceFileHashesSha256: snapshot.sourceFileHashesSha256 || null,
+  };
+}
+
+function assertSwitchloomSourceFingerprintEqual(actual, expected, label) {
+  assertEqual(JSON.stringify(actual), JSON.stringify(expected), label);
 }
 
 function assertSwitchloomSourceWorktreeUnchanged(before) {
   const after = snapshotSwitchloomSourceWorktree();
   assertEqual(JSON.stringify(after), JSON.stringify(before), "Switchloom source worktree inventory");
   receipt("Switchloom source worktree inventory unchanged", after);
+  return after;
+}
+
+function assertStableSwitchloomSourceFingerprint(before, after, label) {
+  const beforeFingerprint = switchloomSourceFingerprint(before);
+  const afterFingerprint = switchloomSourceFingerprint(after);
+  assertSwitchloomSourceFingerprintEqual(afterFingerprint, beforeFingerprint, label);
+  return {
+    before: beforeFingerprint,
+    after: afterFingerprint,
+  };
+}
+
+function oracleReceiptPathFor(rootPath = tempRoot) {
+  return join(rootPath, "oracle-receipt.json");
+}
+
+function replayReceiptPathFor(rootPath = tempRoot) {
+  return join(rootPath, "replay-receipt.json");
+}
+
+function retainedOracleReceipt(rootPath = tempRoot) {
+  const path = oracleReceiptPathFor(rootPath);
+  assertOk(existsSync(path), "retained replay root missing live oracle receipt", { path });
+  const payload = parseJson(readFileSync(path, "utf8"), "retained live oracle receipt");
+  assertEqual(payload.ok, true, "retained live oracle receipt ok");
+  assertEqual(payload.mode, "live", "retained live oracle receipt mode");
+  assertOk(Array.isArray(payload.receipts), "retained live oracle receipt missing receipts", { path, payload });
+  assertOk(
+    payload.receipts.some((entry) => entry?.step === "cross-product oracle complete"),
+    "retained live oracle receipt is incomplete",
+    { path, receipts: payload.receipts },
+  );
+  const source = payload.switchloomSourceFingerprint;
+  assertOk(source?.before && source?.after, "retained live oracle receipt missing Switchloom source fingerprint", {
+    path,
+    source,
+  });
+  assertSwitchloomSourceFingerprintEqual(source.after, source.before, "retained live oracle before/after source fingerprint");
+  return { path, payload, source };
+}
+
+function assertCurrentSwitchloomSourceMatchesLiveReceipt(liveSource) {
+  const current = snapshotSwitchloomSourceWorktree();
+  const currentFingerprint = switchloomSourceFingerprint(current);
+  assertSwitchloomSourceFingerprintEqual(
+    currentFingerprint,
+    liveSource.after,
+    "current Switchloom source fingerprint vs retained live oracle",
+  );
+  receipt("current Switchloom source matches retained live oracle fingerprint", {
+    ...currentFingerprint,
+    retainedHead: liveSource.after.head,
+  });
+  return current;
 }
 
 function nativeTarget() {
@@ -261,19 +429,29 @@ function retainedPublicTarball() {
   return tarball;
 }
 
-function extractTarball(tarball) {
-  assertEqual(hashFile(tarball, "sha1"), EXPECTED.shasum, "tarball sha1");
-  assertEqual(integrity(tarball), EXPECTED.integrity, "tarball sha512 integrity");
+function assertTarballIdentityAndInventory(tarball, label = "tarball") {
+  assertEqual(hashFile(tarball, "sha1"), EXPECTED.shasum, `${label} sha1`);
+  assertEqual(hashFile(tarball, "sha256"), EXPECTED.sha256, `${label} sha256`);
+  assertEqual(integrity(tarball), EXPECTED.integrity, `${label} sha512 integrity`);
 
-  const listing = run("tar", ["-tzf", tarball]).stdout.trim().split(/\n+/);
+  const listing = run("tar", ["-tzf", tarball]).stdout.trim().split(/\n+/).sort();
+  assertArrayEqual(listing, EXPECTED_TARBALL_ENTRIES, `${label} inventory`);
+  assertEqual(listing.length, 9, `${label} entry count`);
+  assertOk(!listing.includes("package/docs/migration-manifest.tsv"), `${label} unexpectedly includes migration manifest`, {
+    listing,
+  });
   for (const path of [
     "package/package.json",
     "package/npm/bin/model-routing.js",
     `package/npm/native/${nativeTarget()}/model-routing`,
-    "package/docs/migration-manifest.tsv",
   ]) {
-    assertOk(listing.includes(path), "published tarball missing required file", { path });
+    assertOk(listing.includes(path), `${label} missing required file`, { path });
   }
+  return listing;
+}
+
+function extractTarball(tarball) {
+  const listing = assertTarballIdentityAndInventory(tarball, "published tarball");
 
   const extractDir = join(tempRoot, "switchloom-package");
   mkdirSync(extractDir, { recursive: true });
@@ -285,7 +463,7 @@ function extractTarball(tarball) {
   assertOk(packageJson.bin?.["model-routing"] === "npm/bin/model-routing.js", "missing compatibility bin alias", { bin: packageJson.bin });
   const bin = join(extractDir, "package/npm/native", nativeTarget(), "model-routing");
   assertOk(existsSync(bin), "native Switchloom binary missing", { bin });
-  receipt("published tarball verified and extracted", { bin, tarball: basename(tarball) });
+  receipt("published tarball verified and extracted", { bin, tarball: basename(tarball), entryCount: listing.length });
   return bin;
 }
 
@@ -387,24 +565,111 @@ function createPlanrLoopContract(repo) {
   return { project: project.project, plan, item };
 }
 
+function artifactByPath(bundleData, path) {
+  return bundleData.artifacts.find((artifact) => artifact.path === path);
+}
+
+function parsePlanrProfiles(agentsToml) {
+  const profiles = {};
+  let current = null;
+  for (const line of agentsToml.split(/\n/)) {
+    const profileMatch = line.match(/^\[profiles\.([^\]]+)\]$/);
+    if (profileMatch) {
+      current = profileMatch[1];
+      profiles[current] = {};
+      continue;
+    }
+    if (/^\[\[routes\]\]$/.test(line) || /^\[route_default\]$/.test(line)) {
+      current = null;
+      continue;
+    }
+    if (!current) {
+      continue;
+    }
+    const fieldMatch = line.match(/^(client|model|effort|notes) = "([^"]+)"$/);
+    if (fieldMatch) {
+      profiles[current][fieldMatch[1]] = fieldMatch[2];
+    }
+  }
+  return profiles;
+}
+
+function parsePlanrRoutes(agentsToml) {
+  return [...agentsToml.matchAll(/\[\[routes\]\]\nprofile = "([^"]+)"\nfallbacks = \[\]\n\n\[routes\.match\]\nwork_type = "([^"]+)"/g)]
+    .map((match) => ({ workType: match[2], profile: match[1] }));
+}
+
+function assertCompiledBundleContract(bundle) {
+  assertEqual(hashFile(bundle, "sha256"), EXPECTED.bundleSha256, "compiled bundle sha256");
+  const bundleData = parseJson(readFileSync(bundle, "utf8"), "compiled Switchloom bundle");
+  assertEqual(bundleData.schema_version, 1, "bundle schema_version");
+  assertEqual(bundleData.bundle_id, EXPECTED.bundleId, "bundle id");
+  assertEqual(bundleData.source?.package, EXPECTED.bundleSourcePackage, "bundle source package");
+  assertEqual(bundleData.source?.package_version, EXPECTED.version, "bundle source package version");
+  assertEqual(bundleData.source?.integration, "planr", "bundle source integration");
+  assertArrayEqual(Object.keys(bundleData.profiles).sort(), Object.keys(EXPECTED_PROFILE_MAPPING).sort(), "bundle profile ids");
+  for (const [profileId, expected] of Object.entries(EXPECTED_PROFILE_MAPPING)) {
+    const profile = bundleData.profiles[profileId];
+    assertEqual(profile.agent_type, expected.agentType, `${profileId} agent_type`);
+    assertEqual(profile.model, expected.model, `${profileId} model`);
+    assertEqual(profile.effort, expected.effort, `${profileId} effort`);
+    assertEqual(profile.fork_turns?.mode, "none", `${profileId} fork_turns mode`);
+  }
+  assertArrayEqual(
+    bundleData.artifacts.map((artifact) => artifact.path).sort(),
+    EXPECTED_ARTIFACTS,
+    "bundle artifact paths",
+  );
+  const agentsToml = artifactByPath(bundleData, ".planr/agents.toml")?.content || "";
+  const planrProfiles = parsePlanrProfiles(agentsToml);
+  assertArrayEqual(Object.keys(planrProfiles).sort(), Object.values(EXPECTED_PROFILE_MAPPING).map((profile) => profile.planrProfile).sort(), "generated Planr profile ids");
+  for (const expected of Object.values(EXPECTED_PROFILE_MAPPING)) {
+    const profile = planrProfiles[expected.planrProfile];
+    assertEqual(profile.client, "codex", `${expected.planrProfile} Planr client`);
+    assertEqual(profile.model, expected.model, `${expected.planrProfile} Planr model`);
+    assertEqual(profile.effort, expected.effort, `${expected.planrProfile} Planr effort`);
+    assertEqual(profile.notes, `native_agent_type=${expected.agentType}`, `${expected.planrProfile} Planr notes`);
+  }
+  const routeMap = new Map(parsePlanrRoutes(agentsToml).map((route) => [route.workType, route.profile]));
+  for (const [workType, profile] of EXPECTED_PLANR_ROUTES) {
+    assertEqual(routeMap.get(workType), profile, `generated Planr route ${workType}`);
+  }
+  assertEqual(agentsToml.match(/\[route_default\]\nprofile = "([^"]+)"/)?.[1], "model_routing_sol_medium", "generated Planr default route");
+  const codexConfig = artifactByPath(bundleData, ".codex/config.toml")?.content || "";
+  for (const expected of Object.values(EXPECTED_PROFILE_MAPPING)) {
+    assertOk(codexConfig.includes(`[agents.${expected.agentType}]`), "Codex config missing native role registration", {
+      agentType: expected.agentType,
+    });
+  }
+  assertOk(codexConfig.includes("[features.multi_agent_v2]"), "Codex config missing multi_agent_v2 section");
+  assertOk(codexConfig.includes("enabled = true"), "Codex config does not enable multi_agent_v2");
+  assertOk(codexConfig.includes("hide_spawn_agent_metadata = true"), "Codex config does not preserve hidden spawn metadata");
+  receipt("compiled v0.3.2 bundle contract verified", {
+    bundle,
+    bundleId: bundleData.bundle_id,
+    artifactCount: bundleData.artifacts.length,
+    profileCount: Object.keys(bundleData.profiles).length,
+    routeCount: bundleData.routes.length,
+  });
+  return bundleData;
+}
+
 function compileAndApply(switchloomBin, repo) {
   const bundle = join(tempRoot, "balanced-planr-codex.json");
   run(switchloomBin, ["compile", "balanced", "--host", "codex-openai", "--integration", "planr", "--output", bundle]);
   const inspect = parseJson(run(switchloomBin, ["inspect", bundle]).stdout, "switchloom inspect");
+  assertCompiledBundleContract(bundle);
   assertEqual(inspect.integration, "planr", "bundle integration");
   assertEqual(inspect.valid, true, "bundle validity");
-  assertEqual(inspect.artifact_count, 9, "bundle artifact count");
+  assertEqual(inspect.artifact_count, 10, "bundle artifact count");
+  assertEqual(inspect.profile_count, 7, "bundle profile count");
+  assertEqual(inspect.route_count, 5, "bundle route count");
 
   const apply = parseJson(run(switchloomBin, ["apply", bundle, "--repository", repo, "--yes"]).stdout, "switchloom apply");
   assertEqual(apply.bundle_id, EXPECTED.bundleId, "applied bundle id");
   const paths = apply.artifacts.map((artifact) => artifact.path).sort();
-  for (const path of [
-    ".planr/agents.toml",
-    ".planr/policy.toml",
-    ".codex/config.toml",
-    ".codex/agents/model-routing-terra-high.toml",
-    ".codex/agents/model-routing-sol-high.toml",
-  ]) {
+  assertArrayEqual(paths, EXPECTED_ARTIFACTS, "apply artifact set");
+  for (const path of EXPECTED_ARTIFACTS) {
     assertOk(paths.includes(path), "apply did not emit required artifact", { path, paths });
     assertOk(existsSync(join(repo, path)), "applied artifact missing on disk", { path });
   }
@@ -416,10 +681,12 @@ function assertPlanrConsumes(repo) {
   assertOk(existsSync(planrBin), "cleaned Planr binary missing; run cargo build --bin planr", { planrBin });
   const agents = parseJson(stripPlanrNoise(run(planrBin, ["--json", "agents", "list"], { cwd: repo }).stdout), "planr agents list");
   const policy = parseJson(stripPlanrNoise(run(planrBin, ["--json", "policy", "check"], { cwd: repo }).stdout), "planr policy check");
-  assertOk(agents.registry.profiles.model_routing_terra_high, "Planr did not consume maker profile");
-  assertOk(agents.registry.profiles.model_routing_sol_high, "Planr did not consume reviewer profile");
-  assertEqual(agents.registry.profiles.model_routing_terra_high.model, "gpt-5.6-terra", "maker requested model");
-  assertEqual(agents.registry.profiles.model_routing_terra_high.effort, "high", "maker requested effort");
+  for (const expected of Object.values(EXPECTED_PROFILE_MAPPING)) {
+    const profile = agents.registry.profiles[expected.planrProfile];
+    assertOk(profile, "Planr did not consume expected profile", { expected });
+    assertEqual(profile.model, expected.model, `${expected.planrProfile} requested model`);
+    assertEqual(profile.effort, expected.effort, `${expected.planrProfile} requested effort`);
+  }
   assertEqual(policy.ok, true, "Planr policy check");
   receipt("Planr consumes external declarations", { profiles: Object.keys(agents.registry.profiles).length, policy: policy.policy_id });
 }
@@ -524,10 +791,47 @@ function runCodexLiveCommand(args, options) {
 
 const CODEX_MULTI_AGENT_V2_METADATA_CONFIG = [
   "--config",
-  "features.multi_agent_v2.hide_spawn_agent_metadata=false",
-  "--config",
   "features.multi_agent_v2.tool_namespace=\"planr_agents\"",
 ];
+
+const FORBIDDEN_FALSE_METADATA_CONFIG = "features.multi_agent_v2.hide_spawn_agent_metadata=false";
+
+function codexConfigOverrides() {
+  return CODEX_MULTI_AGENT_V2_METADATA_CONFIG.filter((_, index) => index % 2 === 1);
+}
+
+function assertNoFalseMetadataOverride(values, label) {
+  const text = Array.isArray(values) ? values.join("\n") : String(values || "");
+  assertOk(!text.includes(FORBIDDEN_FALSE_METADATA_CONFIG), `${label} contains stale false spawn-metadata override`, {
+    forbidden: FORBIDDEN_FALSE_METADATA_CONFIG,
+    values,
+  });
+}
+
+function generatedCodexConfigState(repo) {
+  const configPath = join(repo, ".codex/config.toml");
+  assertOk(existsSync(configPath), "generated Codex config missing for invocation provenance", { configPath });
+  const text = readFileSync(configPath, "utf8");
+  const state = {
+    path: configPath,
+    sha256: hashText(text),
+    multi_agent_v2_enabled: text.includes("[features.multi_agent_v2]") && text.includes("enabled = true"),
+    hide_spawn_agent_metadata: text.includes("[features.multi_agent_v2]") && text.includes("hide_spawn_agent_metadata = true"),
+    contains_false_override: text.includes(FORBIDDEN_FALSE_METADATA_CONFIG),
+  };
+  assertOk(state.multi_agent_v2_enabled, "generated Codex config does not enable multi_agent_v2", state);
+  assertOk(state.hide_spawn_agent_metadata, "generated Codex config does not hide spawn metadata", state);
+  assertOk(!state.contains_false_override, "generated Codex config contains stale false spawn-metadata override", state);
+  return state;
+}
+
+function codexHostDiagnosticsPath() {
+  return join(tempRoot, "codex-host-diagnostics.json");
+}
+
+function codexInvocationProvenancePath() {
+  return join(tempRoot, "codex-live-invocation.json");
+}
 
 function recordCodexHostDiagnostics(repo, sandbox = null) {
   const version = run("codex", ["--version"], { cwd: repo }).stdout.trim();
@@ -540,7 +844,11 @@ function recordCodexHostDiagnostics(repo, sandbox = null) {
     .split(/\n/)
     .map((line) => line.trim().split(/\s+/))
     .find((columns) => columns[0] === "multi_agent_v2");
-  receipt("Codex host diagnostics captured without forcing multi_agent_v2", {
+  const config = codexConfigOverrides();
+  assertNoFalseMetadataOverride(config, "Codex diagnostics config overrides");
+  const diagnosticsPath = codexHostDiagnosticsPath();
+  const diagnostics = {
+    schema_version: 1,
     version,
     externally_sandboxed: sandbox?.externallySandboxed ?? false,
     denied_protected_paths: sandbox?.protectedPaths || [],
@@ -549,8 +857,67 @@ function recordCodexHostDiagnostics(repo, sandbox = null) {
       stage: multiAgentV2?.slice(1, -1).join(" ") || null,
       enabled: multiAgentV2?.at(-1) || null,
     },
-    config: CODEX_MULTI_AGENT_V2_METADATA_CONFIG.filter((_, index) => index % 2 === 1),
+    config_overrides: config,
+    generated: generatedCodexConfigState(repo),
+  };
+  writeFileSync(diagnosticsPath, JSON.stringify(diagnostics, null, 2));
+  receipt("Codex host diagnostics captured without forcing multi_agent_v2", {
+    diagnosticsPath,
+    version: diagnostics.version,
+    externally_sandboxed: diagnostics.externally_sandboxed,
+    denied_protected_paths: diagnostics.denied_protected_paths,
+    allowed_repo: diagnostics.allowed_repo,
+    multi_agent_v2: diagnostics.multi_agent_v2,
+    config: diagnostics.config_overrides,
+    generated: diagnostics.generated,
   });
+  return { diagnosticsPath, diagnostics };
+}
+
+function writeCodexInvocationProvenance({ repo, args, prompt, sandbox, sandboxArgs, diagnosticsPath }) {
+  const path = codexInvocationProvenancePath();
+  const provenance = {
+    schema_version: 1,
+    command: "codex",
+    repo,
+    args,
+    prompt,
+    sandbox_args: sandboxArgs,
+    config_overrides: codexConfigOverrides(),
+    generated: generatedCodexConfigState(repo),
+    diagnostics_path: diagnosticsPath,
+    externally_sandboxed: sandbox?.externallySandboxed ?? false,
+  };
+  writeFileSync(path, JSON.stringify(provenance, null, 2));
+  assertCodexInvocationProvenance(path);
+  receipt("Codex live invocation provenance recorded", {
+    path,
+    generated: provenance.generated,
+    config_overrides: provenance.config_overrides,
+  });
+  return path;
+}
+
+function assertCodexInvocationProvenance(path) {
+  assertOk(existsSync(path), "retained replay root missing Codex live invocation provenance", { path });
+  const provenance = parseJson(readFileSync(path, "utf8"), "Codex invocation provenance");
+  assertEqual(provenance.schema_version, 1, "Codex invocation provenance schema_version");
+  assertEqual(provenance.generated?.multi_agent_v2_enabled, true, "Codex invocation generated multi_agent_v2");
+  assertEqual(provenance.generated?.hide_spawn_agent_metadata, true, "Codex invocation generated hidden spawn metadata");
+  assertEqual(provenance.generated?.contains_false_override, false, "Codex invocation generated false override flag");
+  assertNoFalseMetadataOverride(provenance.config_overrides || [], "Codex invocation config overrides");
+  assertNoFalseMetadataOverride(provenance.args || [], "Codex invocation args");
+  assertOk(typeof provenance.diagnostics_path === "string", "Codex invocation provenance missing diagnostics path", provenance);
+  assertOk(existsSync(provenance.diagnostics_path), "Codex invocation diagnostics file missing", {
+    diagnosticsPath: provenance.diagnostics_path,
+  });
+  const diagnostics = parseJson(readFileSync(provenance.diagnostics_path, "utf8"), "Codex host diagnostics provenance");
+  assertEqual(diagnostics.schema_version, 1, "Codex diagnostics provenance schema_version");
+  assertEqual(diagnostics.generated?.multi_agent_v2_enabled, true, "Codex diagnostics generated multi_agent_v2");
+  assertEqual(diagnostics.generated?.hide_spawn_agent_metadata, true, "Codex diagnostics generated hidden spawn metadata");
+  assertEqual(diagnostics.generated?.contains_false_override, false, "Codex diagnostics generated false override flag");
+  assertNoFalseMetadataOverride(diagnostics.config_overrides || [], "Codex diagnostics config overrides");
+  return { provenance, diagnostics };
 }
 
 function requestedOnlyRouteAuditPayload() {
@@ -793,9 +1160,101 @@ function parseFunctionArguments(call) {
 
 function spawnFunctionCalls(parentRollout) {
   return parentRollout.events
-    .map(functionCallPayload)
-    .filter((call) => call?.name === "spawn_agent" || call?.name === "collaboration.spawn_agent")
-    .map((call) => ({ call, args: parseFunctionArguments(call) }));
+    .map((event, index) => ({ index, call: functionCallPayload(event) }))
+    .filter(({ call }) => call?.name === "spawn_agent" || call?.name === "collaboration.spawn_agent")
+    .map(({ index, call }) => ({ index, call, args: parseFunctionArguments(call), callId: call.call_id || call.id || null }));
+}
+
+function functionCallOutputPayload(event) {
+  const payload = payloadOf(event);
+  if (payload?.type === "function_call_output" || payload?.type === "custom_tool_call_output") {
+    return payload;
+  }
+  if (payload?.item?.type === "function_call_output" || payload?.item?.type === "custom_tool_call_output") {
+    return payload.item;
+  }
+  return null;
+}
+
+function functionCallOutputText(payload) {
+  if (typeof payload?.output === "string") {
+    return payload.output;
+  }
+  if (typeof payload?.content === "string") {
+    return payload.content;
+  }
+  if (Array.isArray(payload?.output)) {
+    return payload.output.map((entry) => {
+      if (typeof entry === "string") {
+        return entry;
+      }
+      if (typeof entry?.text === "string") {
+        return entry.text;
+      }
+      return JSON.stringify(entry);
+    }).join("");
+  }
+  if (Array.isArray(payload?.content)) {
+    return payload.content.map((entry) => {
+      if (typeof entry === "string") {
+        return entry;
+      }
+      if (typeof entry?.text === "string") {
+        return entry.text;
+      }
+      return JSON.stringify(entry);
+    }).join("");
+  }
+  return "";
+}
+
+function functionCallOutputAfter(rollout, callId, callIndex) {
+  if (!callId) {
+    return null;
+  }
+  return rollout.events
+    .map((event, index) => ({ index, payload: functionCallOutputPayload(event) }))
+    .find(({ index, payload }) => index > callIndex && payload?.call_id === callId) || null;
+}
+
+function spawnOutputIndicatesFailure(output) {
+  if (!output) {
+    return false;
+  }
+  const text = functionCallOutputText(output.payload);
+  return output.payload?.status === "failed"
+    || output.payload?.status === "error"
+    || /\bfailed to parse\b/i.test(text)
+    || /\bunknown field\b/i.test(text)
+    || /\bcollab spawn failed\b/i.test(text);
+}
+
+function hasMatchingDirectChildForSpawn(childRollouts, parentThreadId, args) {
+  return childRollouts.some((rollout) => {
+    const meta = sessionMeta(rollout);
+    return parentThreadIdFromMeta(meta) === parentThreadId
+      && typeof args.agent_type === "string"
+      && agentRoleFromMeta(meta) === args.agent_type;
+  });
+}
+
+function classifySpawnCalls(parentRollout, childRollouts, parentThreadId) {
+  const calls = spawnFunctionCalls(parentRollout);
+  return calls.map((entry) => {
+    const output = functionCallOutputAfter(parentRollout, entry.callId, entry.index);
+    const outputText = output ? functionCallOutputText(output.payload) : "";
+    const matchedChild = hasMatchingDirectChildForSpawn(childRollouts, parentThreadId, entry.args);
+    const failed = spawnOutputIndicatesFailure(output);
+    const successful = !failed && (Boolean(output) || matchedChild);
+    return {
+      ...entry,
+      outputIndex: output?.index ?? null,
+      outputText,
+      matchedChild,
+      successful,
+      failed,
+    };
+  });
 }
 
 function hasHostCompletion(rollout) {
@@ -819,6 +1278,24 @@ function userMessages(rollout) {
     const payload = payloadOf(event);
     if (payload?.type === "user_message" && typeof payload.message === "string") {
       return [payload.message];
+    }
+    if (payload?.type === "user_message" && typeof payload.input === "string") {
+      return [payload.input];
+    }
+    if (payload?.type === "input" && typeof payload.input === "string") {
+      return [payload.input];
+    }
+    if (typeof payload?.message === "string" && payload.role === "user") {
+      return [payload.message];
+    }
+    if (typeof payload?.input === "string" && payload.role === "user") {
+      return [payload.input];
+    }
+    if (typeof payload?.item?.message === "string" && payload.item.role === "user") {
+      return [payload.item.message];
+    }
+    if (typeof payload?.item?.input === "string" && payload.item.role === "user") {
+      return [payload.item.input];
     }
     return [];
   });
@@ -912,7 +1389,7 @@ function execCommandInputs(input) {
     try {
       const args = JSON.parse(objectText);
       if (typeof args.cmd === "string") {
-        commands.push(args.cmd);
+        commands.push({ command: args.cmd, inputOffset: callStart });
       }
     } catch {
       // Ignore non-JSON tool source; evidence must come from the decoded exec_command args.
@@ -925,7 +1402,7 @@ function execCommandInputs(input) {
 function completedExecCommandEvidence(rollout) {
   const commandExecutions = commandExecutionEvents(rollout)
     .filter(({ payload }) => payload.status === "completed" && payload.exit_code === 0)
-    .map(({ index, payload }) => ({ index, command: payload.command || "" }));
+    .map(({ index, payload }) => ({ index, orderBase: index * 1_000_000, command: payload.command || "" }));
   const customExecCalls = rollout.events.flatMap((event, index) => {
     const payload = payloadOf(event);
     if (
@@ -936,11 +1413,15 @@ function completedExecCommandEvidence(rollout) {
       && typeof payload.input === "string"
       && successfulCustomToolOutputAfter(rollout, payload.call_id, index)
     ) {
-      return execCommandInputs(payload.input).map((command) => ({ index, command }));
+      return execCommandInputs(payload.input).map(({ command, inputOffset }) => ({
+        index,
+        orderBase: (index * 1_000_000) + inputOffset,
+        command,
+      }));
     }
     return [];
   });
-  return [...commandExecutions, ...customExecCalls].sort((a, b) => a.index - b.index);
+  return [...commandExecutions, ...customExecCalls].sort((a, b) => (a.orderBase ?? a.index) - (b.orderBase ?? b.index));
 }
 
 function childToolCallFragments(rollout) {
@@ -1052,17 +1533,43 @@ function planrDoneItem(command) {
   return match?.[2] || null;
 }
 
+function planrVerificationOccurrences(entry) {
+  const command = entry.command || "";
+  const occurrences = [];
+  const pattern = /\bplanr\s+log\s+add\b/g;
+  for (const match of command.matchAll(pattern)) {
+    const fragment = command.slice(match.index);
+    const item = planrVerificationItem(fragment);
+    if (item) {
+      occurrences.push({
+        ...entry,
+        order: (entry.orderBase ?? entry.index) + match.index,
+        item,
+      });
+    }
+  }
+  return occurrences;
+}
+
+function planrDoneOccurrences(entry) {
+  const command = entry.command || "";
+  const occurrences = [];
+  const pattern = /\bplanr\s+done\s+(["']?)([^\s"']+)\1/g;
+  for (const match of command.matchAll(pattern)) {
+    occurrences.push({
+      ...entry,
+      order: (entry.orderBase ?? entry.index) + match.index,
+      item: match[2],
+    });
+  }
+  return occurrences;
+}
+
 function findVerificationBeforeDone(commands) {
-  const verifications = commands.flatMap(({ index, command }) => {
-    const item = planrVerificationItem(command || "");
-    return item ? [{ index, command, item }] : [];
-  });
-  const dones = commands.flatMap(({ index, command }) => {
-    const item = planrDoneItem(command || "");
-    return item ? [{ index, command, item }] : [];
-  });
+  const verifications = commands.flatMap((entry) => planrVerificationOccurrences(entry));
+  const dones = commands.flatMap((entry) => planrDoneOccurrences(entry));
   for (const verification of verifications) {
-    const done = dones.find((candidate) => candidate.item === verification.item && verification.index < candidate.index);
+    const done = dones.find((candidate) => candidate.item === verification.item && verification.order < candidate.order);
     if (done) {
       return { verification, done };
     }
@@ -1073,7 +1580,7 @@ function findVerificationBeforeDone(commands) {
 function rolloutLineCommands(rollout) {
   let offset = 0;
   return rolloutText(rollout).split(/\n/).map((line) => {
-    const entry = { index: offset, command: line };
+    const entry = { index: offset, orderBase: offset, command: line };
     offset += line.length + 1;
     return entry;
   });
@@ -1135,7 +1642,8 @@ function assertSpawnArguments(spawns, expected) {
   const { args } = matches[0];
   assertEqual(args.agent_type, expected.role, `${expected.label} native agent_type`);
   assertEqual(args.fork_turns, "none", `${expected.label} fork_turns`);
-  assertOk(typeof args.message === "string" && args.message.length > 0, `${expected.label} spawn message missing`, args);
+  assertEqual(args.task_name, expected.taskName, `${expected.label} task_name`);
+  assertOk(typeof args.message === "string" && args.message.length > 0, `${expected.label} opaque spawn message missing`, args);
   return args;
 }
 
@@ -1164,7 +1672,7 @@ function isDirectChildWithRole(rollout, parentThreadId, expectedRoles) {
     && expectedRoles.has(agentRoleFromMeta(meta));
 }
 
-function assertCodexLiveHostEvidence(result, outputPath, changedFiles, repo) {
+function assertCodexLiveHostEvidence(result, outputPath, changedFiles, repo, contract) {
   const combined = `${result.stderr}\n${result.stdout}`;
   assertOk(!combined.includes("collab spawn failed"), "Codex host reported a collab spawn failure", { outputPath });
   const publicEvents = parseJsonlEvents(result.stdout, "Codex public JSONL");
@@ -1180,17 +1688,31 @@ function assertCodexLiveHostEvidence(result, outputPath, changedFiles, repo) {
   assertParentUsedRepoLocalPlanrLoop(parent, repo);
   const parentThreadId = threadIdFromMeta(sessionMeta(parent));
   assertOk(parentThreadId, "parent rollout missing thread id", { path: parent.path, meta: sessionMeta(parent) });
-  const spawns = spawnFunctionCalls(parent);
-  assertEqual(spawns.length, 2, "parent spawn_agent function-call count");
-  assertSpawnArguments(spawns, {
+  const expectedRoles = new Set(["model_routing_terra_high", "model_routing_sol_high"]);
+  const childRollouts = rollouts.filter((rollout) => isDirectChildWithRole(rollout, parentThreadId, expectedRoles));
+  const classifiedSpawns = classifySpawnCalls(parent, rollouts, parentThreadId);
+  const successfulSpawns = classifiedSpawns.filter((entry) => entry.successful);
+  const failedSpawns = classifiedSpawns.filter((entry) => !entry.successful).map((entry) => ({
+    call_id: entry.callId,
+    name: entry.call?.name,
+    args: entry.args,
+    outputIndex: entry.outputIndex,
+    outputText: entry.outputText,
+    failed: entry.failed,
+    matchedChild: entry.matchedChild,
+  }));
+  assertEqual(successfulSpawns.length, 2, "parent successful spawn_agent function-call count");
+  assertEqual(successfulSpawns.filter((entry) => !entry.matchedChild).length, 0, "successful spawn without matching role child count");
+  assertSpawnArguments(successfulSpawns, {
     label: "maker",
     role: "model_routing_terra_high",
+    taskName: "maker",
   });
-  assertSpawnArguments(spawns, {
+  assertSpawnArguments(successfulSpawns, {
     label: "reviewer",
     role: "model_routing_sol_high",
+    taskName: "reviewer",
   });
-  const expectedRoles = new Set(["model_routing_terra_high", "model_routing_sol_high"]);
   const directChildrenWithOtherRoles = rollouts.filter((rollout) => {
     const meta = sessionMeta(rollout);
     const role = agentRoleFromMeta(meta);
@@ -1208,7 +1730,6 @@ function assertCodexLiveHostEvidence(result, outputPath, changedFiles, repo) {
       meta,
     });
   }
-  const childRollouts = rollouts.filter((rollout) => isDirectChildWithRole(rollout, parentThreadId, expectedRoles));
   assertEqual(childRollouts.length, 2, "child rollout count");
   const maker = assertChildRollout(childRollouts, parentThreadId, {
     label: "maker",
@@ -1246,6 +1767,8 @@ function assertCodexLiveHostEvidence(result, outputPath, changedFiles, repo) {
     maker_effort: "high",
     reviewer_effort: "high",
     fork_turns_all_used: false,
+    spawn_message_evidence: "opaque_hidden_metadata",
+    failed_spawn_attempts: failedSpawns,
   };
 }
 
@@ -1262,11 +1785,11 @@ function runCodexLive(repo, contract) {
         profilePath: null,
         protectedPaths: [],
       };
-  recordCodexHostDiagnostics(repo, sandbox);
+  const { diagnosticsPath } = recordCodexHostDiagnostics(repo, sandbox);
   const sandboxArgs = platform() === "darwin"
     ? ["--dangerously-bypass-approvals-and-sandbox"]
     : ["--sandbox", "workspace-write"];
-  const { result } = runCodexLiveCommand([
+  const codexArgs = [
     "exec",
     "-C",
     repo,
@@ -1277,7 +1800,16 @@ function runCodexLive(repo, contract) {
     "--json",
     "--",
     prompt,
-  ], {
+  ];
+  writeCodexInvocationProvenance({
+    repo,
+    args: codexArgs,
+    prompt,
+    sandbox,
+    sandboxArgs,
+    diagnosticsPath,
+  });
+  const { result } = runCodexLiveCommand(codexArgs, {
     cwd: repo,
     sandbox,
     allowFailure: true,
@@ -1288,7 +1820,7 @@ function runCodexLive(repo, contract) {
   assertUserConfigSentinelsUnchanged(beforeLiveConfig);
   assertEqual(result.status, 0, "authenticated Codex live run status");
   const changed = changedRollouts(beforeRollouts);
-  const hostEvidence = assertCodexLiveHostEvidence(result, outputPath, changed, repo);
+  const hostEvidence = assertCodexLiveHostEvidence(result, outputPath, changed, repo, contract);
   receipt("authenticated Codex executed routed maker and reviewer", { outputPath, hostEvidence });
 }
 
@@ -1316,21 +1848,11 @@ function assertRetainedUninstallAndUnroutedPlanr(repo, contract) {
   const switchloomBin = join(tempRoot, "switchloom-package/package/npm/native", nativeTarget(), "model-routing");
   assertOk(existsSync(switchloomBin), "retained replay root missing extracted Switchloom binary", { switchloomBin });
   const bundle = join(tempRoot, "balanced-planr-codex.json");
-  const expectedPaths = [
-    ".codex/agents/model-routing-luna-xhigh.toml",
-    ".codex/agents/model-routing-sol-high.toml",
-    ".codex/agents/model-routing-sol-medium.toml",
-    ".codex/agents/model-routing-sol-ultra.toml",
-    ".codex/agents/model-routing-terra-high.toml",
-    ".codex/agents/model-routing-terra-medium.toml",
-    ".codex/config.toml",
-    ".planr/agents.toml",
-    ".planr/policy.toml",
-  ].sort();
+  assertOk(existsSync(bundle), "retained replay root missing compiled Switchloom bundle", { bundle });
+  assertCompiledBundleContract(bundle);
   if (!existsSync(join(repo, ".model-routing/manifest.json"))) {
-    assertOk(existsSync(bundle), "retained replay root missing applied bundle for reinstall", { bundle });
     const apply = parseJson(run(switchloomBin, ["apply", bundle, "--repository", repo, "--yes"]).stdout, "switchloom replay apply");
-    assertArrayEqual(apply.artifacts.map((artifact) => artifact.path).sort(), expectedPaths, "replay apply artifact set");
+    assertArrayEqual(apply.artifacts.map((artifact) => artifact.path).sort(), EXPECTED_ARTIFACTS, "replay apply artifact set");
   }
   const unmanaged = [".codex/agents/user-local.toml", ".planr/user-note.txt"];
   for (const path of unmanaged) {
@@ -1343,11 +1865,11 @@ function assertRetainedUninstallAndUnroutedPlanr(repo, contract) {
     "switchloom replay uninstall",
   );
   const removedPaths = uninstall.artifacts.map((artifact) => artifact.path).sort();
-  assertArrayEqual(removedPaths, expectedPaths, "replay uninstall removed artifact set");
+  assertArrayEqual(removedPaths, EXPECTED_ARTIFACTS, "replay uninstall removed artifact set");
   for (const artifact of uninstall.artifacts) {
     assertEqual(artifact.status, "removed", `managed artifact ${artifact.path} replay uninstall status`);
   }
-  for (const path of expectedPaths) {
+  for (const path of EXPECTED_ARTIFACTS) {
     assertOk(!existsSync(join(repo, path)), "managed artifact still exists after replay uninstall", { path });
   }
   for (const path of unmanaged) {
@@ -1358,6 +1880,17 @@ function assertRetainedUninstallAndUnroutedPlanr(repo, contract) {
   assertEqual(agents.reason, "missing", "replay unrouted Planr missing registry reason");
   assertPlanAuditHolds(repo, contract);
   receipt("retained Switchloom uninstall and unrouted Planr checks passed");
+}
+
+function retainedCompiledBundle() {
+  const bundle = join(tempRoot, "balanced-planr-codex.json");
+  assertOk(existsSync(bundle), "retained replay root missing compiled Switchloom bundle", { bundle });
+  assertCompiledBundleContract(bundle);
+  receipt("retained compiled Switchloom bundle verified before replay host evidence", {
+    bundle,
+    sha256: hashFile(bundle, "sha256"),
+  });
+  return bundle;
 }
 
 function completeRetainedReviewIfNeeded(repo, contract) {
@@ -1409,32 +1942,57 @@ function retainedGoalContract(repo) {
 
 function runReplayFromRetainedRoot() {
   const beforeReplayConfig = snapshotUserConfigSentinels();
-  const beforeSwitchloomSource = snapshotSwitchloomSourceWorktree();
+  const retainedOracle = retainedOracleReceipt();
+  const beforeSwitchloomSource = assertCurrentSwitchloomSourceMatchesLiveReceipt(retainedOracle.source);
   const repo = join(tempRoot, "fresh-repo");
   assertOk(existsSync(repo), "retained replay root missing fresh repo", { repo });
   const outputPath = join(tempRoot, "codex-live.jsonl");
   assertOk(existsSync(outputPath), "retained replay root missing codex-live.jsonl", { outputPath });
   const tarball = retainedPublicTarball();
-  assertEqual(hashFile(tarball, "sha1"), EXPECTED.shasum, "retained tarball sha1");
-  assertEqual(integrity(tarball), EXPECTED.integrity, "retained tarball sha512 integrity");
+  const retainedTarballInventory = assertTarballIdentityAndInventory(tarball, "retained tarball");
+  receipt("retained public tarball identity and inventory verified", {
+    tarball,
+    sha256: hashFile(tarball, "sha256"),
+    entryCount: retainedTarballInventory.length,
+  });
+  retainedCompiledBundle();
+  assertCodexInvocationProvenance(codexInvocationProvenancePath());
+  receipt("retained Codex invocation provenance verified before replay host evidence", {
+    path: codexInvocationProvenancePath(),
+  });
   const replayOutput = readFileSync(outputPath, "utf8");
   const publicEvents = parseJsonlEvents(replayOutput, "retained Codex public JSONL");
   const publicParentThreadId = publicEvents.find((event) => event?.type === "thread.started")?.thread_id;
   assertOk(publicParentThreadId, "retained Codex public JSONL did not expose parent thread id", { outputPath });
-  const changedFiles = rolloutFilesForReplay(publicParentThreadId, outputPath);
-  const hostEvidence = assertCodexLiveHostEvidence({ status: 0, stdout: replayOutput, stderr: "" }, outputPath, changedFiles, repo);
-  receipt("replayed authenticated Codex routed maker and reviewer", { outputPath, hostEvidence });
   const contract = retainedGoalContract(repo);
+  const changedFiles = rolloutFilesForReplay(publicParentThreadId, outputPath);
+  const hostEvidence = assertCodexLiveHostEvidence({ status: 0, stdout: replayOutput, stderr: "" }, outputPath, changedFiles, repo, contract);
+  receipt("replayed authenticated Codex routed maker and reviewer", { outputPath, hostEvidence });
   completeRetainedReviewIfNeeded(repo, contract);
   assertPlanAuditHolds(repo, contract);
   assertRetainedUninstallAndUnroutedPlanr(repo, contract);
   assertRetainedMissingAuthEvidence();
   assertRequestedOnlyRejectedFromAudit(join(tempRoot, "requested-only-route-audit.json"));
   assertUserConfigSentinelsUnchanged(beforeReplayConfig);
-  assertSwitchloomSourceWorktreeUnchanged(beforeSwitchloomSource);
+  const afterSwitchloomSource = assertSwitchloomSourceWorktreeUnchanged(beforeSwitchloomSource);
+  const replaySourceFingerprint = assertStableSwitchloomSourceFingerprint(
+    beforeSwitchloomSource,
+    afterSwitchloomSource,
+    "replay Switchloom source before/after fingerprint",
+  );
   assertNoDuplicateModelSelectionOwnership();
-  const receiptPath = join(tempRoot, "replay-receipt.json");
-  const payload = { ok: true, mode: "replay", tempRoot, receipts };
+  const receiptPath = replayReceiptPathFor();
+  const payload = {
+    ok: true,
+    mode: "replay",
+    tempRoot,
+    retainedOracleReceipt: retainedOracle.path,
+    switchloomSourceFingerprint: {
+      retainedLive: retainedOracle.source.after,
+      replay: replaySourceFingerprint,
+    },
+    receipts,
+  };
   writeFileSync(receiptPath, JSON.stringify(payload, null, 2));
   receipt("replay receipt written", { receiptPath });
   process.stdout.write(JSON.stringify({ ...payload, receiptPath }, null, 2));
@@ -1489,10 +2047,350 @@ function assertNoDuplicateModelSelectionOwnership() {
   receipt("canonical routing ownership regression passed");
 }
 
+function assertThrowsWith(fn, expectedMessage, label) {
+  try {
+    fn();
+  } catch (error) {
+    assertOk(error.message.includes(expectedMessage), `${label} failed with unexpected message`, {
+      expectedMessage,
+      actualMessage: error.message,
+      detail: error.detail,
+    });
+    receipt(`${label} rejected`, { message: error.message });
+    return;
+  }
+  fail(`${label} unexpectedly passed`, { expectedMessage });
+}
+
+function runReplayProvenanceSelfTest() {
+  const selfTestRoot = join(tempRoot, "replay-provenance-self-test");
+  mkdirSync(selfTestRoot, { recursive: true });
+
+  const tamperedBundle = join(selfTestRoot, "balanced-planr-codex.json");
+  writeFileSync(tamperedBundle, JSON.stringify({ schema_version: 1, bundle_id: EXPECTED.bundleId }, null, 2));
+  assertThrowsWith(
+    () => assertCompiledBundleContract(tamperedBundle),
+    "compiled bundle sha256 mismatch",
+    "self-test tampered retained bundle",
+  );
+
+  const staleInvocation = join(selfTestRoot, "codex-live-invocation-stale-false.json");
+  writeFileSync(staleInvocation, JSON.stringify({
+    schema_version: 1,
+    command: "codex",
+    repo: selfTestRoot,
+    args: ["exec", "--config", FORBIDDEN_FALSE_METADATA_CONFIG, "--json", "--", "$planr-loop"],
+    prompt: "$planr-loop",
+    sandbox_args: ["--sandbox", "workspace-write"],
+    config_overrides: [FORBIDDEN_FALSE_METADATA_CONFIG],
+    generated: {
+      path: join(selfTestRoot, ".codex/config.toml"),
+      sha256: "self-test",
+      multi_agent_v2_enabled: true,
+      hide_spawn_agent_metadata: true,
+      contains_false_override: false,
+    },
+    diagnostics_path: join(selfTestRoot, "codex-host-diagnostics.json"),
+    externally_sandboxed: false,
+  }, null, 2));
+  assertThrowsWith(
+    () => assertCodexInvocationProvenance(staleInvocation),
+    "stale false spawn-metadata override",
+    "self-test stale false-metadata invocation receipt",
+  );
+
+  const payload = { ok: true, mode: "self-test", tempRoot, receipts };
+  process.stdout.write(JSON.stringify(payload, null, 2));
+}
+
+function spawnCallFixture(callId, args, output) {
+  return [
+    {
+      payload: {
+        type: "function_call",
+        name: "spawn_agent",
+        call_id: callId,
+        arguments: JSON.stringify(args),
+      },
+    },
+    {
+      payload: {
+        type: "function_call_output",
+        call_id: callId,
+        output,
+      },
+    },
+  ];
+}
+
+function childRolloutFixture(parentThreadId, threadId, role) {
+  return {
+    path: `fixture-${threadId}.jsonl`,
+    events: [
+      {
+        type: "session_meta",
+        payload: {
+          thread_id: threadId,
+          parent_thread_id: parentThreadId,
+          agent_role: role,
+        },
+      },
+    ],
+  };
+}
+
+function assertSpawnFixture(parentRollout, childRollouts, contract) {
+  const parentThreadId = "parent-fixture";
+  const classifiedSpawns = classifySpawnCalls(parentRollout, childRollouts, parentThreadId);
+  const successfulSpawns = classifiedSpawns.filter((entry) => entry.successful);
+  const failedSpawns = classifiedSpawns.filter((entry) => !entry.successful);
+  const makerExpected = {
+    label: "maker",
+    role: "model_routing_terra_high",
+    taskName: "maker",
+  };
+  const reviewerExpected = {
+    label: "reviewer",
+    role: "model_routing_sol_high",
+    taskName: "reviewer",
+  };
+  assertEqual(successfulSpawns.length, 2, "parent successful spawn_agent function-call count");
+  assertEqual(successfulSpawns.filter((entry) => !entry.matchedChild).length, 0, "successful spawn without matching role child count");
+  assertSpawnArguments(successfulSpawns, makerExpected);
+  assertSpawnArguments(successfulSpawns, reviewerExpected);
+  const makerChild = childRollouts.find((rollout) => agentRoleFromMeta(sessionMeta(rollout)) === makerExpected.role);
+  const reviewerChild = childRollouts.find((rollout) => agentRoleFromMeta(sessionMeta(rollout)) === reviewerExpected.role);
+  assertOk(makerChild, "maker fixture child missing");
+  assertOk(reviewerChild, "reviewer fixture child missing");
+  return { classifiedSpawns, successfulSpawns, failedSpawns };
+}
+
+function runSpawnEvidenceSelfTest() {
+  const contract = { item: { id: "i-fixture" } };
+  const parentThreadId = "parent-fixture";
+  const malformedArgs = {
+    agent_type: "model_routing_terra_high",
+    fork_turns: "none",
+    task_name: "maker",
+    target: "unsupported",
+    message: "gAAAAABencryptedMalformedMakerMessage",
+  };
+  const makerArgs = {
+    agent_type: "model_routing_terra_high",
+    fork_turns: "none",
+    task_name: "maker",
+    message: "gAAAAABencryptedMakerMessage",
+  };
+  const reviewerArgs = {
+    agent_type: "model_routing_sol_high",
+    fork_turns: "none",
+    task_name: "reviewer",
+    message: "gAAAAABencryptedReviewerMessage",
+  };
+  const parentRollout = {
+    path: "fixture-parent.jsonl",
+    events: [
+      ...spawnCallFixture("call-failed", malformedArgs, "failed to parse function arguments: unknown field target"),
+      ...spawnCallFixture("call-maker", makerArgs, "spawned /root/maker"),
+      ...spawnCallFixture("call-reviewer", reviewerArgs, "spawned /root/reviewer"),
+    ],
+  };
+  const childRollouts = [
+    childRolloutFixture(parentThreadId, "maker-thread", "model_routing_terra_high"),
+    childRolloutFixture(parentThreadId, "reviewer-thread", "model_routing_sol_high"),
+  ];
+  const valid = assertSpawnFixture(parentRollout, childRollouts, contract);
+  assertEqual(valid.failedSpawns.length, 1, "failed spawn attempt count");
+  assertEqual(valid.failedSpawns[0].callId, "call-failed", "failed spawn attempt call_id");
+  assertOk(valid.failedSpawns[0].outputText.includes("unknown field target"), "failed spawn attempt diagnostic retained", {
+    outputText: valid.failedSpawns[0].outputText,
+  });
+  receipt("self-test failed malformed spawn plus two successful opaque spawns accepted", {
+    failedCallId: valid.failedSpawns[0].callId,
+    successfulCallIds: valid.successfulSpawns.map((entry) => entry.callId),
+    messageEvidence: "opaque_hidden_metadata",
+  });
+
+  const missingRoleChildren = [
+    childRolloutFixture(parentThreadId, "maker-thread-wrong-role", "model_routing_sol_medium"),
+    childRolloutFixture(parentThreadId, "reviewer-thread", "model_routing_sol_high"),
+  ];
+  assertThrowsWith(
+    () => assertSpawnFixture(parentRollout, missingRoleChildren, contract),
+    "successful spawn without matching role child count mismatch",
+    "self-test missing matching role child",
+  );
+
+  const extraParentRollout = {
+    path: "fixture-parent-extra.jsonl",
+    events: [
+      ...parentRollout.events,
+      ...spawnCallFixture("call-extra", {
+        agent_type: "model_routing_terra_high",
+        fork_turns: "none",
+        task_name: "extra",
+        message: "unexpected extra successful spawn",
+      }, "spawned /root/extra"),
+    ],
+  };
+  assertThrowsWith(
+    () => assertSpawnFixture(extraParentRollout, childRollouts, contract),
+    "parent successful spawn_agent function-call count mismatch",
+    "self-test extra successful spawn",
+  );
+
+  const payload = { ok: true, mode: "spawn-evidence-self-test", tempRoot, receipts };
+  process.stdout.write(JSON.stringify(payload, null, 2));
+}
+
+function sourceFingerprintFixture(overrides = {}) {
+  return {
+    exists: true,
+    head: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    statusSha256: "status-a",
+    statusLines: [],
+    sourceInventorySha256: "inventory-a",
+    sourcePathCount: 3,
+    sourceDeletedPathCount: 0,
+    sourceDeletedPathsSha256: hashText(""),
+    sourceFileHashesSha256: "files-a",
+    ...overrides,
+  };
+}
+
+function writeOracleReceiptFixture(rootPath, fingerprint) {
+  mkdirSync(rootPath, { recursive: true });
+  const payload = {
+    ok: true,
+    mode: "live",
+    tempRoot: rootPath,
+    switchloomSourceFingerprint: {
+      before: fingerprint.before,
+      after: fingerprint.after,
+    },
+    receipts: [
+      { step: "cross-product oracle complete" },
+      { step: "oracle receipt written", receiptPath: oracleReceiptPathFor(rootPath) },
+    ],
+  };
+  writeFileSync(oracleReceiptPathFor(rootPath), JSON.stringify(payload, null, 2));
+}
+
+function runSourceProvenanceSelfTest() {
+  const selfTestRoot = join(tempRoot, "source-provenance-self-test");
+  mkdirSync(selfTestRoot, { recursive: true });
+
+  const deletedWorktree = join(selfTestRoot, "deleted-worktree");
+  mkdirSync(deletedWorktree, { recursive: true });
+  run("git", ["init"], { cwd: deletedWorktree });
+  writeFileSync(join(deletedWorktree, "present.txt"), "present\n");
+  writeFileSync(join(deletedWorktree, "deleted.txt"), "deleted\n");
+  run("git", ["add", "present.txt", "deleted.txt"], { cwd: deletedWorktree });
+  run("git", ["-c", "user.name=Planr Oracle", "-c", "user.email=planr-oracle@example.invalid", "commit", "-m", "fixture"], { cwd: deletedWorktree });
+  rmSync(join(deletedWorktree, "deleted.txt"));
+  const deletedSnapshot = snapshotGitSourceWorktree(deletedWorktree);
+  assertEqual(deletedSnapshot.sourcePathCount, 2, "deleted-worktree source path count");
+  assertEqual(deletedSnapshot.sourceDeletedPathCount, 1, "deleted-worktree deleted path count");
+  assertEqual(
+    deletedSnapshot.sourceDeletedPathsSha256,
+    hashText("deleted.txt"),
+    "deleted-worktree deleted path fingerprint",
+  );
+  assertSwitchloomSourceFingerprintEqual(
+    switchloomSourceFingerprint(snapshotGitSourceWorktree(deletedWorktree)),
+    switchloomSourceFingerprint(deletedSnapshot),
+    "deleted-worktree stable fingerprint",
+  );
+  receipt("self-test deleted tracked paths are fingerprinted without being opened");
+
+  assertThrowsWith(
+    () => retainedOracleReceipt(join(selfTestRoot, "missing")),
+    "retained replay root missing live oracle receipt",
+    "self-test missing live oracle receipt",
+  );
+
+  const baseFingerprint = sourceFingerprintFixture();
+  writeOracleReceiptFixture(join(selfTestRoot, "tampered"), {
+    before: baseFingerprint,
+    after: sourceFingerprintFixture({ head: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }),
+  });
+  assertThrowsWith(
+    () => retainedOracleReceipt(join(selfTestRoot, "tampered")),
+    "retained live oracle before/after source fingerprint mismatch",
+    "self-test tampered live oracle fingerprint",
+  );
+
+  const validRoot = join(selfTestRoot, "valid");
+  writeOracleReceiptFixture(validRoot, {
+    before: baseFingerprint,
+    after: baseFingerprint,
+  });
+  const retained = retainedOracleReceipt(validRoot);
+  assertThrowsWith(
+    () => assertSwitchloomSourceFingerprintEqual(
+      sourceFingerprintFixture({ sourceFileHashesSha256: "files-b" }),
+      retained.source.after,
+      "current Switchloom source fingerprint vs retained live oracle",
+    ),
+    "current Switchloom source fingerprint vs retained live oracle mismatch",
+    "self-test different current source fingerprint",
+  );
+
+  const payload = { ok: true, mode: "source-provenance-self-test", tempRoot, receipts };
+  process.stdout.write(JSON.stringify(payload, null, 2));
+}
+
+function runCommandOrderingSelfTest() {
+  const sameCommand = [{
+    index: 1,
+    orderBase: 1_000_000,
+    command: "PLANR_WORKER_ID=maker planr log add --item i-build-first-slice-68d6 --kind verification --summary ok && planr done i-build-first-slice-68d6 --summary done --review",
+  }];
+  assertOk(
+    findVerificationBeforeDone(sameCommand),
+    "same-command verification before done was not accepted",
+    { sameCommand },
+  );
+  receipt("self-test same-command verification-before-done accepted");
+
+  const reversedCommand = [{
+    index: 1,
+    orderBase: 1_000_000,
+    command: "planr done i-build-first-slice-68d6 --summary done --review && planr log add --item i-build-first-slice-68d6 --kind verification --summary late",
+  }];
+  assertThrowsWith(
+    () => assertOk(findVerificationBeforeDone(reversedCommand), "done before verification unexpectedly accepted"),
+    "done before verification unexpectedly accepted",
+    "self-test done-before-log ordering",
+  );
+
+  const differentItemCommand = [{
+    index: 1,
+    orderBase: 1_000_000,
+    command: "planr log add --item i-other --kind verification --summary ok && planr done i-build-first-slice-68d6 --summary done --review",
+  }];
+  assertThrowsWith(
+    () => assertOk(findVerificationBeforeDone(differentItemCommand), "different-item verification unexpectedly accepted"),
+    "different-item verification unexpectedly accepted",
+    "self-test different-item ordering",
+  );
+
+  const payload = { ok: true, mode: "command-ordering-self-test", tempRoot, receipts };
+  process.stdout.write(JSON.stringify(payload, null, 2));
+}
+
 let beforeConfig;
 
 try {
-  if (replayRoot) {
+  if (process.env.PLANR_ORACLE_SELF_TEST === "replay-provenance") {
+    runReplayProvenanceSelfTest();
+  } else if (process.env.PLANR_ORACLE_SELF_TEST === "spawn-evidence") {
+    runSpawnEvidenceSelfTest();
+  } else if (process.env.PLANR_ORACLE_SELF_TEST === "source-provenance") {
+    runSourceProvenanceSelfTest();
+  } else if (process.env.PLANR_ORACLE_SELF_TEST === "command-ordering") {
+    runCommandOrderingSelfTest();
+  } else if (replayRoot) {
     runReplayFromRetainedRoot();
   } else {
     beforeConfig = snapshotUserConfigSentinels();
@@ -1510,12 +2408,23 @@ try {
     assertPlanAuditHolds(repo, contract);
     assertUninstallAndUnroutedPlanr(switchloomBin, repo, appliedArtifacts, contract);
     assertUserConfigSentinelsUnchanged(beforeConfig);
-    assertSwitchloomSourceWorktreeUnchanged(beforeSwitchloomSource);
+    const afterSwitchloomSource = assertSwitchloomSourceWorktreeUnchanged(beforeSwitchloomSource);
+    const liveSourceFingerprint = assertStableSwitchloomSourceFingerprint(
+      beforeSwitchloomSource,
+      afterSwitchloomSource,
+      "live Switchloom source before/after fingerprint",
+    );
     assertNoDuplicateModelSelectionOwnership();
     receipt("cross-product oracle complete", { tempRoot, bundle });
-    const receiptPath = join(tempRoot, "oracle-receipt.json");
+    const receiptPath = oracleReceiptPathFor();
     receipt("oracle receipt written", { receiptPath });
-    const payload = { ok: true, mode: "live", tempRoot, receipts };
+    const payload = {
+      ok: true,
+      mode: "live",
+      tempRoot,
+      switchloomSourceFingerprint: liveSourceFingerprint,
+      receipts,
+    };
     writeFileSync(receiptPath, JSON.stringify(payload, null, 2));
     process.stdout.write(JSON.stringify({ ...payload, receiptPath }, null, 2));
   }
