@@ -6,25 +6,25 @@ description: Supported operating systems, architectures, clients, transports, ru
 ## Distribution platforms
 
 {/* planr:linux-release-portability:start surface=support schema=1 */}
-> **Linux release portability — pending**
+> **Linux release portability — corrected**
 >
-> Contract state: `status=pending`; `affectedThrough=v1.7.2`; `correctedFrom=unpublished`.
+> Contract state: `status=corrected`; `affectedThrough=v1.7.2`; `correctedFrom=v1.7.3`.
 > Published Linux release, installer, and npm binaries through v1.7.2 require GLIBC_2.39; macOS is unaffected.
-> On an affected Linux system, build from source on the target distribution or wait for a corrective release.
-> Candidate artifacts remain CI-only evidence for a future corrective release; no corrected release is published yet.
+> Starting with v1.7.3, current Linux release, installer, and npm artifacts are static-musl executables and do not require glibc.
+> On an affected Linux release, build from source on the target distribution or upgrade to v1.7.3.
 {/* planr:linux-release-portability:end surface=support schema=1 */}
 
 | Platform | Release/npm binary | Notes |
 | --- | --- | --- |
 | macOS arm64 | Supported | Homebrew, installer, npm, source |
 | macOS x86_64 | Supported | Homebrew, installer, npm, source |
-| Linux x86_64 | Known v1.7.2 limitation | Release/npm/installer requires GLIBC_2.39; build from source on the target distribution |
-| Linux arm64 | Known v1.7.2 limitation | Release/npm/installer requires GLIBC_2.39; build from source on the target distribution |
+| Linux x86_64 | Supported from v1.7.3 | Static-musl release/npm/installer; older affected release: v1.7.2 |
+| Linux arm64 | Supported from v1.7.3 | Static-musl release/npm/installer; older affected release: v1.7.2 |
 | Native Windows | Not published | Use WSL 2 or build from source at your own integration boundary |
 
-The currently published v1.7.2 Linux release and npm binaries are dynamically linked GNU executables that require GLIBC_2.39. This is a known compatibility issue; macOS is unaffected. Linux users without GLIBC_2.39 should build from source on the target distribution or wait for a corrective release; the installer and npm wrapper reuse the affected bytes and are not workarounds.
+The v1.7.2 Linux release and npm binaries are dynamically linked GNU executables that require GLIBC_2.39. This is a known compatibility issue; macOS is unaffected. Linux users without GLIBC_2.39 should upgrade to v1.7.3 or newer or build from source on the target distribution.
 
-Release and pull-request CI now prepare static-musl candidates on native runners, reject dynamic ELF dependencies or glibc symbols, and replay a fresh Planr lifecycle in digest-pinned Alpine 3.20.8 before accepting the exact tarball and npm bytes. These glibc-free properties belong to a future corrective release after it is actually published; no corrected release is published yet. The npm wrapper requires Node.js 18+. Native/Homebrew installs do not require Node.js. Building Planr requires Rust 1.85+. Building this documentation site requires Node.js 22+ and the pinned pnpm version.
+Release and pull-request CI build static-musl artifacts on native runners, reject dynamic ELF dependencies or glibc symbols, and replay a fresh Planr lifecycle in digest-pinned Alpine 3.20.8 before accepting the exact tarball and npm bytes. The npm wrapper requires Node.js 18+. Native/Homebrew installs do not require Node.js. Building Planr requires Rust 1.85+. Building this documentation site requires Node.js 22+ and the pinned pnpm version.
 
 ## Client support
 

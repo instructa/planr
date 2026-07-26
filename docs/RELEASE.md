@@ -106,12 +106,12 @@ Only `-alpha.N`, `-beta.N`, and `-rc.N` suffixes are accepted; everything else t
 Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`:
 
 <!-- planr:linux-release-portability:start surface=maintainerRelease schema=1 -->
-> **Linux release portability — pending**
+> **Linux release portability — corrected**
 >
-> Contract state: `status=pending`; `affectedThrough=v1.7.2`; `correctedFrom=unpublished`.
+> Contract state: `status=corrected`; `affectedThrough=v1.7.2`; `correctedFrom=v1.7.3`.
 > Published Linux release, installer, and npm binaries through v1.7.2 require GLIBC_2.39; macOS is unaffected.
-> On an affected Linux system, build from source on the target distribution or wait for a corrective release.
-> Candidate artifacts remain CI-only evidence for a future corrective release; no corrected release is published yet.
+> Starting with v1.7.3, current Linux release, installer, and npm artifacts are static-musl executables and do not require glibc.
+> On an affected Linux release, build from source on the target distribution or upgrade to v1.7.3.
 <!-- planr:linux-release-portability:end surface=maintainerRelease schema=1 -->
 
 When this contract changes, update `docs/contracts/LINUX_RELEASE_PORTABILITY.json`, run `pnpm docs:sync-linux-portability`, and commit every synchronized notice before running the release gates.
