@@ -52,6 +52,7 @@ assert.ok(securityWorkflow.includes("version: 3.96.0"), "TruffleHog image versio
 const releaseWorkflow = await readFile(path.join(workflowsRoot, "release.yml"), "utf8");
 const ciWorkflow = await readFile(path.join(workflowsRoot, "ci.yml"), "utf8");
 const linuxBuildScript = await readFile(path.join(repoRoot, "scripts", "build-linux-release.sh"), "utf8");
+const linuxBuilderDockerfile = await readFile(path.join(repoRoot, "scripts", "linux-release-builder.Dockerfile"), "utf8");
 const linuxVerifyScript = await readFile(path.join(repoRoot, "scripts", "verify-linux-release-artifact.sh"), "utf8");
 const publicLifecycleScript = await readFile(path.join(repoRoot, "scripts", "verify-public-lifecycle.sh"), "utf8");
 for (const target of ["darwin-arm64", "darwin-x86_64", "linux-x86_64", "linux-arm64"]) {
@@ -74,6 +75,20 @@ assert.doesNotMatch(
 const buildImageDigest = "sha256:3757b14ddcc2057eb91a074dcdd0913bed839b22444bd2229a49eea910ed8736";
 const runtimeImageDigest = "sha256:765942a4039992336de8dd5db680586e1a206607dd06170ff0a37267a9e01958";
 assert.ok(linuxBuildScript.includes(`rust:1.90.0-alpine3.21@${buildImageDigest}`), "Linux build image must use the reviewed immutable multi-architecture digest");
+assert.ok(linuxBuildScript.includes('musl_version="1.2.5-r11"'), "Linux build must pin the reviewed musl package version");
+for (const digest of [
+  "61e84757a8bfbc0d7fa8f4ce6de9cd4d791714369d78f6a08e5b03510fb2a623",
+  "d3b5ab01046a92b9a168b790f516606e320f015cbd4deeb584c5e115a02124ba",
+  "721010e6bff908878d9c527428598661be59dde0d9f013f8431d01fd4dd16652",
+  "9c4ebdc7e2a29f12de5135cee8f1b92439bfff7c74839b4fb7b422680cf18db4",
+]) {
+  assert.ok(linuxBuildScript.includes(digest), `Linux build must pin reviewed native APK digest ${digest}`);
+}
+assert.match(linuxBuildScript, /\| sha256sum -c -/u, "Linux build must verify downloaded APK digests before the image build");
+assert.match(linuxBuilderDockerfile, /\| sha256sum -c -/u, "Linux builder image must reverify exact APK bytes before installation");
+assert.ok(linuxBuilderDockerfile.includes(`ARG BUILD_IMAGE=rust:1.90.0-alpine3.21@${buildImageDigest}`), "Linux builder Dockerfile must default to the reviewed immutable build image");
+assert.match(linuxBuilderDockerfile, /apk verify \/tmp\/musl\.apk \/tmp\/musl-dev\.apk/u, "Linux builder image must retain Alpine package signature verification");
+assert.match(linuxBuilderDockerfile, /apk --no-network --repositories-file \/dev\/null add --no-cache/u, "Linux builder image must install only the verified local APKs without repository access");
 assert.ok(linuxVerifyScript.includes(`alpine:3.20.8@${runtimeImageDigest}`), "Linux runtime image must use the reviewed immutable older-runtime digest");
 assert.match(linuxBuildScript, /uname -m\):\$target:\$cargo_target/u, "Linux build must bind target selection to the native runner architecture");
 assert.match(linuxVerifyScript, /uname -m\):\$target:\$cargo_target/u, "Linux verification must bind target selection to the native runner architecture");

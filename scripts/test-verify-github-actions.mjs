@@ -13,6 +13,7 @@ const verifier = path.join(fixtureScripts, "verify-github-actions.mjs");
 const releaseWorkflow = path.join(fixtureWorkflows, "release.yml");
 const ciWorkflow = path.join(fixtureWorkflows, "ci.yml");
 const linuxBuildScript = path.join(fixtureScripts, "build-linux-release.sh");
+const linuxBuilderDockerfile = path.join(fixtureScripts, "linux-release-builder.Dockerfile");
 const linuxVerifyScript = path.join(fixtureScripts, "verify-linux-release-artifact.sh");
 const publicLifecycleScript = path.join(fixtureScripts, "verify-public-lifecycle.sh");
 
@@ -27,6 +28,7 @@ try {
   await mkdir(fixtureScripts, { recursive: true });
   await cp(path.join(repoRoot, "scripts", "verify-github-actions.mjs"), verifier);
   await cp(path.join(repoRoot, "scripts", "build-linux-release.sh"), linuxBuildScript);
+  await cp(path.join(repoRoot, "scripts", "linux-release-builder.Dockerfile"), linuxBuilderDockerfile);
   await cp(path.join(repoRoot, "scripts", "verify-linux-release-artifact.sh"), linuxVerifyScript);
   await cp(path.join(repoRoot, "scripts", "verify-public-lifecycle.sh"), publicLifecycleScript);
   await cp(path.join(repoRoot, ".github", "workflows"), fixtureWorkflows, { recursive: true });
@@ -34,7 +36,7 @@ try {
   const baseline = runVerifier();
   assert.equal(baseline.status, 0, `baseline workflow fixture must pass:\n${baseline.stderr}`);
 
-  const fixtureFiles = [releaseWorkflow, ciWorkflow, linuxBuildScript, linuxVerifyScript, publicLifecycleScript];
+  const fixtureFiles = [releaseWorkflow, ciWorkflow, linuxBuildScript, linuxBuilderDockerfile, linuxVerifyScript, publicLifecycleScript];
   const baselineSources = new Map(
     await Promise.all(fixtureFiles.map(async (file) => [file, await readFile(file, "utf8")])),
   );
@@ -109,6 +111,24 @@ try {
     "unpinned Linux build image",
   );
   await expectRejected(
+    linuxBuildScript,
+    (value) => value.replace('musl_version="1.2.5-r11"', 'musl_version="latest"'),
+    /must pin the reviewed musl package version/u,
+    "unpinned musl development prerequisite",
+  );
+  await expectRejected(
+    linuxBuildScript,
+    (value) => value.replace("d3b5ab01046a92b9a168b790f516606e320f015cbd4deeb584c5e115a02124ba", "0".repeat(64)),
+    /must pin reviewed native APK digest/u,
+    "unreviewed native musl-dev digest",
+  );
+  await expectRejected(
+    linuxBuilderDockerfile,
+    (value) => value.replace("apk verify /tmp/musl.apk /tmp/musl-dev.apk", "true"),
+    /must retain Alpine package signature verification/u,
+    "missing Alpine APK signature verification",
+  );
+  await expectRejected(
     linuxVerifyScript,
     (value) => value.replace(/@sha256:[0-9a-f]{64}/u, ""),
     /runtime image must use the reviewed immutable/u,
@@ -142,7 +162,7 @@ try {
     "incomplete aggregate checksums",
   );
 
-  console.log("github_actions_regression=passed adversarial_cases=12 same_runner_smoke_insufficient=true musl_native_pins_lifecycle_checksums_npm_fail_closed=true");
+  console.log("github_actions_regression=passed adversarial_cases=15 same_runner_smoke_insufficient=true musl_native_pins_lifecycle_checksums_npm_fail_closed=true");
 } finally {
   await rm(fixtureRoot, { recursive: true, force: true });
 }
