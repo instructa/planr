@@ -49,9 +49,9 @@ export const LINUX_PORTABILITY_NOTICE_SURFACES = Object.freeze([
 ]);
 
 const mdxNoticeSurfaces = new Set(['installation', 'support', 'release']);
-const noticeBlockPatterns = [
-  /<!-- planr:linux-release-portability:start\b[^>]*-->[\s\S]*?<!-- planr:linux-release-portability:end\b[^>]*-->/gu,
-  /\{\/\* planr:linux-release-portability:start\b[^*]*\*\/\}[\s\S]*?\{\/\* planr:linux-release-portability:end\b[^*]*\*\/\}/gu,
+const noticeMarkerPatterns = [
+  /<!--\s*(planr:linux-release-portability[^>]*)-->/giu,
+  /\{\/\*\s*(planr:linux-release-portability[^*]*)\*\/\}/giu,
 ];
 
 function noticeMarker(surface, boundary, schema) {
@@ -59,8 +59,37 @@ function noticeMarker(surface, boundary, schema) {
   return mdxNoticeSurfaces.has(surface) ? `{/* ${marker} */}` : `<!-- ${marker} -->`;
 }
 
-function noticeBlocks(source) {
-  return noticeBlockPatterns.flatMap((pattern) => [...source.matchAll(pattern)].map((match) => ({ match, pattern })));
+function noticeMarkers(source) {
+  return noticeMarkerPatterns
+    .flatMap((pattern) => [...source.matchAll(pattern)].map((match) => ({
+      boundary: /^planr:linux-release-portability:([a-z-]+)\b/iu.exec(match[1].trim())?.[1].toLowerCase() ?? 'invalid',
+      index: match.index,
+      raw: match[0],
+    })))
+    .sort((left, right) => left.index - right.index);
+}
+
+function inspectNoticeStructure(source, contract, surface, requireExact) {
+  const markers = noticeMarkers(source);
+  const starts = markers.filter(({ boundary }) => boundary === 'start');
+  const ends = markers.filter(({ boundary }) => boundary === 'end');
+  assert.equal(starts.length, 1, `${surface} must contain exactly one Linux portability start marker`);
+  assert.equal(ends.length, 1, `${surface} must contain exactly one Linux portability end marker`);
+  assert.equal(markers.length, 2, `${surface} must contain exactly two Linux portability marker tokens`);
+  const expectedStart = noticeMarker(surface, 'start', contract.noticeSchema);
+  const expectedEnd = noticeMarker(surface, 'end', contract.noticeSchema);
+  assert.equal(starts[0].raw, expectedStart, `${surface} Linux portability start marker is edited or assigned to the wrong surface`);
+  assert.equal(ends[0].raw, expectedEnd, `${surface} Linux portability end marker is edited or assigned to the wrong surface`);
+  assert.ok(starts[0].index < ends[0].index, `${surface} Linux portability markers are out of order`);
+  const endIndex = ends[0].index + ends[0].raw.length;
+  if (requireExact) {
+    assert.equal(
+      source.slice(starts[0].index, endIndex),
+      renderLinuxPortabilityNotice(contract, surface),
+      `${surface} Linux portability notice body is stale or mutated`,
+    );
+  }
+  return { startIndex: starts[0].index, endIndex };
 }
 
 export function renderLinuxPortabilityNotice(contract, surface) {
@@ -90,9 +119,8 @@ export function renderLinuxPortabilityNotice(contract, surface) {
 }
 
 export function replaceLinuxPortabilityNotice(source, contract, surface) {
-  const blocks = noticeBlocks(source);
-  assert.equal(blocks.length, 1, `${surface} must contain exactly one Linux portability notice block before synchronization`);
-  return source.replace(blocks[0].pattern, renderLinuxPortabilityNotice(contract, surface));
+  const { startIndex, endIndex } = inspectNoticeStructure(source, contract, surface, false);
+  return `${source.slice(0, startIndex)}${renderLinuxPortabilityNotice(contract, surface)}${source.slice(endIndex)}`;
 }
 
 function assertCanonicalNotices(documents, contract) {
@@ -102,13 +130,7 @@ function assertCanonicalNotices(documents, contract) {
     'Linux portability public surface inventory drifted',
   );
   for (const surface of LINUX_PORTABILITY_NOTICE_SURFACES) {
-    const source = documents[surface];
-    const blocks = noticeBlocks(source);
-    assert.equal(blocks.length, 1, `${surface} must contain exactly one Linux portability notice block`);
-    assert.ok(
-      source.includes(renderLinuxPortabilityNotice(contract, surface)),
-      `${surface} Linux portability notice is missing, stale, mutated, or assigned to the wrong surface`,
-    );
+    inspectNoticeStructure(documents[surface], contract, surface, true);
   }
 }
 

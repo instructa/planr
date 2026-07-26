@@ -38,7 +38,7 @@ expectRejected(
     contract: { ...clone(contract), affectedReleases: [...contract.affectedReleases, '1.7.3'], affectedThrough: '1.7.3' },
     documents,
   },
-  /Linux portability notice is missing, stale, mutated, or assigned to the wrong surface/u,
+  /Linux portability notice body is stale or mutated/u,
 );
 
 expectRejected(
@@ -48,7 +48,7 @@ expectRejected(
     contract: { ...clone(contract), affectedReleases: [...contract.affectedReleases, '1.7.3'], affectedThrough: '1.7.3' },
     documents,
   },
-  /Linux portability notice is missing, stale, mutated, or assigned to the wrong surface/u,
+  /Linux portability notice body is stale or mutated/u,
 );
 
 const docsOnlyBump = Object.fromEntries(
@@ -57,7 +57,7 @@ const docsOnlyBump = Object.fromEntries(
 expectRejected(
   'docs-only affected version bump',
   { packageVersion: packageManifest.version, contract, documents: docsOnlyBump },
-  /Linux portability notice is missing, stale, mutated, or assigned to the wrong surface/u,
+  /Linux portability notice body is stale or mutated/u,
 );
 
 expectRejected(
@@ -94,7 +94,7 @@ expectRejected(
       support: `${documents.support}\n${renderLinuxPortabilityNotice(contract, 'support')}`,
     },
   },
-  /support must contain exactly one Linux portability notice block/u,
+  /support must contain exactly one Linux portability start marker/u,
 );
 
 const canonicalInstallationNotice = renderLinuxPortabilityNotice(contract, 'installation');
@@ -111,7 +111,7 @@ expectRejected(
       ),
     },
   },
-  /installation Linux portability notice is missing, stale, mutated, or assigned to the wrong surface/u,
+  /installation Linux portability notice body is stale or mutated/u,
 );
 
 expectRejected(
@@ -124,7 +124,7 @@ expectRejected(
       installation: documents.installation.replace('surface=installation schema=1', 'surface=support schema=1'),
     },
   },
-  /installation Linux portability notice is missing, stale, mutated, or assigned to the wrong surface/u,
+  /installation Linux portability start marker is edited or assigned to the wrong surface/u,
 );
 
 expectRejected(
@@ -140,7 +140,80 @@ expectRejected(
       ),
     },
   },
-  /installation Linux portability notice is missing, stale, mutated, or assigned to the wrong surface/u,
+  /installation Linux portability start marker is edited or assigned to the wrong surface/u,
+);
+
+const installationNoticeLines = canonicalInstallationNotice.split('\n');
+const installationStart = installationNoticeLines[0];
+const installationEnd = installationNoticeLines.at(-1);
+const wrongInstallationStart = installationStart.replace('surface=installation schema=1', 'surface=wrong schema=999');
+const wrongInstallationEnd = installationEnd.replace('surface=installation schema=1', 'surface=wrong schema=999');
+const invalidInstallationMarker = installationStart.replace(':start', '-start');
+
+expectRejected(
+  'edited wrong start immediately before canonical notice',
+  {
+    packageVersion: packageManifest.version,
+    contract,
+    documents: { ...documents, installation: `${wrongInstallationStart}\n${documents.installation}` },
+  },
+  /installation must contain exactly one Linux portability start marker/u,
+);
+
+expectRejected(
+  'edited wrong end immediately after canonical notice',
+  {
+    packageVersion: packageManifest.version,
+    contract,
+    documents: { ...documents, installation: `${documents.installation}\n${wrongInstallationEnd}` },
+  },
+  /installation must contain exactly one Linux portability end marker/u,
+);
+
+expectRejected(
+  'extra unpaired canonical start after notice',
+  {
+    packageVersion: packageManifest.version,
+    contract,
+    documents: { ...documents, installation: `${documents.installation}\n${installationStart}` },
+  },
+  /installation must contain exactly one Linux portability start marker/u,
+);
+
+expectRejected(
+  'edited notice-like marker syntax beside canonical notice',
+  {
+    packageVersion: packageManifest.version,
+    contract,
+    documents: { ...documents, installation: `${invalidInstallationMarker}\n${documents.installation}` },
+  },
+  /installation must contain exactly two Linux portability marker tokens/u,
+);
+
+expectRejected(
+  'extra unpaired canonical end before notice',
+  {
+    packageVersion: packageManifest.version,
+    contract,
+    documents: { ...documents, installation: `${installationEnd}\n${documents.installation}` },
+  },
+  /installation must contain exactly one Linux portability end marker/u,
+);
+
+expectRejected(
+  'canonical markers in reverse order',
+  {
+    packageVersion: packageManifest.version,
+    contract,
+    documents: {
+      ...documents,
+      installation: documents.installation.replace(
+        canonicalInstallationNotice,
+        [installationEnd, ...installationNoticeLines.slice(1, -1), installationStart].join('\n'),
+      ),
+    },
+  },
+  /installation Linux portability markers are out of order/u,
 );
 
 const correctedFrom = '1.7.3';
@@ -148,7 +221,7 @@ const correctedContract = { ...clone(contract), status: 'corrected', correctedFr
 expectRejected(
   'stale pending notice after corrected state transition',
   { packageVersion: correctedFrom, contract: correctedContract, documents },
-  /Linux portability notice is missing, stale, mutated, or assigned to the wrong surface/u,
+  /Linux portability notice body is stale or mutated/u,
 );
 
 for (const [index, bypassClaim] of [
@@ -165,7 +238,7 @@ for (const [index, bypassClaim] of [
         installation: `${documents.installation.replace(renderLinuxPortabilityNotice(contract, 'installation'), '')}\n${bypassClaim}`,
       },
     },
-    /installation must contain exactly one Linux portability notice block/u,
+    /installation must contain exactly one Linux portability start marker/u,
   );
 }
 
@@ -257,4 +330,4 @@ verifyLinuxPortabilityContract({
   documents: correctedDocuments,
 });
 
-console.log('linux_portability_contract_regression=passed adversarial_cases=35 allowed_pending_scopes=13 structural_notice_cases=8 corrected_transition_fixture=true dynamic_version_claims=true');
+console.log('linux_portability_contract_regression=passed adversarial_cases=35 allowed_pending_scopes=13 structural_notice_cases=14 corrected_transition_fixture=true dynamic_version_claims=true');
