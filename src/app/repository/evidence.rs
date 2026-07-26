@@ -50,9 +50,9 @@ impl App {
 
     pub(crate) fn list_artifacts(&self, item: Option<&str>) -> Result<Vec<Value>> {
         let sql = if item.is_some() {
-            "SELECT id, project_id, item_id, name, kind, path, content, mime_type, size_bytes, metadata, created_at FROM artifacts WHERE item_id = ?1 ORDER BY created_at DESC LIMIT 100"
+            "SELECT id, project_id, item_id, name, kind, path, content, mime_type, size_bytes, metadata, created_at FROM artifacts WHERE item_id = ?1 ORDER BY created_at DESC, rowid DESC LIMIT 100"
         } else {
-            "SELECT id, project_id, item_id, name, kind, path, content, mime_type, size_bytes, metadata, created_at FROM artifacts ORDER BY created_at DESC LIMIT 100"
+            "SELECT id, project_id, item_id, name, kind, path, content, mime_type, size_bytes, metadata, created_at FROM artifacts ORDER BY created_at DESC, rowid DESC LIMIT 100"
         };
         let mut stmt = self.conn.prepare(sql)?;
         let rows = if let Some(item) = item {
