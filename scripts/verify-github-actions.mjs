@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const workflowsRoot = path.join(repoRoot, ".github", "workflows");
 const trivyIgnoreFile = await readFile(path.join(repoRoot, ".trivyignore.yaml"), "utf8");
+const localSecurityScript = await readFile(path.join(repoRoot, "scripts", "security-local.sh"), "utf8");
 
 assert.equal(
   trivyIgnoreFile,
@@ -23,6 +24,7 @@ assert.equal(
 `,
   "Trivy exceptions must remain limited to the two expiring build-only Dockerfile findings",
 );
+assert.match(localSecurityScript, /--skip-check-update/u, "Local Trivy must use the checks bundled with the reviewed binary");
 
 const expectedActions = new Map([
   ["actions/checkout", { sha: "3d3c42e5aac5ba805825da76410c181273ba90b1", version: "v7.0.1", runtime: "node24" }],
@@ -73,6 +75,8 @@ for (const [expected, label] of [
   ["7105f1cd6577f058a9e39d0578f1a99c8a1e481e4d3512cd8a09acfe22a0fdc0", "TruffleHog release digest"],
   ["https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-64bit.tar.gz", "Trivy release URL"],
   ["8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9", "Trivy release digest"],
+  ["https://github.com/zizmorcore/zizmor/releases/download/v1.24.1/zizmor-x86_64-unknown-linux-gnu.tar.gz", "zizmor release URL"],
+  ["a8000f3c683319a523d3b20df0e75457ba591f049cfcbfa98966631b56733c03", "zizmor release digest"],
 ]) {
   assert.ok(securityWorkflow.includes(expected), `Security workflow must pin the reviewed ${label}`);
 }
@@ -84,7 +88,14 @@ assert.match(
 );
 assert.match(securityWorkflow, /--scanners secret,misconfig/u, "Trivy must scan secrets and misconfigurations");
 assert.match(securityWorkflow, /--ignorefile \.trivyignore\.yaml/u, "Trivy CI must use the reviewed narrow ignore file");
+assert.match(securityWorkflow, /--skip-check-update/u, "Trivy must use the checks bundled with the reviewed binary");
 assert.match(securityWorkflow, /--exit-code 1/u, "Trivy findings must fail the Security job");
+assert.doesNotMatch(
+  securityWorkflow,
+  /(?:python3\s+-m\s+pip\s+install[^\n]*\buv\b|\buvx\b)/u,
+  "Security workflow must not install mutable uv or zizmor inputs",
+);
+assert.match(securityWorkflow, /\n\s*zizmor \. \\\n/u, "GitHub Actions Security must run the checksum-verified zizmor binary");
 
 const releaseWorkflow = await readFile(path.join(workflowsRoot, "release.yml"), "utf8");
 const ciWorkflow = await readFile(path.join(workflowsRoot, "ci.yml"), "utf8");

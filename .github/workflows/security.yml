@@ -58,6 +58,7 @@ jobs:
           trivy fs \
             --scanners secret,misconfig \
             --ignorefile .trivyignore.yaml \
+            --skip-check-update \
             --skip-dirs target \
             --skip-dirs dist \
             --skip-dirs node_modules \
@@ -73,12 +74,24 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Install pinned zizmor
+        env:
+          ZIZMOR_SHA256: a8000f3c683319a523d3b20df0e75457ba591f049cfcbfa98966631b56733c03
+        run: |
+          tools_dir="$RUNNER_TEMP/planr-security-tools"
+          mkdir -p "$tools_dir"
+          curl --fail --location --proto '=https' --tlsv1.2 --retry 3 \
+            --output "$RUNNER_TEMP/zizmor.tar.gz" \
+            https://github.com/zizmorcore/zizmor/releases/download/v1.24.1/zizmor-x86_64-unknown-linux-gnu.tar.gz
+          printf '%s  %s\n' "$ZIZMOR_SHA256" "$RUNNER_TEMP/zizmor.tar.gz" | sha256sum --check -
+          tar -xzf "$RUNNER_TEMP/zizmor.tar.gz" -C "$tools_dir" zizmor
+          "$tools_dir/zizmor" --version
+          echo "$tools_dir" >> "$GITHUB_PATH"
+
       - name: Run zizmor
         run: |
           npm run verify:github-actions
-          python3 -m pip install --user uv
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          "$HOME/.local/bin/uvx" zizmor==1.24.1 . \
+          zizmor . \
             --persona regular \
             --min-severity medium \
             --min-confidence medium \

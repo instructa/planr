@@ -18,6 +18,7 @@ const linuxBuilderDockerfile = path.join(fixtureScripts, "linux-release-builder.
 const linuxVerifyScript = path.join(fixtureScripts, "verify-linux-release-artifact.sh");
 const publicLifecycleScript = path.join(fixtureScripts, "verify-public-lifecycle.sh");
 const trivyIgnoreFile = path.join(fixtureRoot, ".trivyignore.yaml");
+const localSecurityScript = path.join(fixtureScripts, "security-local.sh");
 
 function runVerifier() {
   return spawnSync(process.execPath, [verifier], {
@@ -33,13 +34,14 @@ try {
   await cp(path.join(repoRoot, "scripts", "linux-release-builder.Dockerfile"), linuxBuilderDockerfile);
   await cp(path.join(repoRoot, "scripts", "verify-linux-release-artifact.sh"), linuxVerifyScript);
   await cp(path.join(repoRoot, "scripts", "verify-public-lifecycle.sh"), publicLifecycleScript);
+  await cp(path.join(repoRoot, "scripts", "security-local.sh"), localSecurityScript);
   await cp(path.join(repoRoot, ".trivyignore.yaml"), trivyIgnoreFile);
   await cp(path.join(repoRoot, ".github", "workflows"), fixtureWorkflows, { recursive: true });
 
   const baseline = runVerifier();
   assert.equal(baseline.status, 0, `baseline workflow fixture must pass:\n${baseline.stderr}`);
 
-  const fixtureFiles = [releaseWorkflow, ciWorkflow, securityWorkflow, linuxBuildScript, linuxBuilderDockerfile, linuxVerifyScript, publicLifecycleScript, trivyIgnoreFile];
+  const fixtureFiles = [releaseWorkflow, ciWorkflow, securityWorkflow, linuxBuildScript, linuxBuilderDockerfile, linuxVerifyScript, publicLifecycleScript, localSecurityScript, trivyIgnoreFile];
   const baselineSources = new Map(
     await Promise.all(fixtureFiles.map(async (file) => [file, await readFile(file, "utf8")])),
   );
@@ -218,8 +220,38 @@ try {
     /exceptions must remain limited to the two expiring build-only Dockerfile findings/u,
     "missing Trivy exception expiry",
   );
+  await expectRejected(
+    securityWorkflow,
+    (value) => value.replace("a8000f3c683319a523d3b20df0e75457ba591f049cfcbfa98966631b56733c03", "0".repeat(64)),
+    /must pin the reviewed zizmor release digest/u,
+    "mutated zizmor binary digest",
+  );
+  await expectRejected(
+    securityWorkflow,
+    (value) => value.replaceAll("v1.24.1", "v1.24.2"),
+    /must pin the reviewed zizmor release URL/u,
+    "mutated zizmor version",
+  );
+  await expectRejected(
+    securityWorkflow,
+    (value) => value.replace("          npm run verify:github-actions\n", "          npm run verify:github-actions\n          python3 -m pip install --user uv\n          uvx zizmor==1.24.1 .\n"),
+    /must not install mutable uv or zizmor inputs/u,
+    "mutable uv and zizmor installation",
+  );
+  await expectRejected(
+    securityWorkflow,
+    (value) => value.replace("            --skip-check-update \\\n", ""),
+    /must use the checks bundled with the reviewed binary/u,
+    "unpinned Trivy checks update",
+  );
+  await expectRejected(
+    localSecurityScript,
+    (value) => value.replace("    --skip-check-update \\\n", ""),
+    /Local Trivy must use the checks bundled with the reviewed binary/u,
+    "unpinned local Trivy checks update",
+  );
 
-  console.log("github_actions_regression=passed adversarial_cases=24 same_runner_smoke_insufficient=true musl_native_pins_lifecycle_checksums_npm_fail_closed=true security_jobs_fail_closed=true");
+  console.log("github_actions_regression=passed adversarial_cases=29 same_runner_smoke_insufficient=true musl_native_pins_lifecycle_checksums_npm_fail_closed=true security_jobs_fail_closed=true immutable_security_toolchain=true");
 } finally {
   await rm(fixtureRoot, { recursive: true, force: true });
 }
