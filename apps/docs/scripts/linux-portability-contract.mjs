@@ -45,7 +45,15 @@ function semanticUnits(source) {
     .replace(/[`*~]/gu, '')
     .replace(/<[^>]+>/gu, ' ');
   const lines = cleaned.split('\n');
-  const tableRows = lines.filter((line) => line.includes('|')).map((line) => line.trim());
+  const tableCells = lines
+    .filter((line) => line.includes('|'))
+    .flatMap((line) => {
+      const cells = line.split('|').map((cell) => cell.trim()).filter(Boolean);
+      const context = [...line.matchAll(/\b(?:linux|x86_64|arm64|binar(?:y|ies)|artifacts?|assets?|releases?|npm|installer|tarballs?|bytes)\b/giu)]
+        .map((match) => match[0])
+        .join(' ');
+      return cells.map((cell) => `${context} ${cell}`.trim());
+    });
   const proseParagraphs = lines
     .map((line) => (line.includes('|') ? '' : line))
     .join('\n')
@@ -53,7 +61,23 @@ function semanticUnits(source) {
     .map((paragraph) => paragraph.replace(/\s+/gu, ' ').trim())
     .filter(Boolean);
   const sentences = proseParagraphs.flatMap((paragraph) => paragraph.split(/(?<=[.!?])\s+|;\s+/gu));
-  return [...tableRows, ...sentences].map((unit) => unit.trim()).filter(Boolean);
+  return [...tableCells, ...sentences].map((unit) => unit.trim()).filter(Boolean);
+}
+
+function claimClauses(unit, futureScope, ciCandidateScope) {
+  const clauses = unit
+    .replace(/[()]/gu, ' — ')
+    .split(/\s*(?:—|–)\s*|,\s*(?=(?:although|though|but|whereas|while|with|yet|and\s+(?:future|candidate|CI|workflow|pipeline)|future|candidate)\b)|\s+and\s+(?=(?:future|candidate|CI|workflow|pipeline)\b)|\s+(?=(?:although|but|whereas|while)\b)/giu)
+    .map((clause) => clause.trim())
+    .filter(Boolean);
+
+  return clauses.flatMap((clause) => {
+    const comma = clause.indexOf(',');
+    if (comma < 0) return [clause];
+    const prefix = clause.slice(0, comma);
+    if (!futureScope.test(prefix) && !ciCandidateScope.test(prefix)) return [clause];
+    return [prefix, clause.slice(comma + 1)].map((part) => part.trim()).filter(Boolean);
+  });
 }
 
 function assertPendingArtifactClaimsAreFutureScoped(entries, affectedThrough) {
@@ -63,18 +87,20 @@ function assertPendingArtifactClaimsAreFutureScoped(entries, affectedThrough) {
   const futureScope = /\b(?:future|candidate|planned|will|once published|after (?:it is |they are )?published|not yet published|before upload)\b/iu;
   const ciCandidateScope = /\b(?:CI|workflow|pipeline)\b.{0,100}\b(?:candidate|prepar(?:e|es|ing)|build(?:s|ing)?|verif(?:y|ies|ying))\b/iu;
   const presentScope = /\b(?:current|currently|supported|today|latest|already)\b|^\s*published\b|\bpublished Linux\b/iu;
+  const presentCandidateScope = /\b(?:current|currently|latest)\b.{0,80}\b(?:CI|workflow|pipeline)\b.{0,80}\bcandidate\b|\b(?:CI|workflow|pipeline)\b.{0,80}\b(?:current|currently|latest)\b.{0,80}\bcandidate\b/iu;
   const affectedToken = new RegExp(`\\bv${affectedThrough.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}\\b`, 'iu');
   const historicalNonPortable = /(?:(?:was|were) not static(?:\s*[-/]\s*|\s+)musl|(?:was|were) not glibc[- ]free|did not (?:ship|use|provide) (?:a )?(?:static(?:\s*[-/]\s*|\s+)|musl)|never (?:shipped|used|provided) (?:a )?(?:static(?:\s*[-/]\s*|\s+)|musl))/iu;
 
   for (const [label, source] of entries) {
     for (const unit of semanticUnits(source)) {
-      if (!linuxContext.test(unit) || !artifact.test(unit) || !portableProperty.test(unit)) continue;
-      if (presentScope.test(unit)) {
-        assert.fail(`${label} presents pending static-musl/glibc-free behavior as a current artifact claim: ${unit}`);
+      for (const clause of claimClauses(unit, futureScope, ciCandidateScope)) {
+        if (!linuxContext.test(clause) || !artifact.test(clause) || !portableProperty.test(clause)) continue;
+        if (affectedToken.test(clause) && historicalNonPortable.test(clause)) continue;
+        const candidateScoped = futureScope.test(clause) || ciCandidateScope.test(clause);
+        const unqualifiedPresent = presentScope.test(clause) && !presentCandidateScope.test(clause);
+        if (candidateScoped && !unqualifiedPresent) continue;
+        assert.fail(`${label} presents pending static-musl/glibc-free behavior as a current artifact claim: ${clause}`);
       }
-      if (futureScope.test(unit) || ciCandidateScope.test(unit)) continue;
-      if (affectedToken.test(unit) && historicalNonPortable.test(unit)) continue;
-      assert.fail(`${label} presents pending static-musl/glibc-free behavior as a current artifact claim: ${unit}`);
     }
   }
 }

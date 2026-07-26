@@ -88,6 +88,14 @@ const falseCurrentClaims = [
   'The Linux npm artifacts are statically linked.',
   'Installer assets require no glibc.',
   'Current Linux binaries are free of glibc.',
+  'Musl powers the Linux release binaries, although future candidates remain under CI.',
+  'The Linux npm artifact is glibc-free, with candidate builds tested in CI.',
+  'Installer bytes require no glibc — future workflow candidates are also verified.',
+  'Although future candidates remain under CI, musl powers the Linux release binaries.',
+  'Future workflow candidates are verified; the Linux npm artifact is glibc-free.',
+  'The Linux installer bytes require no glibc (future candidates are verified in CI).',
+  'Linux release binaries use musl and future CI candidates are also tested.',
+  '| Linux npm artifact | glibc-free | future CI candidates verified |',
 ];
 for (const [index, claim] of falseCurrentClaims.entries()) {
   expectRejected(
@@ -109,6 +117,10 @@ for (const allowedPendingClaim of [
   'CI verifies static-musl Linux candidate binaries before upload.',
   'The future Linux release binaries will use musl once published.',
   `Historically, v${contract.affectedThrough} Linux binaries were not static musl and were affected by GLIBC_2.39.`,
+  'The latest CI candidate artifacts for Linux will be static musl once published.',
+  'Current CI candidate Linux binaries are static musl before upload.',
+  'Before upload, current CI candidate Linux binaries are static musl.',
+  '| Linux CI candidate binaries | static musl before upload |',
 ]) {
   verifyLinuxPortabilityContract({
     packageVersion: packageManifest.version,
@@ -136,4 +148,4 @@ verifyLinuxPortabilityContract({
   documents: correctedDocuments,
 });
 
-console.log('linux_portability_contract_regression=passed adversarial_cases=20 allowed_pending_scopes=4 corrected_transition_fixture=true dynamic_version_claims=true');
+console.log('linux_portability_contract_regression=passed adversarial_cases=28 allowed_pending_scopes=8 corrected_transition_fixture=true dynamic_version_claims=true');
