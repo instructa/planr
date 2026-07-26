@@ -94,7 +94,7 @@ expectRejected(
       support: `${documents.support}\n${renderLinuxPortabilityNotice(contract, 'support')}`,
     },
   },
-  /support must contain exactly one Linux portability start marker/u,
+  /support must contain exactly two raw Linux portability reserved tokens/u,
 );
 
 const canonicalInstallationNotice = renderLinuxPortabilityNotice(contract, 'installation');
@@ -149,6 +149,15 @@ const installationEnd = installationNoticeLines.at(-1);
 const wrongInstallationStart = installationStart.replace('surface=installation schema=1', 'surface=wrong schema=999');
 const wrongInstallationEnd = installationEnd.replace('surface=installation schema=1', 'surface=wrong schema=999');
 const invalidInstallationMarker = installationStart.replace(':start', '-start');
+const malformedMarkdownStart = '<!-- planr:linux-release-portability:start surface=installation schema=1 -- >';
+const malformedMarkdownEnd = '<!-- planr:linux-release-portability:end surface=installation schema=1 -- >';
+const whitespaceMutatedMdxStart = '{ /* planr:linux-release-portability:start surface=installation schema=1 */}';
+const whitespaceMutatedMdxEnd = '{ /* planr:linux-release-portability:end surface=installation schema=1 */}';
+const rawReservedStart = 'planr:linux-release-portability:start surface=installation schema=1';
+const canonicalReadmeNotice = renderLinuxPortabilityNotice(contract, 'README');
+const readmeNoticeLines = canonicalReadmeNotice.split('\n');
+const readmeStart = readmeNoticeLines[0];
+const readmeEnd = readmeNoticeLines.at(-1);
 
 expectRejected(
   'edited wrong start immediately before canonical notice',
@@ -157,7 +166,7 @@ expectRejected(
     contract,
     documents: { ...documents, installation: `${wrongInstallationStart}\n${documents.installation}` },
   },
-  /installation must contain exactly one Linux portability start marker/u,
+  /installation must contain exactly two raw Linux portability reserved tokens/u,
 );
 
 expectRejected(
@@ -167,7 +176,7 @@ expectRejected(
     contract,
     documents: { ...documents, installation: `${documents.installation}\n${wrongInstallationEnd}` },
   },
-  /installation must contain exactly one Linux portability end marker/u,
+  /installation must contain exactly two raw Linux portability reserved tokens/u,
 );
 
 expectRejected(
@@ -177,7 +186,7 @@ expectRejected(
     contract,
     documents: { ...documents, installation: `${documents.installation}\n${installationStart}` },
   },
-  /installation must contain exactly one Linux portability start marker/u,
+  /installation must contain exactly two raw Linux portability reserved tokens/u,
 );
 
 expectRejected(
@@ -187,7 +196,7 @@ expectRejected(
     contract,
     documents: { ...documents, installation: `${invalidInstallationMarker}\n${documents.installation}` },
   },
-  /installation must contain exactly two Linux portability marker tokens/u,
+  /installation must contain exactly two raw Linux portability reserved tokens/u,
 );
 
 expectRejected(
@@ -197,8 +206,66 @@ expectRejected(
     contract,
     documents: { ...documents, installation: `${installationEnd}\n${documents.installation}` },
   },
-  /installation must contain exactly one Linux portability end marker/u,
+  /installation must contain exactly two raw Linux portability reserved tokens/u,
 );
+
+for (const [label, extraToken] of [
+  ['malformed Markdown close on start beside canonical notice', malformedMarkdownStart],
+  ['malformed Markdown close on end beside canonical notice', malformedMarkdownEnd],
+  ['whitespace-mutated MDX start wrapper beside canonical notice', whitespaceMutatedMdxStart],
+  ['whitespace-mutated MDX end wrapper beside canonical notice', whitespaceMutatedMdxEnd],
+  ['raw reserved start token beside canonical notice', rawReservedStart],
+]) {
+  expectRejected(
+    label,
+    {
+      packageVersion: packageManifest.version,
+      contract,
+      documents: { ...documents, installation: `${extraToken}\n${documents.installation}` },
+    },
+    /installation must contain exactly two raw Linux portability reserved tokens/u,
+  );
+}
+
+for (const [label, surface, canonicalNotice, malformedNotice] of [
+  [
+    'malformed Markdown close on canonical start',
+    'README',
+    canonicalReadmeNotice,
+    canonicalReadmeNotice.replace(readmeStart, readmeStart.replace('-->', '-- >')),
+  ],
+  [
+    'malformed Markdown close on canonical end',
+    'README',
+    canonicalReadmeNotice,
+    canonicalReadmeNotice.replace(readmeEnd, readmeEnd.replace('-->', '-- >')),
+  ],
+  [
+    'whitespace-mutated MDX canonical start wrapper',
+    'installation',
+    canonicalInstallationNotice,
+    canonicalInstallationNotice.replace(installationStart, installationStart.replace('{/*', '{ /*')),
+  ],
+  [
+    'whitespace-mutated MDX canonical end wrapper',
+    'installation',
+    canonicalInstallationNotice,
+    canonicalInstallationNotice.replace(installationEnd, installationEnd.replace('{/*', '{ /*')),
+  ],
+]) {
+  expectRejected(
+    label,
+    {
+      packageVersion: packageManifest.version,
+      contract,
+      documents: {
+        ...documents,
+        [surface]: documents[surface].replace(canonicalNotice, malformedNotice),
+      },
+    },
+    new RegExp(`${surface} Linux portability reserved tokens must use valid comment wrappers`, 'u'),
+  );
+}
 
 expectRejected(
   'canonical markers in reverse order',
@@ -238,7 +305,7 @@ for (const [index, bypassClaim] of [
         installation: `${documents.installation.replace(renderLinuxPortabilityNotice(contract, 'installation'), '')}\n${bypassClaim}`,
       },
     },
-    /installation must contain exactly one Linux portability start marker/u,
+    /installation must contain exactly two raw Linux portability reserved tokens/u,
   );
 }
 
@@ -330,4 +397,4 @@ verifyLinuxPortabilityContract({
   documents: correctedDocuments,
 });
 
-console.log('linux_portability_contract_regression=passed adversarial_cases=35 allowed_pending_scopes=13 structural_notice_cases=14 corrected_transition_fixture=true dynamic_version_claims=true');
+console.log('linux_portability_contract_regression=passed adversarial_cases=35 allowed_pending_scopes=13 structural_notice_cases=23 corrected_transition_fixture=true dynamic_version_claims=true');

@@ -49,6 +49,7 @@ export const LINUX_PORTABILITY_NOTICE_SURFACES = Object.freeze([
 ]);
 
 const mdxNoticeSurfaces = new Set(['installation', 'support', 'release']);
+const noticeReservedPrefix = 'planr:linux-release-portability';
 const noticeMarkerPatterns = [
   /<!--\s*(planr:linux-release-portability[^>]*)-->/giu,
   /\{\/\*\s*(planr:linux-release-portability[^*]*)\*\/\}/giu,
@@ -64,18 +65,26 @@ function noticeMarkers(source) {
     .flatMap((pattern) => [...source.matchAll(pattern)].map((match) => ({
       boundary: /^planr:linux-release-portability:([a-z-]+)\b/iu.exec(match[1].trim())?.[1].toLowerCase() ?? 'invalid',
       index: match.index,
+      reservedIndex: match.index + match[0].toLowerCase().indexOf(noticeReservedPrefix),
       raw: match[0],
     })))
     .sort((left, right) => left.index - right.index);
 }
 
 function inspectNoticeStructure(source, contract, surface, requireExact) {
+  const reservedIndexes = [...source.matchAll(/planr:linux-release-portability/gu)].map((match) => match.index);
+  assert.equal(reservedIndexes.length, 2, `${surface} must contain exactly two raw Linux portability reserved tokens`);
   const markers = noticeMarkers(source);
+  assert.equal(markers.length, 2, `${surface} Linux portability reserved tokens must use valid comment wrappers`);
+  assert.deepEqual(
+    markers.map(({ reservedIndex }) => reservedIndex),
+    reservedIndexes,
+    `${surface} Linux portability reserved tokens must be the parsed comment markers`,
+  );
   const starts = markers.filter(({ boundary }) => boundary === 'start');
   const ends = markers.filter(({ boundary }) => boundary === 'end');
   assert.equal(starts.length, 1, `${surface} must contain exactly one Linux portability start marker`);
   assert.equal(ends.length, 1, `${surface} must contain exactly one Linux portability end marker`);
-  assert.equal(markers.length, 2, `${surface} must contain exactly two Linux portability marker tokens`);
   const expectedStart = noticeMarker(surface, 'start', contract.noticeSchema);
   const expectedEnd = noticeMarker(surface, 'end', contract.noticeSchema);
   assert.equal(starts[0].raw, expectedStart, `${surface} Linux portability start marker is edited or assigned to the wrong surface`);
