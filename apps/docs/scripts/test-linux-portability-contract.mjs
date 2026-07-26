@@ -2,7 +2,11 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { verifyLinuxPortabilityContract } from './linux-portability-contract.mjs';
+import {
+  renderLinuxPortabilityNotice,
+  replaceLinuxPortabilityNotice,
+  verifyLinuxPortabilityContract,
+} from './linux-portability-contract.mjs';
 
 const docsRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repositoryRoot = path.dirname(path.dirname(docsRoot));
@@ -34,7 +38,7 @@ expectRejected(
     contract: { ...clone(contract), affectedReleases: [...contract.affectedReleases, '1.7.3'], affectedThrough: '1.7.3' },
     documents,
   },
-  /must derive its affected Linux version from affectedThrough=1\.7\.3/u,
+  /Linux portability notice is missing, stale, mutated, or assigned to the wrong surface/u,
 );
 
 expectRejected(
@@ -44,7 +48,7 @@ expectRejected(
     contract: { ...clone(contract), affectedReleases: [...contract.affectedReleases, '1.7.3'], affectedThrough: '1.7.3' },
     documents,
   },
-  /must derive its affected Linux version from affectedThrough=1\.7\.3/u,
+  /Linux portability notice is missing, stale, mutated, or assigned to the wrong surface/u,
 );
 
 const docsOnlyBump = Object.fromEntries(
@@ -53,7 +57,7 @@ const docsOnlyBump = Object.fromEntries(
 expectRejected(
   'docs-only affected version bump',
   { packageVersion: packageManifest.version, contract, documents: docsOnlyBump },
-  new RegExp(`must derive its affected Linux version from affectedThrough=${contract.affectedThrough}`, 'u'),
+  /Linux portability notice is missing, stale, mutated, or assigned to the wrong surface/u,
 );
 
 expectRejected(
@@ -71,6 +75,99 @@ expectRejected(
   },
   /correctedFrom must be newer than affectedThrough/u,
 );
+
+const missingSurfaceDocuments = clone(documents);
+delete missingSurfaceDocuments.installation;
+expectRejected(
+  'missing required public surface',
+  { packageVersion: packageManifest.version, contract, documents: missingSurfaceDocuments },
+  /public surface inventory drifted/u,
+);
+
+expectRejected(
+  'duplicate canonical notice',
+  {
+    packageVersion: packageManifest.version,
+    contract,
+    documents: {
+      ...documents,
+      support: `${documents.support}\n${renderLinuxPortabilityNotice(contract, 'support')}`,
+    },
+  },
+  /support must contain exactly one Linux portability notice block/u,
+);
+
+const canonicalInstallationNotice = renderLinuxPortabilityNotice(contract, 'installation');
+expectRejected(
+  'mutated canonical notice body',
+  {
+    packageVersion: packageManifest.version,
+    contract,
+    documents: {
+      ...documents,
+      installation: documents.installation.replace(
+        canonicalInstallationNotice,
+        canonicalInstallationNotice.replace('Candidate artifacts remain CI-only evidence', 'Candidate artifacts are published evidence'),
+      ),
+    },
+  },
+  /installation Linux portability notice is missing, stale, mutated, or assigned to the wrong surface/u,
+);
+
+expectRejected(
+  'edited canonical notice marker',
+  {
+    packageVersion: packageManifest.version,
+    contract,
+    documents: {
+      ...documents,
+      installation: documents.installation.replace('surface=installation schema=1', 'surface=support schema=1'),
+    },
+  },
+  /installation Linux portability notice is missing, stale, mutated, or assigned to the wrong surface/u,
+);
+
+expectRejected(
+  'notice assigned to the wrong surface',
+  {
+    packageVersion: packageManifest.version,
+    contract,
+    documents: {
+      ...documents,
+      installation: documents.installation.replace(
+        renderLinuxPortabilityNotice(contract, 'installation'),
+        renderLinuxPortabilityNotice(contract, 'README'),
+      ),
+    },
+  },
+  /installation Linux portability notice is missing, stale, mutated, or assigned to the wrong surface/u,
+);
+
+const correctedFrom = '1.7.3';
+const correctedContract = { ...clone(contract), status: 'corrected', correctedFrom };
+expectRejected(
+  'stale pending notice after corrected state transition',
+  { packageVersion: correctedFrom, contract: correctedContract, documents },
+  /Linux portability notice is missing, stale, mutated, or assigned to the wrong surface/u,
+);
+
+for (const [index, bypassClaim] of [
+  'Linux release binaries use musl alongside candidate npm artifacts tested in CI.',
+  'Linux release binaries use musl next to future installer assets.',
+].entries()) {
+  expectRejected(
+    `cross-artifact prose cannot replace canonical notice ${index + 1}`,
+    {
+      packageVersion: packageManifest.version,
+      contract,
+      documents: {
+        ...documents,
+        installation: `${documents.installation.replace(renderLinuxPortabilityNotice(contract, 'installation'), '')}\n${bypassClaim}`,
+      },
+    },
+    /installation must contain exactly one Linux portability notice block/u,
+  );
+}
 
 const falseCurrentClaims = [
   'Linux x86_64 and arm64 are supported with static musl release binaries; glibc is not required.',
@@ -144,20 +241,20 @@ for (const allowedPendingClaim of [
   });
 }
 
-const correctedFrom = '1.7.3';
 const correctedDocuments = Object.fromEntries(
   Object.entries(documents).map(([label, source]) => [
     label,
-    `${source
+    replaceLinuxPortabilityNotice(`${source
       .replaceAll(/no corrected release is published yet/giu, 'the corrected release boundary is published')
-      .replaceAll(/wait for a corrective release/giu, 'use the corrected release')}
-Starting with v${correctedFrom}, current Linux release and npm artifacts are static musl executables and do not require glibc.`,
+      .replaceAll(/wait for a corrective release/giu, 'use the corrected release')}`,
+    correctedContract,
+    label),
   ]),
 );
 verifyLinuxPortabilityContract({
   packageVersion: correctedFrom,
-  contract: { ...clone(contract), status: 'corrected', correctedFrom },
+  contract: correctedContract,
   documents: correctedDocuments,
 });
 
-console.log('linux_portability_contract_regression=passed adversarial_cases=35 allowed_pending_scopes=13 corrected_transition_fixture=true dynamic_version_claims=true');
+console.log('linux_portability_contract_regression=passed adversarial_cases=35 allowed_pending_scopes=13 structural_notice_cases=8 corrected_transition_fixture=true dynamic_version_claims=true');

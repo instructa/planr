@@ -39,6 +39,79 @@ function prose(source) {
   return source.replace(/^>\s?/gmu, '').replace(/\s+/gu, ' ');
 }
 
+export const LINUX_PORTABILITY_NOTICE_SURFACES = Object.freeze([
+  'README',
+  'installation',
+  'support',
+  'release',
+  'maintainerRelease',
+  'changelog',
+]);
+
+const mdxNoticeSurfaces = new Set(['installation', 'support', 'release']);
+const noticeBlockPatterns = [
+  /<!-- planr:linux-release-portability:start\b[^>]*-->[\s\S]*?<!-- planr:linux-release-portability:end\b[^>]*-->/gu,
+  /\{\/\* planr:linux-release-portability:start\b[^*]*\*\/\}[\s\S]*?\{\/\* planr:linux-release-portability:end\b[^*]*\*\/\}/gu,
+];
+
+function noticeMarker(surface, boundary, schema) {
+  const marker = `planr:linux-release-portability:${boundary} surface=${surface} schema=${schema}`;
+  return mdxNoticeSurfaces.has(surface) ? `{/* ${marker} */}` : `<!-- ${marker} -->`;
+}
+
+function noticeBlocks(source) {
+  return noticeBlockPatterns.flatMap((pattern) => [...source.matchAll(pattern)].map((match) => ({ match, pattern })));
+}
+
+export function renderLinuxPortabilityNotice(contract, surface) {
+  assert.equal(contract.noticeSchema, 1, 'Linux portability noticeSchema must be 1');
+  assert.ok(LINUX_PORTABILITY_NOTICE_SURFACES.includes(surface), `unknown Linux portability notice surface ${surface}`);
+  const correctedFrom = contract.correctedFrom === null ? 'unpublished' : `v${contract.correctedFrom}`;
+  const lines = [
+    noticeMarker(surface, 'start', contract.noticeSchema),
+    `> **Linux release portability — ${contract.status}**`,
+    '>',
+    `> Contract state: \`status=${contract.status}\`; \`affectedThrough=v${contract.affectedThrough}\`; \`correctedFrom=${correctedFrom}\`.`,
+    `> Published Linux release, installer, and npm binaries through v${contract.affectedThrough} require GLIBC_2.39; macOS is unaffected.`,
+  ];
+  if (contract.status === 'pending') {
+    lines.push(
+      '> On an affected Linux system, build from source on the target distribution or wait for a corrective release.',
+      '> Candidate artifacts remain CI-only evidence for a future corrective release; no corrected release is published yet.',
+    );
+  } else {
+    lines.push(
+      `> Starting with v${contract.correctedFrom}, current Linux release, installer, and npm artifacts are static-musl executables and do not require glibc.`,
+      `> On an affected Linux release, build from source on the target distribution or upgrade to v${contract.correctedFrom}.`,
+    );
+  }
+  lines.push(noticeMarker(surface, 'end', contract.noticeSchema));
+  return lines.join('\n');
+}
+
+export function replaceLinuxPortabilityNotice(source, contract, surface) {
+  const blocks = noticeBlocks(source);
+  assert.equal(blocks.length, 1, `${surface} must contain exactly one Linux portability notice block before synchronization`);
+  return source.replace(blocks[0].pattern, renderLinuxPortabilityNotice(contract, surface));
+}
+
+function assertCanonicalNotices(documents, contract) {
+  assert.deepEqual(
+    Object.keys(documents).sort(),
+    [...LINUX_PORTABILITY_NOTICE_SURFACES].sort(),
+    'Linux portability public surface inventory drifted',
+  );
+  for (const surface of LINUX_PORTABILITY_NOTICE_SURFACES) {
+    const source = documents[surface];
+    const blocks = noticeBlocks(source);
+    assert.equal(blocks.length, 1, `${surface} must contain exactly one Linux portability notice block`);
+    assert.ok(
+      source.includes(renderLinuxPortabilityNotice(contract, surface)),
+      `${surface} Linux portability notice is missing, stale, mutated, or assigned to the wrong surface`,
+    );
+  }
+}
+
 function semanticUnits(source) {
   const cleaned = source
     .replace(/^>\s?/gmu, '')
@@ -134,7 +207,7 @@ function assertPendingArtifactClaimsAreFutureScoped(entries, affectedThrough) {
 export function verifyLinuxPortabilityContract({ packageVersion, contract, documents }) {
   assert.deepEqual(
     Object.keys(contract).sort(),
-    ['affectedReleases', 'affectedThrough', 'correctedFrom', 'status'],
+    ['affectedReleases', 'affectedThrough', 'correctedFrom', 'noticeSchema', 'status'],
     'Linux release portability contract has an unexpected shape',
   );
   assert.ok(['pending', 'corrected'].includes(contract.status), 'Linux release portability status must be pending or corrected');
@@ -147,8 +220,22 @@ export function verifyLinuxPortabilityContract({ packageVersion, contract, docum
   assert.equal(new Set(contract.affectedReleases).size, contract.affectedReleases.length, 'affectedReleases must not contain duplicates');
   assert.equal(orderedAffected.at(-1), contract.affectedThrough, 'affectedThrough must be the last explicitly recorded affected release');
 
+  if (contract.status === 'pending') {
+    assert.equal(contract.correctedFrom, null, 'pending portability requires correctedFrom=null');
+    assert.ok(
+      compareSemver(packageVersion, contract.affectedThrough) <= 0,
+      `package ${packageVersion} moved beyond pending affected boundary ${contract.affectedThrough}; transition the contract to corrected with an explicit correctedFrom boundary`,
+    );
+  } else {
+    assert.equal(typeof contract.correctedFrom, 'string', 'corrected portability requires a correctedFrom version');
+    parseSemver(contract.correctedFrom, 'correctedFrom');
+    assert.ok(compareSemver(contract.correctedFrom, contract.affectedThrough) > 0, 'correctedFrom must be newer than affectedThrough');
+    assert.ok(compareSemver(packageVersion, contract.correctedFrom) >= 0, 'correctedFrom must be the current-or-earlier corrective package boundary');
+  }
+
   const entries = Object.entries(documents);
   assert.ok(entries.length > 0, 'public Linux documents are required');
+  assertCanonicalNotices(documents, contract);
   const affectedClaim = /v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?).{0,240}?GLIBC_2\.39/giu;
   for (const [label, source] of entries) {
     const versions = [...prose(source).matchAll(affectedClaim)].map((match) => match[1]);
@@ -166,11 +253,6 @@ export function verifyLinuxPortabilityContract({ packageVersion, contract, docum
   }
 
   if (contract.status === 'pending') {
-    assert.equal(contract.correctedFrom, null, 'pending portability requires correctedFrom=null');
-    assert.ok(
-      compareSemver(packageVersion, contract.affectedThrough) <= 0,
-      `package ${packageVersion} moved beyond pending affected boundary ${contract.affectedThrough}; transition the contract to corrected with an explicit correctedFrom boundary`,
-    );
     for (const [label, source] of userDocuments) {
       assert.ok(source.includes('wait for a corrective release'), `${label} must retain the pending wait remediation`);
       assert.ok(source.includes('no corrected release is published yet'), `${label} must state that the corrected release remains unpublished`);
@@ -178,10 +260,6 @@ export function verifyLinuxPortabilityContract({ packageVersion, contract, docum
     }
     assertPendingArtifactClaimsAreFutureScoped(entries, contract.affectedThrough);
   } else {
-    assert.equal(typeof contract.correctedFrom, 'string', 'corrected portability requires a correctedFrom version');
-    parseSemver(contract.correctedFrom, 'correctedFrom');
-    assert.ok(compareSemver(contract.correctedFrom, contract.affectedThrough) > 0, 'correctedFrom must be newer than affectedThrough');
-    assert.ok(compareSemver(packageVersion, contract.correctedFrom) >= 0, 'correctedFrom must be the current-or-earlier corrective package boundary');
     const correctedClaim = new RegExp(
       `v${contract.correctedFrom.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}.{0,240}static[- ]musl.{0,160}(?:does not|do not) require glibc`,
       'iu',

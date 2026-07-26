@@ -36,7 +36,14 @@ not receive provider credentials or execute the private maintainer benchmark.
 
 ## Watch the workflow
 
-The currently published v1.7.2 Linux release and npm assets are dynamically linked GNU binaries that require GLIBC_2.39; macOS assets are unaffected. The static-musl work below prepares a future corrective release and does not retroactively change v1.7.2. No corrected release is published yet.
+{/* planr:linux-release-portability:start surface=release schema=1 */}
+> **Linux release portability — pending**
+>
+> Contract state: `status=pending`; `affectedThrough=v1.7.2`; `correctedFrom=unpublished`.
+> Published Linux release, installer, and npm binaries through v1.7.2 require GLIBC_2.39; macOS is unaffected.
+> On an affected Linux system, build from source on the target distribution or wait for a corrective release.
+> Candidate artifacts remain CI-only evidence for a future corrective release; no corrected release is published yet.
+{/* planr:linux-release-portability:end surface=release schema=1 */}
 
 For a new tag, the workflow verifies manifest and changelog drift, creates a draft GitHub release, and builds four archives: macOS arm64/x86_64 and Linux arm64/x86_64. Linux candidates build on native GitHub runners inside a digest-pinned Rust/musl toolchain. Before upload, each extracted Linux tarball must have valid embedded checksums, no dynamic ELF interpreter, shared-library dependency, or glibc symbol, and must complete a fresh Planr lifecycle in digest-pinned Alpine 3.20.8. The npm fixture must execute the exact extracted bytes. Pull-request CI runs the same two-architecture contract without publishing or secrets and aggregates both candidate tarball checksums. The tag workflow publishes `SHA256SUMS` only after every build succeeds, then makes the release public. npm publication uses OIDC when enabled; stable releases may update Homebrew when enabled.
 

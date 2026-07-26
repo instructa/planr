@@ -96,10 +96,16 @@ Only `-alpha.N`, `-beta.N`, and `-rc.N` suffixes are accepted; everything else t
 
 Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`:
 
-The currently published v1.7.2 Linux release and npm assets are dynamically
-linked GNU binaries that require GLIBC_2.39; macOS assets are unaffected. The
-static-musl pipeline below prepares a future corrective release and does not
-retroactively change v1.7.2. No corrected release is published yet.
+<!-- planr:linux-release-portability:start surface=maintainerRelease schema=1 -->
+> **Linux release portability — pending**
+>
+> Contract state: `status=pending`; `affectedThrough=v1.7.2`; `correctedFrom=unpublished`.
+> Published Linux release, installer, and npm binaries through v1.7.2 require GLIBC_2.39; macOS is unaffected.
+> On an affected Linux system, build from source on the target distribution or wait for a corrective release.
+> Candidate artifacts remain CI-only evidence for a future corrective release; no corrected release is published yet.
+<!-- planr:linux-release-portability:end surface=maintainerRelease schema=1 -->
+
+When this contract changes, update `docs/contracts/LINUX_RELEASE_PORTABILITY.json`, run `pnpm docs:sync-linux-portability`, and commit every synchronized notice before running the release gates.
 
 1. `create-release` verifies the tag against `Cargo.toml`, all distribution manifests, and the changelog section, then creates a draft GitHub Release.
 2. `build` compiles and packages `planr-<os>-<arch>.tar.gz` for `darwin-arm64`, `darwin-x86_64`, `linux-x86_64`, and `linux-arm64`, then uploads each asset to the draft release. Future Linux candidates use native x86_64/arm64 GitHub runners and the same digest-pinned Rust 1.90.0 Alpine/musl image. Before upload, the extracted tarball must pass embedded checksums, static ELF checks (no interpreter, shared-library dependency, or glibc symbol), a fresh project/plan/map/pick/done/export lifecycle in digest-pinned Alpine 3.20.8 with networking disabled, and exact-byte npm wrapper execution.
