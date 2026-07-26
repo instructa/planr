@@ -2,6 +2,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { legacyRedirects } from '../redirects.mjs';
+import { verifyTwoPhaseReleaseContract } from './release-contract.mjs';
 
 const docsRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const repositoryRoot = dirname(dirname(docsRoot));
@@ -115,10 +116,13 @@ requireMarkers(governance, 'governance runbook', [
 
 const release = await readPage('operations', 'release');
 requireMarkers(release, 'release runbook', [
-  '`scripts/prepare-release-candidate.sh <version>` is the only supported version-transition entry point',
-  '`scripts/release.sh <version> "summary"` is the only supported publication entry point',
   'four archives', '`SHA256SUMS`', 'npm under the `alpha` dist-tag', 'Do not silently replace',
 ]);
+verifyTwoPhaseReleaseContract({
+  releasePage: release,
+  prepareScript: await read('scripts/prepare-release-candidate.sh'),
+  publishScript: await read('scripts/release.sh'),
+});
 
 const packageJson = JSON.parse(await read('apps/docs/package.json'));
 for (const [name, version] of Object.entries({ ...packageJson.dependencies, ...packageJson.devDependencies })) {

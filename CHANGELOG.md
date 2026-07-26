@@ -22,6 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Correct both Linux architectures from v1.7.3 onward with static-musl binaries built on native GitHub runners using digest-pinned toolchain and runtime images, and block release upload unless older-runtime lifecycle, ELF-linkage, checksum, and npm-byte verification passes. The immutable v1.7.2 Linux/npm assets remain dynamically linked and require GLIBC_2.39.
 - Separate candidate preparation from publication so the exact versioned source, generated references, changelog, and release contracts can be independently reviewed before approval; publication now refuses to rewrite the reviewed commit.
 - Make artifact lists deterministically newest-first when multiple artifacts share the same second-level timestamp, using insertion order instead of random artifact IDs or unspecified SQLite row order.
+- Anchor documentation verification to the two-phase release contract and its no-mutation boundaries instead of a stale single-entry-point phrase.
 
 ## [1.7.2] - 2026-07-25
 
