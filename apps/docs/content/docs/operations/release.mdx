@@ -36,7 +36,7 @@ not receive provider credentials or execute the private maintainer benchmark.
 
 ## Watch the workflow
 
-The tag workflow verifies manifest and changelog drift, creates a draft GitHub release, and builds four archives: macOS arm64/x86_64 and Linux arm64/x86_64. It publishes `SHA256SUMS` only after every build succeeds, then makes the release public. npm publication uses OIDC when enabled; stable releases may update Homebrew when enabled.
+The tag workflow verifies manifest and changelog drift, creates a draft GitHub release, and builds four archives: macOS arm64/x86_64 and Linux arm64/x86_64. Linux builds run on native GitHub runners inside a digest-pinned Rust/musl toolchain. Before upload, each extracted Linux tarball must have valid embedded checksums, no dynamic ELF interpreter, shared-library dependency, or glibc symbol, and must complete a fresh Planr lifecycle in digest-pinned Alpine 3.20.8. The npm fixture must execute the exact extracted bytes. Pull-request CI runs the same two-architecture contract without publishing or secrets and aggregates both candidate tarball checksums. The tag workflow publishes `SHA256SUMS` only after every build succeeds, then makes the release public. npm publication uses OIDC when enabled; stable releases may update Homebrew when enabled.
 
 Pre-releases are marked as GitHub prereleases and publish npm under the `alpha` dist-tag. They do not move Homebrew or the stable installer.
 

@@ -9,11 +9,11 @@ description: Supported operating systems, architectures, clients, transports, ru
 | --- | --- | --- |
 | macOS arm64 | Supported | Homebrew, installer, npm, source |
 | macOS x86_64 | Supported | Homebrew, installer, npm, source |
-| Linux x86_64 | Supported | Installer, npm, source |
-| Linux arm64 | Supported | Installer, npm, source |
+| Linux x86_64 | Supported | Static musl release/npm binary; installer; source |
+| Linux arm64 | Supported | Static musl release/npm binary; installer; source |
 | Native Windows | Not published | Use WSL 2 or build from source at your own integration boundary |
 
-The npm wrapper requires Node.js 18+. Native/Homebrew installs do not require Node.js. Building Planr requires Rust 1.85+. Building this documentation site requires Node.js 22+ and the pinned pnpm version.
+Published Linux binaries are genuinely static musl executables and do not require glibc. Release and pull-request CI build each architecture on a native runner, reject dynamic ELF dependencies or glibc symbols, and replay a fresh Planr lifecycle in digest-pinned Alpine 3.20.8 before accepting the exact tarball and npm bytes. The npm wrapper requires Node.js 18+. Native/Homebrew installs do not require Node.js. Building Planr requires Rust 1.85+. Building this documentation site requires Node.js 22+ and the pinned pnpm version.
 
 ## Client support
 

@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Build both published Linux architectures as static musl binaries on native GitHub runners with digest-pinned toolchain and runtime images, and block release upload unless independent older-runtime lifecycle, ELF-linkage, checksum, and npm-byte verification passes.
+
 ## [1.7.2] - 2026-07-25
 
 ### Changed

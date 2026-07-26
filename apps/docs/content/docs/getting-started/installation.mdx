@@ -8,7 +8,7 @@ Planr is a native command-line application. GitHub Releases are the canonical ar
 ## Before you install
 
 - **macOS:** Apple Silicon and Intel are supported.
-- **Linux:** x86_64 and arm64 are supported.
+- **Linux:** x86_64 and arm64 are supported with static musl release binaries; glibc is not required.
 - **Windows:** use WSL 2. Native Windows binaries are not currently published.
 - **npm install:** Node.js 18 or newer is required. Homebrew and release binaries do not require Node.js.
 - **source build:** a Rust toolchain and Git are required.
@@ -40,7 +40,7 @@ To upgrade, run the same command again. Before removing a script installation, l
 
 <CommandBlock command="npm install -g planr" label="Install" />
 
-The package includes native binaries for `darwin-arm64`, `darwin-x86_64`, `linux-x86_64`, and `linux-arm64`; it does not compile Rust during installation.
+The package includes native binaries for `darwin-arm64`, `darwin-x86_64`, `linux-x86_64`, and `linux-arm64`; it does not compile Rust during installation. The two Linux binaries are the exact checksum-verified static musl bytes from the corresponding GitHub Release tarballs.
 
 ```bash
 npm install -g planr@latest

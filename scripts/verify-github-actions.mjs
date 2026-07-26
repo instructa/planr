@@ -50,9 +50,58 @@ const securityWorkflow = await readFile(path.join(workflowsRoot, "security.yml")
 assert.ok(securityWorkflow.includes("version: 3.96.0"), "TruffleHog image version must match the pinned action release");
 
 const releaseWorkflow = await readFile(path.join(workflowsRoot, "release.yml"), "utf8");
+const ciWorkflow = await readFile(path.join(workflowsRoot, "ci.yml"), "utf8");
+const linuxBuildScript = await readFile(path.join(repoRoot, "scripts", "build-linux-release.sh"), "utf8");
+const linuxVerifyScript = await readFile(path.join(repoRoot, "scripts", "verify-linux-release-artifact.sh"), "utf8");
+const publicLifecycleScript = await readFile(path.join(repoRoot, "scripts", "verify-public-lifecycle.sh"), "utf8");
 for (const target of ["darwin-arm64", "darwin-x86_64", "linux-x86_64", "linux-arm64"]) {
   assert.ok(releaseWorkflow.includes(`target: ${target}`), `release matrix must include ${target}`);
 }
+for (const [target, rustTarget, runner] of [
+  ["linux-x86_64", "x86_64-unknown-linux-musl", "ubuntu-24.04"],
+  ["linux-arm64", "aarch64-unknown-linux-musl", "ubuntu-24.04-arm"],
+]) {
+  const matrixEntry = `- target: ${target}\n            rust_target: ${rustTarget}\n            runner: ${runner}`;
+  assert.ok(releaseWorkflow.includes(matrixEntry), `release matrix must build ${target} natively with ${rustTarget}`);
+  assert.ok(ciWorkflow.includes(matrixEntry), `PR CI must build ${target} natively with ${rustTarget}`);
+}
+assert.doesNotMatch(
+  releaseWorkflow,
+  /(?:x86_64|aarch64)-unknown-linux-gnu/u,
+  "release workflow must not publish host-glibc Linux targets",
+);
+
+const buildImageDigest = "sha256:3757b14ddcc2057eb91a074dcdd0913bed839b22444bd2229a49eea910ed8736";
+const runtimeImageDigest = "sha256:765942a4039992336de8dd5db680586e1a206607dd06170ff0a37267a9e01958";
+assert.ok(linuxBuildScript.includes(`rust:1.90.0-alpine3.21@${buildImageDigest}`), "Linux build image must use the reviewed immutable multi-architecture digest");
+assert.ok(linuxVerifyScript.includes(`alpine:3.20.8@${runtimeImageDigest}`), "Linux runtime image must use the reviewed immutable older-runtime digest");
+assert.match(linuxBuildScript, /uname -m\):\$target:\$cargo_target/u, "Linux build must bind target selection to the native runner architecture");
+assert.match(linuxVerifyScript, /uname -m\):\$target:\$cargo_target/u, "Linux verification must bind target selection to the native runner architecture");
+assert.match(linuxVerifyScript, /readelf -l "\$binary" \| grep -q 'INTERP'/u, "Linux verification must reject a dynamic program interpreter");
+assert.match(linuxVerifyScript, /readelf -d "\$binary" \| grep -q '\(NEEDED\)'/u, "Linux verification must reject shared-library dependencies");
+assert.match(linuxVerifyScript, /strings "\$binary" \| grep -Eq 'GLIBC_\[0-9\]'/u, "Linux verification must reject glibc symbol requirements");
+assert.match(linuxVerifyScript, /sha256sum -c SHA256SUMS/u, "Linux verification must check embedded artifact checksums");
+assert.match(linuxVerifyScript, /--network none/u, "older-runtime lifecycle verification must not use the network");
+assert.match(
+  linuxVerifyScript,
+  /\/bin\/sh \/verify-public-lifecycle\.sh \/artifact\/planr "\$version"/u,
+  "Linux verification must execute the fresh public lifecycle",
+);
+assert.match(linuxVerifyScript, /cmp "\$binary" "\$npm_fixture\/npm\/native\/\$target\/planr"/u, "npm fixture must contain the exact extracted artifact bytes");
+assert.match(linuxVerifyScript, /node npm\/bin\/planr\.js --version/u, "Linux verification must execute the npm wrapper over bundled bytes");
+for (const command of ["project init", "plan new", "plan split", "map build", "pick", "done", "export"]) {
+  assert.ok(publicLifecycleScript.includes(command), `public lifecycle must exercise ${command}`);
+}
+
+assert.match(ciWorkflow, /^  linux-portability:\n/mu, "PR CI must contain a Linux portability matrix job");
+assert.match(ciWorkflow, /^  linux-portability-checksums:\n/mu, "PR CI must aggregate both Linux tarball checksums");
+const portabilityStart = ciWorkflow.indexOf("\n  linux-portability:\n");
+const portabilityEnd = ciWorkflow.indexOf("\n  linux-portability-checksums:\n", portabilityStart);
+const portabilityJob = ciWorkflow.slice(portabilityStart, portabilityEnd);
+assert.doesNotMatch(portabilityJob, /secrets\./u, "PR Linux portability CI must not consume secrets");
+assert.match(portabilityJob, /scripts\/build-linux-release\.sh/u, "PR Linux portability CI must use the canonical pinned build");
+assert.match(portabilityJob, /scripts\/verify-linux-release-artifact\.sh/u, "PR Linux portability CI must use the canonical compatibility verifier");
+assert.match(ciWorkflow, /sha256sum planr-linux-arm64\.tar\.gz planr-linux-x86_64\.tar\.gz > SHA256SUMS/u, "PR CI must aggregate the exact two Linux tarballs");
 
 const smokeStepMarker = "      - name: Smoke-test binary\n";
 const smokeStepStart = releaseWorkflow.indexOf(smokeStepMarker);
@@ -78,6 +127,17 @@ assert.match(
   "release workflow must compare runtime output with the release tag",
 );
 
+const portabilityStepMarker = "      - name: Verify portable Linux artifact\n";
+const portabilityStepStart = releaseWorkflow.indexOf(portabilityStepMarker);
+assert.notEqual(portabilityStepStart, -1, "release workflow must contain an independent Linux compatibility step");
+const uploadStepStart = releaseWorkflow.indexOf("      - name: Upload release asset\n");
+assert.ok(portabilityStepStart < uploadStepStart, "Linux compatibility verification must complete before release upload");
+const portabilityStepEnd = releaseWorkflow.indexOf("\n      - name:", portabilityStepStart + portabilityStepMarker.length);
+const portabilityStep = releaseWorkflow.slice(portabilityStepStart, portabilityStepEnd);
+assert.match(portabilityStep, /startsWith\(matrix\.target, 'linux-'\)/u, "compatibility verification must cover every Linux matrix target");
+assert.doesNotMatch(portabilityStep, /continue-on-error:/u, "Linux compatibility failure must block release upload");
+assert.match(portabilityStep, /scripts\/verify-linux-release-artifact\.sh/u, "release must use the canonical Linux compatibility verifier");
+
 console.log(
-  `github_actions_check=passed workflows=${workflowFiles.length} uses=${[...seen.values()].reduce((sum, count) => sum + count, 0)} node24_actions=4 immutable_sha_pins=true release_arch_runtime_gate=4`,
+  `github_actions_check=passed workflows=${workflowFiles.length} uses=${[...seen.values()].reduce((sum, count) => sum + count, 0)} node24_actions=4 immutable_sha_pins=true release_arch_runtime_gate=4 linux_static_musl=2 pinned_build_runtime_images=true independent_lifecycle=true`,
 );
