@@ -3,6 +3,7 @@ import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { legacyRedirects } from '../redirects.mjs';
+import { verifyLinuxPortabilityContract } from './linux-portability-contract.mjs';
 
 const docsRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repositoryRoot = path.dirname(path.dirname(docsRoot));
@@ -116,6 +117,26 @@ for (const route of routeMap.keys()) assert.ok(coverage.includes(`\`${route}\``)
 const rootReadme = await readFile(path.join(repositoryRoot, 'README.md'), 'utf8');
 assert.ok(rootReadme.includes('[**Documentation →**](https://planr.so/docs)'), 'root README lacks an actionable docs entry point');
 
+const packageManifest = JSON.parse(await readFile(path.join(repositoryRoot, 'package.json'), 'utf8'));
+const linuxPortabilityContract = JSON.parse(await readFile(path.join(repositoryRoot, 'docs', 'contracts', 'LINUX_RELEASE_PORTABILITY.json'), 'utf8'));
+const installationPage = routeMap.get('/docs/getting-started/installation')?.content ?? '';
+const supportPage = routeMap.get('/docs/reference/support-matrix')?.content ?? '';
+const releasePage = routeMap.get('/docs/operations/release')?.content ?? '';
+const maintainerRelease = await readFile(path.join(repositoryRoot, 'docs', 'RELEASE.md'), 'utf8');
+const changelog = await readFile(path.join(repositoryRoot, 'CHANGELOG.md'), 'utf8');
+const linuxPortability = verifyLinuxPortabilityContract({
+  packageVersion: packageManifest.version,
+  contract: linuxPortabilityContract,
+  documents: {
+    README: rootReadme,
+    installation: installationPage,
+    support: supportPage,
+    release: releasePage,
+    maintainerRelease,
+    changelog,
+  },
+});
+
 const requirementAudit = [
   { id: 1, requirement: 'Latest stable compatible Fumadocs app, pinned and integrated', evidence: 'exact dependency gate, lockfile install, CONTRACT stack decision, CI scripts' },
   { id: 2, requirement: 'Clear English task-oriented content and copyable commands', evidence: '61 frontmatter-valid pages, authoring contract, CommandBlock browser interaction' },
@@ -222,5 +243,6 @@ await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
 console.log('release_readiness_verification=passed');
 console.log(`mode=${report.mode} routes=${report.routes} internal_links=${report.internalLinks} redirects=${report.redirects}`);
 console.log(`requirements=${report.requirementAudit.length} unfinished_markers=${report.unfinishedMarkers} duplicate_anchors=${report.duplicateAnchors}`);
+console.log(`linux_portability_contract=passed package=${linuxPortability.packageVersion} status=${linuxPortability.status} affected_through=${linuxPortability.affectedThrough} corrected_from=${linuxPortability.correctedFrom ?? 'unpublished'}`);
 if (report.live) console.log(`rendered=${report.live.renderedRoutes} search_cases=${report.live.searchCases} sitemap_routes=${report.live.sitemapRoutes}`);
 console.log(`report=${reportPath}`);

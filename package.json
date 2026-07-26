@@ -47,6 +47,7 @@
     "docs:verify-agent-landing": "pnpm --filter @planr/docs verify:agent-landing",
     "docs:verify-concepts": "cargo build --bin planr && pnpm --filter @planr/docs verify:concepts",
     "docs:verify-maintenance": "pnpm --filter @planr/docs verify:maintenance",
+    "docs:sync-linux-portability": "pnpm --filter @planr/docs sync:linux-portability",
     "docs:verify-deployment": "pnpm --filter @planr/docs verify:deployment",
     "docs:verify-release": "pnpm --filter @planr/docs verify:release",
     "docs:verify-release-live": "pnpm --filter @planr/docs verify:release-live",

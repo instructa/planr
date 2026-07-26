@@ -5,16 +5,25 @@ description: Install Planr on a supported platform, verify it, and keep it curre
 
 Planr is a native command-line application. GitHub Releases are the canonical artifact source; Homebrew and npm provide convenient supported wrappers around those releases.
 
+{/* planr:linux-release-portability:start surface=installation schema=1 */}
+> **Linux release portability — pending**
+>
+> Contract state: `status=pending`; `affectedThrough=v1.7.2`; `correctedFrom=unpublished`.
+> Published Linux release, installer, and npm binaries through v1.7.2 require GLIBC_2.39; macOS is unaffected.
+> On an affected Linux system, build from source on the target distribution or wait for a corrective release.
+> Candidate artifacts remain CI-only evidence for a future corrective release; no corrected release is published yet.
+{/* planr:linux-release-portability:end surface=installation schema=1 */}
+
 ## Before you install
 
 - **macOS:** Apple Silicon and Intel are supported.
-- **Linux:** x86_64 and arm64 are supported.
+- **Linux:** the currently published v1.7.2 x86_64 and arm64 release/npm binaries are dynamically linked GNU executables that require GLIBC_2.39. This is a known compatibility issue; macOS is unaffected.
 - **Windows:** use WSL 2. Native Windows binaries are not currently published.
 - **npm install:** Node.js 18 or newer is required. Homebrew and release binaries do not require Node.js.
 - **source build:** a Rust toolchain and Git are required.
 
 <Callout type="info" title="Choose one installation method">
-  Homebrew is the easiest option on macOS. The install script is the shortest cross-platform path on macOS or Linux. Use npm when your toolchain already manages global Node.js CLIs.
+  Homebrew is the easiest option on macOS. On Linux, the v1.7.2 installer and npm package carry the same GLIBC_2.39-limited binaries; do not treat either wrapper as a compatibility workaround.
 </Callout>
 
 ## Homebrew on macOS
@@ -30,7 +39,7 @@ brew uninstall planr
 
 ## Install script on macOS or Linux
 
-The maintained script downloads the matching release asset and installs `planr`:
+The maintained script downloads the matching release asset and installs `planr`. On Linux it currently resolves v1.7.2 to the affected GNU binary, so use it only when the target provides GLIBC_2.39:
 
 <CommandBlock command="curl -fsSL https://raw.githubusercontent.com/instructa/planr/main/scripts/install.sh | sh" label="Install" />
 
@@ -40,7 +49,7 @@ To upgrade, run the same command again. Before removing a script installation, l
 
 <CommandBlock command="npm install -g planr" label="Install" />
 
-The package includes native binaries for `darwin-arm64`, `darwin-x86_64`, `linux-x86_64`, and `linux-arm64`; it does not compile Rust during installation.
+The package includes native binaries for `darwin-arm64`, `darwin-x86_64`, `linux-x86_64`, and `linux-arm64`; it does not compile Rust during installation. In v1.7.2, the two Linux binaries are the same dynamically linked GNU release bytes and require GLIBC_2.39. npm is therefore not a portability workaround for affected Linux systems.
 
 ```bash
 npm install -g planr@latest
@@ -56,7 +65,9 @@ cargo build --release
 PREFIX="$HOME/.local" scripts/install.sh
 ```
 
-Make sure `$HOME/.local/bin` is on your `PATH`. Source builds track your checkout rather than a published release, so rebuild after pulling updates.
+Make sure `$HOME/.local/bin` is on your `PATH`. Source builds track your checkout rather than a published release, so rebuild after pulling updates. For Linux without GLIBC_2.39, build from source on the target distribution or wait for a corrective release.
+
+The reviewed release pipeline now verifies static-musl candidate artifacts on native x86_64 and arm64 runners. Those glibc-free properties apply only to a future corrective release produced and published by that pipeline; no corrected release is published yet.
 
 ## Verify the installation
 

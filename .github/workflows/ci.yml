@@ -138,3 +138,66 @@ jobs:
             cargo install cargo-audit --locked
           fi
           cargo audit --deny warnings
+
+  linux-portability:
+    name: Portable Linux ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x86_64
+            rust_target: x86_64-unknown-linux-musl
+            runner: ubuntu-24.04
+          - target: linux-arm64
+            rust_target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build portable Linux artifact
+        env:
+          PLANR_TARGET: ${{ matrix.target }}
+          PLANR_CARGO_TARGET: ${{ matrix.rust_target }}
+        run: scripts/build-linux-release.sh
+
+      - name: Verify static linkage, lifecycle, checksums, and npm bytes
+        env:
+          PLANR_TARGET: ${{ matrix.target }}
+          PLANR_CARGO_TARGET: ${{ matrix.rust_target }}
+        run: scripts/verify-linux-release-artifact.sh
+
+      - name: Save exact Linux release tarball
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: portable-${{ matrix.target }}
+          path: dist/planr-${{ matrix.target }}.tar.gz
+          compression-level: 0
+
+  linux-portability-checksums:
+    name: Portable Linux aggregate checksums
+    needs: linux-portability
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download exact Linux release tarballs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: portable-linux-*
+          path: assets
+          merge-multiple: true
+
+      - name: Verify complete aggregate checksum set
+        run: |
+          test "$(find assets -maxdepth 1 -name 'planr-linux-*.tar.gz' -type f | wc -l)" -eq 2
+          cd assets
+          sha256sum planr-linux-arm64.tar.gz planr-linux-x86_64.tar.gz > SHA256SUMS
+          sha256sum -c SHA256SUMS
+
+      - name: Save aggregate checksum evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: portable-linux-sha256sums
+          path: assets/SHA256SUMS

@@ -1,0 +1,9 @@
+{
+  "affectedReleases": [
+    "1.7.2"
+  ],
+  "affectedThrough": "1.7.2",
+  "correctedFrom": null,
+  "noticeSchema": 1,
+  "status": "pending"
+}

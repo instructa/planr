@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+<!-- planr:linux-release-portability:start surface=changelog schema=1 -->
+> **Linux release portability — pending**
+>
+> Contract state: `status=pending`; `affectedThrough=v1.7.2`; `correctedFrom=unpublished`.
+> Published Linux release, installer, and npm binaries through v1.7.2 require GLIBC_2.39; macOS is unaffected.
+> On an affected Linux system, build from source on the target distribution or wait for a corrective release.
+> Candidate artifacts remain CI-only evidence for a future corrective release; no corrected release is published yet.
+<!-- planr:linux-release-portability:end surface=changelog schema=1 -->
+
+- Prepare both Linux architectures for a future corrective release as static musl binaries built on native GitHub runners with digest-pinned toolchain and runtime images, and block release upload unless independent older-runtime lifecycle, ELF-linkage, checksum, and npm-byte verification passes. This does not change the currently published v1.7.2 Linux/npm assets, which remain dynamically linked and require GLIBC_2.39.
+
 ## [1.7.2] - 2026-07-25
 
 ### Changed
