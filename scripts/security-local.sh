@@ -18,6 +18,7 @@ fi
 if command -v trivy >/dev/null 2>&1; then
   trivy fs \
     --scanners vuln,secret,misconfig \
+    --ignorefile .trivyignore.yaml \
     --skip-dirs target \
     --skip-dirs dist \
     --skip-dirs node_modules \

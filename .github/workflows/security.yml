@@ -26,19 +26,43 @@ jobs:
       - name: Check repository privacy boundaries
         run: sh scripts/check-repository-privacy.sh
 
+      - name: Install pinned security scanners
+        env:
+          TRUFFLEHOG_SHA256: 7105f1cd6577f058a9e39d0578f1a99c8a1e481e4d3512cd8a09acfe22a0fdc0
+          TRIVY_SHA256: 8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9
+        run: |
+          tools_dir="$RUNNER_TEMP/planr-security-tools"
+          mkdir -p "$tools_dir"
+
+          curl --fail --location --proto '=https' --tlsv1.2 --retry 3 \
+            --output "$RUNNER_TEMP/trufflehog.tar.gz" \
+            https://github.com/trufflesecurity/trufflehog/releases/download/v3.96.0/trufflehog_3.96.0_linux_amd64.tar.gz
+          printf '%s  %s\n' "$TRUFFLEHOG_SHA256" "$RUNNER_TEMP/trufflehog.tar.gz" | sha256sum --check -
+          tar -xzf "$RUNNER_TEMP/trufflehog.tar.gz" -C "$tools_dir" trufflehog
+
+          curl --fail --location --proto '=https' --tlsv1.2 --retry 3 \
+            --output "$RUNNER_TEMP/trivy.tar.gz" \
+            https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-64bit.tar.gz
+          printf '%s  %s\n' "$TRIVY_SHA256" "$RUNNER_TEMP/trivy.tar.gz" | sha256sum --check -
+          tar -xzf "$RUNNER_TEMP/trivy.tar.gz" -C "$tools_dir" trivy
+
+          "$tools_dir/trufflehog" --version
+          "$tools_dir/trivy" --version
+          echo "$tools_dir" >> "$GITHUB_PATH"
+
       - name: TruffleHog verified secrets
-        uses: trufflesecurity/trufflehog@6f3c981e7b77f235fd2702dd74af25fc4b72bf11 # v3.96.0
-        with:
-          version: 3.96.0
-          extra_args: --results=verified
+        run: trufflehog git "file://$GITHUB_WORKSPACE" --results=verified --fail --no-update --github-actions
 
       - name: Trivy secret and misconfig scan
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          scan-type: fs
-          scanners: secret,misconfig
-          exit-code: "1"
-          skip-dirs: target,dist,node_modules
+        run: |
+          trivy fs \
+            --scanners secret,misconfig \
+            --ignorefile .trivyignore.yaml \
+            --skip-dirs target \
+            --skip-dirs dist \
+            --skip-dirs node_modules \
+            --exit-code 1 \
+            .
 
   actions-security:
     name: GitHub Actions Security

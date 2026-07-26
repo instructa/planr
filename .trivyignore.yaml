@@ -1,0 +1,11 @@
+misconfigurations:
+  - id: AVD-DS-0002
+    paths:
+      - scripts/linux-release-builder.Dockerfile
+    statement: This image is an ephemeral build environment that requires root to install verified local APKs and is never shipped or run as a service.
+    expired_at: 2027-07-26
+  - id: AVD-DS-0026
+    paths:
+      - scripts/linux-release-builder.Dockerfile
+    statement: This image performs one finite build command and exits, so it has no long-running service to health-check.
+    expired_at: 2027-07-26
