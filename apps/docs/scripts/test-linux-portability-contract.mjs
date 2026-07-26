@@ -72,18 +72,53 @@ expectRejected(
   /correctedFrom must be newer than affectedThrough/u,
 );
 
-expectRejected(
-  'premature static-current claim',
-  {
+const falseCurrentClaims = [
+  'Linux x86_64 and arm64 are supported with static musl release binaries; glibc is not required.',
+  'The two Linux binaries are the exact checksum-verified static musl bytes from the corresponding GitHub Release tarballs.',
+  'Linux x86_64 | Supported | Static musl release/npm binary; installer; source',
+  'Published Linux binaries are genuinely static musl executables.',
+  'Current installer artifacts for Linux are glibc-free.',
+  'Static / musl binaries are supported today through npm on Linux.',
+  'Linux release assets use musl and do not require glibc.',
+  'npm and installer bytes for arm64 are no-glibc artifacts.',
+  '| Linux x86_64 | npm + installer | glibc-free; static-musl |',
+  'Without a glibc dependency, the Linux tarballs are available from the current release.',
+  'Current Linux release binaries are static musl, although future candidates remain under CI.',
+  'Linux release binaries use musl.',
+  'The Linux npm artifacts are statically linked.',
+  'Installer assets require no glibc.',
+  'Current Linux binaries are free of glibc.',
+];
+for (const [index, claim] of falseCurrentClaims.entries()) {
+  expectRejected(
+    `pending current-artifact phrase ${index + 1}`,
+    {
+      packageVersion: packageManifest.version,
+      contract,
+      documents: {
+        ...documents,
+        installation: `${documents.installation}\n${claim}`,
+      },
+    },
+    /presents pending static-musl\/glibc-free behavior as a current artifact claim/u,
+  );
+}
+
+for (const allowedPendingClaim of [
+  'Future corrective release candidate artifacts for Linux are static musl and do not require glibc once published.',
+  'CI verifies static-musl Linux candidate binaries before upload.',
+  'The future Linux release binaries will use musl once published.',
+  `Historically, v${contract.affectedThrough} Linux binaries were not static musl and were affected by GLIBC_2.39.`,
+]) {
+  verifyLinuxPortabilityContract({
     packageVersion: packageManifest.version,
     contract,
     documents: {
       ...documents,
-      support: `${documents.support}\nPublished Linux binaries are genuinely static musl executables.`,
+      installation: `${documents.installation}\n${allowedPendingClaim}`,
     },
-  },
-  /must not be presented as a current published artifact/u,
-);
+  });
+}
 
 const correctedFrom = '1.7.3';
 const correctedDocuments = Object.fromEntries(
@@ -101,4 +136,4 @@ verifyLinuxPortabilityContract({
   documents: correctedDocuments,
 });
 
-console.log('linux_portability_contract_regression=passed adversarial_cases=6 corrected_transition_fixture=true dynamic_version_claims=true');
+console.log('linux_portability_contract_regression=passed adversarial_cases=20 allowed_pending_scopes=4 corrected_transition_fixture=true dynamic_version_claims=true');

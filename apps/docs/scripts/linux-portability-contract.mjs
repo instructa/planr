@@ -39,6 +39,46 @@ function prose(source) {
   return source.replace(/^>\s?/gmu, '').replace(/\s+/gu, ' ');
 }
 
+function semanticUnits(source) {
+  const cleaned = source
+    .replace(/^>\s?/gmu, '')
+    .replace(/[`*~]/gu, '')
+    .replace(/<[^>]+>/gu, ' ');
+  const lines = cleaned.split('\n');
+  const tableRows = lines.filter((line) => line.includes('|')).map((line) => line.trim());
+  const proseParagraphs = lines
+    .map((line) => (line.includes('|') ? '' : line))
+    .join('\n')
+    .split(/\n\s*\n/gu)
+    .map((paragraph) => paragraph.replace(/\s+/gu, ' ').trim())
+    .filter(Boolean);
+  const sentences = proseParagraphs.flatMap((paragraph) => paragraph.split(/(?<=[.!?])\s+|;\s+/gu));
+  return [...tableRows, ...sentences].map((unit) => unit.trim()).filter(Boolean);
+}
+
+function assertPendingArtifactClaimsAreFutureScoped(entries, affectedThrough) {
+  const artifact = /\b(?:x86_64|arm64|binar(?:y|ies)|artifacts?|assets?|releases?|npm|installer|tarballs?|bytes)\b/iu;
+  const linuxContext = /\b(?:linux|x86_64|arm64|musl|glibc)\b/iu;
+  const portableProperty = /(?:\bstatic(?:ally)?\b|\bmusl\b|glibc[- ]free|no[- ]glibc|free of glibc|without (?:a )?glibc(?: dependency)?\b|glibc (?:is|are) not required|(?:does|do) not require glibc|requires? no glibc)/iu;
+  const futureScope = /\b(?:future|candidate|planned|will|once published|after (?:it is |they are )?published|not yet published|before upload)\b/iu;
+  const ciCandidateScope = /\b(?:CI|workflow|pipeline)\b.{0,100}\b(?:candidate|prepar(?:e|es|ing)|build(?:s|ing)?|verif(?:y|ies|ying))\b/iu;
+  const presentScope = /\b(?:current|currently|supported|today|latest|already)\b|^\s*published\b|\bpublished Linux\b/iu;
+  const affectedToken = new RegExp(`\\bv${affectedThrough.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}\\b`, 'iu');
+  const historicalNonPortable = /(?:(?:was|were) not static(?:\s*[-/]\s*|\s+)musl|(?:was|were) not glibc[- ]free|did not (?:ship|use|provide) (?:a )?(?:static(?:\s*[-/]\s*|\s+)|musl)|never (?:shipped|used|provided) (?:a )?(?:static(?:\s*[-/]\s*|\s+)|musl))/iu;
+
+  for (const [label, source] of entries) {
+    for (const unit of semanticUnits(source)) {
+      if (!linuxContext.test(unit) || !artifact.test(unit) || !portableProperty.test(unit)) continue;
+      if (presentScope.test(unit)) {
+        assert.fail(`${label} presents pending static-musl/glibc-free behavior as a current artifact claim: ${unit}`);
+      }
+      if (futureScope.test(unit) || ciCandidateScope.test(unit)) continue;
+      if (affectedToken.test(unit) && historicalNonPortable.test(unit)) continue;
+      assert.fail(`${label} presents pending static-musl/glibc-free behavior as a current artifact claim: ${unit}`);
+    }
+  }
+}
+
 export function verifyLinuxPortabilityContract({ packageVersion, contract, documents }) {
   assert.deepEqual(
     Object.keys(contract).sort(),
@@ -84,12 +124,7 @@ export function verifyLinuxPortabilityContract({ packageVersion, contract, docum
       assert.ok(source.includes('no corrected release is published yet'), `${label} must state that the corrected release remains unpublished`);
       assert.match(source, /(?:future corrective release|candidate artifacts)/iu, `${label} must scope static-musl behavior to future candidates`);
     }
-    const corpus = entries.map(([, source]) => prose(source)).join('\n');
-    assert.doesNotMatch(
-      corpus,
-      /(?:(?:currently )?published|current) Linux (?:release|npm|artifacts?|binaries).{0,120}static[- ]musl/iu,
-      'pending static-musl behavior must not be presented as a current published artifact',
-    );
+    assertPendingArtifactClaimsAreFutureScoped(entries, contract.affectedThrough);
   } else {
     assert.equal(typeof contract.correctedFrom, 'string', 'corrected portability requires a correctedFrom version');
     parseSemver(contract.correctedFrom, 'correctedFrom');
