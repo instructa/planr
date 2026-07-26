@@ -96,6 +96,13 @@ const falseCurrentClaims = [
   'The Linux installer bytes require no glibc (future candidates are verified in CI).',
   'Linux release binaries use musl and future CI candidates are also tested.',
   '| Linux npm artifact | glibc-free | future CI candidates verified |',
+  'Linux release binaries use musl because future CI candidates are tested.',
+  'Linux release binaries use musl even as future CI candidates are tested.',
+  'Linux release binaries use musl / future CI candidates are verified.',
+  'Because future CI candidates are tested, Linux release binaries use musl.',
+  'Linux installer artifacts are glibc-free because planned workflow candidates are verified.',
+  '| Linux release binaries use musl | because future CI candidates are tested |',
+  'Linux release binaries use musl: future CI candidates are tested.',
 ];
 for (const [index, claim] of falseCurrentClaims.entries()) {
   expectRejected(
@@ -121,6 +128,11 @@ for (const allowedPendingClaim of [
   'Current CI candidate Linux binaries are static musl before upload.',
   'Before upload, current CI candidate Linux binaries are static musl.',
   '| Linux CI candidate binaries | static musl before upload |',
+  'Latest Linux candidate binaries built by CI will be static musl once published.',
+  'Linux candidate binaries currently verified in CI are static musl before upload.',
+  'Once published, Linux CI candidate binaries will be glibc-free.',
+  'Linux binaries planned as CI candidates will be static musl after they are published.',
+  '| Latest Linux candidate binaries built by CI | static musl once published |',
 ]) {
   verifyLinuxPortabilityContract({
     packageVersion: packageManifest.version,
@@ -148,4 +160,4 @@ verifyLinuxPortabilityContract({
   documents: correctedDocuments,
 });
 
-console.log('linux_portability_contract_regression=passed adversarial_cases=28 allowed_pending_scopes=8 corrected_transition_fixture=true dynamic_version_claims=true');
+console.log('linux_portability_contract_regression=passed adversarial_cases=35 allowed_pending_scopes=13 corrected_transition_fixture=true dynamic_version_claims=true');

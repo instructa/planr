@@ -64,10 +64,10 @@ function semanticUnits(source) {
   return [...tableCells, ...sentences].map((unit) => unit.trim()).filter(Boolean);
 }
 
-function claimClauses(unit, futureScope, ciCandidateScope) {
+function claimClauses(unit) {
   const clauses = unit
     .replace(/[()]/gu, ' — ')
-    .split(/\s*(?:—|–)\s*|,\s*(?=(?:although|though|but|whereas|while|with|yet|and\s+(?:future|candidate|CI|workflow|pipeline)|future|candidate)\b)|\s+and\s+(?=(?:future|candidate|CI|workflow|pipeline)\b)|\s+(?=(?:although|but|whereas|while)\b)/giu)
+    .split(/\s*(?:—|–)\s*|\s+\/\s+(?=(?:future|candidate|CI|workflow|pipeline)\b)|,\s*(?=(?:although|though|but|whereas|while|with|yet|and\s+(?:future|candidate|CI|workflow|pipeline)|future|candidate)\b)|\s+and\s+(?=(?:future|candidate|CI|workflow|pipeline)\b)|\s+(?=(?:although|but|whereas|while|because|even\s+as)\b)/giu)
     .map((clause) => clause.trim())
     .filter(Boolean);
 
@@ -75,30 +75,56 @@ function claimClauses(unit, futureScope, ciCandidateScope) {
     const comma = clause.indexOf(',');
     if (comma < 0) return [clause];
     const prefix = clause.slice(0, comma);
-    if (!futureScope.test(prefix) && !ciCandidateScope.test(prefix)) return [clause];
+    if (!/\b(?:future|candidate|planned|CI|workflow|pipeline)\b/iu.test(prefix)) return [clause];
     return [prefix, clause.slice(comma + 1)].map((part) => part.trim()).filter(Boolean);
   });
+}
+
+function tokenDistance(source, leftEnd, rightStart) {
+  return source.slice(leftEnd, rightStart).match(/[0-9A-Za-z_]+(?:-[0-9A-Za-z_]+)*/gu)?.length ?? 0;
+}
+
+function isCandidateScopedArtifactClaim(clause, artifact, portableProperty) {
+  const artifacts = [...clause.matchAll(new RegExp(artifact.source, `${artifact.flags}g`))];
+  const properties = [...clause.matchAll(new RegExp(portableProperty.source, `${portableProperty.flags}g`))];
+  const qualifiers = [...clause.matchAll(/\b(?:future|candidates?|planned)\b/giu)];
+  const candidateNouns = [...clause.matchAll(/\bcandidates?\b/giu)];
+  const auxiliaries = [...clause.matchAll(/\bwill\b/giu)];
+  const lifecycle = /\b(?:once published|after (?:it is |they are )?published|not yet published|before upload)\b/iu.test(clause);
+  const candidateArtifact = qualifiers.some((qualifier) =>
+    artifacts.some((artifactMatch) =>
+      qualifier.index < artifactMatch.index
+      && tokenDistance(clause, qualifier.index + qualifier[0].length, artifactMatch.index) <= 3));
+  const ciCandidateAction = /\b(?:CI|workflow|pipeline)\b/iu.test(clause)
+    && /\b(?:prepar(?:e|es|ing)|build(?:s|ing|t)?|verif(?:y|ies|ied|ying)|test(?:s|ed|ing)?)\b/iu.test(clause)
+    && candidateNouns.some((candidate) =>
+      properties.some((property) => {
+        const left = Math.min(candidate.index, property.index);
+        const right = Math.max(candidate.index + candidate[0].length, property.index + property[0].length);
+        return tokenDistance(clause, left, right) <= 3;
+      }));
+  const futurePredicate = artifacts.some((artifactMatch) =>
+    properties.some((property) =>
+      auxiliaries.some((auxiliary) => artifactMatch.index < auxiliary.index && auxiliary.index < property.index)));
+  const explicitlyCurrent = /\b(?:current|currently|latest|today|already)\b|^\s*published\b|\bpublished Linux\b/iu.test(clause);
+  if (!explicitlyCurrent) return candidateArtifact || ciCandidateAction || futurePredicate || lifecycle;
+  const candidateLifecycle = /\b(?:CI|workflow|pipeline)\b/iu.test(clause) || lifecycle || futurePredicate;
+  return ciCandidateAction || (candidateArtifact && candidateLifecycle);
 }
 
 function assertPendingArtifactClaimsAreFutureScoped(entries, affectedThrough) {
   const artifact = /\b(?:x86_64|arm64|binar(?:y|ies)|artifacts?|assets?|releases?|npm|installer|tarballs?|bytes)\b/iu;
   const linuxContext = /\b(?:linux|x86_64|arm64|musl|glibc)\b/iu;
   const portableProperty = /(?:\bstatic(?:ally)?\b|\bmusl\b|glibc[- ]free|no[- ]glibc|free of glibc|without (?:a )?glibc(?: dependency)?\b|glibc (?:is|are) not required|(?:does|do) not require glibc|requires? no glibc)/iu;
-  const futureScope = /\b(?:future|candidate|planned|will|once published|after (?:it is |they are )?published|not yet published|before upload)\b/iu;
-  const ciCandidateScope = /\b(?:CI|workflow|pipeline)\b.{0,100}\b(?:candidate|prepar(?:e|es|ing)|build(?:s|ing)?|verif(?:y|ies|ying))\b/iu;
-  const presentScope = /\b(?:current|currently|supported|today|latest|already)\b|^\s*published\b|\bpublished Linux\b/iu;
-  const presentCandidateScope = /\b(?:current|currently|latest)\b.{0,80}\b(?:CI|workflow|pipeline)\b.{0,80}\bcandidate\b|\b(?:CI|workflow|pipeline)\b.{0,80}\b(?:current|currently|latest)\b.{0,80}\bcandidate\b/iu;
   const affectedToken = new RegExp(`\\bv${affectedThrough.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}\\b`, 'iu');
   const historicalNonPortable = /(?:(?:was|were) not static(?:\s*[-/]\s*|\s+)musl|(?:was|were) not glibc[- ]free|did not (?:ship|use|provide) (?:a )?(?:static(?:\s*[-/]\s*|\s+)|musl)|never (?:shipped|used|provided) (?:a )?(?:static(?:\s*[-/]\s*|\s+)|musl))/iu;
 
   for (const [label, source] of entries) {
     for (const unit of semanticUnits(source)) {
-      for (const clause of claimClauses(unit, futureScope, ciCandidateScope)) {
+      for (const clause of claimClauses(unit)) {
         if (!linuxContext.test(clause) || !artifact.test(clause) || !portableProperty.test(clause)) continue;
         if (affectedToken.test(clause) && historicalNonPortable.test(clause)) continue;
-        const candidateScoped = futureScope.test(clause) || ciCandidateScope.test(clause);
-        const unqualifiedPresent = presentScope.test(clause) && !presentCandidateScope.test(clause);
-        if (candidateScoped && !unqualifiedPresent) continue;
+        if (isCandidateScopedArtifactClaim(clause, artifact, portableProperty)) continue;
         assert.fail(`${label} presents pending static-musl/glibc-free behavior as a current artifact claim: ${clause}`);
       }
     }
