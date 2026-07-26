@@ -1,18 +1,6 @@
 #!/usr/bin/env sh
-# The only supported release path. Bumps every distribution manifest from one
-# input version, runs the quality and leak gates, then commits, tags, and
-# pushes. A release that skips this script fails the tag-time gate in
-# .github/workflows/release.yml.
-#
-# Usage: scripts/release.sh <x.y.z[-alpha.N|-beta.N|-rc.N]> "one-line release summary"
-#
-# Pre-release versions (e.g. 1.2.0-alpha.1) ship a GitHub prerelease and
-# publish npm under the `alpha` dist-tag instead of `latest`; the
-# Homebrew tap only moves on stable versions.
-#
-# Preconditions:
-# - branch is main with a clean worktree
-# - CHANGELOG.md already contains the committed `## [<version>]` section
+# Publish an already prepared, reviewed release commit. This script never
+# changes, stages, or commits source files; it only gates and tags exact main.
 set -eu
 
 cd "$(dirname "$0")/.."
@@ -34,11 +22,11 @@ if [ "$branch" != "main" ]; then
   exit 1
 fi
 if [ -n "$(git status --porcelain)" ]; then
-  echo "worktree is dirty; commit or stash before releasing" >&2
+  echo "worktree is dirty; publish only the reviewed candidate commit" >&2
   exit 1
 fi
 if ! grep -q "^## \[$version\]" CHANGELOG.md; then
-  echo "CHANGELOG.md has no '## [$version]' section; write and commit it first" >&2
+  echo "CHANGELOG.md has no committed '## [$version]' section" >&2
   exit 1
 fi
 if git rev-parse "v$version" >/dev/null 2>&1; then
@@ -46,52 +34,43 @@ if git rev-parse "v$version" >/dev/null 2>&1; then
   exit 1
 fi
 
-# One version source feeds every manifest. sed writes through a temp file so
-# the script behaves identically on BSD and GNU.
-replace() {
-  file="$1"
-  pattern="$2"
-  sed "$pattern" "$file" > "$file.release-tmp"
-  mv "$file.release-tmp" "$file"
-}
-replace Cargo.toml "s/^version = \".*\"/version = \"$version\"/"
-replace package.json "s/\"version\": \".*\"/\"version\": \"$version\"/"
-replace plugins/planr/.codex-plugin/plugin.json "s/\"version\": \".*\"/\"version\": \"$version\"/"
-replace plugins/planr/.claude-plugin/plugin.json "s/\"version\": \".*\"/\"version\": \"$version\"/"
-replace .cursor-plugin/plugin.json "s/\"version\": \".*\"/\"version\": \"$version\"/"
+crate_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)"
+if [ "$crate_version" != "$version" ]; then
+  echo "Cargo.toml is $crate_version, not prepared candidate $version" >&2
+  exit 1
+fi
+lock_version="$(sed -n '/name = "planr"/{n;s/^version = "\([^"]*\)"/\1/p;q;}' Cargo.lock)"
+if [ "$lock_version" != "$version" ]; then
+  echo "Cargo.lock is $lock_version, not prepared candidate $version" >&2
+  exit 1
+fi
+for manifest in \
+  package.json \
+  plugins/planr/.codex-plugin/plugin.json \
+  plugins/planr/.claude-plugin/plugin.json \
+  .cursor-plugin/plugin.json; do
+  manifest_version="$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' "$manifest" | head -n 1)"
+  if [ "$manifest_version" != "$version" ]; then
+    echo "$manifest is $manifest_version, not prepared candidate $version" >&2
+    exit 1
+  fi
+done
 
-# pnpm 11 verifies installed workspace metadata before running scripts. Refresh
-# that derived state after the root manifest bump, using only the committed
-# lockfile, and fail closed if synchronization changes a single lockfile byte.
+# Recheck generated, version-derived references and frozen workspace state.
+# Every command must leave the reviewed commit byte-clean.
 pnpm install --frozen-lockfile
-if ! git diff --quiet -- pnpm-lock.yaml; then
-  echo "pnpm-lock.yaml changed during frozen workspace synchronization" >&2
-  exit 1
-fi
-
-# Generated references are version-derived release artifacts. Build the bumped
-# binary first, then regenerate and strictly check both references before any
-# release gate or Git mutation. The release commit owns these files together
-# with every synchronized version manifest.
-cargo build --quiet
-pnpm --filter @planr/docs reference:generate
 pnpm --filter @planr/docs reference:check
+cargo build --quiet
+if [ -n "$(git status --porcelain)" ]; then
+  echo "release verification changed the reviewed candidate source" >&2
+  exit 1
+fi
 
-# The candidate binary owns eval semantics. The local receipt contains only
-# identifiers/digests; model-backed evidence remains in the local Planr DB.
 eval_receipt="${PLANR_RELEASE_EVAL_RECEIPT:-}"
-if [ -z "$eval_receipt" ]; then
-  echo "PLANR_RELEASE_EVAL_RECEIPT is required; capture fresh local eval evidence before release" >&2
-  exit 1
-fi
 eval_suite="${PLANR_RELEASE_EVAL_SUITE:-}"
-if [ -z "$eval_suite" ]; then
-  echo "PLANR_RELEASE_EVAL_SUITE is required; point it at the externally maintained suite" >&2
-  exit 1
-fi
 eval_db="${PLANR_RELEASE_EVAL_DB:-}"
-if [ -z "$eval_db" ]; then
-  echo "PLANR_RELEASE_EVAL_DB is required; point it at the external eval result database" >&2
+if [ -z "$eval_receipt" ] || [ -z "$eval_suite" ] || [ -z "$eval_db" ]; then
+  echo "PLANR_RELEASE_EVAL_RECEIPT, PLANR_RELEASE_EVAL_SUITE, and PLANR_RELEASE_EVAL_DB are required" >&2
   exit 1
 fi
 node scripts/verify-release-eval-receipt.mjs \
@@ -100,21 +79,16 @@ node scripts/verify-release-eval-receipt.mjs \
   --suite "$eval_suite" \
   --planr-bin target/debug/planr
 
-# Deterministic gates. cargo test includes the manifest drift guard; the leak
-# gate mirrors CI secret scanning. All remain before commit, tag, and push.
 cargo test
 npm run verify:release-eval-gate
 npm pack --dry-run
 scripts/security-local.sh
+if [ -n "$(git status --porcelain)" ]; then
+  echo "release gates changed the reviewed candidate source" >&2
+  exit 1
+fi
 
-git add Cargo.toml Cargo.lock package.json \
-  plugins/planr/.codex-plugin/plugin.json \
-  plugins/planr/.claude-plugin/plugin.json \
-  .cursor-plugin/plugin.json \
-  apps/docs/content/docs/reference/cli-generated.mdx \
-  apps/docs/content/docs/reference/mcp-schemas-generated.mdx
-git commit -m "release $version: $summary"
 git tag -a "v$version" -m "planr v$version: $summary"
 git push origin HEAD "v$version"
 
-echo "released v$version; watch the Release workflow for binaries and the tap update"
+echo "released reviewed candidate v$version; watch the Release workflow"

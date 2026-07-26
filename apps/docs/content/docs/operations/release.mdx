@@ -3,33 +3,31 @@ title: Release Planr
 description: Prepare, publish, verify, and diagnose a Planr binary release through the supported path.
 ---
 
-`scripts/release.sh <version> "summary"` is the only supported release entry point. Do not create a version tag or edit distribution manifests by hand.
+`scripts/prepare-release-candidate.sh <version>` is the only supported version-transition entry point. `scripts/release.sh <version> "summary"` is the only supported publication entry point. Do not create a version tag or edit distribution manifests by hand.
 
 ## Prepare
 
-1. Work on `main` with a clean worktree.
-2. Add and commit a `CHANGELOG.md` section named exactly `## [<version>]`.
-3. Confirm the `v<version>` tag does not exist.
-4. Run the repository and docs gates appropriate to the release. Any public behavior change must update its canonical docs. The committed generated CLI/MCP references must still match the branch's current version; do not pre-generate a future release version.
+1. Start from clean, reviewed source on a release branch and confirm the tag does not exist.
+2. Run `scripts/prepare-release-candidate.sh <version>`. It synchronizes all distribution versions and generated references without staging, committing, tagging, pushing, or publishing.
+3. Add the exact `## [<version>]` changelog section and any release-contract transition, then commit the complete candidate.
+4. Run repository, docs, package, architecture, security, and integration gates on that exact commit. Obtain an independent review before publication approval.
 5. Produce fresh local Planr eval evidence in the external `~/projects/planr-evals` maintainer workspace and a sanitized, short-lived receipt. Provider credentials, private suites, raw runs, and model evidence stay on the maintainer machine; they never enter CI or the receipt.
 
 Versions must use `x.y.z`, optionally followed by `-alpha.N`, `-beta.N`, or `-rc.N`.
 
 ## Release
 
-<CommandBlock command={'PLANR_RELEASE_EVAL_SUITE=/path/to/planr-evals/suite.json PLANR_RELEASE_EVAL_DB=/path/to/planr-evals/eval.sqlite PLANR_RELEASE_EVAL_RECEIPT=/path/to/planr-evals/receipt.json scripts/release.sh 1.7.2 "one-line release summary"'} label="Release" />
+<CommandBlock command={'PLANR_RELEASE_EVAL_SUITE=/path/to/planr-evals/suite.json PLANR_RELEASE_EVAL_DB=/path/to/planr-evals/eval.sqlite PLANR_RELEASE_EVAL_RECEIPT=/path/to/planr-evals/receipt.json scripts/release.sh 1.7.3 "one-line release summary"'} label="Release reviewed candidate" />
 
-The script synchronizes Cargo, npm, Codex, Claude, and Cursor manifests;
-refreshes pnpm's installed workspace metadata from the frozen lockfile and
-rejects any lockfile byte change; builds the candidate and synchronizes
-`Cargo.lock`; regenerates and strictly verifies both generated references;
-validates the receipt against Planr-owned route
+The publication script requires clean `main` to contain the already prepared
+and reviewed Cargo, npm, Codex, Claude, Cursor, lockfile, and generated-reference
+versions. It refreshes pnpm's installed workspace metadata from the frozen
+lockfile, strictly checks references, rebuilds without allowing source drift,
+and validates the receipt against Planr-owned route
 evidence and the explicitly supplied external suite/database; recomputes and
 gates the stored comparison; runs Rust, deterministic release-gate, package,
-and security checks; then stages the six version files plus both generated
-references in one release commit and
-annotated Git tag and pushes both. Every check runs before the first Git
-commit, tag, or push.
+and security checks; then creates and pushes only the annotated Git tag for the
+reviewed commit. Every check runs before the first tag or push.
 
 Public CI exercises only the synthetic, key-free release-gate contract. It does
 not receive provider credentials or execute the private maintainer benchmark.
