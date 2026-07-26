@@ -3,6 +3,7 @@ import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { legacyRedirects } from '../redirects.mjs';
+import { verifyLinuxPortabilityContract } from './linux-portability-contract.mjs';
 
 const docsRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repositoryRoot = path.dirname(path.dirname(docsRoot));
@@ -118,45 +119,23 @@ assert.ok(rootReadme.includes('[**Documentation →**](https://planr.so/docs)'),
 
 const packageManifest = JSON.parse(await readFile(path.join(repositoryRoot, 'package.json'), 'utf8'));
 const linuxPortabilityContract = JSON.parse(await readFile(path.join(repositoryRoot, 'docs', 'contracts', 'LINUX_RELEASE_PORTABILITY.json'), 'utf8'));
-assert.deepEqual(
-  Object.keys(linuxPortabilityContract).sort(),
-  ['affectedThrough', 'correctedFrom', 'status'],
-  'Linux release portability contract has an unexpected shape',
-);
-assert.equal(linuxPortabilityContract.status, 'pending', 'corrected Linux release boundary must be reviewed before changing status');
-assert.equal(linuxPortabilityContract.correctedFrom, null, 'no corrective Linux release has been published yet');
-assert.equal(
-  packageManifest.version,
-  linuxPortabilityContract.affectedThrough,
-  'package version moved beyond the known affected Linux release; explicitly update the corrected release boundary and public docs in the release process',
-);
-
 const installationPage = routeMap.get('/docs/getting-started/installation')?.content ?? '';
 const supportPage = routeMap.get('/docs/reference/support-matrix')?.content ?? '';
 const releasePage = routeMap.get('/docs/operations/release')?.content ?? '';
 const maintainerRelease = await readFile(path.join(repositoryRoot, 'docs', 'RELEASE.md'), 'utf8');
 const changelog = await readFile(path.join(repositoryRoot, 'CHANGELOG.md'), 'utf8');
-const publicLinuxClaims = [rootReadme, installationPage, supportPage, releasePage, maintainerRelease, changelog];
-for (const [index, source] of publicLinuxClaims.entries()) {
-  assert.ok(source.includes('v1.7.2'), `Linux publication claim ${index + 1} must retain the affected v1.7.2 boundary`);
-  assert.ok(source.includes('GLIBC_2.39'), `Linux publication claim ${index + 1} must retain the v1.7.2 runtime requirement`);
-}
-for (const source of [rootReadme, installationPage, supportPage]) {
-  const prose = source.replace(/^>\s?/gm, '').replace(/\s+/g, ' ');
-  assert.ok(prose.includes('macOS is unaffected'), 'user-facing Linux warning must state that macOS is unaffected');
-  assert.ok(prose.includes('build from source on the target distribution'), 'user-facing Linux warning must offer the safe source-build remediation');
-  assert.ok(prose.includes('wait for a corrective release'), 'user-facing Linux warning must offer the safe wait remediation');
-  assert.ok(prose.includes('no corrected release is published yet'), 'candidate portability must not be presented as already published');
-}
-const publicClaimCorpus = publicLinuxClaims.join('\n');
-for (const staleClaim of [
-  'supported with static musl release binaries',
-  'Published Linux binaries are genuinely static musl executables',
-  'exact checksum-verified static musl bytes from the corresponding GitHub Release tarballs',
-  'Static musl release/npm binary; installer; source',
-]) {
-  assert.ok(!publicClaimCorpus.includes(staleClaim), `pending static-musl behavior is presented as current: ${staleClaim}`);
-}
+const linuxPortability = verifyLinuxPortabilityContract({
+  packageVersion: packageManifest.version,
+  contract: linuxPortabilityContract,
+  documents: {
+    README: rootReadme,
+    installation: installationPage,
+    support: supportPage,
+    release: releasePage,
+    maintainerRelease,
+    changelog,
+  },
+});
 
 const requirementAudit = [
   { id: 1, requirement: 'Latest stable compatible Fumadocs app, pinned and integrated', evidence: 'exact dependency gate, lockfile install, CONTRACT stack decision, CI scripts' },
@@ -264,6 +243,6 @@ await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
 console.log('release_readiness_verification=passed');
 console.log(`mode=${report.mode} routes=${report.routes} internal_links=${report.internalLinks} redirects=${report.redirects}`);
 console.log(`requirements=${report.requirementAudit.length} unfinished_markers=${report.unfinishedMarkers} duplicate_anchors=${report.duplicateAnchors}`);
-console.log(`linux_portability_contract=passed package=${packageManifest.version} affected_through=${linuxPortabilityContract.affectedThrough} corrected_from=unpublished`);
+console.log(`linux_portability_contract=passed package=${linuxPortability.packageVersion} status=${linuxPortability.status} affected_through=${linuxPortability.affectedThrough} corrected_from=${linuxPortability.correctedFrom ?? 'unpublished'}`);
 if (report.live) console.log(`rendered=${report.live.renderedRoutes} search_cases=${report.live.searchCases} sitemap_routes=${report.live.sitemapRoutes}`);
 console.log(`report=${reportPath}`);

@@ -22,7 +22,7 @@
     "verify:concepts": "node scripts/verify-concept-semantics.mjs",
     "verify:maintenance": "node scripts/verify-maintenance.mjs",
     "verify:deployment": "pnpm run build && wrangler deploy --config wrangler.jsonc --dry-run --outdir .wrangler-static && node scripts/verify-static-deployment.mjs",
-    "verify:release": "node scripts/verify-release-readiness.mjs",
+    "verify:release": "node scripts/test-linux-portability-contract.mjs && node scripts/verify-release-readiness.mjs",
     "verify:release-live": "node scripts/verify-release-readiness.mjs --live",
     "verify:clean-install": "node scripts/verify-clean-install.mjs",
     "reference:generate": "node scripts/generate-cli-reference.mjs && node scripts/generate-mcp-reference.mjs",
