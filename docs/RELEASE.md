@@ -96,8 +96,13 @@ Only `-alpha.N`, `-beta.N`, and `-rc.N` suffixes are accepted; everything else t
 
 Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`:
 
+The currently published v1.7.2 Linux release and npm assets are dynamically
+linked GNU binaries that require GLIBC_2.39; macOS assets are unaffected. The
+static-musl pipeline below prepares a future corrective release and does not
+retroactively change v1.7.2. No corrected release is published yet.
+
 1. `create-release` verifies the tag against `Cargo.toml`, all distribution manifests, and the changelog section, then creates a draft GitHub Release.
-2. `build` compiles and packages `planr-<os>-<arch>.tar.gz` for `darwin-arm64`, `darwin-x86_64`, `linux-x86_64`, and `linux-arm64`, then uploads each asset to the draft release. Linux builds use native x86_64/arm64 GitHub runners and the same digest-pinned Rust 1.90.0 Alpine/musl image. Before upload, the extracted tarball must pass embedded checksums, static ELF checks (no interpreter, shared-library dependency, or glibc symbol), a fresh project/plan/map/pick/done/export lifecycle in digest-pinned Alpine 3.20.8 with networking disabled, and exact-byte npm wrapper execution.
+2. `build` compiles and packages `planr-<os>-<arch>.tar.gz` for `darwin-arm64`, `darwin-x86_64`, `linux-x86_64`, and `linux-arm64`, then uploads each asset to the draft release. Future Linux candidates use native x86_64/arm64 GitHub runners and the same digest-pinned Rust 1.90.0 Alpine/musl image. Before upload, the extracted tarball must pass embedded checksums, static ELF checks (no interpreter, shared-library dependency, or glibc symbol), a fresh project/plan/map/pick/done/export lifecycle in digest-pinned Alpine 3.20.8 with networking disabled, and exact-byte npm wrapper execution.
 3. `finalize` downloads all uploaded assets, writes one aggregated `SHA256SUMS` covering every tarball, uploads it, and publishes the release.
 4. `npm-publish` downloads the release assets, verifies them against `SHA256SUMS`, bundles the four platform binaries into `npm/native/`, smoke-tests the wrapper, and publishes to npm via Trusted Publishing (OIDC). Runs only when the repository variable `NPM_PUBLISH_ENABLED` is `true`; requires the one-time Trusted Publisher setup described at <https://planr.so/docs/operations/release>.
 5. `homebrew-tap` regenerates `Formula/planr.rb` with `scripts/generate-formula.sh` and pushes it to `instructa/homebrew-tap` (installed as `brew install instructa/tap/planr`).

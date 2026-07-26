@@ -44,6 +44,13 @@ Or with the release installer:
 curl -fsSL https://raw.githubusercontent.com/instructa/planr/main/scripts/install.sh | sh
 ```
 
+> **Linux v1.7.2 compatibility:** The currently published Linux release,
+> installer, and npm binaries are dynamically linked GNU executables that
+> require GLIBC_2.39. This is a known compatibility issue; macOS is unaffected.
+> On a Linux system without GLIBC_2.39, build from source on the target
+> distribution or wait for a corrective release. Static-musl candidate
+> artifacts are verified in CI, but no corrected release is published yet.
+
 Then initialize a project. When selected, Claude Code and Cursor also receive standalone project worker/reviewer roles; Codex workflow skills come from its plugin:
 
 ```bash

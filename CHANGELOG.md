@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
-- Build both published Linux architectures as static musl binaries on native GitHub runners with digest-pinned toolchain and runtime images, and block release upload unless independent older-runtime lifecycle, ELF-linkage, checksum, and npm-byte verification passes.
+- Prepare both Linux architectures for a future corrective release as static musl binaries built on native GitHub runners with digest-pinned toolchain and runtime images, and block release upload unless independent older-runtime lifecycle, ELF-linkage, checksum, and npm-byte verification passes. This does not change the currently published v1.7.2 Linux/npm assets, which remain dynamically linked and require GLIBC_2.39.
 
 ## [1.7.2] - 2026-07-25
 
