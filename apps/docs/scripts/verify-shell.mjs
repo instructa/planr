@@ -547,7 +547,7 @@ try {
     ['/docs/contributing/docs-authoring', 'Documentation Authoring', ['Add a page', 'CommandBlock', 'Review checklist']],
     ['/docs/contributing/testing', 'Testing Changes', ['Documentation ladder', 'docs:verify-maintenance', 'skipped gate is not a pass']],
     ['/docs/contributing/security-and-privacy', 'Security and Privacy', ['local-first boundary', '127.0.0.1', 'Sensitive evidence']],
-    ['/docs/operations/release', 'Release Planr', ['only supported release entry point', 'SHA256SUMS', 'Pre-releases']],
+    ['/docs/operations/release', 'Release Planr', ['scripts/prepare-release-candidate.sh <version>', 'scripts/release.sh <version> "summary"', 'SHA256SUMS', 'Pre-releases']],
     ['/docs/operations/versioning-and-migrations', 'Versioning and Migrations', ['additive, idempotent', 'no documented guarantee', 'Migration change checklist']],
     ['/docs/operations/docs-deployment', 'Deploy the Documentation', ['Node.js 22', 'Alchemy v2', 'planr.so', 'pnpm docs:deploy', 'NEXT_PUBLIC_SITE_URL', 'Pre-traffic health check']],
     ['/docs/operations/health-and-diagnostics', 'Health and Diagnostics', ['no dedicated /health endpoint', 'Diagnostic ladder', 'Do not edit production content in place']],
@@ -562,6 +562,13 @@ try {
       assert(body?.toLowerCase().includes(phrase.toLowerCase()), `${heading} is missing ${phrase}`);
     }
   }
+  const releaseBody = await navigate('/docs/operations/release').then(() => evaluate(`document.querySelector('#nd-page')?.innerText`));
+  const prepareEntry = releaseBody?.indexOf('scripts/prepare-release-candidate.sh <version>') ?? -1;
+  const publishEntry = releaseBody?.indexOf('scripts/release.sh <version> "summary"') ?? -1;
+  assert(prepareEntry >= 0 && publishEntry > prepareEntry, 'Release Planr must render preparation before publication');
+  assert(releaseBody?.includes('without staging, committing, tagging, pushing, or publishing'), 'Release Planr is missing the preparation mutation boundary');
+  assert(releaseBody?.includes('requires clean main'), 'Release Planr is missing the publication clean-main boundary');
+  assert(!/only supported release (entry point|path)|commits?, tags?, and pushes? in one step/iu.test(releaseBody ?? ''), 'Release Planr must not render a one-step release contract');
   results.interactions.push({ name: 'contributor-operations-runbooks', routes: maintenanceRoutes.length, status: 'passed' });
   await navigate('/docs/contributing/docs-authoring');
   await screenshot('docs-authoring-desktop');

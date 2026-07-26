@@ -5,14 +5,32 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const workflowsRoot = path.join(repoRoot, ".github", "workflows");
+const trivyIgnoreFile = await readFile(path.join(repoRoot, ".trivyignore.yaml"), "utf8");
+const localSecurityScript = await readFile(path.join(repoRoot, "scripts", "security-local.sh"), "utf8");
+
+assert.equal(
+  trivyIgnoreFile,
+  `misconfigurations:
+  - id: AVD-DS-0002
+    paths:
+      - scripts/linux-release-builder.Dockerfile
+    statement: This image is an ephemeral build environment that requires root to install verified local APKs and is never shipped or run as a service.
+    expired_at: 2027-07-26
+  - id: AVD-DS-0026
+    paths:
+      - scripts/linux-release-builder.Dockerfile
+    statement: This image performs one finite build command and exits, so it has no long-running service to health-check.
+    expired_at: 2027-07-26
+`,
+  "Trivy exceptions must remain limited to the two expiring build-only Dockerfile findings",
+);
+assert.match(localSecurityScript, /--skip-check-update/u, "Local Trivy must use the checks bundled with the reviewed binary");
 
 const expectedActions = new Map([
   ["actions/checkout", { sha: "3d3c42e5aac5ba805825da76410c181273ba90b1", version: "v7.0.1", runtime: "node24" }],
   ["actions/setup-node", { sha: "820762786026740c76f36085b0efc47a31fe5020", version: "v7.0.0", runtime: "node24" }],
   ["actions/upload-artifact", { sha: "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", version: "v7.0.1", runtime: "node24" }],
   ["actions/download-artifact", { sha: "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", version: "v8.0.1", runtime: "node24" }],
-  ["aquasecurity/trivy-action", { sha: "ed142fd0673e97e23eac54620cfb913e5ce36c25", version: "v0.36.0", runtime: "composite" }],
-  ["trufflesecurity/trufflehog", { sha: "6f3c981e7b77f235fd2702dd74af25fc4b72bf11", version: "v3.96.0", runtime: "composite" }],
 ]);
 
 const workflowFiles = (await readdir(workflowsRoot))
@@ -25,9 +43,9 @@ for (const file of workflowFiles) {
   const lines = source.split("\n");
 
   for (const [index, line] of lines.entries()) {
-    if (!/^\s*uses:/u.test(line)) continue;
+    if (!/^\s*(?:-\s*)?uses:/u.test(line)) continue;
 
-    const match = /^\s*uses:\s*([^@\s]+)@([0-9a-f]{40})\s+#\s+(\S+)\s*$/u.exec(line);
+    const match = /^\s*(?:-\s*)?uses:\s*([^@\s]+)@([0-9a-f]{40})\s+#\s+(\S+)\s*$/u.exec(line);
     assert.ok(match, `${file}:${index + 1} must use a full immutable commit SHA and exact version comment`);
 
     const [, action, sha, version] = match;
@@ -47,7 +65,37 @@ for (const [action, expected] of expectedActions) {
 }
 
 const securityWorkflow = await readFile(path.join(workflowsRoot, "security.yml"), "utf8");
-assert.ok(securityWorkflow.includes("version: 3.96.0"), "TruffleHog image version must match the pinned action release");
+assert.doesNotMatch(
+  securityWorkflow,
+  /^\s*(?:-\s*)?uses:\s*(?:aquasecurity|trufflesecurity)\//mu,
+  "Security workflow must respect the GitHub-owned-only repository action policy",
+);
+for (const [expected, label] of [
+  ["https://github.com/trufflesecurity/trufflehog/releases/download/v3.96.0/trufflehog_3.96.0_linux_amd64.tar.gz", "TruffleHog release URL"],
+  ["7105f1cd6577f058a9e39d0578f1a99c8a1e481e4d3512cd8a09acfe22a0fdc0", "TruffleHog release digest"],
+  ["https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-64bit.tar.gz", "Trivy release URL"],
+  ["8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9", "Trivy release digest"],
+  ["https://github.com/zizmorcore/zizmor/releases/download/v1.24.1/zizmor-x86_64-unknown-linux-gnu.tar.gz", "zizmor release URL"],
+  ["a8000f3c683319a523d3b20df0e75457ba591f049cfcbfa98966631b56733c03", "zizmor release digest"],
+]) {
+  assert.ok(securityWorkflow.includes(expected), `Security workflow must pin the reviewed ${label}`);
+}
+assert.match(securityWorkflow, /sha256sum --check -/u, "Security scanner downloads must be checksum verified");
+assert.match(
+  securityWorkflow,
+  /trufflehog git "file:\/\/\$GITHUB_WORKSPACE" --results=verified --fail --no-update --github-actions/u,
+  "TruffleHog must fail closed while scanning verified secrets across Git history",
+);
+assert.match(securityWorkflow, /--scanners secret,misconfig/u, "Trivy must scan secrets and misconfigurations");
+assert.match(securityWorkflow, /--ignorefile \.trivyignore\.yaml/u, "Trivy CI must use the reviewed narrow ignore file");
+assert.match(securityWorkflow, /--skip-check-update/u, "Trivy must use the checks bundled with the reviewed binary");
+assert.match(securityWorkflow, /--exit-code 1/u, "Trivy findings must fail the Security job");
+assert.doesNotMatch(
+  securityWorkflow,
+  /(?:python3\s+-m\s+pip\s+install[^\n]*\buv\b|\buvx\b)/u,
+  "Security workflow must not install mutable uv or zizmor inputs",
+);
+assert.match(securityWorkflow, /\n\s*zizmor \. \\\n/u, "GitHub Actions Security must run the checksum-verified zizmor binary");
 
 const releaseWorkflow = await readFile(path.join(workflowsRoot, "release.yml"), "utf8");
 const ciWorkflow = await readFile(path.join(workflowsRoot, "ci.yml"), "utf8");

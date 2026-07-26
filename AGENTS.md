@@ -19,3 +19,4 @@ Core rules:
 - Keep product and build plans first-class for rich scope, ownership, verification, and narrative context.
 - Require log-backed closure: files changed, commands run, tests/review results, and blocked or unverified items.
 - Support Codex, Claude Code, and Cursor as peers through MCP and CLI workflows.
+- Never modify, replace, or re-upload an already published release. Fix release defects only by bumping and publishing a new version.

@@ -10562,10 +10562,18 @@ fn artifacts_events_and_debug_bundle_are_persisted() {
         .stdout
         .clone();
     let screenshot: Value = serde_json::from_slice(&screenshot).unwrap();
+    let screenshot_id = screenshot["artifact"]["id"].as_str().unwrap();
     assert_eq!(
         screenshot["artifact"]["mime_type"], "image/png",
         "mime must be inferred from the path extension: {screenshot}"
     );
+    rusqlite::Connection::open(&db)
+        .unwrap()
+        .execute(
+            "UPDATE artifacts SET created_at = '2026-07-26 12:00:00' WHERE item_id = ?1",
+            [item_id],
+        )
+        .unwrap();
 
     planr()
         .current_dir(dir.path())
@@ -10597,7 +10605,13 @@ fn artifacts_events_and_debug_bundle_are_persisted() {
         .stdout
         .clone();
     let artifacts: Value = serde_json::from_slice(&artifacts).unwrap();
-    assert_eq!(artifacts["artifacts"][0]["id"], artifact_id);
+    let artifacts = artifacts["artifacts"].as_array().unwrap();
+    assert_eq!(artifacts.len(), 2, "both created artifacts must be listed");
+    assert_eq!(
+        artifacts[0]["id"], screenshot_id,
+        "the most recently inserted artifact must win a created_at tie"
+    );
+    assert_eq!(artifacts[1]["id"], artifact_id);
 
     planr()
         .current_dir(dir.path())

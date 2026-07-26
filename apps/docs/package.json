@@ -20,7 +20,7 @@
     "verify:agent-journey": "node scripts/verify-agent-journey.mjs",
     "verify:agent-landing": "node scripts/verify-agent-landing.mjs",
     "verify:concepts": "node scripts/verify-concept-semantics.mjs",
-    "verify:maintenance": "node scripts/verify-maintenance.mjs",
+    "verify:maintenance": "node scripts/test-release-contract.mjs && node scripts/verify-maintenance.mjs",
     "sync:linux-portability": "node scripts/sync-linux-portability-notices.mjs",
     "check:linux-portability": "node scripts/sync-linux-portability-notices.mjs --check",
     "verify:deployment": "pnpm run build && wrangler deploy --config wrangler.jsonc --dry-run --outdir .wrangler-static && node scripts/verify-static-deployment.mjs",

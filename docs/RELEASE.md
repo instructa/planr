@@ -12,18 +12,26 @@ The v1 repository-owned public install order is:
 
 Published npm versions bundle platform-native binaries; see <https://planr.so/docs/operations/release>.
 
-## Version Bump
+## Candidate and publication
 
-`scripts/release.sh` is the only supported release path. The version lives in
-`Cargo.toml`; `package.json`, both plugin manifests under `plugins/planr/`, and
-`.cursor-plugin/plugin.json` must match it. Generated CLI and MCP references
-must match the currently committed version before the release branch merges.
-After bumping on clean `main`, the script refreshes pnpm's derived workspace
-metadata with the frozen lockfile and rejects any lockfile byte change. It then
-builds, regenerates, and strictly checks both references before staging them in
-the same atomic release commit as the six synchronized version files. Manual
-tagging or pre-generating a future version skips this ownership boundary and
-can ship stale references.
+`scripts/prepare-release-candidate.sh` is the only supported version-transition
+path. Run it from clean, reviewed source on a release branch. It synchronizes
+`Cargo.toml`, `Cargo.lock`, `package.json`, both plugin manifests under
+`plugins/planr/`, `.cursor-plugin/plugin.json`, and the generated CLI/MCP
+references. It never stages, commits, tags, pushes, or publishes. Commit those
+changes with the changelog and any release-contract transition, then run the
+full candidate verification and independent review on that exact commit.
+
+`scripts/release.sh` is the only supported publication path. It runs on clean
+`main`, requires every version and generated reference to already match the
+requested version, reruns the local eval and deterministic gates, and rejects
+any command that changes the reviewed source. Only then does it create and push
+the annotated tag. Editing manifests by hand or publishing an unprepared commit
+skips this ownership boundary.
+
+```bash
+scripts/prepare-release-candidate.sh 1.2.0
+```
 
 ```bash
 export PLANR_RELEASE_EVAL_SUITE="$HOME/projects/planr-evals/suites/planr-lean-skills-dogfood.suite.json"
@@ -56,15 +64,16 @@ stored baseline/candidate/policy identities, and gates that fresh result.
 Requested-only values and policy or binding metadata are never
 effective-treatment proof.
 
-The script enforces, in order:
+The two scripts enforce, in order:
 
-1. branch is `main`, worktree is clean, `CHANGELOG.md` already has a committed `## [x.y.z]` section, and the tag does not exist;
-2. the version is written into all synchronized manifests;
-3. `pnpm install --frozen-lockfile` refreshes installed workspace metadata, and any `pnpm-lock.yaml` byte change stops the release before build, references, gates, or Git mutation;
-4. the build synchronizes `Cargo.lock`, and the bumped candidate regenerates and strictly verifies both generated references before any later gate or Git mutation;
-5. the candidate binary validates the sanitized receipt, observed effective treatment, candidate binding, and existing Planr comparison/gate before any Git mutation;
-6. deterministic gates: `cargo test` (including manifest drift), `npm pack --dry-run`, and `scripts/security-local.sh` (betterleaks + trivy);
-7. one mechanical commit containing the six version files plus both generated references, an annotated `vx.y.z` tag carrying that summary, and a single push of branch plus tag.
+1. candidate preparation starts from a clean worktree and a nonexistent tag;
+2. the candidate version is written into all synchronized manifests;
+3. frozen workspace synchronization cannot change `pnpm-lock.yaml`;
+4. the candidate build synchronizes `Cargo.lock`, then regenerates and strictly checks both references without Git mutation;
+5. candidate source, changelog, contracts, and generated files are committed and independently reviewed before publication approval;
+6. publication requires clean `main`, the exact prepared versions/references, a committed changelog section, and no existing tag;
+7. the candidate binary validates the sanitized receipt and recomputed comparison, then deterministic tests, package, and security gates run without changing source;
+8. publication creates and pushes only the annotated `vx.y.z` tag for that reviewed commit.
 
 Two independent gates back the script:
 
@@ -97,12 +106,12 @@ Only `-alpha.N`, `-beta.N`, and `-rc.N` suffixes are accepted; everything else t
 Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`:
 
 <!-- planr:linux-release-portability:start surface=maintainerRelease schema=1 -->
-> **Linux release portability — pending**
+> **Linux release portability — corrected**
 >
-> Contract state: `status=pending`; `affectedThrough=v1.7.2`; `correctedFrom=unpublished`.
+> Contract state: `status=corrected`; `affectedThrough=v1.7.2`; `correctedFrom=v1.7.3`.
 > Published Linux release, installer, and npm binaries through v1.7.2 require GLIBC_2.39; macOS is unaffected.
-> On an affected Linux system, build from source on the target distribution or wait for a corrective release.
-> Candidate artifacts remain CI-only evidence for a future corrective release; no corrected release is published yet.
+> Starting with v1.7.3, current Linux release, installer, and npm artifacts are static-musl executables and do not require glibc.
+> On an affected Linux release, build from source on the target distribution or upgrade to v1.7.3.
 <!-- planr:linux-release-portability:end surface=maintainerRelease schema=1 -->
 
 When this contract changes, update `docs/contracts/LINUX_RELEASE_PORTABILITY.json`, run `pnpm docs:sync-linux-portability`, and commit every synchronized notice before running the release gates.

@@ -91,8 +91,11 @@ for (const scenario of ["stale-run", "tampered-suite-content", "unproven-treatme
 const release = fs.readFileSync(path.join(repo, "scripts/release.sh"), "utf8");
 const gateIndex = release.indexOf("node scripts/verify-release-eval-receipt.mjs");
 assert.ok(gateIndex > release.indexOf("cargo build --quiet"), "eval gate must run after candidate build");
-for (const mutation of ["git add ", "git commit ", "git tag ", "git push "]) {
+for (const mutation of ["git tag ", "git push "]) {
   assert.ok(gateIndex < release.indexOf(mutation), `eval gate must precede ${mutation.trim()}`);
+}
+for (const forbiddenMutation of ["git add ", "git commit "]) {
+  assert.ok(!release.includes(forbiddenMutation), `publication must not run ${forbiddenMutation.trim()}`);
 }
 for (const forbidden of ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "NPM_TOKEN", "raw_prompt", "raw_completion"]) {
   assert.ok(!release.includes(forbidden), `release path must not request ${forbidden}`);

@@ -45,12 +45,12 @@ curl -fsSL https://raw.githubusercontent.com/instructa/planr/main/scripts/instal
 ```
 
 <!-- planr:linux-release-portability:start surface=README schema=1 -->
-> **Linux release portability — pending**
+> **Linux release portability — corrected**
 >
-> Contract state: `status=pending`; `affectedThrough=v1.7.2`; `correctedFrom=unpublished`.
+> Contract state: `status=corrected`; `affectedThrough=v1.7.2`; `correctedFrom=v1.7.3`.
 > Published Linux release, installer, and npm binaries through v1.7.2 require GLIBC_2.39; macOS is unaffected.
-> On an affected Linux system, build from source on the target distribution or wait for a corrective release.
-> Candidate artifacts remain CI-only evidence for a future corrective release; no corrected release is published yet.
+> Starting with v1.7.3, current Linux release, installer, and npm artifacts are static-musl executables and do not require glibc.
+> On an affected Linux release, build from source on the target distribution or upgrade to v1.7.3.
 <!-- planr:linux-release-portability:end surface=README schema=1 -->
 
 Then initialize a project. When selected, Claude Code and Cursor also receive standalone project worker/reviewer roles; Codex workflow skills come from its plugin:

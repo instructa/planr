@@ -2,6 +2,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { legacyRedirects } from '../redirects.mjs';
+import { verifyTwoPhaseReleaseContract } from './release-contract.mjs';
 
 const docsRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const repositoryRoot = dirname(dirname(docsRoot));
@@ -115,9 +116,13 @@ requireMarkers(governance, 'governance runbook', [
 
 const release = await readPage('operations', 'release');
 requireMarkers(release, 'release runbook', [
-  '`scripts/release.sh <version> "summary"` is the only supported release entry point',
   'four archives', '`SHA256SUMS`', 'npm under the `alpha` dist-tag', 'Do not silently replace',
 ]);
+verifyTwoPhaseReleaseContract({
+  releasePage: release,
+  prepareScript: await read('scripts/prepare-release-candidate.sh'),
+  publishScript: await read('scripts/release.sh'),
+});
 
 const packageJson = JSON.parse(await read('apps/docs/package.json'));
 for (const [name, version] of Object.entries({ ...packageJson.dependencies, ...packageJson.devDependencies })) {
@@ -236,8 +241,9 @@ const sourceChecks = [
   ['apps/docs/public/agents/cursor.svg', ['<svg', 'fill: #26251e']],
   ['apps/docs/scripts/verify-static-deployment.mjs', ['static_deployment_verification=passed', 'api/markdown/', '_redirects']],
   ['.github/workflows/ci.yml', ['Build Cloudflare static deployment artifact', 'pnpm docs:verify-deployment']],
-  ['scripts/release.sh', ['The only supported release path', 'cargo test', 'scripts/security-local.sh', 'git tag -a']],
-  ['docs/RELEASE.md', ['only supported release path', 'annotated `vx.y.z` tag']],
+  ['scripts/prepare-release-candidate.sh', ['Prepare the exact source state', 'pnpm install --frozen-lockfile', 'reference:generate']],
+  ['scripts/release.sh', ['Publish an already prepared, reviewed release commit', 'cargo test', 'scripts/security-local.sh', 'git tag -a']],
+  ['docs/RELEASE.md', ['only supported publication path', 'annotated `vx.y.z` tag']],
   ['apps/docs/redirects.mjs', ['legacyRedirects', 'permanent: true']],
   ['apps/docs/worker.mjs', ["from './redirects.mjs'", 'status: 308', 'env.ASSETS.fetch(request)']],
   ['src/storage/schema.rs', ['const SCHEMA_VERSION', 'ensure_column', "'schema_version'"]],

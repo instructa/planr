@@ -6,18 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.7.3] - 2026-07-26
+
 ### Fixed
 
 <!-- planr:linux-release-portability:start surface=changelog schema=1 -->
-> **Linux release portability — pending**
+> **Linux release portability — corrected**
 >
-> Contract state: `status=pending`; `affectedThrough=v1.7.2`; `correctedFrom=unpublished`.
+> Contract state: `status=corrected`; `affectedThrough=v1.7.2`; `correctedFrom=v1.7.3`.
 > Published Linux release, installer, and npm binaries through v1.7.2 require GLIBC_2.39; macOS is unaffected.
-> On an affected Linux system, build from source on the target distribution or wait for a corrective release.
-> Candidate artifacts remain CI-only evidence for a future corrective release; no corrected release is published yet.
+> Starting with v1.7.3, current Linux release, installer, and npm artifacts are static-musl executables and do not require glibc.
+> On an affected Linux release, build from source on the target distribution or upgrade to v1.7.3.
 <!-- planr:linux-release-portability:end surface=changelog schema=1 -->
 
-- Prepare both Linux architectures for a future corrective release as static musl binaries built on native GitHub runners with digest-pinned toolchain and runtime images, and block release upload unless independent older-runtime lifecycle, ELF-linkage, checksum, and npm-byte verification passes. This does not change the currently published v1.7.2 Linux/npm assets, which remain dynamically linked and require GLIBC_2.39.
+- Correct both Linux architectures from v1.7.3 onward with static-musl binaries built on native GitHub runners using digest-pinned toolchain and runtime images, and block release upload unless older-runtime lifecycle, ELF-linkage, checksum, and npm-byte verification passes. The immutable v1.7.2 Linux/npm assets remain dynamically linked and require GLIBC_2.39.
+- Separate candidate preparation from publication so the exact versioned source, generated references, changelog, and release contracts can be independently reviewed before approval; publication now refuses to rewrite the reviewed commit.
+- Make artifact lists deterministically newest-first when multiple artifacts share the same second-level timestamp, using insertion order instead of random artifact IDs or unspecified SQLite row order.
+- Anchor documentation verification to the two-phase release contract and its no-mutation boundaries instead of a stale single-entry-point phrase.
 
 ## [1.7.2] - 2026-07-25
 
@@ -513,7 +518,8 @@ Initial Planr product release.
 - Tag-driven release pipeline with multi-target builds (darwin/linux, arm64/x86_64) and Homebrew tap automation.
 - Skill workflow documentation for Codex, Claude Code, Cursor, and MCP-only clients.
 
-[Unreleased]: https://github.com/instructa/planr/compare/v1.7.2...HEAD
+[Unreleased]: https://github.com/instructa/planr/compare/v1.7.3...HEAD
+[1.7.3]: https://github.com/instructa/planr/compare/v1.7.2...v1.7.3
 [1.7.2]: https://github.com/instructa/planr/compare/v1.7.1...v1.7.2
 [1.7.1]: https://github.com/instructa/planr/compare/v1.7.0...v1.7.1
 [1.7.0]: https://github.com/instructa/planr/compare/v1.6.0...v1.7.0

@@ -4,7 +4,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   renderLinuxPortabilityNotice,
-  replaceLinuxPortabilityNotice,
   verifyLinuxPortabilityContract,
 } from './linux-portability-contract.mjs';
 
@@ -32,10 +31,10 @@ function expectRejected(label, input, expected) {
 verifyLinuxPortabilityContract({ packageVersion: packageManifest.version, contract, documents });
 
 expectRejected(
-  'package and affectedThrough bump with unchanged v1.7.2 docs',
+  'package and affectedThrough bump with unchanged corrective docs',
   {
-    packageVersion: '1.7.3',
-    contract: { ...clone(contract), affectedReleases: [...contract.affectedReleases, '1.7.3'], affectedThrough: '1.7.3' },
+    packageVersion: '1.7.4',
+    contract: { ...clone(contract), affectedReleases: [...contract.affectedReleases, '1.7.3'], affectedThrough: '1.7.3', correctedFrom: '1.7.4' },
     documents,
   },
   /Linux portability notice body is stale or mutated/u,
@@ -45,10 +44,10 @@ expectRejected(
   'contract-only affectedThrough bump',
   {
     packageVersion: packageManifest.version,
-    contract: { ...clone(contract), affectedReleases: [...contract.affectedReleases, '1.7.3'], affectedThrough: '1.7.3' },
+    contract: { ...clone(contract), affectedReleases: [...contract.affectedReleases, '1.7.3'], affectedThrough: '1.7.3', correctedFrom: '1.7.4' },
     documents,
   },
-  /Linux portability notice body is stale or mutated/u,
+  /correctedFrom must be the current-or-earlier corrective package boundary/u,
 );
 
 const docsOnlyBump = Object.fromEntries(
@@ -61,9 +60,9 @@ expectRejected(
 );
 
 expectRejected(
-  'package-only bump beyond pending boundary',
-  { packageVersion: '1.7.3', contract, documents },
-  /moved beyond pending affected boundary/u,
+  'package before corrected boundary',
+  { packageVersion: contract.affectedThrough, contract, documents },
+  /correctedFrom must be the current-or-earlier corrective package boundary/u,
 );
 
 expectRejected(
@@ -107,7 +106,7 @@ expectRejected(
       ...documents,
       installation: documents.installation.replace(
         canonicalInstallationNotice,
-        canonicalInstallationNotice.replace('Candidate artifacts remain CI-only evidence', 'Candidate artifacts are published evidence'),
+        canonicalInstallationNotice.replace('Linux release portability — corrected', 'Linux release portability — mutated'),
       ),
     },
   },
@@ -283,11 +282,15 @@ expectRejected(
   /installation Linux portability markers are out of order/u,
 );
 
-const correctedFrom = '1.7.3';
-const correctedContract = { ...clone(contract), status: 'corrected', correctedFrom };
+const correctedFrom = contract.correctedFrom;
+const correctedContract = clone(contract);
+const pendingContract = { ...clone(contract), status: 'pending', correctedFrom: null };
+const pendingDocuments = Object.fromEntries(
+  Object.keys(documents).map((label) => [label, renderLinuxPortabilityNotice(pendingContract, label)]),
+);
 expectRejected(
   'stale pending notice after corrected state transition',
-  { packageVersion: correctedFrom, contract: correctedContract, documents },
+  { packageVersion: correctedFrom, contract: correctedContract, documents: pendingDocuments },
   /Linux portability notice body is stale or mutated/u,
 );
 
@@ -345,11 +348,11 @@ for (const [index, claim] of falseCurrentClaims.entries()) {
   expectRejected(
     `pending current-artifact phrase ${index + 1}`,
     {
-      packageVersion: packageManifest.version,
-      contract,
+      packageVersion: pendingContract.affectedThrough,
+      contract: pendingContract,
       documents: {
-        ...documents,
-        installation: `${documents.installation}\n${claim}`,
+        ...pendingDocuments,
+        installation: `${pendingDocuments.installation}\n${claim}`,
       },
     },
     /presents pending static-musl\/glibc-free behavior as a current artifact claim/u,
@@ -360,7 +363,7 @@ for (const allowedPendingClaim of [
   'Future corrective release candidate artifacts for Linux are static musl and do not require glibc once published.',
   'CI verifies static-musl Linux candidate binaries before upload.',
   'The future Linux release binaries will use musl once published.',
-  `Historically, v${contract.affectedThrough} Linux binaries were not static musl and were affected by GLIBC_2.39.`,
+  `Historically, v${pendingContract.affectedThrough} Linux binaries were not static musl and were affected by GLIBC_2.39.`,
   'The latest CI candidate artifacts for Linux will be static musl once published.',
   'Current CI candidate Linux binaries are static musl before upload.',
   'Before upload, current CI candidate Linux binaries are static musl.',
@@ -372,29 +375,19 @@ for (const allowedPendingClaim of [
   '| Latest Linux candidate binaries built by CI | static musl once published |',
 ]) {
   verifyLinuxPortabilityContract({
-    packageVersion: packageManifest.version,
-    contract,
+    packageVersion: pendingContract.affectedThrough,
+    contract: pendingContract,
     documents: {
-      ...documents,
-      installation: `${documents.installation}\n${allowedPendingClaim}`,
+      ...pendingDocuments,
+      installation: `${pendingDocuments.installation}\n${allowedPendingClaim}`,
     },
   });
 }
 
-const correctedDocuments = Object.fromEntries(
-  Object.entries(documents).map(([label, source]) => [
-    label,
-    replaceLinuxPortabilityNotice(`${source
-      .replaceAll(/no corrected release is published yet/giu, 'the corrected release boundary is published')
-      .replaceAll(/wait for a corrective release/giu, 'use the corrected release')}`,
-    correctedContract,
-    label),
-  ]),
-);
 verifyLinuxPortabilityContract({
   packageVersion: correctedFrom,
   contract: correctedContract,
-  documents: correctedDocuments,
+  documents,
 });
 
 console.log('linux_portability_contract_regression=passed adversarial_cases=35 allowed_pending_scopes=13 structural_notice_cases=23 corrected_transition_fixture=true dynamic_version_claims=true');
