@@ -3,12 +3,12 @@ use super::{App, ReviewAnnotationInput};
 use crate::cli::{
     ApprovalCommand, ClientArg, CloseArgs, ContextCommand, DoctorArgs, ImportArgs, InstallCommand,
     ItemCommand, LinkCommand, LogCommand, MapCommand, PickCommand, PlanCommand, ProjectCommand,
-    PromptCommand, ReviewCommand, SearchArgs,
+    ReviewCommand, SearchArgs,
 };
 use crate::integrations::{cursor_deeplink, install_snippet, mcp_json_config};
 use crate::model::LinkKind;
 use crate::planpack::{build_plan_body, product_plan_files, project_pack_files};
-use crate::rolefiles::{agent_roles, cursor_skills, install_artifact_paths};
+use crate::rolefiles::{agent_roles, cursor_skills, grok_workflow_assets, install_artifact_paths};
 use crate::util::{
     append_line, command_exists, format_item, format_project, now_string, print_json, short_id,
     worker_id, write_if_missing,
@@ -60,7 +60,12 @@ impl App {
                 };
                 let mut agent_paths = Vec::new();
                 for target in clients {
-                    for (relative, content) in agent_roles(target) {
+                    let assets = if target == "grok" {
+                        grok_workflow_assets()
+                    } else {
+                        agent_roles(target)
+                    };
+                    for (relative, content) in assets {
                         let path = self.root.join(relative);
                         write_if_missing(&path, content, false)?;
                         agent_paths.push(path);
@@ -884,6 +889,7 @@ impl App {
             ClientArg::Codex => vec!["codex"],
             ClientArg::Claude => vec!["claude"],
             ClientArg::Cursor => vec!["cursor"],
+            ClientArg::Grok => vec!["grok"],
             ClientArg::All => vec!["codex", "claude", "cursor"],
         };
         let checks: Vec<_> = clients
@@ -966,7 +972,11 @@ impl App {
             InstallCommand::Codex(args) => ("codex", args),
             InstallCommand::Claude(args) => ("claude", args),
             InstallCommand::Cursor(args) => ("cursor", args),
+            InstallCommand::Grok(args) => ("grok", args),
         };
+        if client == "grok" {
+            return self.install_grok(args);
+        }
         if args.dry_run {
             if args.no_mcp {
                 let contract = match client {
@@ -1077,39 +1087,5 @@ impl App {
             hooks_human(&mut human);
             self.emit(payload, human)
         }
-    }
-
-    pub(crate) fn prompt(&self, command: PromptCommand) -> Result<()> {
-        let (mode, client) = match command {
-            PromptCommand::Cli(args) => ("cli", args.client),
-            PromptCommand::Mcp(args) => ("mcp", args.client),
-            PromptCommand::Http(args) => ("http", args.client),
-            PromptCommand::Routing(args) => return self.prompt_routing(args.client),
-        };
-        let client = client
-            .map(|value| format!("{value:?}").to_lowercase())
-            .unwrap_or_else(|| "generic".to_string());
-        let prompt = match mode {
-            "cli" => format!(
-                "Use Planr as the local source of truth for planning and execution. Start with `planr project show --json`, inspect `planr map status --json`, pick work with `planr pick --json`, log evidence with `planr log add`, request and close reviews with `planr review ...`, and close only after `planr map preview --close <item-id>` is clean. Use database `{}` when an explicit DB path is needed. Target client: {client}.",
-                self.db_path.display()
-            ),
-            "mcp" => format!(
-                "Configure a project-scoped MCP server with command `planr --db {} mcp`. Use `planr install codex|claude|cursor --dry-run` for client-specific snippets, or this generic JSON:\n{}",
-                self.db_path.display(),
-                mcp_json_config(&self.db_path)
-            ),
-            "http" => "Run `planr serve --port 7526`, open `http://127.0.0.1:7526/review` for the local review workspace, use `/v1/review-workspace` for review data, `/v1/events/stream` for SSE, and keep the server bound to localhost.".to_string(),
-            _ => unreachable!(),
-        };
-        self.emit(
-            json!({
-                "mode": mode,
-                "client": client,
-                "prompt": prompt,
-                "global_config_edited": false
-            }),
-            prompt,
-        )
     }
 }

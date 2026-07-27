@@ -4,7 +4,7 @@ Generated: 2026-06-09
 
 ## Purpose
 
-This package defines Planr as a production-grade, local-first planning and execution coordination tool for coding agents. Planr combines product plans, build plans, and a live dependency-aware map with reviewable logs and integration surfaces for Codex, Claude Code, Cursor, and other MCP-capable agents.
+This package defines Planr as a production-grade, local-first planning and execution coordination tool for coding agents. Planr combines product plans, build plans, and a live dependency-aware map with reviewable logs and integration surfaces for Codex, Claude Code, Cursor, explicitly opted-in Grok Build, and other MCP-capable agents.
 
 ## Package Contents
 
@@ -30,7 +30,7 @@ Two frozen contracts were split out of this package because CI gates them direct
 
 - V1 is a local-first developer tool, not a hosted SaaS.
 - The first implementation may be a Rust CLI and local daemon using SQLite.
-- Codex, Claude Code, and Cursor should all work through standard CLI and MCP integration paths.
+- Codex, Claude Code, Cursor, and explicitly opted-in Grok Build should all work through standard CLI and MCP integration paths.
 - Existing `.planr` data may be imported, but the V1 CLI, data model, and docs define the final product API.
 - Planr should ship with its own name, code, docs, and architecture.
 

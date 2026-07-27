@@ -11,6 +11,8 @@ const docsRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repositoryRoot = path.dirname(path.dirname(docsRoot));
 const contract = JSON.parse(await readFile(path.join(repositoryRoot, 'docs', 'contracts', 'LINUX_RELEASE_PORTABILITY.json'), 'utf8'));
 const packageManifest = JSON.parse(await readFile(path.join(repositoryRoot, 'package.json'), 'utf8'));
+const [candidateMajor, candidateMinor, candidatePatch] = packageManifest.version.split('.').map(Number);
+const nextCandidatePatch = `${candidateMajor}.${candidateMinor}.${candidatePatch + 1}`;
 const documents = {
   README: await readFile(path.join(repositoryRoot, 'README.md'), 'utf8'),
   installation: await readFile(path.join(docsRoot, 'content', 'docs', 'getting-started', 'installation.mdx'), 'utf8'),
@@ -44,7 +46,12 @@ expectRejected(
   'contract-only affectedThrough bump',
   {
     packageVersion: packageManifest.version,
-    contract: { ...clone(contract), affectedReleases: [...contract.affectedReleases, '1.7.3'], affectedThrough: '1.7.3', correctedFrom: '1.7.4' },
+    contract: {
+      ...clone(contract),
+      affectedReleases: [...contract.affectedReleases, packageManifest.version],
+      affectedThrough: packageManifest.version,
+      correctedFrom: nextCandidatePatch,
+    },
     documents,
   },
   /correctedFrom must be the current-or-earlier corrective package boundary/u,

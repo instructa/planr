@@ -86,7 +86,7 @@ function internalLinks(page) {
 
 const pages = await collectPages(contentRoot);
 const routeMap = new Map(pages.map((page) => [page.route, page]));
-assert.equal(routeMap.size, 61, 'release inventory must contain exactly 61 unique MDX routes');
+assert.equal(routeMap.size, 62, 'release inventory must contain exactly 62 unique MDX routes');
 const navigation = await declaredRoutes();
 assert.deepEqual([...navigation].sort(), [...routeMap.keys()].sort(), 'explicit navigation and MDX route inventory drifted');
 
@@ -139,17 +139,17 @@ const linuxPortability = verifyLinuxPortabilityContract({
 
 const requirementAudit = [
   { id: 1, requirement: 'Latest stable compatible Fumadocs app, pinned and integrated', evidence: 'exact dependency gate, lockfile install, CONTRACT stack decision, CI scripts' },
-  { id: 2, requirement: 'Clear English task-oriented content and copyable commands', evidence: '61 frontmatter-valid pages, authoring contract, CommandBlock browser interaction' },
+  { id: 2, requirement: 'Clear English task-oriented content and copyable commands', evidence: '62 frontmatter-valid pages, authoring contract, CommandBlock browser interaction' },
   { id: 3, requirement: 'Landing, installation, quickstart, and complete lifecycle', evidence: 'published route inventory plus clean-install onboarding replay' },
   { id: 4, requirement: 'Core concepts and canonical ownership', evidence: 'concept page tree plus semantic graph replay' },
-  { id: 5, requirement: 'Codex, Claude Code, Cursor, CLI-only, and generic MCP', evidence: 'five integration routes plus client dry-run diagnostics' },
+  { id: 5, requirement: 'Codex, Claude Code, Cursor, explicitly opted-in Grok Build, CLI-only, and generic MCP', evidence: 'six integration routes plus client dry-run diagnostics' },
   { id: 6, requirement: 'Exhaustive CLI, MCP, configuration, data, and support reference', evidence: 'generated reference drift checks and 232 coverage assertions' },
   { id: 7, requirement: 'Recipes, troubleshooting, FAQ, contributor, migration, and operations', evidence: 'explicit navigation and coverage inventory' },
   { id: 8, requirement: 'Polished responsive, themed, searchable, accessible shell', evidence: 'production Chrome CDP flow, screenshots, keyboard/focus/zoom/mobile/theme, axe' },
   { id: 9, requirement: 'Content, build, link, orphan, semantic, browser, and accessibility guardrails', evidence: 'CI plus release, maintenance, reference, onboarding, concepts, and shell verifiers' },
   { id: 10, requirement: 'Obvious repository documentation entry points', evidence: 'root README and apps/docs README checks' },
   { id: 11, requirement: 'Official Fumadocs and AgentRig research with recorded decisions', evidence: 'CONTRACT sources and adopted/rejected ADRs' },
-  { id: 12, requirement: 'Audited public-surface coverage with no unexplained gaps', evidence: '61-route COVERAGE inventory with agent and human journeys, link/orphan checks, drift verifiers' },
+  { id: 12, requirement: 'Audited public-surface coverage with no unexplained gaps', evidence: '62-route COVERAGE inventory with agent and human journeys, link/orphan checks, drift verifiers' },
 ];
 
 const report = {

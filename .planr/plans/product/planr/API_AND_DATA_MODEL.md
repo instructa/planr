@@ -183,6 +183,7 @@ item_id TEXT NOT NULL
 worker_id TEXT NOT NULL
 client TEXT NOT NULL
 profile TEXT
+observed_client TEXT
 command TEXT
 cwd TEXT
 worktree_path TEXT
@@ -198,6 +199,7 @@ Clients:
 - codex
 - claude-code
 - cursor
+- grok
 - generic-mcp
 - human
 - ci
@@ -317,12 +319,12 @@ isProject: false
 ### Project
 
 ```bash
-planr project init [--client codex|claude|cursor|all] [--force]
+planr project init [--client codex|claude|cursor|grok|all] [--force]
 planr project show [--json]
 planr project list [--json]
-planr doctor [--client codex|claude|cursor|all]
-planr install codex|claude|cursor [--dry-run]
-planr prompt cli|mcp|http [--client codex|claude|cursor|all]
+planr doctor [--client codex|claude|cursor|grok|all]
+planr install codex|claude|cursor|grok [--dry-run]
+planr prompt cli|mcp|http [--client codex|claude|cursor|grok|all]
 planr mcp
 planr serve --port 7526
 planr import <file> [--preview] [--confirm]
@@ -446,6 +448,27 @@ planr map pressure
 - `planr-review`
 - `planr-map`
 - `planr-summary`
+
+## Grok Build Project Contract
+
+`planr install grok` reconciles one portable project MCP table and native
+repository workflow assets. The MCP process inherits the repository working
+directory, so the config intentionally contains no absolute `--db` path:
+
+```toml
+[mcp_servers.planr]
+command = "planr"
+args = ["mcp"]
+enabled = true
+startup_timeout_sec = 30
+tool_timeout_sec = 6000
+env = { PLANR_MCP_CLIENT = "grok" }
+```
+
+The exact `PLANR_MCP_CLIENT=grok` child-process marker may populate
+`runs.observed_client`; ambient `GROK_*` variables may not. The marker is
+advisory evidence, never authentication or worker identity. Grok v1 writes no
+hooks and remains outside the legacy `--client all` expansion.
 
 ## HTTP API
 

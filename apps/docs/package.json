@@ -10,7 +10,7 @@
     "start": "wrangler dev --config wrangler.jsonc --port 3000 --local",
     "deploy": "alchemy deploy --stage prod --yes",
     "destroy": "alchemy destroy --stage prod",
-    "content": "fumadocs-mdx",
+    "content": "fumadocs-mdx && node scripts/verify-grok-inventory.mjs",
     "typecheck": "fumadocs-mdx && tsc --noEmit",
     "lint": "eslint .",
     "verify:shell": "node scripts/verify-shell.mjs",

@@ -19,7 +19,9 @@ Planr V1 is a single Rust binary with explicit module ownership. The crate stays
 - `src/main.rs`: process composition root. Owns top-level module wiring, process startup, database opening, error printing, and dispatch into `App`.
 - `src/cli.rs`: CLI contract boundary. Owns `clap` command definitions, option parsing types, value enums, and command DTOs used by app dispatch.
 - `src/app/mod.rs`: application composition boundary. Owns the `App` runtime state, top-level dispatch, shared app-local row helpers, and app submodule wiring.
-- `src/app/commands.rs`: CLI use-case orchestration. Owns project, plan, map, item, link, pick, approval, log, close, review, context, search, doctor, and install command handlers.
+- `src/app/commands.rs`: general CLI use-case orchestration. Owns project, plan, map, item, link, pick, approval, log, close, review, context, search, doctor, and shared install command handlers.
+- `src/app/grok.rs`: Grok-specific install orchestration. Owns safe project TOML reconciliation, repository workflow writes, and the explicit no-hooks result.
+- `src/app/prompts.rs`: CLI, MCP, and HTTP prompt output. Host routing prompt composition remains in `src/app/agents.rs`.
 - `src/app/flow.rs`: compound work-flow boundary. Owns evidence log writing (with heartbeat folding), the close transition core, review-request creation, the pick work packet, and the `done` command that chains them for CLI, HTTP, and MCP surfaces.
 - `src/app/git_review.rs`: Git and PR review evidence boundary. Owns worktree detection, scoped changed-file provenance, PR URL context, and dirty-worktree safety projections.
 - `src/app/mcp.rs`: MCP stdio boundary. Owns MCP protocol request routing, tool calls, resource reads, and prompt responses.
@@ -46,7 +48,8 @@ Planr V1 is a single Rust binary with explicit module ownership. The crate stays
 - `src/route_audit.rs`: provider-neutral run-observation contract. Owns strict requested/resolved/effective route stages, model/effort/fork enforcement confidence, transition provenance, policy/binding versions, and per-dimension metering confidence. It rejects requested-only values in the effective stage rather than inferring host execution.
 - `src/app/agents.rs`: routing application boundary. Owns the `agents` and `item route` command handlers, the shared `*_value` JSON shapes reused by MCP, per-item route facts assembly, and registry-aware role content selection for installs.
 - `src/app/agents_init.rs`: registry bootstrap boundary. Owns `planr agents init` — the static cost-tiering scaffold and, per the agent-pool plan, the flag-spec builder and interactive wizard.
-- `src/integrations.rs`: agent-client integration descriptor boundary. Owns Codex, Claude Code, Cursor, MCP install metadata, MCP tool schemas, MCP resources, and MCP text response wrapping.
+- `src/integrations.rs`: shared agent-client descriptor boundary. Owns MCP install metadata, tool schemas, resources, and text response wrapping.
+- `src/integrations/grok.rs`: document-preserving Grok project MCP configuration and conflict policy.
 - `src/rolefiles.rs`: static host workflow roles and Cursor skill payloads. It does not select or pin models; externally generated routing artifacts stay outside Planr ownership.
 - `src/util.rs`: small CLI-boundary utilities. Owns ids, timestamps, path helpers, output formatting, and safe file writes.
 

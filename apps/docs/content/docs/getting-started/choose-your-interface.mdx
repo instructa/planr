@@ -1,6 +1,6 @@
 ---
 title: Choose Your Interface
-description: Decide how Codex, Claude Code, Cursor, generic MCP hosts, and CLI-only workflows connect to Planr.
+description: Decide how Codex, Claude Code, Cursor, Grok Build, generic MCP hosts, and CLI-only workflows connect to Planr.
 ---
 
 Every interface operates on the same `.planr` project, plans, map, logs, and reviews. Choose by where you want agents or humans to issue commands—not by a different Planr data model.
@@ -10,6 +10,7 @@ Every interface operates on the same `.planr` project, plans, map, logs, and rev
 | Codex | Codex skills, MCP tools, project hooks, and role prompts | [Codex integration](/docs/integrations/codex) |
 | Claude Code | Claude plugin skills plus project-scoped MCP and hooks | [Claude Code integration](/docs/integrations/claude-code) |
 | Cursor | Project MCP, agents, skills, hooks, and optional deeplink | [Cursor integration](/docs/integrations/cursor) |
+| Grok Build | Explicitly opted-in native skills, agents, and project MCP; no hooks in v1 | [Grok Build integration](/docs/integrations/grok-build) |
 | Generic MCP | Any stdio-capable MCP host | [Generic MCP integration](/docs/integrations/generic-mcp) |
 | CLI only | Shell scripts, CI, or operators who want no client files | [CLI-only workflow](/docs/integrations/cli-only) |
 
@@ -23,6 +24,7 @@ You can preview first-party client changes before writing files:
 planr install codex --dry-run
 planr install claude --dry-run
 planr install cursor --dry-run
+planr install grok --dry-run
 ```
 
-After setup, verify all detected integrations with `planr doctor --client all`.
+After setup, use `planr doctor --client grok` for Grok. The legacy `--client all` selection intentionally remains Codex, Claude Code, and Cursor only, so Grok adoption is never implicit.

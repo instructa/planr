@@ -56,8 +56,12 @@ fixture tree; release verification does not read ignored files from the Planr
 checkout.
 
 Generate the candidate revision with
-`node scripts/verify-release-eval-receipt.mjs --print-candidate-revision`. At
-release time the candidate binary canonicalizes the explicitly supplied suite,
+`node scripts/verify-release-eval-receipt.mjs --print-candidate-revision`. The
+revision hashes every tracked or non-ignored release-source file, including its
+normalized executable mode, so changing any candidate source invalidates the
+receipt. The separate evaluated-subject revision binds the stored model run to
+the five workflow files the benchmark evaluates; changing either the exact
+release source or that evaluated subset invalidates the receipt. At release time the candidate binary canonicalizes the explicitly supplied suite,
 requires a Planr-validated effective route observation (host report, telemetry
 receipt, process exit, or local observation), recomputes the comparison from its
 stored baseline/candidate/policy identities, and gates that fresh result.

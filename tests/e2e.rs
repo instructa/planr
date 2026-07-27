@@ -24,6 +24,7 @@ fn planr() -> Command {
         "CLAUDECODE",
         "CURSOR_AGENT",
         "CURSOR_INVOKED_AS",
+        "PLANR_MCP_CLIENT",
         "PLANR_PROFILE",
     ] {
         cmd.env_remove(var);
@@ -495,7 +496,7 @@ fn mcp_contract_install_fixtures_and_cli_docs_do_not_drift() {
         .unwrap();
     assert!(unknown_tool_text.contains(fixture["unknown_tool_error"].as_str().unwrap()));
 
-    for client in ["codex", "claude", "cursor"] {
+    for client in ["codex", "claude", "cursor", "grok"] {
         let output = planr()
             .current_dir(dir.path())
             .args(["--db", db.to_str().unwrap(), "install", client, "--dry-run"])
@@ -524,6 +525,7 @@ fn mcp_contract_install_fixtures_and_cli_docs_do_not_drift() {
     );
     assert!(dir.path().join(".mcp.json").exists());
     assert!(dir.path().join(".cursor/mcp.json").exists());
+    assert!(dir.path().join(".grok/config.toml").exists());
     // `planr install cursor` is the one-command Cursor setup: MCP config plus
     // subagent roles plus the full skill set, matching the plugin experience.
     for provisioned in [
@@ -6139,7 +6141,7 @@ allow_overwrite = true
             .stderr(std::process::Stdio::piped())
             .spawn()
             .unwrap();
-        thread::sleep(Duration::from_millis(150));
+        wait_for_http_server(port);
         (server, port)
     };
 
@@ -7394,7 +7396,7 @@ fn human_review_feedback_contract_writes_annotations_artifacts_and_followups() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    thread::sleep(Duration::from_millis(150));
+    wait_for_http_server(port);
     let http_review = http_json(&http_request(
         port,
         "POST",
@@ -7544,7 +7546,7 @@ fn http_server_survives_aborted_and_garbage_connections() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    thread::sleep(Duration::from_millis(150));
+    wait_for_http_server(port);
 
     // Connection dropped mid-request: header promises a body that never comes.
     {
@@ -7608,7 +7610,7 @@ fn http_protocol_correctness_status_codes_cors_and_live_sse() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    thread::sleep(Duration::from_millis(150));
+    wait_for_http_server(port);
 
     // Unknown route is a 404, not a 200 with an error body.
     let missing = http_request(port, "GET", "/v1/definitely-not-a-route", "");
@@ -10341,7 +10343,7 @@ fn graph_adaptation_primitives_preview_rewire_and_replan() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    thread::sleep(Duration::from_millis(150));
+    wait_for_http_server(port);
     let status = http_request(port, "GET", "/v1/projects/current/map/status", "");
     assert!(status.contains("\"ready\""), "{status}");
     let unlocks = http_request(port, "GET", &format!("/v1/items/{first_id}/unlocks"), "");
@@ -10416,7 +10418,7 @@ fn local_http_api_smoke_uses_same_core_engine() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    thread::sleep(Duration::from_millis(150));
+    wait_for_http_server(port);
 
     let create = http_request(
         port,
@@ -10706,7 +10708,7 @@ fn artifacts_events_and_debug_bundle_are_persisted() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    thread::sleep(Duration::from_millis(150));
+    wait_for_http_server(port);
     let http_artifact = http_json(&http_request(
         port,
         "POST",
@@ -11231,7 +11233,7 @@ fn recovery_sweep_is_available_through_mcp_and_http() {
         ])
         .spawn()
         .unwrap();
-    thread::sleep(Duration::from_millis(150));
+    wait_for_http_server(port);
     let http_recovery = http_json(&http_request(
         port,
         "POST",
@@ -11297,7 +11299,7 @@ fn local_review_workspace_serves_browser_ui_and_drives_review_chain() {
         ])
         .spawn()
         .unwrap();
-    thread::sleep(Duration::from_millis(150));
+    wait_for_http_server(port);
 
     let review = http_json(&http_request(
         port,
@@ -11818,6 +11820,22 @@ fn free_port() -> u16 {
     listener.local_addr().unwrap().port()
 }
 
+fn wait_for_http_server(port: u16) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match TcpStream::connect(("127.0.0.1", port)) {
+            Ok(stream) => {
+                drop(stream);
+                return;
+            }
+            Err(_) if std::time::Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("HTTP server did not become ready: {error}"),
+        }
+    }
+}
+
 fn http_request(port: u16, method: &str, path: &str, body: &str) -> String {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
     let request = format!(
@@ -12232,6 +12250,352 @@ fn project_init_and_install_provision_loop_agent_roles() {
 }
 
 #[test]
+fn grok_host_surfaces_are_explicit_portable_and_opt_in() {
+    let all_dir = tempdir().unwrap();
+    let all_db = all_dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(all_dir.path())
+        .args([
+            "--db",
+            all_db.to_str().unwrap(),
+            "project",
+            "init",
+            "All Hosts",
+            "--client",
+            "all",
+        ])
+        .assert()
+        .success();
+    assert!(
+        !all_dir.path().join(".grok").exists(),
+        "the legacy all selection must not opt a project into Grok"
+    );
+    let all_doctor = planr()
+        .current_dir(all_dir.path())
+        .args([
+            "--db",
+            all_db.to_str().unwrap(),
+            "--json",
+            "doctor",
+            "--client",
+            "all",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let all_doctor: Value = serde_json::from_slice(&all_doctor).unwrap();
+    assert_eq!(all_doctor["clients"].as_array().unwrap().len(), 3);
+    assert!(
+        all_doctor["clients"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|check| check["client"] != "grok")
+    );
+
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    let initialized = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "project",
+            "init",
+            "Grok Host",
+            "--client",
+            "grok",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let initialized: Value = serde_json::from_slice(&initialized).unwrap();
+    assert_eq!(initialized["client"], "grok");
+    assert!(dir.path().join(".grok/skills/planr/SKILL.md").exists());
+    assert!(dir.path().join(".grok/agents/planr-worker.md").exists());
+    assert!(
+        !dir.path().join(".grok/config.toml").exists(),
+        "project init provisions workflows but does not silently enable MCP"
+    );
+
+    let preview = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "install",
+            "grok",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let preview: Value = serde_json::from_slice(&preview).unwrap();
+    assert_eq!(preview["client"], "grok");
+    assert_eq!(preview["hooks"]["supported"], false);
+    assert_eq!(preview["hooks"]["status"], "unsupported");
+    let config = preview["config"].as_str().unwrap();
+    assert!(config.contains("args = [\"mcp\"]"));
+    assert!(config.contains("PLANR_MCP_CLIENT = \"grok\""));
+    assert!(!config.contains(db.to_str().unwrap()));
+    assert!(!config.to_ascii_lowercase().contains("xai"));
+
+    fs::write(
+        dir.path().join(".grok/config.toml"),
+        "# keep this comment\ntheme = \"dark\"\n\n[mcp_servers.foreign]\ncommand = \"foreign\"\n",
+    )
+    .unwrap();
+    let installed = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "install", "grok"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let installed: Value = serde_json::from_slice(&installed).unwrap();
+    assert_eq!(installed["hooks"]["supported"], false);
+    let preview_paths: std::collections::BTreeSet<&str> = preview["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|path| path.as_str().unwrap())
+        .collect();
+    let mut written_paths: std::collections::BTreeSet<String> = installed["assets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|path| {
+            path.as_str()
+                .unwrap()
+                .strip_prefix(dir.path().to_str().unwrap())
+                .unwrap()
+                .trim_start_matches('/')
+                .to_string()
+        })
+        .collect();
+    written_paths.insert(".grok/config.toml".to_string());
+    assert_eq!(
+        preview_paths,
+        written_paths.iter().map(String::as_str).collect(),
+        "dry-run paths and non-dry writes must have one source of truth"
+    );
+    let config = fs::read_to_string(dir.path().join(".grok/config.toml")).unwrap();
+    assert!(config.contains("# keep this comment"));
+    assert!(config.contains("theme = \"dark\""));
+    assert!(config.contains("[mcp_servers.foreign]"));
+    let parsed: toml::Value = toml::from_str(&config).unwrap();
+    assert_eq!(
+        parsed["mcp_servers"]["planr"]["env"]["PLANR_MCP_CLIENT"].as_str(),
+        Some("grok")
+    );
+    assert!(!dir.path().join(".grok/hooks.json").exists());
+
+    let installed_skill = dir.path().join(".grok/skills/planr/SKILL.md");
+    fs::write(&installed_skill, "local customization\n").unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "install", "grok"])
+        .assert()
+        .success();
+    assert_eq!(
+        fs::read_to_string(&installed_skill).unwrap(),
+        "local customization\n",
+        "normal reconciliation must preserve workflow edits"
+    );
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "install", "grok", "--force"])
+        .assert()
+        .success();
+    assert_eq!(
+        fs::read_to_string(&installed_skill).unwrap(),
+        include_str!("../plugins/planr/skills/planr/SKILL.md"),
+        "forced reconciliation must restore the packaged workflow"
+    );
+
+    let doctor = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "doctor",
+            "--client",
+            "grok",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let doctor: Value = serde_json::from_slice(&doctor).unwrap();
+    assert_eq!(doctor["clients"].as_array().unwrap().len(), 1);
+    assert_eq!(doctor["clients"][0]["client"], "grok");
+
+    let mcp_prompt = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "prompt",
+            "mcp",
+            "--client",
+            "grok",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let mcp_prompt: Value = serde_json::from_slice(&mcp_prompt).unwrap();
+    assert!(
+        mcp_prompt["prompt"]
+            .as_str()
+            .unwrap()
+            .contains(".grok/config.toml")
+    );
+    assert!(
+        !mcp_prompt["prompt"]
+            .as_str()
+            .unwrap()
+            .contains(db.to_str().unwrap())
+    );
+
+    let routing = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "prompt",
+            "routing",
+            "--client",
+            "grok",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let routing: Value = serde_json::from_slice(&routing).unwrap();
+    assert!(routing["hosts"]["grok"].is_array());
+    assert!(
+        routing["prompt"]
+            .as_str()
+            .unwrap()
+            .contains("grok --no-auto-update")
+    );
+    assert!(routing["process_dispatch"].as_array().unwrap().is_empty());
+
+    fs::write(
+        dir.path().join(".planr/agents.toml"),
+        "[profiles.grok]\nclient = \"grok\"\nmodel = \"grok-code\"\n\n[route_default]\nprofile = \"grok\"\n",
+    )
+    .unwrap();
+    let item = create_test_item(dir.path(), &db, "Grok observation", "narrow marker");
+    planr()
+        .current_dir(dir.path())
+        .env("PLANR_MCP_CLIENT", "grok")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "log",
+            "add",
+            "--item",
+            &item,
+            "--summary",
+            "observed through MCP",
+            "--cmd",
+            "cargo test",
+        ])
+        .assert()
+        .success();
+    planr()
+        .current_dir(dir.path())
+        .env("GROK_SESSION_ID", "ambient-only")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "log",
+            "add",
+            "--item",
+            &item,
+            "--summary",
+            "ambient variable ignored",
+            "--cmd",
+            "cargo test",
+        ])
+        .assert()
+        .success();
+    let trace = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "trace",
+            "item",
+            &item,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let trace: Value = serde_json::from_slice(&trace).unwrap();
+    let runs = trace["routing"]["runs"].as_array().unwrap();
+    assert_eq!(runs[0]["observed_client"], "grok");
+    assert!(
+        !runs[1].as_object().unwrap().contains_key("observed_client"),
+        "ambient GROK_* variables must not be treated as a stable observation"
+    );
+
+    let conflict_dir = tempdir().unwrap();
+    let conflict_db = conflict_dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(conflict_dir.path())
+        .args([
+            "--db",
+            conflict_db.to_str().unwrap(),
+            "project",
+            "init",
+            "Conflict",
+        ])
+        .assert()
+        .success();
+    fs::create_dir_all(conflict_dir.path().join(".grok")).unwrap();
+    let conflict = "[mcp_servers.planr]\ncommand = \"custom-planr\"\n";
+    fs::write(conflict_dir.path().join(".grok/config.toml"), conflict).unwrap();
+    planr()
+        .current_dir(conflict_dir.path())
+        .args(["--db", conflict_db.to_str().unwrap(), "install", "grok"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("re-run with --force"));
+    assert_eq!(
+        fs::read_to_string(conflict_dir.path().join(".grok/config.toml")).unwrap(),
+        conflict
+    );
+    assert!(
+        !conflict_dir
+            .path()
+            .join(".grok/skills/planr/SKILL.md")
+            .exists(),
+        "a config conflict must fail before any workflow asset is written"
+    );
+}
+
+#[test]
 fn client_install_responsibilities_are_exact() {
     let full_contracts: [(&str, &[&str], &[&str]); 3] = [
         (
@@ -12574,10 +12938,12 @@ fn rust_implementation_has_owned_module_boundaries() {
         ("src/app/mod.rs", 180),
         ("src/app/audit.rs", 200),
         ("src/app/commands.rs", 1_120),
+        ("src/app/grok.rs", 150),
         ("src/app/flow.rs", 320),
         ("src/app/git_review.rs", 350),
         ("src/app/mcp.rs", 900),
         ("src/app/packages.rs", 450),
+        ("src/app/prompts.rs", 100),
         ("src/app/http.rs", 900),
         ("src/app/repository.rs", 1_100),
         ("src/app/lease.rs", 300),
@@ -12592,6 +12958,7 @@ fn rust_implementation_has_owned_module_boundaries() {
         ("src/model.rs", 400),
         ("src/planpack.rs", 320),
         ("src/integrations.rs", 500),
+        ("src/integrations/grok.rs", 220),
         ("src/agents.rs", 800),
         ("src/app/agents.rs", 950),
         ("src/app/agents_init.rs", 800),
@@ -12611,10 +12978,12 @@ fn rust_implementation_has_owned_module_boundaries() {
         "src/app/mod.rs",
         "src/app/audit.rs",
         "src/app/commands.rs",
+        "src/app/grok.rs",
         "src/app/flow.rs",
         "src/app/git_review.rs",
         "src/app/mcp.rs",
         "src/app/packages.rs",
+        "src/app/prompts.rs",
         "src/app/http.rs",
         "src/app/repository.rs",
         "src/app/lease.rs",
@@ -12629,6 +12998,7 @@ fn rust_implementation_has_owned_module_boundaries() {
         "src/storage/rows.rs",
         "src/planpack.rs",
         "src/integrations.rs",
+        "src/integrations/grok.rs",
         "src/app/agents_init.rs",
     ] {
         assert!(
