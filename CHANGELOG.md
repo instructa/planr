@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-07-27
+
+### Added
+
+- Add first-class Pi support through the explicit `planr install pi` and `--client pi` flows, provisioning native `.pi/skills` workflow assets plus optional `pi-subagents` project roles without treating Pi as an MCP host.
+- Add the frozen Pi integration contract, Pi documentation, deterministic inventory checks, observed-client support, generated CLI/MCP references, and E2E coverage for Pi install previews, writes, and project initialization.
+
+### Compatibility
+
+- Keep Pi outside the legacy `--client all` selection so existing Codex, Claude Code, Cursor, and Grok setup remains unchanged. Pi v1 has no MCP or hook contract; `--no-mcp` and `--no-hooks` are accepted for CLI parity without adding extra Pi artifacts.
+
+### Security
+
+- Keep Planr provider-neutral for Pi: generated assets contain no provider credential, model pin, endpoint, Pi auth path, global setting, or session reference. CI verifies deterministic contracts only; authenticated Pi usage remains operator-local.
+
 ## [1.8.0] - 2026-07-27
 
 ### Added
@@ -533,7 +548,8 @@ Initial Planr product release.
 - Tag-driven release pipeline with multi-target builds (darwin/linux, arm64/x86_64) and Homebrew tap automation.
 - Skill workflow documentation for Codex, Claude Code, Cursor, and MCP-only clients.
 
-[Unreleased]: https://github.com/instructa/planr/compare/v1.8.0...HEAD
+[Unreleased]: https://github.com/instructa/planr/compare/v1.9.0...HEAD
+[1.9.0]: https://github.com/instructa/planr/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/instructa/planr/compare/v1.7.3...v1.8.0
 [1.7.3]: https://github.com/instructa/planr/compare/v1.7.2...v1.7.3
 [1.7.2]: https://github.com/instructa/planr/compare/v1.7.1...v1.7.2
