@@ -20,7 +20,7 @@
 
 ## Source Freshness Notes
 
-- MCP and coding-agent client behavior changes frequently. Re-check Codex, Claude Code, Cursor, and MCP docs before implementing install helpers or promising exact config commands.
+- MCP and coding-agent client behavior changes frequently. Re-check Codex, Claude Code, Cursor, Grok Build, and MCP docs before implementing install helpers or promising exact config commands.
 - The spec intentionally prefers stable integration concepts over vendor-specific hidden config internals.
 
 ## Product Independence Notes

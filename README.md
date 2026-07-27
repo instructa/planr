@@ -2,7 +2,7 @@
 
 ![Planr — turn chaotic agent work into a verified task graph](public/planr_banner1.webp)
 
-Planr is a local-first planning and execution coordination tool for coding agents. It combines reviewable Markdown plans with a dependency-aware work map so Codex, Claude Code, Cursor, generic MCP clients, and human operators can drive the same work safely — from idea to verified completion.
+Planr is a local-first planning and execution coordination tool for coding agents. It combines reviewable Markdown plans with a dependency-aware work map so Codex, Claude Code, Cursor, Grok Build, generic MCP clients, and human operators can drive the same work safely — from idea to verified completion.
 
 [**View the Demo →**](https://x.com/kevinkern/status/2066957434564808884?s=20)
 
@@ -53,7 +53,7 @@ curl -fsSL https://raw.githubusercontent.com/instructa/planr/main/scripts/instal
 > On an affected Linux release, build from source on the target distribution or upgrade to v1.7.3.
 <!-- planr:linux-release-portability:end surface=README schema=1 -->
 
-Then initialize a project. When selected, Claude Code and Cursor also receive standalone project worker/reviewer roles; Codex workflow skills come from its plugin:
+Then initialize a project. When selected, Claude Code and Cursor also receive standalone project worker/reviewer roles; Codex workflow skills come from its plugin. Grok Build is a separate explicit opt-in and is not included by `all`:
 
 ```bash
 planr project init "My Product" --client all
@@ -103,6 +103,23 @@ planr install cursor --no-mcp   # project skills, subagents, and hooks; no MCP c
 ```
 
 The dry-run also prints a one-click `cursor://` deeplink for user-level MCP install. Marketplace listing is pending review. Multitasking with Cursor subagents: [Cursor guide](https://planr.so/docs/integrations/cursor).
+
+</details>
+
+<a id="install-grok-build"></a>
+<details>
+<summary><strong>Grok Build</strong></summary>
+
+Preview, install, and inspect the repository-local integration:
+
+```bash
+planr install grok --dry-run
+planr install grok
+planr doctor --client grok --json
+grok inspect --json
+```
+
+Planr writes portable `.grok/config.toml` MCP configuration plus native `.grok/agents/` and `.grok/skills/` assets. It writes no Grok plugin, hooks, xAI credentials, model setting, or provider runtime dependency. Live authenticated verification is maintainer-local only and never runs in CI. See the [Grok Build guide](https://planr.so/docs/integrations/grok-build).
 
 </details>
 
@@ -202,7 +219,7 @@ Full documentation lives at [planr.so/docs](https://planr.so/docs).
 - [Plugins and Model Routing](https://planr.so/docs/plugins) · [Recipes](https://planr.so/docs/guides/recipes)
 - [Integrations and Host Hooks](https://planr.so/docs/integrations)
 - [CLI Reference](https://planr.so/docs/reference/cli) · [MCP Reference](https://planr.so/docs/reference/mcp)
-- [Codex](https://planr.so/docs/integrations/codex) · [Claude Code](https://planr.so/docs/integrations/claude-code) · [Cursor](https://planr.so/docs/integrations/cursor)
+- [Codex](https://planr.so/docs/integrations/codex) · [Claude Code](https://planr.so/docs/integrations/claude-code) · [Cursor](https://planr.so/docs/integrations/cursor) · [Grok Build](https://planr.so/docs/integrations/grok-build)
 - [Daily Worker Loop](https://planr.so/docs/guides/daily-worker-loop)
 - [Task Graph Model](https://planr.so/docs/concepts/graph-and-readiness)
 - [Architecture](https://planr.so/docs/contributing/architecture)

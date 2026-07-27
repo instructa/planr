@@ -37,9 +37,19 @@ const workflowFiles = (await readdir(workflowsRoot))
   .filter((file) => file.endsWith(".yml") || file.endsWith(".yaml"))
   .sort();
 const seen = new Map();
+const workflowSources = new Map();
+const releaseScriptFiles = [
+  "build-release.sh",
+  "build-linux-release.sh",
+  "prepare-release-candidate.sh",
+  "release.sh",
+  "verify-linux-release-artifact.sh",
+  "verify-public-lifecycle.sh",
+];
 
 for (const file of workflowFiles) {
   const source = await readFile(path.join(workflowsRoot, file), "utf8");
+  workflowSources.set(file, source);
   const lines = source.split("\n");
 
   for (const [index, line] of lines.entries()) {
@@ -55,6 +65,22 @@ for (const file of workflowFiles) {
     assert.equal(version, expected.version, `${file}:${index + 1} has stale version comment for ${action}`);
     seen.set(action, (seen.get(action) ?? 0) + 1);
   }
+}
+
+const releaseBoundarySources = new Map(
+  await Promise.all(
+    releaseScriptFiles.map(async (file) => [
+      `scripts/${file}`,
+      await readFile(path.join(repoRoot, "scripts", file), "utf8"),
+    ]),
+  ),
+);
+for (const [file, source] of [...workflowSources, ...releaseBoundarySources]) {
+  assert.doesNotMatch(
+    source,
+    /(?:xai|x\.ai|\bgrok\b)/iu,
+    `${file} must not contain xAI credentials, Grok installation/auth, or live model execution; Grok verification is maintainer-local only`,
+  );
 }
 
 for (const [action, expected] of expectedActions) {

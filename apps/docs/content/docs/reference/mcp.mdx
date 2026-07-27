@@ -54,15 +54,16 @@ Unknown or missing IDs produce JSON-RPC errors. Resource templates use `{id}` su
 
 ## Install contract
 
-`planr install <client> --dry-run` prints the complete client-owned MCP, role, skill, and hook-reconciliation paths for Codex, Claude Code, and Cursor without writing them. A non-dry install writes only repository-local files, with this ownership contract:
+`planr install <client> --dry-run` prints the complete client-owned MCP, role, skill, and hook-reconciliation paths for Codex, Claude Code, Cursor, and Grok Build without writing them. A non-dry install writes only repository-local files, with this ownership contract:
 
 - Codex: the CLI writes `.planr/integrations/codex-mcp.toml` and `.codex/hooks.json`; the plugin owns all ten workflow skills; neither path writes Planr project roles or project skills.
 - Claude Code: the CLI writes `.mcp.json`, standalone `.claude/agents/` roles, and `.claude/settings.json` hooks, but no project skills; the plugin owns all ten workflow skills and its plugin agents.
 - Cursor: the CLI writes `.cursor/mcp.json`, both `.cursor/agents/` roles, all ten `.cursor/skills/` skill copies, and `.cursor/hooks.json`.
+- Grok Build: the CLI document-preservingly reconciles only `mcp_servers.planr` in `.grok/config.toml`, writes both native `.grok/agents/` roles and the canonical `.grok/skills/` tree, and writes no hooks or project plugin. It is explicit opt-in and remains outside `--client all`.
 
 The Cursor dry-run additionally prints a `cursor://anysphere.cursor-deeplink/mcp/install` link whose embedded config (`planr mcp`, no `--db`) is safe at user scope because each workspace resolves its own database. Planr does not edit global client configuration without a separate explicit operator action; the deeplink requires the operator to click it and confirm inside Cursor.
 
-`--no-mcp` skips only the project MCP artifact: Codex reconciles hooks only; Claude Code writes standalone roles and hooks but no project skills; Cursor writes roles, all ten skills, and hooks. `--no-hooks` is the independent hook opt-out and can be combined with `--no-mcp`.
+`--no-mcp` skips only the project MCP artifact: Codex reconciles hooks only; Claude Code writes standalone roles and hooks but no project skills; Cursor writes roles, all ten skills, and hooks; Grok writes its native roles and skills. `--no-hooks` is the independent hook opt-out and can be combined with `--no-mcp`; for Grok it is an explicit no-op because v1 has no hook contract.
 
 ## Results and errors
 

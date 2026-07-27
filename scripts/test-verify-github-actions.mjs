@@ -17,6 +17,9 @@ const linuxBuildScript = path.join(fixtureScripts, "build-linux-release.sh");
 const linuxBuilderDockerfile = path.join(fixtureScripts, "linux-release-builder.Dockerfile");
 const linuxVerifyScript = path.join(fixtureScripts, "verify-linux-release-artifact.sh");
 const publicLifecycleScript = path.join(fixtureScripts, "verify-public-lifecycle.sh");
+const buildReleaseScript = path.join(fixtureScripts, "build-release.sh");
+const prepareReleaseScript = path.join(fixtureScripts, "prepare-release-candidate.sh");
+const releaseScript = path.join(fixtureScripts, "release.sh");
 const trivyIgnoreFile = path.join(fixtureRoot, ".trivyignore.yaml");
 const localSecurityScript = path.join(fixtureScripts, "security-local.sh");
 
@@ -34,6 +37,9 @@ try {
   await cp(path.join(repoRoot, "scripts", "linux-release-builder.Dockerfile"), linuxBuilderDockerfile);
   await cp(path.join(repoRoot, "scripts", "verify-linux-release-artifact.sh"), linuxVerifyScript);
   await cp(path.join(repoRoot, "scripts", "verify-public-lifecycle.sh"), publicLifecycleScript);
+  await cp(path.join(repoRoot, "scripts", "build-release.sh"), buildReleaseScript);
+  await cp(path.join(repoRoot, "scripts", "prepare-release-candidate.sh"), prepareReleaseScript);
+  await cp(path.join(repoRoot, "scripts", "release.sh"), releaseScript);
   await cp(path.join(repoRoot, "scripts", "security-local.sh"), localSecurityScript);
   await cp(path.join(repoRoot, ".trivyignore.yaml"), trivyIgnoreFile);
   await cp(path.join(repoRoot, ".github", "workflows"), fixtureWorkflows, { recursive: true });
@@ -41,13 +47,14 @@ try {
   const baseline = runVerifier();
   assert.equal(baseline.status, 0, `baseline workflow fixture must pass:\n${baseline.stderr}`);
 
-  const fixtureFiles = [releaseWorkflow, ciWorkflow, securityWorkflow, linuxBuildScript, linuxBuilderDockerfile, linuxVerifyScript, publicLifecycleScript, localSecurityScript, trivyIgnoreFile];
+  const fixtureFiles = [releaseWorkflow, ciWorkflow, securityWorkflow, linuxBuildScript, linuxBuilderDockerfile, linuxVerifyScript, publicLifecycleScript, buildReleaseScript, prepareReleaseScript, releaseScript, localSecurityScript, trivyIgnoreFile];
   const baselineSources = new Map(
     await Promise.all(fixtureFiles.map(async (file) => [file, await readFile(file, "utf8")])),
   );
   async function resetFixtures() {
     await Promise.all([...baselineSources].map(([file, source]) => writeFile(file, source)));
   }
+  let adversarialCases = 0;
   async function expectRejected(file, mutate, expected, label) {
     await resetFixtures();
     const source = baselineSources.get(file);
@@ -57,6 +64,7 @@ try {
     const result = runVerifier();
     assert.notEqual(result.status, 0, `${label} must fail verification`);
     assert.match(`${result.stdout}\n${result.stderr}`, expected, `${label} failure must explain the invariant`);
+    adversarialCases += 1;
   }
 
   const source = baselineSources.get(releaseWorkflow);
@@ -89,6 +97,36 @@ try {
     ),
     /PR CI must build linux-arm64 natively/u,
     "emulated arm64 PR runner",
+  );
+  await expectRejected(
+    ciWorkflow,
+    (value) => `${value}\n# XAI_API_KEY: \${{ secrets.XAI_API_KEY }}\n`,
+    /must not contain xAI credentials, Grok installation\/auth, or live model execution/u,
+    "xAI credential in PR CI",
+  );
+  await expectRejected(
+    releaseWorkflow,
+    (value) => `${value}\n# run: grok --no-auto-update -p \"live release smoke\"\n`,
+    /must not contain xAI credentials, Grok installation\/auth, or live model execution/u,
+    "live Grok release smoke",
+  );
+  await expectRejected(
+    releaseScript,
+    (value) => `${value}\ngrok login\n`,
+    /must not contain xAI credentials, Grok installation\/auth, or live model execution/u,
+    "Grok login in publication script",
+  );
+  await expectRejected(
+    buildReleaseScript,
+    (value) => `${value}\ngrok -p \"live release prompt\" --output-format json\n`,
+    /must not contain xAI credentials, Grok installation\/auth, or live model execution/u,
+    "Grok model call in release build script",
+  );
+  await expectRejected(
+    prepareReleaseScript,
+    (value) => `${value}\ngrok mcp doctor\n`,
+    /must not contain xAI credentials, Grok installation\/auth, or live model execution/u,
+    "Grok command in candidate preparation script",
   );
   await expectRejected(
     releaseWorkflow,
@@ -251,7 +289,7 @@ try {
     "unpinned local Trivy checks update",
   );
 
-  console.log("github_actions_regression=passed adversarial_cases=29 same_runner_smoke_insufficient=true musl_native_pins_lifecycle_checksums_npm_fail_closed=true security_jobs_fail_closed=true immutable_security_toolchain=true");
+  console.log(`github_actions_regression=passed adversarial_cases=${adversarialCases} same_runner_smoke_insufficient=true musl_native_pins_lifecycle_checksums_npm_fail_closed=true security_jobs_fail_closed=true immutable_security_toolchain=true`);
 } finally {
   await rm(fixtureRoot, { recursive: true, force: true });
 }

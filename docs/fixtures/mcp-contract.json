@@ -92,16 +92,23 @@
       "\"mcpServers\"",
       "\"planr\"",
       "cursor://anysphere.cursor-deeplink/mcp/install?name=planr&config="
+    ],
+    "grok": [
+      "[mcp_servers.planr]",
+      "args = [\"mcp\"]",
+      "PLANR_MCP_CLIENT = \"grok\"",
+      ".grok/skills/planr/SKILL.md",
+      "hooks: unsupported/no-op"
     ]
   },
   "cli_reference_commands": [
-    "planr install codex|claude|cursor",
+    "planr install codex|claude|cursor|grok",
     "planr prompt cli|mcp|http",
     "planr prompt routing",
     "planr agents init",
     "planr agents init --profile|--skill|--route|--default-route|--interactive",
     "planr prime",
-    "planr install codex|claude|cursor [--dry-run] [--no-mcp] [--force] [--no-hooks]",
+    "planr install codex|claude|cursor|grok [--dry-run] [--no-mcp] [--force] [--no-hooks]",
     "planr mcp",
     "planr review annotate",
     "planr review ingest",

@@ -72,7 +72,7 @@ Status: Accepted
 
 ### Context
 
-Codex, Claude Code, and Cursor all have MCP integration paths, while their native skill/plugin systems differ.
+Codex, Claude Code, Cursor, and explicitly opted-in Grok Build all have MCP integration paths, while their native skill/plugin systems differ.
 
 ### Decision
 

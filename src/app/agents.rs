@@ -647,6 +647,18 @@ impl App {
             prompt.push_str(&format!("- {line}\n"));
         }
         hosts.insert("generic".to_string(), json!(generic_guidance));
+        if client == "grok" {
+            let grok_guidance = [
+                "Use repository-native `.grok/skills` and `.grok/agents` installed by `planr install grok`.",
+                "Grok V1 installs no Planr hooks; run `planr prime` manually when fresh state is needed.",
+                "For headless runs use `grok --no-auto-update -p \"<task>\" --output-format json`.",
+            ];
+            prompt.push_str("\n### Grok Build\n");
+            for line in grok_guidance {
+                prompt.push_str(&format!("- {line}\n"));
+            }
+            hosts.insert("grok".to_string(), json!(grok_guidance));
+        }
         if !process_dispatch.is_empty() {
             prompt.push_str("\n### Hosts without role files (process dispatch)\n");
             for line in &process_dispatch {

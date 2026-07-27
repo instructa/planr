@@ -1,0 +1,58 @@
+---
+title: Grok Build
+description: Install Planr's repository-native Grok skills, agents, and portable project MCP configuration.
+---
+
+Grok Build is a first-class, explicitly opted-in Planr host. It operates on the same local `.planr` graph as every other client; Planr does not call xAI, choose a model, or manage your Grok login.
+
+## Install in one repository
+
+Preview the complete path set, then apply it:
+
+```bash
+planr install grok --dry-run
+planr install grok
+planr doctor --client grok --json
+```
+
+The install writes `.grok/config.toml`, both Planr roles under `.grok/agents/`, and the canonical Planr workflow tree under `.grok/skills/`. It copies those workflows from the same packaged `plugins/planr` sources used by other hosts; there is no Grok-specific fork or runtime dependency.
+
+Grok is intentionally not included by `--client all`. Use `--client grok` or `install grok` when this repository should opt in. `project init --client grok` provisions the native workflows without silently enabling MCP.
+
+## Portable MCP configuration
+
+Planr owns only `mcp_servers.planr` in `.grok/config.toml` and preserves other valid TOML, keys, comments, and ordering:
+
+```toml
+[mcp_servers.planr]
+command = "planr"
+args = ["mcp"]
+enabled = true
+startup_timeout_sec = 30
+tool_timeout_sec = 6000
+env = { PLANR_MCP_CLIENT = "grok" }
+```
+
+The config contains no xAI credential, auth-file path, model, endpoint, or absolute Planr database path. `PLANR_MCP_CLIENT=grok` is only a narrow observed-client marker on the Planr child process; it is not authentication or worker identity.
+
+If an existing `mcp_servers.planr` differs, the installer stops and preserves it. Review the conflict before using `--force`, which replaces only that table. Malformed TOML always fails without writing anything. `--no-mcp` installs only the native workflows.
+
+## Discovery and compatibility
+
+Planr v1 uses documented native `.grok/skills/<name>/` and `.grok/agents/*.md` discovery. It does not write `.grok/plugins/planr`: at the frozen compatibility baseline, project plugins default to disabled and project config cannot reliably enable them. Disabling Claude-compatibility or plugin scanners therefore should not hide Planr's native assets.
+
+The v1 behavior was verified against `xai-org/grok-build` commit `b41c75a578f98bddbd326ab02cd53618451d97ee` from July 26, 2026. After a Grok upgrade, inspect discovery with:
+
+```bash
+grok inspect --json
+```
+
+Confirm that Planr skills and agents originate under this repository's `.grok/` tree and that the Planr MCP origin is the project config. If a scanner reports Planr disabled, first check that you are not diagnosing `.grok/plugins`; Planr v1 deliberately installs no project plugin. Re-run `planr install grok --dry-run` and compare the native paths before using `--force`.
+
+## Hooks and live verification
+
+Grok has no Planr hooks in v1. `--no-hooks` is accepted for CLI parity but changes no Grok path. Run `planr prime` manually when a fresh compact state summary is useful.
+
+Deterministic tests and CI never install or invoke Grok and never receive xAI credentials. A maintainer may perform a local authenticated release check with an existing Grok login in a disposable repository. Record only redacted discovery/origin, diagnostics, and the disposable Planr project identity—never tokens, auth files, prompts, responses, transcripts, or private content.
+
+Continue with the shared [Daily Worker Loop](/docs/guides/daily-worker-loop) or generate Grok-specific host guidance with `planr prompt routing --client grok`.

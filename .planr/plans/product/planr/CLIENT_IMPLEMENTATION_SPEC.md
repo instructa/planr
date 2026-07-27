@@ -5,7 +5,7 @@
 - CLI: primary V1 interface.
 - MCP client: primary agent integration.
 - Optional TUI/dashboard: local visual inspection.
-- Install helpers: client-specific setup for Codex, Claude Code, Cursor.
+- Install helpers: client-specific setup for Codex, Claude Code, Cursor, and explicitly opted-in Grok Build.
 
 ## CLI Requirements
 
@@ -114,6 +114,6 @@ Errors must include:
 - CLI golden output tests.
 - JSON schema output tests.
 - MCP tool discovery tests.
-- Config-generation fixture tests for Codex, Claude Code, and Cursor.
+- Config-generation fixture tests for Codex, Claude Code, Cursor, and Grok Build.
 - Prompt output tests for CLI, MCP, HTTP, and per-client wording.
 - Browser workspace smoke tests against localhost.

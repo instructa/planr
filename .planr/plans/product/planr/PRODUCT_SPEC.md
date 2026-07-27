@@ -11,7 +11,7 @@ Planr turns broad product ideas and coding work into a coherent flow: product pl
 ## Target Users
 
 - Individual developers running one or more coding agents locally.
-- Power users coordinating Codex, Claude Code, Cursor, Gemini CLI, or custom MCP agents in the same repo.
+- Power users coordinating Codex, Claude Code, Cursor, Grok Build, Gemini CLI, or custom MCP agents in the same repo.
 - Teams that want repo-local planning artifacts before adopting a hosted workflow.
 - Agent builders who need a small coordination primitive for local or CI-based agent workers.
 
@@ -28,7 +28,7 @@ Planr turns broad product ideas and coding work into a coherent flow: product pl
 - Local first: the repository plus a local database should be enough.
 - Product plans capture intent, build plans capture implementation context, and the map coordinates live work.
 - Log over optimism: completion is proven, not declared.
-- Cross-agent by default: Codex, Claude Code, Cursor, and MCP clients are peers.
+- Cross-agent by default: Codex, Claude Code, Cursor, Grok Build, and MCP clients are peers.
 - Hard-cut bias: avoid duplicate sources of truth and transitional shells.
 - Human-readable artifacts: all important plans and decisions must be inspectable without a proprietary UI.
 
@@ -37,9 +37,9 @@ Planr turns broad product ideas and coding work into a coherent flow: product pl
 - A `planr` CLI.
 - A local SQLite map graph with items, links, picks, contexts, artifacts, logs, reviews, runs, and events.
 - A `.planr/` repo pack for plans, project context, review artifacts, and skill/prompt templates.
-- MCP server exposing tools, resources, and prompts for Claude Code, Cursor, Codex, and compatible clients.
+- MCP server exposing tools, resources, and prompts for Claude Code, Cursor, Codex, Grok Build, and compatible clients.
 - Optional HTTP/SSE local server for dashboard and automation clients.
-- Codex, Claude Code, and Cursor install/config helpers.
+- Codex, Claude Code, Cursor, and explicitly opted-in Grok Build install/config helpers.
 - Import of existing `.planr` data.
 - Export/import of map graph and Markdown plan packs.
 - Explicit recovery sweeps for stale, timed-out, and retryable work.
@@ -96,7 +96,7 @@ idea -> product plan -> build plan -> map -> pick -> log -> review/evidence -> r
 
 ## Core User Journeys
 
-- Initialize Planr in a repo and configure Codex, Claude Code, and Cursor.
+- Initialize Planr in a repo and configure Codex, Claude Code, Cursor, or Grok Build.
 - Create a plan from a broad app idea or PRD request.
 - Convert product plan slices into build plans.
 - Seed map items from a plan.
@@ -114,7 +114,8 @@ idea -> product plan -> build plan -> map -> pick -> log -> review/evidence -> r
 ### Initialization
 
 - REQ-PROD-010: `planr project init` must create `.planr/`, `.planr/project/`, `.planr/plans/`, `.planr/reviews/`, and a local database without overwriting user content unless `--force` is provided.
-- REQ-PROD-011: `planr project init --client codex|claude|cursor|all` must print or apply integration instructions for the selected client.
+- REQ-PROD-011: `planr project init --client codex|claude|cursor|grok|all` must print or apply integration instructions for the selected client; the legacy `all` selection excludes Grok so adoption remains explicit.
+- REQ-PROD-013: `planr install grok` must write only repository-local native Grok skills, agents, and portable MCP configuration; it must not install hooks, credentials, provider SDKs, or a project plugin.
 - REQ-PROD-012: Initialization must detect existing `.planr` data and offer import commands.
 
 ### Product Plans
@@ -141,7 +142,7 @@ idea -> product plan -> build plan -> map -> pick -> log -> review/evidence -> r
 
 ### Agent Execution
 
-- REQ-PROD-050: Planr must provide agent-specific prompts or MCP prompts for Codex, Claude Code, and Cursor.
+- REQ-PROD-050: Planr must provide agent-specific prompts or MCP prompts for Codex, Claude Code, Cursor, and Grok Build.
 - REQ-PROD-051: Runs must record worker id, client, model/profile when available, item id, command surface, start/end time, and result status.
 - REQ-PROD-052: Item closure must require or allow a log entry with files changed, tests run, commands run, result summary, and blocked/unverified items.
 - REQ-PROD-053: Review findings must create fix items rather than failing ordinary code items.
@@ -165,6 +166,7 @@ idea -> product plan -> build plan -> map -> pick -> log -> review/evidence -> r
 - Codex CLI and Codex MCP configuration.
 - Claude Code MCP project/user configuration.
 - Cursor MCP project/global configuration.
+- Grok Build native repository skills/agents and portable `.grok/config.toml`; no hooks in v1.
 - Generic MCP clients via stdio and optional streamable HTTP.
 - Git worktrees and Git diff logs.
 - Optional CI invocation for verification tasks.

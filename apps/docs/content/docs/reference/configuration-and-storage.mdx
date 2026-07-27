@@ -11,6 +11,7 @@ description: Environment variables, repository files, generated paths, precedenc
 | `PLANR_WORKER_ID` | Preferred stable worker/lease identity. |
 | `PLANR_SESSION_ID` | Worker identity fallback when `PLANR_WORKER_ID` is blank or absent. |
 | `PLANR_PROFILE` | Observed registry profile fallback for execution logs. |
+| `PLANR_MCP_CLIENT` | Narrow child-process client marker. The exact value `grok` is advisory observed-client evidence, not authentication or worker identity. |
 | `PLANR_NATIVE_BIN` | npm wrapper override for a native Planr executable. |
 
 Precedence is explicit CLI flag, then environment, then workspace default where supported. Never reuse one worker ID for concurrent workers.
@@ -34,6 +35,7 @@ Precedence is explicit CLI flag, then environment, then workspace default where 
 | `.planr/integrations/codex-mcp.toml` | Generated project Codex MCP snippet |
 | `.mcp.json` | Claude project MCP configuration |
 | `.cursor/mcp.json`, `.cursor/agents/`, `.cursor/skills/` | Cursor project integration |
+| `.grok/config.toml`, `.grok/agents/`, `.grok/skills/` | Explicit Grok Build project MCP and native workflows; no hooks or plugin tree |
 
 ## npm wrapper binary resolution
 

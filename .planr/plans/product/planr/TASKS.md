@@ -237,7 +237,7 @@ Requirements:
 - Keep release curl install as the primary user path.
 - Add Homebrew-ready path or explicit tap-publication condition.
 - Keep Cargo/source as maintainer workflow.
-- Add or document client setup for Codex, Claude Code, Cursor, and generic MCP.
+- Add or document client setup for Codex, Claude Code, Cursor, explicitly opted-in Grok Build, and generic MCP.
 - Add prompt/config output for CLI, MCP, and HTTP workflows.
 - Document checksum verification.
 
@@ -638,7 +638,7 @@ Goal:
 Expose Planr tools, resources, and prompts over MCP.
 
 Context:
-Primary cross-agent integration for Codex, Claude Code, and Cursor.
+Primary cross-agent integration for Codex, Claude Code, Cursor, and explicitly opted-in Grok Build.
 
 Requirements:
 - `planr mcp` starts stdio server.
@@ -849,7 +849,7 @@ Files or areas likely involved:
 - `src/observability/`.
 
 Acceptance criteria:
-- Doctor reports database, `.planr`, Git, MCP, Codex, Claude Code, Cursor.
+- Doctor reports database, `.planr`, Git, MCP, Codex, Claude Code, Cursor, and explicitly selected Grok Build.
 - Debug bundle is reviewable before sharing.
 
 Tests:
@@ -894,7 +894,7 @@ Dependencies:
 - TASK-SEC-001.
 
 Do not do:
-- Do not rely on live Codex/Claude/Cursor for core CI tests.
+- Do not rely on live Codex/Claude/Cursor/Grok Build for core CI tests.
 
 ### TASK-REL-001: Package And Release V1
 

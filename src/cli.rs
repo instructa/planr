@@ -827,18 +827,18 @@ pub(crate) enum InstallCommand {
     Codex(InstallClientArgs),
     Claude(InstallClientArgs),
     Cursor(InstallClientArgs),
+    Grok(InstallClientArgs),
 }
 
 #[derive(Args, Debug)]
 pub(crate) struct InstallClientArgs {
     #[arg(long)]
     pub(crate) dry_run: bool,
-    /// Skip project MCP config. Codex installs hooks only; Claude installs
-    /// project roles/hooks; Cursor installs project roles/skills/hooks.
+    /// Skip project MCP config. Codex installs hooks only; Claude/Cursor install
+    /// roles and skills; Grok installs roles/skills with no hooks.
     #[arg(long)]
     pub(crate) no_mcp: bool,
-    /// Overwrite Planr-owned role/skill files provisioned for this client,
-    /// e.g. after editing .planr/agents.toml. Otherwise preserves hand edits.
+    /// Overwrite Planr-owned role/skill files; otherwise preserve hand edits.
     #[arg(long)]
     pub(crate) force: bool,
     /// Skip installing host hooks (session-start/post-compaction state
@@ -1021,6 +1021,7 @@ pub(crate) enum ClientArg {
     Codex,
     Claude,
     Cursor,
+    Grok,
     All,
 }
 

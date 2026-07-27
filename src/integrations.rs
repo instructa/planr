@@ -3,7 +3,9 @@ use serde_json::{Value, json};
 use std::path::Path;
 
 mod cursor;
+mod grok;
 pub use cursor::cursor_deeplink;
+pub use grok::reconcile_grok_project_config;
 
 pub fn install_snippet(client: &str, db: &Path) -> String {
     match client {
@@ -21,6 +23,11 @@ pub fn install_snippet(client: &str, db: &Path) -> String {
             db.display(),
             cursor_deeplink()
         ),
+        "grok" => {
+            reconcile_grok_project_config(None, false)
+                .expect("static Grok project config must reconcile")
+                .content
+        }
         _ => String::new(),
     }
 }

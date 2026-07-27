@@ -31,7 +31,9 @@ planr install codex --dry-run
 planr doctor --client codex --json
 ```
 
-Substitute `claude` or `cursor`. For generic MCP, confirm the server command is `planr mcp`, uses stdio, and starts in the workspace root.
+Substitute `claude`, `cursor`, or explicitly opted-in `grok`. For generic MCP, confirm the server command is `planr mcp`, uses stdio, and starts in the workspace root.
+
+For Grok Build, run `planr install grok --dry-run` and `grok inspect --json`. Planr uses native `.grok/skills/` and `.grok/agents/`, not `.grok/plugins/planr`; disabled project-plugin or Claude-compatibility scanners should not control those native paths. If diagnostics mention a disabled Planr plugin, you are inspecting the wrong discovery surface. Grok v1 has no Planr hooks, and `doctor --client all` intentionally excludes it.
 
 The [Agent Quickstart](/docs/agents/quickstart) has the canonical client-specific setup prompts, expected project artifacts, reload guidance, and success receipt. Re-run setup safely only after comparing its dry-run with the existing files.
 

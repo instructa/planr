@@ -87,7 +87,7 @@ Before public release:
 ## Launch Criteria
 
 - All regression reviews pass.
-- Docs cover first-run setup for Codex, Claude Code, and Cursor.
+- Docs cover first-run setup for Codex, Claude Code, Cursor, and explicitly opted-in Grok Build.
 - `planr doctor --client all` produces actionable output.
 - `planr prompt cli|mcp|http` prints actionable instructions without editing config.
 - Fresh consumer E2E passes in `~/projects/planr-test`.

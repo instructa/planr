@@ -575,6 +575,7 @@ dependencies = [
  "tempfile",
  "time",
  "toml",
+ "toml_edit",
  "uuid",
 ]
 

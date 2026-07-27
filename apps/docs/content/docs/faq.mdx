@@ -17,7 +17,7 @@ Markdown product/build plans own scope and acceptance criteria. The SQLite map o
 
 ## Can multiple clients share one project?
 
-Yes. Codex, Claude Code, Cursor, generic MCP hosts, CLI users, and reviewers coordinate through the same workspace database. Give concurrent workers distinct `PLANR_WORKER_ID` values.
+Yes. Codex, Claude Code, Cursor, explicitly opted-in Grok Build, generic MCP hosts, CLI users, and reviewers coordinate through the same workspace database. Give concurrent workers distinct `PLANR_WORKER_ID` values.
 
 ## Can two workers pick the same item?
 

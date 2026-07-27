@@ -228,6 +228,9 @@ pub fn explicit_worker_id() -> Option<String> {
 /// broadly, so they rank last. None when nothing identifies the host;
 /// callers must store nothing rather than guess.
 pub fn observed_client() -> Option<String> {
+    if env::var("PLANR_MCP_CLIENT").ok().as_deref() == Some("grok") {
+        return Some("grok".to_string());
+    }
     if env::var("CODEX_SANDBOX").is_ok() || env::var("CODEX_SESSION_ID").is_ok() {
         return Some("codex".to_string());
     }
