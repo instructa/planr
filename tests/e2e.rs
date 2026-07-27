@@ -6141,7 +6141,7 @@ allow_overwrite = true
             .stderr(std::process::Stdio::piped())
             .spawn()
             .unwrap();
-        thread::sleep(Duration::from_millis(150));
+        wait_for_http_server(port);
         (server, port)
     };
 
@@ -7396,7 +7396,7 @@ fn human_review_feedback_contract_writes_annotations_artifacts_and_followups() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    thread::sleep(Duration::from_millis(150));
+    wait_for_http_server(port);
     let http_review = http_json(&http_request(
         port,
         "POST",
@@ -7546,7 +7546,7 @@ fn http_server_survives_aborted_and_garbage_connections() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    thread::sleep(Duration::from_millis(150));
+    wait_for_http_server(port);
 
     // Connection dropped mid-request: header promises a body that never comes.
     {
@@ -7610,7 +7610,7 @@ fn http_protocol_correctness_status_codes_cors_and_live_sse() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    thread::sleep(Duration::from_millis(150));
+    wait_for_http_server(port);
 
     // Unknown route is a 404, not a 200 with an error body.
     let missing = http_request(port, "GET", "/v1/definitely-not-a-route", "");
@@ -10343,7 +10343,7 @@ fn graph_adaptation_primitives_preview_rewire_and_replan() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    thread::sleep(Duration::from_millis(150));
+    wait_for_http_server(port);
     let status = http_request(port, "GET", "/v1/projects/current/map/status", "");
     assert!(status.contains("\"ready\""), "{status}");
     let unlocks = http_request(port, "GET", &format!("/v1/items/{first_id}/unlocks"), "");
@@ -10418,7 +10418,7 @@ fn local_http_api_smoke_uses_same_core_engine() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    thread::sleep(Duration::from_millis(150));
+    wait_for_http_server(port);
 
     let create = http_request(
         port,
@@ -10708,7 +10708,7 @@ fn artifacts_events_and_debug_bundle_are_persisted() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    thread::sleep(Duration::from_millis(150));
+    wait_for_http_server(port);
     let http_artifact = http_json(&http_request(
         port,
         "POST",
@@ -11233,7 +11233,7 @@ fn recovery_sweep_is_available_through_mcp_and_http() {
         ])
         .spawn()
         .unwrap();
-    thread::sleep(Duration::from_millis(150));
+    wait_for_http_server(port);
     let http_recovery = http_json(&http_request(
         port,
         "POST",
@@ -11299,7 +11299,7 @@ fn local_review_workspace_serves_browser_ui_and_drives_review_chain() {
         ])
         .spawn()
         .unwrap();
-    thread::sleep(Duration::from_millis(150));
+    wait_for_http_server(port);
 
     let review = http_json(&http_request(
         port,
@@ -11818,6 +11818,22 @@ fn template_export_import_preserves_graph_context_and_review_artifacts() {
 fn free_port() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.local_addr().unwrap().port()
+}
+
+fn wait_for_http_server(port: u16) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match TcpStream::connect(("127.0.0.1", port)) {
+            Ok(stream) => {
+                drop(stream);
+                return;
+            }
+            Err(_) if std::time::Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("HTTP server did not become ready: {error}"),
+        }
+    }
 }
 
 fn http_request(port: u16, method: &str, path: &str, body: &str) -> String {

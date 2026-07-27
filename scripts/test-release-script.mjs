@@ -11,6 +11,8 @@ import { fileURLToPath } from "node:url";
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const prepareSource = fs.readFileSync(path.join(repo, "scripts/prepare-release-candidate.sh"), "utf8");
 const releaseSource = fs.readFileSync(path.join(repo, "scripts/release.sh"), "utf8");
+const changelogLinksSource = fs.readFileSync(path.join(repo, "scripts/verify-changelog-release-links.sh"), "utf8");
+const repositoryVersion = JSON.parse(fs.readFileSync(path.join(repo, "package.json"), "utf8")).version;
 const version = "9.9.9";
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "planr-release-contract-"));
 
@@ -20,13 +22,14 @@ function write(file, content, mode) {
   if (mode) fs.chmodSync(file, mode);
 }
 
-function fixture(name, prepared) {
+function fixture(name, prepared, changelogPrepared = prepared) {
   const root = path.join(tmp, name);
   const bin = path.join(root, "bin");
   const log = path.join(root, "commands.log");
   const initial = prepared ? version : "1.7.2";
   write(path.join(root, "scripts/prepare-release-candidate.sh"), prepareSource, 0o755);
   write(path.join(root, "scripts/release.sh"), releaseSource, 0o755);
+  write(path.join(root, "scripts/verify-changelog-release-links.sh"), changelogLinksSource, 0o755);
   write(path.join(root, "scripts/security-local.sh"), "#!/bin/sh\nset -eu\nprintf 'security-local\\n' >> \"$COMMAND_LOG\"\n", 0o755);
   write(path.join(root, "scripts/verify-release-eval-receipt.mjs"), "");
   write(path.join(root, "Cargo.toml"), `[package]\nname = "planr"\nversion = "${initial}"\n`);
@@ -37,7 +40,27 @@ function fixture(name, prepared) {
     "plugins/planr/.claude-plugin/plugin.json",
     ".cursor-plugin/plugin.json",
   ]) write(path.join(root, file), `${JSON.stringify({ name: "planr", version: initial }, null, 2)}\n`);
-  write(path.join(root, "CHANGELOG.md"), `## [${version}]\n`);
+  const changelog = changelogPrepared
+    ? [
+      "## [Unreleased]",
+      "",
+      `## [${version}]`,
+      "",
+      "## [1.7.2]",
+      "",
+      `[Unreleased]: https://github.com/instructa/planr/compare/v${version}...HEAD`,
+      `[${version}]: https://github.com/instructa/planr/compare/v1.7.2...v${version}`,
+      "",
+    ]
+    : [
+      "## [Unreleased]",
+      "",
+      "## [1.7.2]",
+      "",
+      "[Unreleased]: https://github.com/instructa/planr/compare/v1.7.2...HEAD",
+      "",
+    ];
+  write(path.join(root, "CHANGELOG.md"), changelog.join("\n"));
   write(path.join(root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
   write(path.join(root, "pnpm-lock.baseline"), "lockfileVersion: '9.0'\n");
   write(path.join(root, "apps/docs/content/docs/reference/cli-generated.mdx"), `cli ${initial}\n`);
@@ -92,7 +115,7 @@ esac
 }
 
 function run(name, script, prepared, env = {}) {
-  const test = fixture(name, prepared);
+  const test = fixture(name, prepared, script === "release.sh");
   const args = script === "release.sh" ? [version, "contract test"] : [version];
   const result = spawnSync("sh", [`scripts/${script}`, ...args], {
     cwd: test.root,
@@ -114,9 +137,57 @@ function run(name, script, prepared, env = {}) {
 assert.doesNotMatch(prepareSource, /git (add|commit|tag|push)/u, "candidate preparation must not mutate Git history");
 assert.doesNotMatch(releaseSource, /git (add|commit)/u, "publication must not change the reviewed candidate commit");
 assert.doesNotMatch(releaseSource, /^replace\(\)|^replace /mu, "publication must not rewrite manifests");
+assert.doesNotMatch(
+  prepareSource,
+  /verify-changelog-release-links\.sh/u,
+  "candidate preparation must run before the target changelog section is authored",
+);
+assert.match(releaseSource, /verify-changelog-release-links\.sh/u, "publication must verify changelog comparison links");
+
+const repositoryChangelogLinks = spawnSync(
+  "sh",
+  ["scripts/verify-changelog-release-links.sh", repositoryVersion],
+  { cwd: repo, encoding: "utf8" },
+);
+assert.equal(repositoryChangelogLinks.status, 0, repositoryChangelogLinks.stderr);
+
+function changelogLinkCheck(name, content) {
+  const root = path.join(tmp, name);
+  write(path.join(root, "scripts/verify-changelog-release-links.sh"), changelogLinksSource, 0o755);
+  write(path.join(root, "CHANGELOG.md"), content);
+  return spawnSync("sh", ["scripts/verify-changelog-release-links.sh", version], {
+    cwd: root,
+    encoding: "utf8",
+  });
+}
+
+const validChangelog = [
+  "## [Unreleased]",
+  `## [${version}]`,
+  "## [1.7.2]",
+  `[Unreleased]: https://github.com/instructa/planr/compare/v${version}...HEAD`,
+  `[${version}]: https://github.com/instructa/planr/compare/v1.7.2...v${version}`,
+  "",
+].join("\n");
+assert.equal(changelogLinkCheck("changelog-valid", validChangelog).status, 0);
+const staleUnreleased = changelogLinkCheck(
+  "changelog-stale-unreleased",
+  validChangelog.replace(`compare/v${version}...HEAD`, "compare/v1.7.2...HEAD"),
+);
+assert.equal(staleUnreleased.status, 1, "stale Unreleased comparison must fail");
+assert.match(staleUnreleased.stderr, /\[Unreleased\] comparison must start/u);
+const missingReleaseLink = changelogLinkCheck(
+  "changelog-missing-release-link",
+  validChangelog.replace(/^\[9\.9\.9\]:.*\n/mu, ""),
+);
+assert.equal(missingReleaseLink.status, 1, "missing release comparison must fail");
+assert.match(missingReleaseLink.stderr, /\[9\.9\.9\] comparison must span/u);
 
 const prepared = run("prepare-pass", "prepare-release-candidate.sh", false);
 assert.equal(prepared.result.status, 0, prepared.result.stderr);
+const preparedChangelog = fs.readFileSync(path.join(prepared.root, "CHANGELOG.md"), "utf8");
+assert.doesNotMatch(preparedChangelog, new RegExp(`^## \\[${version.replaceAll(".", "\\.")}\\]`, "mu"));
+assert.match(preparedChangelog, /\[Unreleased\]: https:\/\/github\.com\/instructa\/planr\/compare\/v1\.7\.2\.\.\.HEAD/u);
 for (const file of [
   "Cargo.toml",
   "Cargo.lock",
@@ -179,5 +250,5 @@ console.log(JSON.stringify({
   publication_owner: "scripts/release.sh",
   reviewed_source_mutation_during_publication: false,
   candidate_git_mutation: false,
-  fail_closed_cases: ["lockfile drift", "reference drift", "unprepared version"],
+  fail_closed_cases: ["lockfile drift", "reference drift", "stale changelog comparison", "missing changelog comparison", "unprepared version"],
 }, null, 2));

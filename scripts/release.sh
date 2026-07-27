@@ -25,10 +25,7 @@ if [ -n "$(git status --porcelain)" ]; then
   echo "worktree is dirty; publish only the reviewed candidate commit" >&2
   exit 1
 fi
-if ! grep -q "^## \[$version\]" CHANGELOG.md; then
-  echo "CHANGELOG.md has no committed '## [$version]' section" >&2
-  exit 1
-fi
+scripts/verify-changelog-release-links.sh "$version"
 if git rev-parse "v$version" >/dev/null 2>&1; then
   echo "tag v$version already exists" >&2
   exit 1

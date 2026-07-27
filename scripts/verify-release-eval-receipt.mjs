@@ -9,7 +9,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const candidatePaths = [
+const evaluatedSubjectPaths = [
   "plugins/planr/skills/planr-goal/SKILL.md",
   "plugins/planr/skills/planr-loop/SKILL.md",
   "plugins/planr/skills/planr-loop/references/host-dispatch.md",
@@ -18,8 +18,48 @@ const candidatePaths = [
 ];
 
 function candidateRevision() {
+  const inventory = spawnSync(
+    "git",
+    ["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+    { cwd: repo, encoding: "utf8" },
+  );
+  assert.equal(inventory.status, 0, "candidate source inventory failed");
+  const candidatePaths = inventory.stdout.split("\0").filter(Boolean).sort();
+  assert.ok(candidatePaths.length > 0, "candidate source inventory is empty");
+
   const hash = crypto.createHash("sha256");
+  hash.update("planr.release-source.v1\0");
   for (const relative of candidatePaths) {
+    const absolute = path.join(repo, relative);
+    let stat;
+    try {
+      stat = fs.lstatSync(absolute);
+    } catch (error) {
+      if (error?.code === "ENOENT") continue;
+      throw error;
+    }
+    const mode = stat.isSymbolicLink()
+      ? "120000"
+      : stat.isFile()
+        ? (stat.mode & 0o111) === 0 ? "100644" : "100755"
+        : null;
+    assert.ok(mode, `unsupported candidate source file type: ${relative}`);
+    const content = stat.isSymbolicLink()
+      ? Buffer.from(fs.readlinkSync(absolute))
+      : fs.readFileSync(absolute);
+    hash.update(relative);
+    hash.update("\0");
+    hash.update(mode);
+    hash.update("\0");
+    hash.update(content);
+    hash.update("\0");
+  }
+  return `sha256:${hash.digest("hex")}`;
+}
+
+function evaluatedSubjectRevision() {
+  const hash = crypto.createHash("sha256");
+  for (const relative of evaluatedSubjectPaths) {
     hash.update(relative);
     hash.update("\0");
     hash.update(fs.readFileSync(path.join(repo, relative)));
@@ -30,6 +70,10 @@ function candidateRevision() {
 
 if (process.argv.includes("--print-candidate-revision")) {
   console.log(candidateRevision());
+  process.exit(0);
+}
+if (process.argv.includes("--print-evaluated-subject-revision")) {
+  console.log(evaluatedSubjectRevision());
   process.exit(0);
 }
 
@@ -60,12 +104,13 @@ const allowedKeys = [
   "candidate_run_id",
   "suite_digest",
   "candidate_revision",
+  "evaluated_subject_revision",
   "created_at",
   "expires_at",
 ];
 assert.deepEqual(Object.keys(receipt).sort(), allowedKeys.sort(), "release eval receipt fields are not allowlisted");
-assert.equal(receipt.schema_version, "planr.release-eval-receipt.v1", "unsupported release eval receipt schema");
-for (const key of ["suite_digest", "candidate_revision"]) {
+assert.equal(receipt.schema_version, "planr.release-eval-receipt.v2", "unsupported release eval receipt schema");
+for (const key of ["suite_digest", "candidate_revision", "evaluated_subject_revision"]) {
   assert.match(receipt[key], /^sha256:[0-9a-f]{64}$/u, `invalid ${key}`);
 }
 for (const key of ["comparison_id", "candidate_run_id"]) {
@@ -78,6 +123,7 @@ assert.ok(createdAt <= Date.now() && Date.now() < expiresAt, "release eval recei
 assert.ok(expiresAt - createdAt <= 7 * 24 * 60 * 60 * 1000, "release eval receipt freshness window exceeds seven days");
 
 assert.equal(receipt.candidate_revision, candidateRevision(), "release eval receipt does not bind the current candidate");
+assert.equal(receipt.evaluated_subject_revision, evaluatedSubjectRevision(), "release eval receipt does not bind the current evaluated subject");
 
 function planrJson(args, acceptedStatuses = [0], cwd = repo) {
   const result = spawnSync(planrBinPath, ["--db", dbPathResolved, "--json", ...args], {
@@ -116,7 +162,7 @@ assert.equal(runEnvelope.ok, true, "candidate run lookup failed");
 const run = runEnvelope.object?.run;
 assert.equal(run?.id, receipt.candidate_run_id, "candidate run identity mismatch");
 assert.equal(run?.suite_digest, receipt.suite_digest, "candidate suite mismatch");
-assert.equal(run?.subject_revision, receipt.candidate_revision, "candidate revision mismatch");
+assert.equal(run?.subject_revision, receipt.evaluated_subject_revision, "evaluated subject revision mismatch");
 assert.equal(run?.status, "success", "candidate run is not successful");
 assert.equal(run?.invalidated_by ?? null, null, "candidate run is invalidated");
 

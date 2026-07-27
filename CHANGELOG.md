@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-07-27
+
+### Added
+
+- Add first-class Grok Build support through the explicit `planr install grok` and `--client grok` flows, with document-preserving project MCP configuration, native Planr worker/reviewer agents, all ten canonical workflow skills, dry-run previews, and Grok-specific doctor diagnostics.
+- Add Grok-aware project initialization, host prompts, observed-client evidence, documentation, frozen integration contracts, deterministic inventory checks, and local disposable-repository verification guidance.
+
+### Compatibility
+
+- Keep Grok outside the legacy `--client all` selection so existing Codex, Claude Code, and Cursor setup remains unchanged. Grok v1 installs no project plugin or hooks; `--no-hooks` is accepted as an explicit no-op for CLI parity.
+
+### Security
+
+- Keep Planr provider-neutral: generated Grok configuration contains no xAI credential, auth-file path, model, endpoint, or absolute database path. CI uses deterministic synthetic coverage only; authenticated Grok verification remains a redacted maintainer-local release gate.
+
 ## [1.7.3] - 2026-07-26
 
 ### Fixed
@@ -518,7 +533,8 @@ Initial Planr product release.
 - Tag-driven release pipeline with multi-target builds (darwin/linux, arm64/x86_64) and Homebrew tap automation.
 - Skill workflow documentation for Codex, Claude Code, Cursor, and MCP-only clients.
 
-[Unreleased]: https://github.com/instructa/planr/compare/v1.7.3...HEAD
+[Unreleased]: https://github.com/instructa/planr/compare/v1.8.0...HEAD
+[1.8.0]: https://github.com/instructa/planr/compare/v1.7.3...v1.8.0
 [1.7.3]: https://github.com/instructa/planr/compare/v1.7.2...v1.7.3
 [1.7.2]: https://github.com/instructa/planr/compare/v1.7.1...v1.7.2
 [1.7.1]: https://github.com/instructa/planr/compare/v1.7.0...v1.7.1

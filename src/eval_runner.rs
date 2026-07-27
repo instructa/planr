@@ -1127,7 +1127,7 @@ mod tests {
                     seed: 123,
                     max_attempts: 1,
                 },
-                timeout_ms: 1_000,
+                timeout_ms: 5_000,
                 output_limit_bytes: 1_024,
             }],
             safety: EvalRunnerSafety {
@@ -1437,7 +1437,49 @@ mod tests {
     #[test]
     fn eval_runner_runs_cases_with_bounded_parallelism_and_stable_order() {
         let root = fixture_root();
-        let mut manifest = base_manifest(vec!["sleep", "0.15"]);
+        fs::write(
+            root.path().join("overlap.py"),
+            r#"import fcntl, os, pathlib, sys, time
+
+lock = pathlib.Path("overlap.lock").open("a+")
+state_path = pathlib.Path("overlap.state")
+
+def read_state():
+    if not state_path.exists():
+        return [0, 0, 0]
+    return [int(value) for value in state_path.read_text().split(",")]
+
+def write_state(state):
+    temporary = pathlib.Path(f"overlap-{os.getpid()}.tmp")
+    temporary.write_text(",".join(str(value) for value in state))
+    temporary.replace(state_path)
+
+fcntl.flock(lock, fcntl.LOCK_EX)
+active, max_active, entered = read_state()
+active += 1
+entered += 1
+write_state([active, max(max_active, active), entered])
+fcntl.flock(lock, fcntl.LOCK_UN)
+
+deadline = time.monotonic() + 5
+while True:
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    active, max_active, entered = read_state()
+    fcntl.flock(lock, fcntl.LOCK_UN)
+    if entered >= 2:
+        break
+    if time.monotonic() >= deadline:
+        sys.exit(2)
+    time.sleep(0.01)
+
+fcntl.flock(lock, fcntl.LOCK_EX)
+active, max_active, entered = read_state()
+write_state([active - 1, max_active, entered])
+fcntl.flock(lock, fcntl.LOCK_UN)
+"#,
+        )
+        .unwrap();
+        let mut manifest = base_manifest(vec!["python3", "overlap.py"]);
         manifest.safety.max_concurrency = 2;
         manifest.cases[0].sampling.repetitions = 1;
         manifest.cases[0].sampling.warmups = 0;
@@ -1446,7 +1488,6 @@ mod tests {
         second.case_id = "case-b".to_string();
         manifest.cases.push(second);
 
-        let started = Instant::now();
         let output = run_eval_manifest(
             root.path(),
             &manifest,
@@ -1456,9 +1497,11 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(
-            started.elapsed() < Duration::from_millis(260),
-            "two 150ms cases should overlap at concurrency=2"
+        assert!(output.cases.iter().all(|case| case.status == "pass"));
+        assert_eq!(
+            fs::read_to_string(root.path().join("overlap.state")).unwrap(),
+            "0,2,2",
+            "both cases must cross the overlap barrier with at most two active processes"
         );
         assert_eq!(
             output
@@ -1498,16 +1541,23 @@ mod tests {
         let root = fixture_root();
         let cancellation = CancellationToken::new();
         let cancel_from_thread = cancellation.clone();
+        let active_marker = root.path().join("active-marker.txt");
+        let marker_from_thread = active_marker.clone();
         let handle = thread::spawn(move || {
-            thread::sleep(Duration::from_millis(500));
+            let readiness_deadline = Instant::now() + Duration::from_secs(5);
+            while !marker_from_thread.exists() && Instant::now() < readiness_deadline {
+                thread::sleep(Duration::from_millis(5));
+            }
+            let observed_active_process = marker_from_thread.exists();
             cancel_from_thread.cancel();
+            observed_active_process
         });
         let mut manifest = base_manifest(vec![
             "python3",
             "-c",
-            "import os, time; os.write(1, b'started'); time.sleep(2)",
+            "import os, pathlib, time; os.write(1, b'started'); pathlib.Path('active-marker.txt').write_text('started'); time.sleep(10)",
         ]);
-        manifest.cases[0].timeout_ms = 2_000;
+        manifest.cases[0].timeout_ms = 10_000;
         let started = Instant::now();
         let output = run_eval_manifest(
             root.path(),
@@ -1518,8 +1568,11 @@ mod tests {
             },
         )
         .unwrap();
-        handle.join().unwrap();
-        assert!(started.elapsed() < Duration::from_millis(1_200));
+        assert!(
+            handle.join().unwrap(),
+            "child process never reached readiness"
+        );
+        assert!(started.elapsed() < Duration::from_secs(7));
         assert_eq!(output.cases[0].status, "inconclusive");
         assert_eq!(output.cases[0].reasons, vec!["run_interrupted"]);
         assert!(
