@@ -135,7 +135,7 @@ The driver dispatch block (alias for `planr prompt routing`)
 Usage: planr agents routing [OPTIONS]
 
 Options:
-      --client <CLIENT>  [possible values: codex, claude, cursor, grok, all]
+      --client <CLIENT>  [possible values: codex, claude, cursor, grok, pi, all]
       --db <DB>          Path to Planr SQLite database
       --json             Emit JSON output
       --no-color         Disable color in human output
@@ -233,7 +233,7 @@ Arguments:
   [NAME]  [default: "Planr Project"]
 
 Options:
-      --client <CLIENT>  [possible values: codex, claude, cursor, grok, all]
+      --client <CLIENT>  [possible values: codex, claude, cursor, grok, pi, all]
       --db <DB>          Path to Planr SQLite database
       --force
       --json             Emit JSON output
@@ -1613,7 +1613,7 @@ Options:
 Usage: planr doctor [OPTIONS]
 
 Options:
-      --client <CLIENT>  [possible values: codex, claude, cursor, grok, all]
+      --client <CLIENT>  [possible values: codex, claude, cursor, grok, pi, all]
       --db <DB>          Path to Planr SQLite database
       --json             Emit JSON output
       --no-color         Disable color in human output
@@ -1646,6 +1646,7 @@ Commands:
   claude
   cursor
   grok
+  pi
   help    Print this message or the help of the given subcommand(s)
 
 Options:
@@ -1664,10 +1665,10 @@ Options:
       --db <DB>   Path to Planr SQLite database
       --dry-run
       --json      Emit JSON output
-      --no-mcp    Skip project MCP config. Codex installs hooks only; Claude/Cursor install roles and skills; Grok installs roles/skills with no hooks
+      --no-mcp    Skip project MCP config. Codex installs hooks only; Claude/Cursor install roles and skills; Grok installs roles/skills with no hooks; Pi has no MCP
       --force     Overwrite Planr-owned role/skill files; otherwise preserve hand edits
       --no-color  Disable color in human output
-      --no-hooks  Skip installing host hooks (session-start/post-compaction state injection via `planr prime`). Hooks are installed by default
+      --no-hooks  Skip installing host hooks (`planr prime` injection). Hooks are installed by default where supported; Grok and Pi have no hook contract
   -h, --help      Print help
 ```
 
@@ -1680,10 +1681,10 @@ Options:
       --db <DB>   Path to Planr SQLite database
       --dry-run
       --json      Emit JSON output
-      --no-mcp    Skip project MCP config. Codex installs hooks only; Claude/Cursor install roles and skills; Grok installs roles/skills with no hooks
+      --no-mcp    Skip project MCP config. Codex installs hooks only; Claude/Cursor install roles and skills; Grok installs roles/skills with no hooks; Pi has no MCP
       --force     Overwrite Planr-owned role/skill files; otherwise preserve hand edits
       --no-color  Disable color in human output
-      --no-hooks  Skip installing host hooks (session-start/post-compaction state injection via `planr prime`). Hooks are installed by default
+      --no-hooks  Skip installing host hooks (`planr prime` injection). Hooks are installed by default where supported; Grok and Pi have no hook contract
   -h, --help      Print help
 ```
 
@@ -1696,10 +1697,10 @@ Options:
       --db <DB>   Path to Planr SQLite database
       --dry-run
       --json      Emit JSON output
-      --no-mcp    Skip project MCP config. Codex installs hooks only; Claude/Cursor install roles and skills; Grok installs roles/skills with no hooks
+      --no-mcp    Skip project MCP config. Codex installs hooks only; Claude/Cursor install roles and skills; Grok installs roles/skills with no hooks; Pi has no MCP
       --force     Overwrite Planr-owned role/skill files; otherwise preserve hand edits
       --no-color  Disable color in human output
-      --no-hooks  Skip installing host hooks (session-start/post-compaction state injection via `planr prime`). Hooks are installed by default
+      --no-hooks  Skip installing host hooks (`planr prime` injection). Hooks are installed by default where supported; Grok and Pi have no hook contract
   -h, --help      Print help
 ```
 
@@ -1712,10 +1713,26 @@ Options:
       --db <DB>   Path to Planr SQLite database
       --dry-run
       --json      Emit JSON output
-      --no-mcp    Skip project MCP config. Codex installs hooks only; Claude/Cursor install roles and skills; Grok installs roles/skills with no hooks
+      --no-mcp    Skip project MCP config. Codex installs hooks only; Claude/Cursor install roles and skills; Grok installs roles/skills with no hooks; Pi has no MCP
       --force     Overwrite Planr-owned role/skill files; otherwise preserve hand edits
       --no-color  Disable color in human output
-      --no-hooks  Skip installing host hooks (session-start/post-compaction state injection via `planr prime`). Hooks are installed by default
+      --no-hooks  Skip installing host hooks (`planr prime` injection). Hooks are installed by default where supported; Grok and Pi have no hook contract
+  -h, --help      Print help
+```
+
+#### `planr install pi`
+
+```text
+Usage: planr install pi [OPTIONS]
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --dry-run
+      --json      Emit JSON output
+      --no-mcp    Skip project MCP config. Codex installs hooks only; Claude/Cursor install roles and skills; Grok installs roles/skills with no hooks; Pi has no MCP
+      --force     Overwrite Planr-owned role/skill files; otherwise preserve hand edits
+      --no-color  Disable color in human output
+      --no-hooks  Skip installing host hooks (`planr prime` injection). Hooks are installed by default where supported; Grok and Pi have no hook contract
   -h, --help      Print help
 ```
 
@@ -1744,7 +1761,7 @@ Options:
 Usage: planr prompt cli [OPTIONS]
 
 Options:
-      --client <CLIENT>  [possible values: codex, claude, cursor, grok, all]
+      --client <CLIENT>  [possible values: codex, claude, cursor, grok, pi, all]
       --db <DB>          Path to Planr SQLite database
       --json             Emit JSON output
       --no-color         Disable color in human output
@@ -1757,7 +1774,7 @@ Options:
 Usage: planr prompt mcp [OPTIONS]
 
 Options:
-      --client <CLIENT>  [possible values: codex, claude, cursor, grok, all]
+      --client <CLIENT>  [possible values: codex, claude, cursor, grok, pi, all]
       --db <DB>          Path to Planr SQLite database
       --json             Emit JSON output
       --no-color         Disable color in human output
@@ -1770,7 +1787,7 @@ Options:
 Usage: planr prompt http [OPTIONS]
 
 Options:
-      --client <CLIENT>  [possible values: codex, claude, cursor, grok, all]
+      --client <CLIENT>  [possible values: codex, claude, cursor, grok, pi, all]
       --db <DB>          Path to Planr SQLite database
       --json             Emit JSON output
       --no-color         Disable color in human output
@@ -1785,7 +1802,7 @@ Model-prioritization block from the registry plus host dispatch traps
 Usage: planr prompt routing [OPTIONS]
 
 Options:
-      --client <CLIENT>  [possible values: codex, claude, cursor, grok, all]
+      --client <CLIENT>  [possible values: codex, claude, cursor, grok, pi, all]
       --db <DB>          Path to Planr SQLite database
       --json             Emit JSON output
       --no-color         Disable color in human output

@@ -24,8 +24,9 @@ impl App {
                 "Configure Grok Build with this portable repository-local `.grok/config.toml` entry (no XAI credentials and no absolute database path):\n{}\nGrok hooks are unsupported/no-op in V1.",
                 install_snippet("grok", &self.db_path)
             ),
+            "mcp" if client == "pi" => "Pi core intentionally ships without MCP. Use the repository-native Planr skills installed by `planr install pi`, invoke `/skill:planr`, and let those skills call the local `planr` CLI. A user-installed MCP adapter remains external to Planr's Pi V1 contract.".to_string(),
             "mcp" => format!(
-                "Configure a project-scoped MCP server with command `planr --db {} mcp`. Use `planr install codex|claude|cursor|grok --dry-run` for client-specific snippets, or this generic JSON:\n{}",
+                "Configure a project-scoped MCP server with command `planr --db {} mcp`. Use `planr install codex|claude|cursor|grok|pi --dry-run` for client-specific guidance, or this generic JSON:\n{}",
                 self.db_path.display(),
                 mcp_json_config(&self.db_path)
             ),

@@ -76,6 +76,7 @@ fn grok_contract_maps_every_canonical_workflow_asset_exactly_once() {
         .chain(
             relative_files(&root().join("plugins/planr/agents"))
                 .into_iter()
+                .filter(|path| !path.contains('/'))
                 .map(|path| format!("plugins/planr/agents/{path}")),
         )
         .collect();
@@ -238,7 +239,10 @@ fn grok_product_and_public_docs_publish_the_frozen_user_contract() {
         .expect("API contract must be readable");
     for (document, required) in [
         (&product, "legacy `all` selection excludes Grok"),
-        (&architecture, "Grok Build has no Planr hook contract in v1"),
+        (
+            &architecture,
+            "Grok Build and Pi have no Planr hook contract in v1",
+        ),
         (&api, "ambient `GROK_*` variables may not"),
     ] {
         assert!(
@@ -272,7 +276,7 @@ fn grok_product_and_public_docs_publish_the_frozen_user_contract() {
     );
     let release_audit =
         fs::read_to_string(root().join("apps/docs/scripts/verify-release-readiness.mjs")).unwrap();
-    assert!(release_audit.contains("six integration routes"));
+    assert!(release_audit.contains("seven integration routes"));
 
     let guide =
         fs::read_to_string(root().join("apps/docs/content/docs/integrations/grok-build.mdx"))

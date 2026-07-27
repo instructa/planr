@@ -223,13 +223,16 @@ pub fn explicit_worker_id() -> Option<String> {
 
 /// The host this process observably runs under, in registry client
 /// vocabulary — from env vars the hosts set themselves, so it is
-/// observed rather than self-declared. Innermost host wins: Codex and
-/// Claude vars mark an active session, Cursor vars are inherited
-/// broadly, so they rank last. None when nothing identifies the host;
-/// callers must store nothing rather than guess.
+/// observed rather than self-declared. Innermost host wins: adapter and
+/// Pi/Codex/Claude markers identify the active runtime, while Cursor vars
+/// are inherited broadly and rank last. None when nothing identifies the
+/// host; callers must store nothing rather than guess.
 pub fn observed_client() -> Option<String> {
     if env::var("PLANR_MCP_CLIENT").ok().as_deref() == Some("grok") {
         return Some("grok".to_string());
+    }
+    if env::var("PI_CODING_AGENT").ok().as_deref() == Some("true") {
+        return Some("pi".to_string());
     }
     if env::var("CODEX_SANDBOX").is_ok() || env::var("CODEX_SESSION_ID").is_ok() {
         return Some("codex".to_string());

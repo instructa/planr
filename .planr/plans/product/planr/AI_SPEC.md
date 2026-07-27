@@ -16,7 +16,7 @@ Planr does not need to call AI providers in V1. Its AI role is to coordinate ext
 ## Model/Provider Strategy
 
 - REQ-AI-001: Planr must not require a specific model provider.
-- REQ-AI-002: Planr must support Codex, Claude Code, Cursor, explicitly opted-in Grok Build, and generic MCP clients through shared MCP contracts.
+- REQ-AI-002: Planr must support Codex, Claude Code, Cursor, explicitly opted-in Grok Build and Pi, and generic MCP clients through shared CLI/MCP contracts and host-native skills where supported.
 - REQ-AI-003: Client-specific runners may exist, but core graph operations must remain provider-neutral.
 
 ## Prompt Architecture

@@ -8,7 +8,9 @@ use crate::cli::{
 use crate::integrations::{cursor_deeplink, install_snippet, mcp_json_config};
 use crate::model::LinkKind;
 use crate::planpack::{build_plan_body, product_plan_files, project_pack_files};
-use crate::rolefiles::{agent_roles, cursor_skills, grok_workflow_assets, install_artifact_paths};
+use crate::rolefiles::{
+    agent_roles, cursor_skills, grok_workflow_assets, install_artifact_paths, pi_workflow_assets,
+};
 use crate::util::{
     append_line, command_exists, format_item, format_project, now_string, print_json, short_id,
     worker_id, write_if_missing,
@@ -60,10 +62,10 @@ impl App {
                 };
                 let mut agent_paths = Vec::new();
                 for target in clients {
-                    let assets = if target == "grok" {
-                        grok_workflow_assets()
-                    } else {
-                        agent_roles(target)
+                    let assets = match target {
+                        "grok" => grok_workflow_assets(),
+                        "pi" => pi_workflow_assets(),
+                        _ => agent_roles(target),
                     };
                     for (relative, content) in assets {
                         let path = self.root.join(relative);
@@ -890,6 +892,7 @@ impl App {
             ClientArg::Claude => vec!["claude"],
             ClientArg::Cursor => vec!["cursor"],
             ClientArg::Grok => vec!["grok"],
+            ClientArg::Pi => vec!["pi"],
             ClientArg::All => vec!["codex", "claude", "cursor"],
         };
         let checks: Vec<_> = clients
@@ -973,9 +976,13 @@ impl App {
             InstallCommand::Claude(args) => ("claude", args),
             InstallCommand::Cursor(args) => ("cursor", args),
             InstallCommand::Grok(args) => ("grok", args),
+            InstallCommand::Pi(args) => ("pi", args),
         };
         if client == "grok" {
             return self.install_grok(args);
+        }
+        if client == "pi" {
+            return self.install_pi(args);
         }
         if args.dry_run {
             if args.no_mcp {

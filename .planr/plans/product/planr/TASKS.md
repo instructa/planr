@@ -237,7 +237,7 @@ Requirements:
 - Keep release curl install as the primary user path.
 - Add Homebrew-ready path or explicit tap-publication condition.
 - Keep Cargo/source as maintainer workflow.
-- Add or document client setup for Codex, Claude Code, Cursor, explicitly opted-in Grok Build, and generic MCP.
+- Add or document client setup for Codex, Claude Code, Cursor, explicitly opted-in Grok Build and Pi, and generic MCP.
 - Add prompt/config output for CLI, MCP, and HTTP workflows.
 - Document checksum verification.
 
@@ -638,7 +638,7 @@ Goal:
 Expose Planr tools, resources, and prompts over MCP.
 
 Context:
-Primary cross-agent integration for Codex, Claude Code, Cursor, and explicitly opted-in Grok Build.
+Primary cross-agent integration for Codex, Claude Code, Cursor, explicitly opted-in Grok Build, and generic MCP clients. Pi deliberately uses native skills and the CLI rather than MCP.
 
 Requirements:
 - `planr mcp` starts stdio server.
@@ -695,7 +695,7 @@ Dependencies:
 Do not do:
 - Do not copy prompt text from another product.
 
-### TASK-CLIENT-001: Add Codex, Claude Code, And Cursor Install Helpers
+### TASK-CLIENT-001: Add First-Class Client Install Helpers
 
 Goal:
 Make first-run integration practical for all target clients.
@@ -708,6 +708,8 @@ Requirements:
 - `planr install codex --dry-run`.
 - `planr install claude --dry-run`.
 - `planr install cursor --dry-run`.
+- `planr install grok --dry-run`.
+- `planr install pi --dry-run`.
 - Print project-scoped config examples.
 
 Files or areas likely involved:
@@ -849,7 +851,7 @@ Files or areas likely involved:
 - `src/observability/`.
 
 Acceptance criteria:
-- Doctor reports database, `.planr`, Git, MCP, Codex, Claude Code, Cursor, and explicitly selected Grok Build.
+- Doctor reports database, `.planr`, Git, MCP, Codex, Claude Code, Cursor, and explicitly selected Grok Build or Pi.
 - Debug bundle is reviewable before sharing.
 
 Tests:
@@ -894,7 +896,7 @@ Dependencies:
 - TASK-SEC-001.
 
 Do not do:
-- Do not rely on live Codex/Claude/Cursor/Grok Build for core CI tests.
+- Do not rely on live Codex/Claude/Cursor/Grok Build/Pi for core CI tests.
 
 ### TASK-REL-001: Package And Release V1
 

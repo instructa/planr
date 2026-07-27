@@ -4,14 +4,14 @@ This is the canonical inventory that maps shipped public surfaces to repository 
 
 ## Published route inventory
 
-The site currently owns 62 MDX routes. Next.js also emits the landing page and framework support routes during the production build.
+The site currently owns 63 MDX routes. Next.js also emits the landing page and framework support routes during the production build.
 
 | Section | Published routes |
 | --- | --- |
 | Documentation | `/docs` |
 | Getting started | `/docs/getting-started`, `/docs/getting-started/why-planr`, `/docs/getting-started/installation`, `/docs/getting-started/quickstart`, `/docs/getting-started/full-lifecycle`, `/docs/getting-started/choose-your-interface` |
 | For Agents | `/docs/agents`, `/docs/agents/quickstart`, `/docs/agents/prompt-recipes`, `/docs/agents/skills` |
-| Integrations | `/docs/integrations`, `/docs/integrations/codex`, `/docs/integrations/claude-code`, `/docs/integrations/cursor`, `/docs/integrations/grok-build`, `/docs/integrations/generic-mcp`, `/docs/integrations/cli-only` |
+| Integrations | `/docs/integrations`, `/docs/integrations/codex`, `/docs/integrations/claude-code`, `/docs/integrations/cursor`, `/docs/integrations/grok-build`, `/docs/integrations/pi`, `/docs/integrations/generic-mcp`, `/docs/integrations/cli-only` |
 | Plugins | `/docs/plugins`, `/docs/plugins/switchloom` |
 | Concepts | `/docs/concepts`, `/docs/concepts/local-first-model`, `/docs/concepts/plans-and-map`, `/docs/concepts/graph-and-readiness`, `/docs/concepts/picks-and-leases`, `/docs/concepts/evidence-and-context`, `/docs/concepts/reviews-and-approvals`, `/docs/concepts/recovery-packages-and-closure` |
 | Guides | `/docs/guides`, `/docs/guides/daily-worker-loop`, `/docs/guides/parallel-coordination`, `/docs/guides/handoff-and-resume`, `/docs/guides/review-and-fix-loops`, `/docs/guides/recover-interrupted-work`, `/docs/guides/packages-and-reuse`, `/docs/guides/recipes` |
@@ -65,6 +65,7 @@ The executable and schema sources decide exact inventory. Editorial pages explai
 | Claude Code | Claude manifest, generated role/install assets | `/docs/integrations/claude-code` |
 | Cursor | Cursor manifest, role/skill/install assets | `/docs/integrations/cursor` |
 | Grok Build | Native role/skill assets and portable project MCP config | `/docs/integrations/grok-build` |
+| Pi | Native Agent Skills, optional pi-subagents roles, and CLI-backed dispatch | `/docs/integrations/pi` |
 | Generic stdio MCP | MCP server and fixture | `/docs/integrations/generic-mcp` |
 | CLI-only and non-first-class hosts | prompt output and CLI | `/docs/integrations/cli-only` |
 | Privacy, secret handling, localhost boundary | safety spec, `src/app/http.rs`, scrub behavior | `/docs/contributing/security-and-privacy` |
@@ -87,7 +88,7 @@ The executable and schema sources decide exact inventory. Editorial pages explai
 
 ## Audit completion checklist
 
-- [x] All 62 current MDX routes are explicitly inventoried.
+- [x] All 63 current MDX routes are explicitly inventoried.
 - [x] Every public product, CLI, MCP, HTTP, data, client, contributor, and operations surface has a current target and canonical source owner.
 - [x] Generated CLI and MCP inventories are separated from editorial guidance and mechanically checked.
 - [x] Retired aliases are isolated in `apps/docs/redirects.mjs` and resolve to a current route.

@@ -282,7 +282,14 @@ fn build_registry(spec: &InitSpec) -> String {
     out
 }
 
-const CLIENTS: [&str; 5] = ["codex", "claude-code", "cursor", "grok", "generic-mcp"];
+const CLIENTS: [&str; 6] = [
+    "codex",
+    "claude-code",
+    "cursor",
+    "grok",
+    "pi",
+    "generic-mcp",
+];
 
 /// The guided path: collects the same inputs the flags carry and feeds
 /// the same builder. Returns None when the user cancels at the confirm
@@ -469,7 +476,9 @@ impl App {
             .profiles
             .iter()
             .map(|profile| profile.client.clone())
-            .filter(|client| ["codex", "claude-code", "cursor", "grok"].contains(&client.as_str()))
+            .filter(|client| {
+                ["codex", "claude-code", "cursor", "grok", "pi"].contains(&client.as_str())
+            })
             .collect();
         clients.sort();
         clients.dedup();
@@ -499,6 +508,7 @@ impl App {
                 "claude-code" => InstallCommand::Claude(install_args),
                 "cursor" => InstallCommand::Cursor(install_args),
                 "grok" => InstallCommand::Grok(install_args),
+                "pi" => InstallCommand::Pi(install_args),
                 _ => unreachable!("wizard filters unsupported clients"),
             })?;
         }

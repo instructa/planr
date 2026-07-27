@@ -102,13 +102,13 @@
     ]
   },
   "cli_reference_commands": [
-    "planr install codex|claude|cursor|grok",
+    "planr install codex|claude|cursor|grok|pi",
     "planr prompt cli|mcp|http",
     "planr prompt routing",
     "planr agents init",
     "planr agents init --profile|--skill|--route|--default-route|--interactive",
     "planr prime",
-    "planr install codex|claude|cursor|grok [--dry-run] [--no-mcp] [--force] [--no-hooks]",
+    "planr install codex|claude|cursor|grok|pi [--dry-run] [--no-mcp] [--force] [--no-hooks]",
     "planr mcp",
     "planr review annotate",
     "planr review ingest",

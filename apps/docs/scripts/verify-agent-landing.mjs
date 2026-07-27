@@ -31,6 +31,7 @@ for (const marker of [
   'aria-live="polite"',
   '/docs/agents/quickstart.md',
   '<noscript>',
+  '/docs/integrations/pi',
   '/docs/getting-started/installation',
 ]) {
   assert(panel.includes(marker), `agent setup panel is missing ${marker}`);
@@ -58,7 +59,7 @@ assert(
   panel.includes('const prompt = agentRecipes[client].setupPrompt;'),
   'the clipboard path must read setupPrompt directly from the typed recipe',
 );
-assert.deepEqual(agentClientIds, ['codex', 'claude', 'cursor']);
+assert.deepEqual(agentClientIds, ['codex', 'claude', 'cursor', 'pi']);
 for (const client of agentClientIds) {
   assert(agentRecipes[client].setupPrompt.length > 1_000, `${client} setup prompt is not self-contained`);
   assert(agentRecipes[client].successReceiptFields.length >= 8, `${client} receipt is incomplete`);

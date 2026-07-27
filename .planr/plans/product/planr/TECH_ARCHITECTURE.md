@@ -7,7 +7,7 @@ Eval Contract v1 is frozen in [EVAL_CONTRACT_V1.md](EVAL_CONTRACT_V1.md). Eval i
 - REQ-ARCH-001: Keep item state, picks, worker runtime state, approval gates, links, log, reviews, and events in one local SQLite source of truth.
 - REQ-ARCH-002: Keep rich product and build plan context in repo-local Markdown files that remain useful without Planr installed.
 - REQ-ARCH-003: Support CLI, MCP, and optional HTTP/SSE as lenses over the same core engine.
-- REQ-ARCH-004: Make Codex, Claude Code, Cursor, Grok Build, and generic MCP clients first-class integration targets.
+- REQ-ARCH-004: Make Codex, Claude Code, Cursor, Grok Build, Pi, and generic MCP clients first-class integration targets.
 - REQ-ARCH-005: Avoid provider-specific logic in the core graph engine.
 
 ## System Context Diagram
@@ -39,7 +39,7 @@ Optional dashboard
 - `cli`: user commands and deterministic output.
 - `mcp`: tools, resources, prompts, capability negotiation.
 - `server`: optional local REST/SSE API.
-- `agents`: integration helpers for Codex, Claude Code, Cursor, Grok Build, and generic clients.
+- `agents`: integration helpers for Codex, Claude Code, Cursor, Grok Build, Pi, and generic clients.
 - `git`: worktree, branch, diff, and changed-file log.
 - `recovery`: stale-pick detection, timeout handling, retry policy, and manual condition reporting.
 - `review_workspace`: local browser review HTML and workspace JSON projection.
@@ -76,7 +76,7 @@ Planr does not call model providers by default. It guides external agents throug
 
 - MCP tools for map, plan, log, and review operations.
 - MCP prompts for `plan`, `work`, `review`, `map`, and `summary` workflows.
-- Client-specific install snippets for Codex, Claude Code, Cursor, and Grok Build.
+- Client-specific install snippets for Codex, Claude Code, Cursor, Grok Build, and Pi.
 - Optional runner wrappers for local Codex/Claude/Cursor CLIs when explicitly configured.
 
 ## Auth And Identity
@@ -92,12 +92,13 @@ Planr does not call model providers by default. It guides external agents throug
 - Claude Code: `.mcp.json` or CLI-based MCP registration guidance.
 - Cursor: `.cursor/mcp.json` project config and global config guidance.
 - Grok Build: native `.grok/skills/` and `.grok/agents/` plus a document-preserving project `.grok/config.toml` MCP merge. Grok is explicit opt-in, has no Planr hooks in v1, and introduces no provider runtime dependency.
+- Pi: native `.pi/skills/` plus optional `pi-subagents` roles under `.pi/agents/`. Pi is explicit opt-in, uses CLI-backed skills because core Pi intentionally omits MCP, has no Planr hooks/extensions/settings in v1, and introduces no runtime dependency.
 - Generic MCP: stdio first; streamable HTTP optional.
 - Git: worktree isolation and scoped diff log.
 
 ## Security Architecture
 
-- Host hooks are repository-local and optional where supported; Grok Build has no Planr hook contract in v1.
+- Host hooks are repository-local and optional where supported; Grok Build and Pi have no Planr hook contract in v1.
 - Any command runner must show command, cwd, environment policy, and worker id.
 - Secrets must not be stored in database, plans, logs, or analytics.
 - MCP tools that mutate state must be separated from read-only resources/prompts.
