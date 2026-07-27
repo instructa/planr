@@ -1,0 +1,49 @@
+---
+title: Pi
+description: Install Planr as native Pi Agent Skills with optional pi-subagents roles and a CLI-backed runtime.
+---
+
+Pi is a first-class, explicitly opted-in Planr host. It operates on the same local `.planr` graph as every other client while using Pi's native Agent Skills and shell tool instead of an MCP compatibility layer.
+
+<AgentRecipe client="pi" />
+
+## What Planr installs
+
+The project installer copies the canonical Planr workflow tree into `.pi/skills/` and writes Pi-specific worker and reviewer role files under `.pi/agents/`. The skills work in core Pi. The role files are inert unless the optional `pi-subagents` package is already installed, so Planr neither installs nor requires that package.
+
+Pi support is intentionally not included by `--client all`. Select Pi explicitly when this repository should carry its native resources. Planr preserves hand-edited assets unless you review the differences and intentionally request a forced restore.
+
+Core Pi deliberately has no built-in MCP client, lifecycle-hook system, plan mode, or permission-popup model. The Planr Pi installer therefore writes no `.pi/settings.json`, MCP configuration, hooks, extension, global configuration, or package state. Run `planr prime` manually when a compact state summary is useful.
+
+## Trust and resource discovery
+
+Pi discovers repository skills only after the project is trusted. Review `.pi/skills/` and `.pi/agents/` before accepting that trust boundary, then open a fresh session or run `/reload`.
+
+Non-interactive Pi modes ignore untrusted project resources unless the operator supplies `--approve`. That flag approves the repository resource boundary; it is not a substitute for inspecting the installed files. A headless host command has this shape:
+
+```bash
+pi --approve --model <provider/model> --thinking <level> -p \
+  "Use /skill:planr-work. Work the next ready item, log evidence, and request review."
+```
+
+Generate the current process-dispatch guidance with `planr prompt routing --client pi`. Planr records the requested model and thinking level as declarations; it does not claim they were honored without runtime evidence.
+
+## Invoke Planr skills
+
+Pi's explicit slash form is `/skill:<name>`. Start with:
+
+```text
+Use /skill:planr. Inspect this repository and tell me the verified next step.
+```
+
+Use `/skill:planr-plan`, `/skill:planr-goal`, `/skill:planr-loop`, `/skill:planr-work`, and `/skill:planr-review` for the corresponding specialized workflows. Natural-language skill activation can work, but the slash form is the clearest portable handoff.
+
+If `pi-subagents` is installed, it discovers the optional `.pi/agents/planr-worker.md` and `.pi/agents/planr-reviewer.md` roles. Custom agents do not automatically inherit skills or context, so Planr's role files declare their required skill while leaving model and thinking policy unpinned. The bash-enabled reviewer explicitly declares read-only acceptance and disables the implementation completion guard. Planr does not install, enable, or configure pi-subagents.
+
+## Runtime observation and compatibility baseline
+
+Commands launched by Pi receive `PI_CODING_AGENT=true`. Planr treats only that exact value as advisory observed-client evidence. It is not authentication, authorization, worker identity, or proof that a declared model actually executed.
+
+The native integration was checked against Pi main commit `a597371bda2af70372d1323d550483b5f4a0ae36`, Pi release `v0.82.1` at commit `b4f293684bba718d59cc1157679bcf6157b3a7f5`, and pi-subagents main commit `73fb2fc`. Pi core remains the required runtime; pi-subagents remains an optional enhancement.
+
+Continue with the shared [Agent Prompt Recipes](/docs/agents/prompt-recipes), the [Daily Worker Loop](/docs/guides/daily-worker-loop), or Pi-specific host guidance from `planr prompt routing --client pi`.

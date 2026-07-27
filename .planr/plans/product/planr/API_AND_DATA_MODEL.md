@@ -319,12 +319,12 @@ isProject: false
 ### Project
 
 ```bash
-planr project init [--client codex|claude|cursor|grok|all] [--force]
+planr project init [--client codex|claude|cursor|grok|pi|all] [--force]
 planr project show [--json]
 planr project list [--json]
-planr doctor [--client codex|claude|cursor|grok|all]
-planr install codex|claude|cursor|grok [--dry-run]
-planr prompt cli|mcp|http [--client codex|claude|cursor|grok|all]
+planr doctor [--client codex|claude|cursor|grok|pi|all]
+planr install codex|claude|cursor|grok|pi [--dry-run]
+planr prompt cli|mcp|http|routing [--client codex|claude|cursor|grok|pi|all]
 planr mcp
 planr serve --port 7526
 planr import <file> [--preview] [--confirm]
@@ -469,6 +469,22 @@ The exact `PLANR_MCP_CLIENT=grok` child-process marker may populate
 `runs.observed_client`; ambient `GROK_*` variables may not. The marker is
 advisory evidence, never authentication or worker identity. Grok v1 writes no
 hooks and remains outside the legacy `--client all` expansion.
+
+## Pi Project Contract
+
+`planr install pi` reconciles the canonical Planr skill tree under
+`.pi/skills/` and Pi-specific optional `pi-subagents` roles under
+`.pi/agents/`. It writes no MCP configuration, extension, hook, prompt,
+settings file, package metadata, credential, provider, model, or global state.
+
+Pi project resources load only after the operator trusts the repository.
+Interactive Pi owns the trust prompt; intentional non-interactive runs pass
+`--approve`. Planr never writes the Pi trust store. Pi's exact
+`PI_CODING_AGENT=true` child-process marker may populate
+`runs.observed_client=pi`; other Pi environment values may not. The marker is
+advisory evidence, never authentication, worker identity, model proof, or proof
+that `pi-subagents` is installed. Pi remains outside the legacy
+`--client all` expansion.
 
 ## HTTP API
 

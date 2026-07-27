@@ -31,8 +31,8 @@ For Cloudflare-local development, use `pnpm docs:alchemy:dev`. Normal content wo
 
 Require successful HTTP responses and expected content from `/`, `/docs`, a representative deep route such as `/docs/getting-started/installation`, `/docs/getting-started/installation.md`, and `/api/search`. Confirm canonical metadata uses the configured origin, the browser finds Installation through the client-side search index, an unknown route renders the recovery 404, and static assets load without browser errors.
 
-Run `PLANR_DOCS_URL=https://planr.so pnpm docs:verify-release-live` and `PLANR_DOCS_URL=https://planr.so pnpm docs:verify-shell` after deployment. The verifier produces a JSON report and screenshots under `.planr/artifacts/docs-shell/`.
+Run `PLANR_DOCS_URL=https://planr.so pnpm docs:verify-release-live` after deployment and record the command output with the release evidence.
 
 ## Promote
 
-Promote only after static, semantic, live-browser, search, responsive, and accessibility evidence passes. Record the Alchemy stage, Worker identity, deployment output, commit, and last known-good commit needed by [Rollback](/docs/operations/rollback). Do not run `pnpm docs:destroy` as rollback.
+Promote only after static, semantic, live-route, and search evidence passes. Record the Alchemy stage, Worker identity, deployment output, commit, and last known-good commit needed by [Rollback](/docs/operations/rollback). Do not run `pnpm docs:destroy` as rollback.

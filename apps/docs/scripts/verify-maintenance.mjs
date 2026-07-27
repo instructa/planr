@@ -27,6 +27,10 @@ function requireMarkers(content, label, markers) {
   for (const marker of markers) assert(content.includes(marker), `${label} is missing contract marker: ${marker}`);
 }
 
+function forbidMarkers(content, label, markers) {
+  for (const marker of markers) assert(!content.includes(marker), `${label} retains retired contract marker: ${marker}`);
+}
+
 function routeFor(file) {
   const slug = relative(contentRoot, file).split(sep).join('/').replace(/\.mdx$/, '');
   if (slug === 'index') return '/docs';
@@ -83,7 +87,7 @@ requireMarkers(authoring, 'docs authoring guide', [
 const testing = await readPage('contributing', 'testing');
 requireMarkers(testing, 'testing guide', [
   'pnpm docs:build', 'pnpm docs:verify-onboarding', 'pnpm docs:verify-concepts',
-  'pnpm docs:verify-reference', 'pnpm docs:verify-maintenance', 'pnpm docs:verify-shell',
+  'pnpm docs:verify-reference', 'pnpm docs:verify-maintenance',
   'pnpm docs:verify-deployment',
   'scripts/ci-local.sh', 'scripts/security-local.sh',
 ]);
@@ -98,7 +102,7 @@ const deployment = await readPage('operations', 'docs-deployment');
 requireMarkers(deployment, 'deployment runbook', [
   'Node.js 22', 'pnpm install --frozen-lockfile', 'NEXT_PUBLIC_SITE_URL',
   'Alchemy v2', 'direct Cloudflare assets', 'planr.so', 'pnpm docs:deploy',
-  '/api/search', 'PLANR_DOCS_URL=https://planr.so pnpm docs:verify-shell',
+  '/api/search', 'PLANR_DOCS_URL=https://planr.so pnpm docs:verify-release-live',
 ]);
 
 const rollback = await readPage('operations', 'rollback');
@@ -106,6 +110,27 @@ requireMarkers(rollback, 'rollback runbook', [
   'last known-good commit', 'pnpm docs:deploy', '/api/search', 'custom 404',
   'pnpm docs:destroy', 'does not touch user `.planr` data', 'Do not assume a binary downgrade is safe',
 ]);
+
+const health = await readPage('operations', 'health-and-diagnostics');
+const retiredBrowserVerifierMarkers = [
+  'docs:verify-shell',
+  'verify:shell',
+  'browser verifier',
+  'production browser verifier',
+  'shell verifiers',
+  'docs-shell',
+  'axe results',
+];
+for (const [label, content] of [
+  ['testing guide', testing],
+  ['deployment runbook', deployment],
+  ['health runbook', health],
+  ['rollback runbook', rollback],
+  ['docs README', await read('apps/docs/README.md')],
+  ['CI workflow', await read('.github/workflows/ci.yml')],
+]) {
+  forbidMarkers(content, label, retiredBrowserVerifierMarkers);
+}
 
 const governance = await readPage('operations', 'documentation-governance');
 requireMarkers(governance, 'governance runbook', [
@@ -138,6 +163,10 @@ assert(packageJson.scripts.build === 'next build && node scripts/prepare-static-
 assert(packageJson.scripts.start === 'wrangler dev --config wrangler.jsonc --port 3000 --local', 'docs start must emulate Cloudflare static routing');
 assert(packageJson.scripts['verify:deployment'].includes('wrangler deploy --config wrangler.jsonc --dry-run'), 'deployment verification must run Wrangler without deploying');
 assert(packageJson.scripts['verify:deployment'].includes('verify-static-deployment.mjs'), 'deployment verification must inspect the complete static artifact');
+assert(packageJson.scripts['verify:shell'] === undefined, 'docs package must not restore the retired browser verifier command');
+assert(packageJson.devDependencies['axe-core'] === undefined, 'docs package must not restore the retired browser verifier dependency');
+const rootPackageJson = JSON.parse(await read('package.json'));
+assert(rootPackageJson.scripts['docs:verify-shell'] === undefined, 'workspace package must not restore the retired browser verifier command');
 assert(packageJson.devDependencies.alchemy === '2.0.0-beta.63', 'Alchemy v2 must stay exactly pinned');
 assert(packageJson.devDependencies.effect === '4.0.0-beta.98', 'Effect v4 must stay exactly pinned');
 assert(packageJson.devDependencies['@effect/platform-node'] === '4.0.0-beta.98', 'Effect Node platform must stay exactly pinned');

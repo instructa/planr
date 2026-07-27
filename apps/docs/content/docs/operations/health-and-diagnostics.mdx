@@ -15,7 +15,7 @@ The docs service has no dedicated `/health` endpoint. Use a real rendered route 
 | Legacy alias does not redirect | `redirects.mjs`, `worker.mjs`, worker-first route inventory, destination route, live redirect check | docs architecture owner |
 | Search misses a page | page frontmatter, build output, `/api/search?query=...`, `lib/source.ts` | content/search owner |
 | Wrong canonical URL | build-time `NEXT_PUBLIC_SITE_URL` | deployment owner |
-| Layout or interaction regression | browser report, viewport screenshot, console, shell components | docs UI owner |
+| Layout or interaction regression | reproduce at the affected viewport, inspect the console and shell components, capture a sanitized screenshot | docs UI owner |
 | Stale command or schema | source generator/check output and canonical Rust owner | runtime and reference owner |
 
 ## Diagnostic ladder
@@ -23,7 +23,7 @@ The docs service has no dedicated `/health` endpoint. Use a real rendered route 
 1. Reproduce with `pnpm install --frozen-lockfile` and the static docs gates.
 2. Run `pnpm docs:verify-maintenance` and the relevant onboarding, concept, or reference verifier.
 3. Build, start, and request `/`, `/docs`, `/api/search?query=installation`, and an unknown route.
-4. Run the browser verifier against that exact origin and inspect its JSON report, screenshots, and axe results.
+4. Reproduce the affected browser flow manually against that exact origin and record the route, viewport, console output, and a sanitized screenshot when useful.
 5. Compare the failed deployment's commit, Alchemy stage, Cloudflare account, `NEXT_PUBLIC_SITE_URL`, Node version, pnpm version, and Worker identity with the last known good release.
 
-Sanitize logs and screenshots before attaching them. If the failure is not quickly attributable, preserve the candidate artifact, deployment logs, failing URL, timestamps, and verifier report, then roll back traffic. Do not edit production content in place.
+Sanitize logs and screenshots before attaching them. If the failure is not quickly attributable, preserve the candidate artifact, deployment logs, failing URL, timestamps, and release-readiness report, then roll back traffic. Do not edit production content in place.

@@ -20,6 +20,7 @@ mod inspection;
 mod lease;
 mod mcp;
 mod packages;
+mod pi;
 mod policy;
 mod prime;
 mod prompts;

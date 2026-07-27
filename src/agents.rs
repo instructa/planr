@@ -16,7 +16,7 @@ pub const REGISTRY_RELATIVE_PATH: &str = ".planr/agents.toml";
 #[serde(deny_unknown_fields)]
 pub struct AgentProfile {
     /// Host client that dispatches this profile: codex, claude-code,
-    /// cursor, or generic-mcp. Free-form so new hosts need no release.
+    /// cursor, grok, pi, or generic-mcp. Free-form so new hosts need no release.
     pub client: String,
     /// Model alias or full id, passed through verbatim — Planr does not
     /// validate ids against provider catalogs.

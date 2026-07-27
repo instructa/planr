@@ -34,6 +34,7 @@ Release and pull-request CI build static-musl artifacts on native runners, rejec
 | Claude Code | Plugin; project `.mcp.json`, roles, hooks | `planr doctor --client claude` |
 | Cursor | Project MCP, agents, skills, hooks, deeplink | `planr doctor --client cursor` |
 | Grok Build | Explicit project MCP, native agents and skills; no hooks in v1 | `planr doctor --client grok` plus `grok inspect --json` locally |
+| Pi | Explicit native Agent Skills and optional pi-subagents roles; CLI-backed, no MCP or hooks in v1 | `planr doctor --client pi` plus project trust/resource inspection locally |
 | Generic MCP | stdio `planr mcp` | MCP initialize/tools/resources/prompts discovery |
 | CLI-only/CI | Native executable and JSON output | `planr doctor --client all` plus scoped commands |
 

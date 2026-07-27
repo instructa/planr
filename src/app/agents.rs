@@ -573,17 +573,19 @@ impl App {
             .and_then(|routing| routing.effort)
             .unwrap_or("<effort>")
             .to_string();
-        let process_dispatch = if client == "all" {
-            vec![
+        let process_dispatch = match client.as_str() {
+            "all" => vec![
                 format!(
                     "pi --provider <provider> --model {example_model} --thinking {example_effort} -p \"<task>\""
                 ),
                 format!(
                     "opencode run --model \"<provider>/{example_model}\" \"<task>\"  # quote the provider/model pair"
                 ),
-            ]
-        } else {
-            Vec::new()
+            ],
+            "pi" => vec![
+                "pi --approve --model <provider/model> --thinking <level> -p \"Use /skill:planr-work on item <item-id>. Stop after requesting review.\"".to_string(),
+            ],
+            _ => Vec::new(),
         };
 
         let mut prompt = String::from("## Model routing\n\n");
@@ -658,6 +660,19 @@ impl App {
                 prompt.push_str(&format!("- {line}\n"));
             }
             hosts.insert("grok".to_string(), json!(grok_guidance));
+        }
+        if client == "pi" {
+            let pi_guidance = [
+                "Use `/skill:planr` to load the repository-native router installed by `planr install pi`; Pi must trust the project before `.pi` resources load.",
+                "When optional `pi-subagents` is installed, dispatch `.pi/agents/planr-worker.md` and `planr-reviewer.md`; otherwise use separate sequential Pi processes and record single-agent review honestly.",
+                "Pi V1 installs no Planr MCP adapter or hooks; run `planr prime` manually when fresh state is needed.",
+                "For intentional headless project-resource loading use `pi --approve -p \"<prompt>\"`; never write Pi trust or global settings on the user's behalf.",
+            ];
+            prompt.push_str("\n### Pi\n");
+            for line in pi_guidance {
+                prompt.push_str(&format!("- {line}\n"));
+            }
+            hosts.insert("pi".to_string(), json!(pi_guidance));
         }
         if !process_dispatch.is_empty() {
             prompt.push_str("\n### Hosts without role files (process dispatch)\n");

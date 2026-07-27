@@ -25,6 +25,7 @@ fn planr() -> Command {
         "CURSOR_AGENT",
         "CURSOR_INVOKED_AS",
         "PLANR_MCP_CLIENT",
+        "PI_CODING_AGENT",
         "PLANR_PROFILE",
     ] {
         cmd.env_remove(var);
@@ -5023,6 +5024,75 @@ fn observed_client_lands_on_runs_and_flags_declared_client_deviation() {
         .filter(|event| event["event_type"] == "client_mismatch_observed")
         .count();
     assert_eq!(mismatch_count, 1, "matching/unknown hosts add no events");
+}
+
+#[test]
+fn pi_runtime_marker_is_exact_and_advisory() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Pi Host"])
+        .assert()
+        .success();
+    fs::write(
+        dir.path().join(".planr/agents.toml"),
+        "[profiles.pi]\nclient = \"pi\"\nmodel = \"provider/model\"\n\n[route_default]\nprofile = \"pi\"\n",
+    )
+    .unwrap();
+    let item = create_test_item(dir.path(), &db, "Pi work", "runtime marker");
+
+    for (value, summary) in [
+        ("true", "exact marker"),
+        ("TRUE", "wrong case"),
+        ("1", "wrong value"),
+    ] {
+        planr()
+            .current_dir(dir.path())
+            .env("PI_CODING_AGENT", value)
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "log",
+                "add",
+                "--item",
+                &item,
+                "--summary",
+                summary,
+                "--cmd",
+                "cargo test",
+            ])
+            .assert()
+            .success();
+    }
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "trace",
+            "item",
+            &item,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let trace: Value = serde_json::from_slice(&output).unwrap();
+    let runs = trace["routing"]["runs"].as_array().unwrap();
+    assert_eq!(runs.len(), 3);
+    assert_eq!(runs[0]["observed_client"], "pi");
+    assert_eq!(runs[0]["client_mismatch"], false);
+    assert!(
+        !runs[1].as_object().unwrap().contains_key("observed_client"),
+        "marker matching is case-sensitive: {trace}"
+    );
+    assert!(
+        !runs[2].as_object().unwrap().contains_key("observed_client"),
+        "truthy variants are not accepted: {trace}"
+    );
 }
 
 /// Regression harness for the first-pick hang observed in a live loop
@@ -12593,6 +12663,283 @@ fn grok_host_surfaces_are_explicit_portable_and_opt_in() {
             .exists(),
         "a config conflict must fail before any workflow asset is written"
     );
+}
+
+#[test]
+fn pi_host_surfaces_are_native_explicit_and_optional() {
+    let all_dir = tempdir().unwrap();
+    let all_db = all_dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(all_dir.path())
+        .args([
+            "--db",
+            all_db.to_str().unwrap(),
+            "project",
+            "init",
+            "All Hosts",
+            "--client",
+            "all",
+        ])
+        .assert()
+        .success();
+    assert!(
+        !all_dir.path().join(".pi").exists(),
+        "the legacy all selection must not opt a project into Pi"
+    );
+    let all_doctor = planr()
+        .current_dir(all_dir.path())
+        .args([
+            "--db",
+            all_db.to_str().unwrap(),
+            "--json",
+            "doctor",
+            "--client",
+            "all",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let all_doctor: Value = serde_json::from_slice(&all_doctor).unwrap();
+    assert_eq!(all_doctor["clients"].as_array().unwrap().len(), 3);
+    assert!(
+        all_doctor["clients"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|check| check["client"] != "pi")
+    );
+
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    let initialized = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "project",
+            "init",
+            "Pi Host",
+            "--client",
+            "pi",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let initialized: Value = serde_json::from_slice(&initialized).unwrap();
+    assert_eq!(initialized["client"], "pi");
+    assert!(dir.path().join(".pi/skills/planr/SKILL.md").exists());
+    assert!(dir.path().join(".pi/agents/planr-worker.md").exists());
+    for forbidden in [
+        ".pi/settings.json",
+        ".pi/mcp.json",
+        ".pi/hooks.json",
+        ".pi/extensions",
+        ".pi/prompts",
+    ] {
+        assert!(
+            !dir.path().join(forbidden).exists(),
+            "project init must not create unsupported Pi artifact {forbidden}"
+        );
+    }
+
+    let preview = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "install",
+            "pi",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let preview: Value = serde_json::from_slice(&preview).unwrap();
+    assert_eq!(preview["client"], "pi");
+    assert_eq!(preview["mcp"]["supported"], false);
+    assert_eq!(preview["mcp"]["status"], "unsupported");
+    assert_eq!(preview["hooks"]["supported"], false);
+    assert_eq!(preview["hooks"]["status"], "unsupported");
+    assert_eq!(preview["global_config_edited"], false);
+    let preview_paths: std::collections::BTreeSet<&str> = preview["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|path| path.as_str().unwrap())
+        .collect();
+    assert_eq!(preview_paths.len(), 16);
+    assert!(
+        preview_paths
+            .iter()
+            .all(|path| path.starts_with(".pi/skills/") || path.starts_with(".pi/agents/"))
+    );
+
+    let parity_preview = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "install",
+            "pi",
+            "--dry-run",
+            "--no-mcp",
+            "--no-hooks",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parity_preview: Value = serde_json::from_slice(&parity_preview).unwrap();
+    assert_eq!(parity_preview["artifacts"], preview["artifacts"]);
+
+    let installed = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "install", "pi"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let installed: Value = serde_json::from_slice(&installed).unwrap();
+    assert_eq!(installed["mcp"]["supported"], false);
+    assert_eq!(installed["hooks"]["supported"], false);
+    assert_eq!(installed["global_config_edited"], false);
+    let written_paths: std::collections::BTreeSet<String> = installed["assets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|path| {
+            path.as_str()
+                .unwrap()
+                .strip_prefix(dir.path().to_str().unwrap())
+                .unwrap()
+                .trim_start_matches('/')
+                .to_string()
+        })
+        .collect();
+    assert_eq!(
+        preview_paths,
+        written_paths.iter().map(String::as_str).collect(),
+        "dry-run paths and non-dry reconciliation must have one source of truth"
+    );
+
+    let installed_skill = dir.path().join(".pi/skills/planr/SKILL.md");
+    fs::write(&installed_skill, "local customization\n").unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "install", "pi"])
+        .assert()
+        .success();
+    assert_eq!(
+        fs::read_to_string(&installed_skill).unwrap(),
+        "local customization\n",
+        "normal reconciliation must preserve workflow edits"
+    );
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "install", "pi", "--force"])
+        .assert()
+        .success();
+    assert_eq!(
+        fs::read_to_string(&installed_skill).unwrap(),
+        include_str!("../plugins/planr/skills/planr/SKILL.md"),
+        "forced reconciliation must restore the packaged workflow"
+    );
+
+    let doctor = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "doctor",
+            "--client",
+            "pi",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let doctor: Value = serde_json::from_slice(&doctor).unwrap();
+    assert_eq!(doctor["clients"].as_array().unwrap().len(), 1);
+    assert_eq!(doctor["clients"][0]["client"], "pi");
+
+    let mcp_prompt = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "prompt",
+            "mcp",
+            "--client",
+            "pi",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let mcp_prompt: Value = serde_json::from_slice(&mcp_prompt).unwrap();
+    assert_eq!(mcp_prompt["global_config_edited"], false);
+    assert!(
+        mcp_prompt["prompt"]
+            .as_str()
+            .unwrap()
+            .contains("Pi core intentionally ships without MCP")
+    );
+    assert!(
+        mcp_prompt["prompt"]
+            .as_str()
+            .unwrap()
+            .contains("/skill:planr")
+    );
+
+    let routing = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "prompt",
+            "routing",
+            "--client",
+            "pi",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let routing: Value = serde_json::from_slice(&routing).unwrap();
+    assert!(routing["hosts"]["pi"].is_array());
+    assert_eq!(
+        routing["process_dispatch"][0],
+        "pi --approve --model <provider/model> --thinking <level> -p \"Use /skill:planr-work on item <item-id>. Stop after requesting review.\""
+    );
+    let routing_prompt = routing["prompt"].as_str().unwrap();
+    for required in [
+        "optional `pi-subagents`",
+        "separate sequential Pi processes",
+        "run `planr prime` manually",
+        "never write Pi trust or global settings",
+    ] {
+        assert!(
+            routing_prompt.contains(required),
+            "Pi routing guidance is missing {required}"
+        );
+    }
 }
 
 #[test]

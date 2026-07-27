@@ -12,10 +12,10 @@ async function source(relative) {
 
 const required = new Map([
   ['.planr/plans/product/planr/API_AND_DATA_MODEL.md', [
-    'planr project init [--client codex|claude|cursor|grok|all]',
-    'planr doctor [--client codex|claude|cursor|grok|all]',
-    'planr install codex|claude|cursor|grok',
-    'planr prompt cli|mcp|http [--client codex|claude|cursor|grok|all]',
+    'planr project init [--client codex|claude|cursor|grok|pi|all]',
+    'planr doctor [--client codex|claude|cursor|grok|pi|all]',
+    'planr install codex|claude|cursor|grok|pi',
+    'planr prompt cli|mcp|http|routing [--client codex|claude|cursor|grok|pi|all]',
   ]],
   ['.planr/plans/product/planr/README.md', ['explicitly opted-in Grok Build']],
   ['.planr/plans/product/planr/AI_SPEC.md', ['explicitly opted-in Grok Build']],
@@ -32,7 +32,7 @@ const required = new Map([
   ]],
   ['apps/docs/scripts/verify-release-readiness.mjs', [
     'explicitly opted-in Grok Build',
-    'six integration routes',
+    'seven integration routes',
   ]],
 ]);
 

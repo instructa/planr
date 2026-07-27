@@ -10,7 +10,7 @@ Rollback redeploys a previously verified commit with its committed lockfile, sta
 1. Freeze promotion and record the failing artifact, deployment, time, and symptom.
 2. Check out the last known-good commit, restore its matching deployment environment, and run `pnpm docs:deploy`; Alchemy converges the existing `planr-docs-prod` Worker and keeps `planr.so` attached.
 3. Verify `/`, `/docs`, a deep route and its `.md` representation, `/api/search`, canonical metadata, browser search, assets, and the custom 404.
-4. Run the browser verifier against the restored origin and monitor platform error rates before declaring recovery.
+4. Run `PLANR_DOCS_URL=https://planr.so pnpm docs:verify-release-live`, manually spot-check the restored browser flow, and monitor platform error rates before declaring recovery.
 5. Diagnose forward on a new commit. Never patch generated files or deployed Worker content in place, and never use `pnpm docs:destroy` as a rollback mechanism.
 
 Docs content has no database migration, so a docs rollback does not touch user `.planr` data. If the deployment introduced an external service or mutable store, that change exceeded the current supported contract and needs its own reviewed recovery plan.

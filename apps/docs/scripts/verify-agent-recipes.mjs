@@ -18,7 +18,7 @@ const repositoryRoot = path.dirname(path.dirname(docsRoot));
 const planrBin = process.env.PLANR_BIN
   ? path.resolve(process.cwd(), process.env.PLANR_BIN)
   : path.join(repositoryRoot, 'target', 'debug', 'planr');
-const expectedClients = ['codex', 'claude', 'cursor'];
+const expectedClients = ['codex', 'claude', 'cursor', 'pi'];
 const forbiddenDefaultGoal = /\/goal Use \$planr(?!-loop)/;
 
 assert.deepEqual(agentClientIds, expectedClients, 'the first-party client union must stay exhaustive');
@@ -47,7 +47,9 @@ for (const client of agentClientIds) {
     'Never reinitialize an existing project.',
     'without my explicit approval',
     'Re-running setup must be idempotent.',
-    'Exact next prompt after setup: Use $planr.',
+    client === 'pi'
+      ? 'Exact next prompt after setup: Use /skill:planr.'
+      : 'Exact next prompt after setup: Use $planr.',
   ]) {
     assert.ok(recipe.setupPrompt.includes(required), `${client} setup prompt is missing: ${required}`);
   }
@@ -65,7 +67,20 @@ for (const client of agentClientIds) {
   assert.ok(!recipe.setupPrompt.includes('claude mcp add'), `${client} setup prompt must not install user-global MCP`);
   assert.ok(!recipe.setupPrompt.includes('cursor://'), `${client} setup prompt must not use the user-level deeplink`);
   assert.ok(recipe.setupPrompt.includes('never use `--force`'), `${client} must gate overwrite behavior`);
-  assert.ok(recipe.nextPrompts.first.startsWith('Use $planr.'), `${client} must default to the public router`);
+  if (client === 'pi') {
+    assert.equal(recipe.pluginRequired, false, 'pi must use native repository assets without a plugin step');
+    assert.deepEqual(recipe.pluginSetup, [], 'pi must not invent plugin installation commands');
+    assert.ok(recipe.setupPrompt.includes('repository-native `.pi/skills` and optional `.pi/agents`'));
+    assert.ok(recipe.setupPrompt.includes('Core Pi has no MCP or lifecycle hooks'));
+    assert.ok(recipe.setupPrompt.includes('Do not install a Pi package or pi-subagents'));
+    assert.ok(recipe.setupPrompt.includes('Review the project resources before trusting or approving them'));
+    assert.ok(!recipe.setupPrompt.includes('.pi/settings.json` configuration. Then create'));
+    assert.ok(recipe.nextPrompts.first.startsWith('Use /skill:planr.'));
+    assert.ok(JSON.stringify(recipe.nextPrompts).includes('/skill:planr-loop'));
+    assert.ok(!JSON.stringify(recipe.nextPrompts).includes('/goal '), 'pi has no native /goal driver');
+  } else {
+    assert.ok(recipe.nextPrompts.first.startsWith('Use $planr.'), `${client} must default to the public router`);
+  }
   assert.ok(!forbiddenDefaultGoal.test(JSON.stringify(recipe.nextPrompts)));
 
   const integrationSlug = recipe.integrationUrl.split('/').at(-1);
@@ -104,6 +119,24 @@ const integrationSentinels = {
     '.cursor/skills/planr-summary/SKILL.md',
     '.cursor/hooks.json',
     '.cursor/hooks/planr-evidence-guard.sh',
+  ],
+  pi: [
+    '.pi/agents/planr-worker.md',
+    '.pi/agents/planr-reviewer.md',
+    '.pi/skills/planr/SKILL.md',
+    '.pi/skills/planr-goal/SKILL.md',
+    '.pi/skills/planr-loop/SKILL.md',
+    '.pi/skills/planr-loop/agents/planr-worker.md',
+    '.pi/skills/planr-loop/agents/planr-reviewer.md',
+    '.pi/skills/planr-loop/references/host-dispatch.md',
+    '.pi/skills/planr-loop/references/recovery-and-verification.md',
+    '.pi/skills/planr-verify-web/SKILL.md',
+    '.pi/skills/planr-task-graph/SKILL.md',
+    '.pi/skills/planr-plan/SKILL.md',
+    '.pi/skills/planr-work/SKILL.md',
+    '.pi/skills/planr-review/SKILL.md',
+    '.pi/skills/planr-status/SKILL.md',
+    '.pi/skills/planr-summary/SKILL.md',
   ],
 };
 const hookPaths = {
@@ -164,21 +197,40 @@ for (const client of agentClientIds) {
     );
 
     run(conflictingWorkspace, client, ['project', 'init', 'Conflicting Recipe Contract', '--json']);
-    const hookPath = path.join(conflictingWorkspace, hookPaths[client]);
-    const conflictingContent = `{ user-owned-${client}-configuration\n`;
-    await mkdir(path.dirname(hookPath), { recursive: true });
-    await writeFile(hookPath, conflictingContent);
-    const conflict = run(conflictingWorkspace, client, ['install', client]);
-    assert.match(
-      conflict.stdout,
-      /exists but is not a JSON object planr can merge into; hooks skipped/,
-      `${client}: conflicting hand-edited hooks must produce actionable preservation output`,
-    );
-    assert.equal(
-      await readFile(hookPath, 'utf8'),
-      conflictingContent,
-      `${client}: conflicting hand-edited hooks must be preserved byte-for-byte`,
-    );
+    if (client === 'pi') {
+      const skillPath = path.join(conflictingWorkspace, '.pi/skills/planr/SKILL.md');
+      const conflictingContent = '# user-owned Pi skill\n';
+      await mkdir(path.dirname(skillPath), { recursive: true });
+      await writeFile(skillPath, conflictingContent);
+      run(conflictingWorkspace, client, ['install', client]);
+      assert.equal(
+        await readFile(skillPath, 'utf8'),
+        conflictingContent,
+        'pi: conflicting hand-edited native skill must be preserved byte-for-byte',
+      );
+      for (const unsupported of ['.pi/settings.json', '.pi/mcp.json', '.pi/hooks.json', '.pi/extensions']) {
+        await assert.rejects(
+          access(path.join(conflictingWorkspace, unsupported)),
+          `pi: install must not create unsupported artifact ${unsupported}`,
+        );
+      }
+    } else {
+      const hookPath = path.join(conflictingWorkspace, hookPaths[client]);
+      const conflictingContent = `{ user-owned-${client}-configuration\n`;
+      await mkdir(path.dirname(hookPath), { recursive: true });
+      await writeFile(hookPath, conflictingContent);
+      const conflict = run(conflictingWorkspace, client, ['install', client]);
+      assert.match(
+        conflict.stdout,
+        /exists but is not a JSON object planr can merge into; hooks skipped/,
+        `${client}: conflicting hand-edited hooks must produce actionable preservation output`,
+      );
+      assert.equal(
+        await readFile(hookPath, 'utf8'),
+        conflictingContent,
+        `${client}: conflicting hand-edited hooks must be preserved byte-for-byte`,
+      );
+    }
   } finally {
     await Promise.all([
       rm(workspace, { recursive: true, force: true }),
@@ -191,7 +243,7 @@ const normalizedSnapshot = JSON.stringify(agentRecipes);
 const snapshotHash = createHash('sha256').update(normalizedSnapshot).digest('hex');
 assert.equal(
   snapshotHash,
-  '1c19ac87bdf0faae0b2e6ca2cdefaf6d8825f643989af49178d71dada204c4b6',
+  'dbf208af3f6dd8ec00b4c917b6c4cb8f5636be90c817fae32eb3fe0aa75e8c5b',
   `agent recipe snapshot changed (${snapshotHash}); inspect the full client contract before accepting it`,
 );
 

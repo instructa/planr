@@ -100,8 +100,9 @@ export function AgentSetupPanel() {
         <div className="agent-setup-noscript">
           JavaScript is not required for setup guidance. Open the permanent recipe for
           {' '}<Link href="/docs/integrations/codex">Codex</Link>,
-          {' '}<Link href="/docs/integrations/claude-code">Claude Code</Link>, or
-          {' '}<Link href="/docs/integrations/cursor">Cursor</Link>.
+          {' '}<Link href="/docs/integrations/claude-code">Claude Code</Link>,
+          {' '}<Link href="/docs/integrations/cursor">Cursor</Link>, or
+          {' '}<Link href="/docs/integrations/pi">Pi</Link>.
         </div>
       </noscript>
 

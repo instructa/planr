@@ -127,7 +127,11 @@ async function main() {
 
     const agentQuickstart = await (await fetch(`${baseUrl}/docs/agents/quickstart.md`)).text();
     assert.match(agentQuickstart, /Use \$planr\. Inspect this repository/);
-    assert.match(agentQuickstart, /planr install (codex|claude|cursor) --dry-run/);
+    for (const client of ['codex', 'claude', 'cursor', 'pi']) {
+      assert.match(agentQuickstart, new RegExp(`planr install ${client} --dry-run`));
+    }
+    assert.match(agentQuickstart, /\/docs\/integrations\/grok-build/);
+    assert.match(agentQuickstart, /Use \/skill:planr\. Inspect this repository/);
     assert(!agentQuickstart.includes('<PromptBlock'));
 
     const promptRecipes = await (await fetch(`${baseUrl}/docs/agents/prompt-recipes.md`)).text();

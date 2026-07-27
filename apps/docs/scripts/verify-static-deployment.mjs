@@ -38,6 +38,11 @@ assert.equal(apiMarkdown.length, contentFiles.length, 'static API Markdown count
 assert.equal(publicMarkdown.length, contentFiles.length, 'public Markdown count must match authored pages');
 assert.equal(docsHtml.length, contentFiles.length, 'static docs HTML count must match authored pages');
 
+const piGuide = await readFile(path.join(outputRoot, 'docs', 'integrations', 'pi.md'), 'utf8');
+for (const marker of ['planr install pi', '/skill:planr', 'PI_CODING_AGENT=true']) {
+  assert.ok(piGuide.includes(marker), `static Pi guide omits ${marker}`);
+}
+
 const search = JSON.parse(await readFile(path.join(outputRoot, 'api', 'search'), 'utf8'));
 assert.equal(search.type, 'advanced', 'search export must be the advanced Orama index');
 for (const route of ['/docs/getting-started/installation', '/docs/agents/quickstart', '/docs/reference/mcp-schemas-generated']) {

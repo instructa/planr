@@ -153,9 +153,9 @@ Planr is a local-first planning and execution coordination tool for coding agent
 
 ## Start here
 
-- [Agent Quickstart](${siteOrigin}/docs/agents/quickstart.md) — let Codex, Claude Code, or Cursor set up Planr safely and reach the first \`$planr\` prompt.
+- [Agent Quickstart](${siteOrigin}/docs/agents/quickstart.md) — let Codex, Claude Code, Cursor, Grok Build, or Pi set up Planr safely and reach the first runtime-native Planr prompt.
 - [Installation](${siteOrigin}/docs/getting-started/installation.md) — supported installation paths and binary verification.
-- [Choose your agent interface](${siteOrigin}/docs/getting-started/choose-your-interface.md) — Codex, Claude Code, Cursor, generic MCP, or CLI-only.
+- [Choose your agent interface](${siteOrigin}/docs/getting-started/choose-your-interface.md) — Codex, Claude Code, Cursor, Grok Build, Pi, generic MCP, or CLI-only.
 - [Full lifecycle](${siteOrigin}/docs/getting-started/full-lifecycle.md) — idea through evidence-backed closure.
 
 ## Agent integrations
@@ -163,6 +163,8 @@ Planr is a local-first planning and execution coordination tool for coding agent
 - [Codex](${siteOrigin}/docs/integrations/codex.md)
 - [Claude Code](${siteOrigin}/docs/integrations/claude-code.md)
 - [Cursor](${siteOrigin}/docs/integrations/cursor.md)
+- [Grok Build](${siteOrigin}/docs/integrations/grok-build.md)
+- [Pi](${siteOrigin}/docs/integrations/pi.md)
 - [Generic MCP](${siteOrigin}/docs/integrations/generic-mcp.md)
 
 ## Complete retrieval

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
-import { agentPrompts } from '../lib/agent-recipes.ts';
+import { agentPrompts, piAgentPrompts } from '../lib/agent-recipes.ts';
 
 const docsRoot = path.resolve(import.meta.dirname, '..');
 const contentRoot = path.join(docsRoot, 'content', 'docs');
@@ -43,6 +43,11 @@ assert.match(agentPrompts.recovery, /report the safest verified next step before
 assert.match(agentPrompts.advancedPlan, /^Use \$planr-plan\./);
 assert.match(agentPrompts.advancedGoal, /^Use \$planr-goal\./);
 assert(!forbiddenUnscopedDriver.test(JSON.stringify(agentPrompts)));
+assert.match(piAgentPrompts.first, /^Use \/skill:planr\./);
+assert.match(piAgentPrompts.planOnly, /do not implement/i);
+assert.match(piAgentPrompts.generatedLoopHandoff, /^Use \/skill:planr-loop on plan <plan-id>\./);
+assert.match(piAgentPrompts.advancedGoal, /^Use \/skill:planr-goal\./);
+assert(!JSON.stringify(piAgentPrompts).includes('/goal '));
 
 const agentIndex = await read('agents/index.mdx');
 for (const route of ['/docs/agents/quickstart', '/docs/agents/prompt-recipes', '/docs/agents/skills']) {
@@ -50,7 +55,7 @@ for (const route of ['/docs/agents/quickstart', '/docs/agents/prompt-recipes', '
 }
 
 const quickstart = await read('agents/quickstart.mdx');
-for (const client of ['codex', 'claude', 'cursor']) {
+for (const client of ['codex', 'claude', 'cursor', 'pi']) {
   assert(quickstart.includes(`<AgentRecipe client="${client}" />`));
 }
 assert(quickstart.includes('<PromptBlock prompt="first"'));
@@ -77,7 +82,7 @@ for (const skill of ['$planr-plan', '$planr-goal', '$planr-loop', '$planr-status
   assert(skills.includes(skill), `skills page omits ${skill}`);
 }
 
-for (const page of ['codex', 'claude-code', 'cursor']) {
+for (const page of ['codex', 'claude-code', 'cursor', 'pi']) {
   const integration = await read(`integrations/${page}.mdx`);
   assert(integration.includes('/docs/agents/prompt-recipes'), `${page} lacks the canonical prompt link`);
 }
@@ -91,4 +96,4 @@ for (const file of await collectMdx()) {
   assert(!forbiddenUnscopedDriver.test(content), `${path.relative(contentRoot, file)} recommends an unscoped host driver`);
 }
 
-console.log(`agent_journey_contract=passed prompts=${Object.keys(agentPrompts).length} pages=4 clients=3`);
+console.log(`agent_journey_contract=passed prompts=${Object.keys(agentPrompts).length} pages=4 clients=4`);

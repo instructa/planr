@@ -1,12 +1,12 @@
 ---
 title: Agent Quickstart
-description: Let Codex, Claude Code, Cursor, or explicitly opted-in Grok Build set up Planr safely and reach the first public Planr prompt.
+description: Let Codex, Claude Code, Cursor, Pi, or explicitly opted-in Grok Build set up Planr safely and reach the first public Planr prompt.
 ---
 
 This path delegates installation and project integration to your coding agent while keeping every mutation previewable and project-scoped. Choose exactly one client setup below, use its recipe or linked explicit guide, and wait for the receipt before asking for product work.
 
 <Callout type="info" title="Start with the right entry">
-  After setup, start ordinary Planr requests with `$planr`. For bounded autonomous delivery, use `$planr-goal` first and then the generated `$planr-loop` handoff.
+  After setup, start ordinary Planr requests with `$planr`. Pi uses its native `/skill:planr` spelling instead. For bounded autonomous delivery, use the runtime-specific Planr Goal prompt first and then its generated Planr Loop handoff.
 </Callout>
 
 ## Codex setup
@@ -21,23 +21,29 @@ This path delegates installation and project integration to your coding agent wh
 
 <AgentRecipe client="cursor" />
 
+## Pi setup
+
+<AgentRecipe client="pi" />
+
+Pi setup is an explicit repository opt-in rather than part of `--client all`.
+
 ## Grok Build setup
 
 Grok setup is an explicit repository opt-in rather than part of `--client all`. Follow the [Grok Build integration](/docs/integrations/grok-build) to preview and install the native project assets, then return here for the shared receipt and first `$planr` request.
 
 ## Verify the setup receipt
 
-Do not accept “installed” as the only result. The agent must report the detected client and repository, resolved Planr binary and version, whether the project already existed, every integration path changed or preserved, plugin/skill status, structured doctor result, any reload or trust action, and the exact next `$planr` prompt.
+Do not accept “installed” as the only result. The agent must report the detected client and repository, resolved Planr binary and version, whether the project already existed, every integration path changed or preserved, plugin/skill status, structured doctor result, any reload or trust action, and the exact next Planr prompt.
 
 The setup is complete only when `planr project show --json` reads the project and `planr doctor --client <client> --json` reports the real client status. A missing reload action or a preserved conflict is an honest incomplete step, not permission to overwrite configuration.
 
 ## Start your first request
 
-Reload the client if the receipt says to, open a fresh session, and paste:
+Reload the client if the receipt says to, open a fresh session, and paste the recipe's exact first prompt. For Codex, Claude Code, Cursor, and Grok Build that prompt is:
 
 <PromptBlock prompt="first" label="First Planr request" />
 
-This request is intentionally read-first. `$planr` inspects the authoritative map and tells you whether the verified next step is planning, mapped work, review, recovery, or status.
+This request is intentionally read-first. `$planr` inspects the authoritative map and tells you whether the verified next step is planning, mapped work, review, recovery, or status. In Pi, use the `/skill:planr` prompt rendered by the [Pi integration](/docs/integrations/pi).
 
 ## Continue safely
 

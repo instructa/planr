@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80" role="img" aria-labelledby="title">
+  <title id="title">Pi monogram</title>
+  <rect width="80" height="80" rx="18" fill="#312E81"/>
+  <path d="M22 27h36M29 27v27M51 27v20c0 5 2.5 8 7 8" fill="none" stroke="#F8FAFC" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

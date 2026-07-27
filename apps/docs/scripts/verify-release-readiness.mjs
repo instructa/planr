@@ -86,7 +86,11 @@ function internalLinks(page) {
 
 const pages = await collectPages(contentRoot);
 const routeMap = new Map(pages.map((page) => [page.route, page]));
-assert.equal(routeMap.size, 62, 'release inventory must contain exactly 62 unique MDX routes');
+assert.equal(routeMap.size, 63, 'release inventory must contain exactly 63 unique MDX routes');
+const retiredBrowserVerifier = /docs:verify-shell|verify:shell|browser verifier|production browser verifier|shell verifiers|docs-shell|axe results/i;
+for (const page of pages) {
+  assert.doesNotMatch(page.content, retiredBrowserVerifier, `${page.route} references the retired browser verifier`);
+}
 const navigation = await declaredRoutes();
 assert.deepEqual([...navigation].sort(), [...routeMap.keys()].sort(), 'explicit navigation and MDX route inventory drifted');
 
@@ -117,7 +121,17 @@ for (const route of routeMap.keys()) assert.ok(coverage.includes(`\`${route}\``)
 const rootReadme = await readFile(path.join(repositoryRoot, 'README.md'), 'utf8');
 assert.ok(rootReadme.includes('[**Documentation →**](https://planr.so/docs)'), 'root README lacks an actionable docs entry point');
 
+const docsReadme = await readFile(path.join(docsRoot, 'README.md'), 'utf8');
+assert.doesNotMatch(docsReadme, retiredBrowserVerifier, 'apps/docs README references the retired browser verifier');
+
+const docsPackageManifest = JSON.parse(await readFile(path.join(docsRoot, 'package.json'), 'utf8'));
+assert.equal(docsPackageManifest.scripts['verify:shell'], undefined, 'docs package retains the retired browser verifier command');
+assert.equal(docsPackageManifest.devDependencies['axe-core'], undefined, 'docs package retains the retired browser verifier dependency');
+
 const packageManifest = JSON.parse(await readFile(path.join(repositoryRoot, 'package.json'), 'utf8'));
+assert.equal(packageManifest.scripts['docs:verify-shell'], undefined, 'workspace package retains the retired browser verifier command');
+const ciWorkflow = await readFile(path.join(repositoryRoot, '.github', 'workflows', 'ci.yml'), 'utf8');
+assert.doesNotMatch(ciWorkflow, retiredBrowserVerifier, 'CI references the retired browser verifier');
 const linuxPortabilityContract = JSON.parse(await readFile(path.join(repositoryRoot, 'docs', 'contracts', 'LINUX_RELEASE_PORTABILITY.json'), 'utf8'));
 const installationPage = routeMap.get('/docs/getting-started/installation')?.content ?? '';
 const supportPage = routeMap.get('/docs/reference/support-matrix')?.content ?? '';
@@ -139,17 +153,17 @@ const linuxPortability = verifyLinuxPortabilityContract({
 
 const requirementAudit = [
   { id: 1, requirement: 'Latest stable compatible Fumadocs app, pinned and integrated', evidence: 'exact dependency gate, lockfile install, CONTRACT stack decision, CI scripts' },
-  { id: 2, requirement: 'Clear English task-oriented content and copyable commands', evidence: '62 frontmatter-valid pages, authoring contract, CommandBlock browser interaction' },
+  { id: 2, requirement: 'Clear English task-oriented content and copyable commands', evidence: '63 frontmatter-valid pages, authoring contract, CommandBlock browser interaction' },
   { id: 3, requirement: 'Landing, installation, quickstart, and complete lifecycle', evidence: 'published route inventory plus clean-install onboarding replay' },
   { id: 4, requirement: 'Core concepts and canonical ownership', evidence: 'concept page tree plus semantic graph replay' },
-  { id: 5, requirement: 'Codex, Claude Code, Cursor, explicitly opted-in Grok Build, CLI-only, and generic MCP', evidence: 'six integration routes plus client dry-run diagnostics' },
+  { id: 5, requirement: 'Codex, Claude Code, Cursor, explicitly opted-in Grok Build and Pi, CLI-only, and generic MCP', evidence: 'seven integration routes plus client dry-run diagnostics' },
   { id: 6, requirement: 'Exhaustive CLI, MCP, configuration, data, and support reference', evidence: 'generated reference drift checks and 232 coverage assertions' },
   { id: 7, requirement: 'Recipes, troubleshooting, FAQ, contributor, migration, and operations', evidence: 'explicit navigation and coverage inventory' },
-  { id: 8, requirement: 'Polished responsive, themed, searchable, accessible shell', evidence: 'production Chrome CDP flow, screenshots, keyboard/focus/zoom/mobile/theme, axe' },
-  { id: 9, requirement: 'Content, build, link, orphan, semantic, browser, and accessibility guardrails', evidence: 'CI plus release, maintenance, reference, onboarding, concepts, and shell verifiers' },
+  { id: 8, requirement: 'Polished responsive, themed, searchable, accessible shell', evidence: 'responsive component contracts, Next.js lint, production build, and manual release checks' },
+  { id: 9, requirement: 'Content, build, link, orphan, semantic, deployment, and live-route guardrails', evidence: 'CI plus release, maintenance, reference, onboarding, concepts, and deployment verifiers' },
   { id: 10, requirement: 'Obvious repository documentation entry points', evidence: 'root README and apps/docs README checks' },
   { id: 11, requirement: 'Official Fumadocs and AgentRig research with recorded decisions', evidence: 'CONTRACT sources and adopted/rejected ADRs' },
-  { id: 12, requirement: 'Audited public-surface coverage with no unexplained gaps', evidence: '62-route COVERAGE inventory with agent and human journeys, link/orphan checks, drift verifiers' },
+  { id: 12, requirement: 'Audited public-surface coverage with no unexplained gaps', evidence: '63-route COVERAGE inventory with agent and human journeys, link/orphan checks, drift verifiers' },
 ];
 
 const report = {
