@@ -64,9 +64,6 @@ importers:
       alchemy:
         specifier: 2.0.0-beta.63
         version: 2.0.0-beta.63(@effect/platform-bun@4.0.0-beta.98(effect@4.0.0-beta.98))(@effect/platform-node@4.0.0-beta.98(effect@4.0.0-beta.98)(ioredis@5.11.1))(@types/node@26.1.1)(@types/react@19.2.17)(effect@4.0.0-beta.98)(vite@8.1.5(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.16.9)(yaml@2.9.0))(vitest@4.1.10(@types/node@26.1.1)(jsdom@28.1.0(@noble/hashes@1.8.0))(msw@2.15.0(@types/node@26.1.1)(typescript@6.0.3))(vite@8.1.5(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.16.9)(yaml@2.9.0)))(workerd@1.20260714.1)(ws@8.21.0)
-      axe-core:
-        specifier: 4.12.1
-        version: 4.12.1
       effect:
         specifier: 4.0.0-beta.98
         version: 4.0.0-beta.98

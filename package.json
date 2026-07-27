@@ -39,7 +39,6 @@
     "docs:content": "pnpm --filter @planr/docs content",
     "docs:typecheck": "pnpm --filter @planr/docs typecheck",
     "docs:lint": "pnpm --filter @planr/docs lint",
-    "docs:verify-shell": "pnpm --filter @planr/docs verify:shell",
     "docs:verify-onboarding": "cargo build --bin planr && pnpm --filter @planr/docs verify:onboarding && pnpm --filter @planr/docs verify:agent-recipes",
     "docs:verify-agent-recipes": "cargo build --bin planr && pnpm --filter @planr/docs verify:agent-recipes",
     "docs:verify-agent-markdown": "pnpm docs:build && pnpm --filter @planr/docs verify:agent-markdown",

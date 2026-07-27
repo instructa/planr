@@ -35,12 +35,9 @@ pnpm docs:verify-maintenance
 pnpm docs:verify-deployment # direct Cloudflare static artifact
 pnpm docs:verify-release
 pnpm docs:verify-clean-install # release-readiness gate
-pnpm docs:verify-shell # with the dev server running
 ```
 
 All commands run through the root workspace scripts; no global Fumadocs or Next.js installation is required.
-
-`docs:verify-shell` drives an installed Chrome through the DevTools protocol, exercises the responsive shell and core interactions, captures screenshots under `.planr/artifacts/docs-shell`, and runs axe against representative routes. Set `CHROME_PATH` only when Chrome is not installed in the standard macOS location; set `PLANR_DOCS_URL` when the dev server uses another origin.
 
 `docs:verify-onboarding` first builds `target/debug/planr`, asserts that its version exactly matches both the root `package.json` and `Cargo.toml`, and replays the documented lifecycle in a fresh temporary project. It never falls back to a global `planr` on `PATH`. To test another explicit build of this same repository, run `PLANR_BIN=/absolute/path/to/planr pnpm --filter @planr/docs verify:onboarding`; the version parity assertion still applies.
 
@@ -58,7 +55,7 @@ All commands run through the root workspace scripts; no global Fumadocs or Next.
 
 ## Retired routes
 
-`redirects.mjs` is the executable inventory of retired public documentation URLs. Add a unique source and current destination there, add the same mapping to `docs/documentation/INFORMATION_ARCHITECTURE.md`, repair internal links, then run `pnpm docs:verify-maintenance` and the production browser verifier. Redirects are permanent; repository `docs/*.md` paths are source files rather than website aliases.
+`redirects.mjs` is the executable inventory of retired public documentation URLs. Add a unique source and current destination there, add the same mapping to `docs/documentation/INFORMATION_ARCHITECTURE.md`, repair internal links, then run `pnpm docs:verify-maintenance` and `pnpm docs:verify-release`. Redirects are permanent; repository `docs/*.md` paths are source files rather than website aliases.
 
 ## Content and generated files
 
