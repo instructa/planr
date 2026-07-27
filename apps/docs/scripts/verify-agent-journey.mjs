@@ -50,9 +50,19 @@ for (const route of ['/docs/agents/quickstart', '/docs/agents/prompt-recipes', '
 }
 
 const quickstart = await read('agents/quickstart.mdx');
-for (const client of ['codex', 'claude', 'cursor']) {
-  assert(quickstart.includes(`<AgentRecipe client="${client}" />`));
+const integrationRoutes = [
+  '/docs/integrations/codex',
+  '/docs/integrations/claude-code',
+  '/docs/integrations/cursor',
+  '/docs/integrations/grok-build',
+  '/docs/integrations/generic-mcp',
+  '/docs/integrations/cli-only',
+];
+for (const route of integrationRoutes) {
+  assert(quickstart.includes(`href="${route}"`), `agent quickstart omits ${route}`);
 }
+assert(!quickstart.includes('<AgentRecipe'), 'agent quickstart must delegate runtime recipes to integration pages');
+assert.match(quickstart, /only owners of runtime-specific setup recipes/);
 assert(quickstart.includes('<PromptBlock prompt="first"'));
 assert.match(quickstart, /Start with the right entry/);
 assert.match(quickstart, /planr doctor --client <client> --json/);
@@ -77,8 +87,9 @@ for (const skill of ['$planr-plan', '$planr-goal', '$planr-loop', '$planr-status
   assert(skills.includes(skill), `skills page omits ${skill}`);
 }
 
-for (const page of ['codex', 'claude-code', 'cursor']) {
+for (const [page, client] of [['codex', 'codex'], ['claude-code', 'claude'], ['cursor', 'cursor'], ['grok-build', 'grok']]) {
   const integration = await read(`integrations/${page}.mdx`);
+  assert(integration.includes(`<AgentRecipe client="${client}" />`), `${page} must own its canonical setup recipe`);
   assert(integration.includes('/docs/agents/prompt-recipes'), `${page} lacks the canonical prompt link`);
 }
 const troubleshooting = await read('troubleshooting.mdx');
@@ -91,4 +102,4 @@ for (const file of await collectMdx()) {
   assert(!forbiddenUnscopedDriver.test(content), `${path.relative(contentRoot, file)} recommends an unscoped host driver`);
 }
 
-console.log(`agent_journey_contract=passed prompts=${Object.keys(agentPrompts).length} pages=4 clients=3`);
+console.log(`agent_journey_contract=passed prompts=${Object.keys(agentPrompts).length} pages=4 integrations=${integrationRoutes.length}`);

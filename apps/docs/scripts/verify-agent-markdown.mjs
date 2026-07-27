@@ -34,7 +34,7 @@ async function availablePort() {
 }
 
 async function waitForServer(baseUrl, child, output) {
-  for (let attempt = 0; attempt < 120; attempt += 1) {
+  for (let attempt = 0; attempt < 600; attempt += 1) {
     if (child.exitCode !== null) throw new Error(`Wrangler exited early.\n${output.join('')}`);
     try {
       const response = await fetch(`${baseUrl}/llms.txt`);
@@ -127,7 +127,17 @@ async function main() {
 
     const agentQuickstart = await (await fetch(`${baseUrl}/docs/agents/quickstart.md`)).text();
     assert.match(agentQuickstart, /Use \$planr\. Inspect this repository/);
-    assert.match(agentQuickstart, /planr install (codex|claude|cursor) --dry-run/);
+    for (const route of [
+      '/docs/integrations/codex',
+      '/docs/integrations/claude-code',
+      '/docs/integrations/cursor',
+      '/docs/integrations/grok-build',
+      '/docs/integrations/generic-mcp',
+      '/docs/integrations/cli-only',
+    ]) {
+      assert(agentQuickstart.includes(route), `processed agent quickstart omits ${route}`);
+    }
+    assert(!/planr install (codex|claude|cursor|grok)/.test(agentQuickstart));
     assert(!agentQuickstart.includes('<PromptBlock'));
 
     const promptRecipes = await (await fetch(`${baseUrl}/docs/agents/prompt-recipes.md`)).text();

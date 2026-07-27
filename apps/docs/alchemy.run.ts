@@ -10,6 +10,9 @@ const productionDomain = "planr.so";
 const Website = Cloudflare.Website.StaticSite(
   "Website",
   Alchemy.Stack.useSync(({ stage }) => {
+    if (stage === "prod" && process.env.PLANR_DOCS_RECEIPT_VALIDATED !== "1") {
+      throw new Error("production docs deployment requires a validated exact-revision receipt; use pnpm docs:deploy");
+    }
     const siteUrl =
       stage === "prod"
         ? `https://${productionDomain}`
@@ -17,7 +20,10 @@ const Website = Cloudflare.Website.StaticSite(
 
     return {
       name: `planr-docs-${stage}`,
-      command: "pnpm run build",
+      // Production promotion validates the exact-revision receipt before
+      // Alchemy starts. This command deliberately consumes the reviewed output
+      // instead of starting a second Next production build.
+      command: "node scripts/use-existing-output.mjs",
       outdir: "out",
       main: "worker.mjs",
       domain: stage === "prod" ? productionDomain : undefined,

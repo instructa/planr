@@ -30,7 +30,9 @@ planr plan check <plan-id>
 planr map build --from <plan-id>
 ```
 
-Fill required plan sections directly. Replace the placeholder task with typically 4-8 independently verifiable `TASK-00n` slices before `planr map build`. Preserve real execution order with `blocks` links. When registry routes use `work_type`, annotate tasks before mapping or retag them afterward; this is prep work, not a user question.
+Fill required plan sections directly. Replace the placeholder task with independently verifiable `TASK-00n` slices before `planr map build`. A small coherent change is one implementation item plus one signal-bearing independent review; do not split mechanical stages into separate implementation/review pairs. Larger scopes still use multiple slices where ownership, dependencies, or independently observable outcomes genuinely differ. Preserve real execution order with `blocks` links. When registry routes use `work_type`, annotate tasks before mapping or retag them afterward; this is prep work, not a user question.
+
+When the repository provides a versioned verification policy and source-bound receipt runner, make that policy the verification owner in the plan. Record the selected profile, exact receipt path/digest, source revision, and the command that validates the receipt. Do not enumerate broad suites independently in every task when the policy already selects them.
 
 ## Durable Contract
 
@@ -40,7 +42,7 @@ Store one contract per plan:
 planr context add "GOAL CONTRACT <plan-id>: DONE when every in-scope item is closed with log evidence, all reviews are complete, approvals are clear, and a live verification log proves <goal oracle>. Iteration budget: 10." --tag goal-contract
 ```
 
-Never weaken it mid-run. Workers use `planr pick --plan <plan-id>`; termination uses `planr plan audit <plan-id> --json`. Reviews are required only where they add signal; evidence-backed setup work may close directly.
+Never weaken it mid-run. Workers use `planr pick --plan <plan-id>`; termination uses `planr plan audit <plan-id> --json`. Reviews are required only where they add signal; evidence-backed setup work may close directly. Where deployment is in scope, the contract must retain human deployment approval and a bounded live oracle against the deployed result.
 
 ## Hand Off
 

@@ -1,0 +1,14 @@
+[
+  {"name":"docs-only","changes":[{"status":"M","path":"apps/docs/content/docs/agents/quickstart.mdx"}],"profile":"focused-docs","classes":["docs-content"],"excluded":["rust-test","docs-build"]},
+  {"name":"docs-app","changes":[{"status":"M","path":"apps/docs/components/command-block.tsx"}],"profile":"docs","classes":["docs-app"],"included":["docs-build"],"excluded":["rust-test"]},
+  {"name":"rust","changes":[{"status":"M","path":"src/app/application.rs"}],"profile":"core","classes":["rust"],"included":["rust-test","generated-reference"],"excluded":["docs-build"]},
+  {"name":"mixed","changes":[{"status":"M","path":"README.md"},{"status":"M","path":"src/model.rs"}],"profile":"core","classes":["docs-content","rust"],"included":["docs-content","rust-test"]},
+  {"name":"sensitive","changes":[{"status":"M","path":".github/workflows/ci.yml"}],"profile":"release-security","classes":["release-security"],"included":["github-actions","security"]},
+  {"name":"lockfile","changes":[{"status":"M","path":"pnpm-lock.yaml"}],"profile":"full","classes":["lockfile"],"escalation":"lockfile_path"},
+  {"name":"generated-reference","changes":[{"status":"M","path":"apps/docs/content/docs/reference/cli-generated.mdx"}],"profile":"full","classes":["generated-reference"],"escalation":"generated-reference_path"},
+  {"name":"deleted","changes":[{"status":"D","path":"tests/e2e.rs"}],"profile":"core","classes":["rust"]},
+  {"name":"renamed","changes":[{"status":"R100","oldPath":"apps/docs/content/docs/faq.mdx","newPath":"apps/docs/content/docs/troubleshooting.mdx"}],"profile":"focused-docs","classes":["docs-content"]},
+  {"name":"unknown","changes":[{"status":"A","path":"mystery/new-owner.xyz"}],"profile":"full","classes":["unknown"],"escalation":"unknown_path"},
+  {"name":"sensitive-overlap","changes":[{"status":"M","path":"README.md"},{"status":"M","path":"scripts/release.sh"}],"profile":"full","classes":["docs-content","release-security"],"escalation":"sensitive_overlap"},
+  {"name":"ambiguous","changes":[{"status":"U","path":"src/model.rs"}],"profile":"full","classes":[],"escalation":"ambiguous_status"}
+]

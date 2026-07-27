@@ -24,11 +24,27 @@ const required = new Map([
   ['apps/docs/content/docs/faq.mdx', ['explicitly opted-in Grok Build']],
   ['apps/docs/content/docs/getting-started/full-lifecycle.mdx', ['explicitly opted-in Grok Build']],
   ['apps/docs/content/docs/agents/index.mdx', ['explicitly opted-in Grok Build']],
+  ['apps/docs/content/docs/agents/quickstart.mdx', [
+    'href="/docs/integrations/grok-build"',
+    'only owners of runtime-specific setup recipes',
+  ]],
   ['apps/docs/content/docs/getting-started/why-planr.mdx', ['explicitly opted-in Grok Build']],
   ['apps/docs/content/docs/concepts/local-first-model.mdx', ['explicitly opted-in Grok Build']],
   ['apps/docs/content/docs/integrations/grok-build.mdx', [
+    '<AgentRecipe client="grok" />',
+    'available in Planr 1.8.0',
     'not included by `--client all`',
     'Grok has no Planr hooks in v1',
+    'no xAI credential is required',
+  ]],
+  ['apps/docs/lib/agent-recipes.ts', [
+    "id: 'grok'",
+    "projectInstallerCommand: 'planr install grok'",
+    "integrationUrl: '/docs/integrations/grok-build'",
+    'do not request, read, copy, or store xAI credentials',
+  ]],
+  ['apps/docs/components/agent-setup-panel.tsx', [
+    'href="/docs/integrations/grok-build">Grok Build</Link>',
   ]],
   ['apps/docs/scripts/verify-release-readiness.mjs', [
     'explicitly opted-in Grok Build',

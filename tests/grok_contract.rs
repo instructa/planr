@@ -278,7 +278,7 @@ fn grok_product_and_public_docs_publish_the_frozen_user_contract() {
         fs::read_to_string(root().join("apps/docs/content/docs/integrations/grok-build.mdx"))
             .expect("public Grok guide must be readable");
     for required in [
-        "planr install grok --dry-run",
+        "<AgentRecipe client=\"grok\" />",
         "not included by `--client all`",
         "no Planr hooks in v1",
         "Disabling Claude-compatibility or plugin scanners",
@@ -292,6 +292,12 @@ fn grok_product_and_public_docs_publish_the_frozen_user_contract() {
             "public guide is missing `{required}`"
         );
     }
+    let typed_recipes = fs::read_to_string(root().join("apps/docs/lib/agent-recipes.ts"))
+        .expect("typed agent recipes must be readable");
+    assert!(
+        typed_recipes.contains("projectInstallerCommand: 'planr install grok'"),
+        "the typed Grok recipe must own the canonical installer command"
+    );
 
     let navigation: Value = serde_json::from_str(
         &fs::read_to_string(root().join("apps/docs/content/docs/integrations/meta.json")).unwrap(),

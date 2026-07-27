@@ -18,7 +18,7 @@ const repositoryRoot = path.dirname(path.dirname(docsRoot));
 const planrBin = process.env.PLANR_BIN
   ? path.resolve(process.cwd(), process.env.PLANR_BIN)
   : path.join(repositoryRoot, 'target', 'debug', 'planr');
-const expectedClients = ['codex', 'claude', 'cursor'];
+const expectedClients = ['codex', 'claude', 'cursor', 'grok'];
 const forbiddenDefaultGoal = /\/goal Use \$planr(?!-loop)/;
 
 assert.deepEqual(agentClientIds, expectedClients, 'the first-party client union must stay exhaustive');
@@ -65,6 +65,13 @@ for (const client of agentClientIds) {
   assert.ok(!recipe.setupPrompt.includes('claude mcp add'), `${client} setup prompt must not install user-global MCP`);
   assert.ok(!recipe.setupPrompt.includes('cursor://'), `${client} setup prompt must not use the user-level deeplink`);
   assert.ok(recipe.setupPrompt.includes('never use `--force`'), `${client} must gate overwrite behavior`);
+  if (client === 'grok') {
+    assert.equal(recipe.pluginRequired, false, 'grok must use native repository assets without a plugin step');
+    assert.deepEqual(recipe.pluginSetup, [], 'grok must not invent plugin installation commands');
+    assert.ok(recipe.setupPrompt.includes('repository-native `.grok/agents`, `.grok/skills`'));
+    assert.ok(recipe.setupPrompt.includes('do not request, read, copy, or store xAI credentials'));
+    assert.ok(!recipe.setupPrompt.includes('.grok/plugins'), 'grok must not route setup through project plugins');
+  }
   assert.ok(recipe.nextPrompts.first.startsWith('Use $planr.'), `${client} must default to the public router`);
   assert.ok(!forbiddenDefaultGoal.test(JSON.stringify(recipe.nextPrompts)));
 
@@ -105,6 +112,21 @@ const integrationSentinels = {
     '.cursor/hooks.json',
     '.cursor/hooks/planr-evidence-guard.sh',
   ],
+  grok: [
+    '.grok/config.toml',
+    '.grok/agents/planr-worker.md',
+    '.grok/agents/planr-reviewer.md',
+    '.grok/skills/planr/SKILL.md',
+    '.grok/skills/planr-goal/SKILL.md',
+    '.grok/skills/planr-loop/SKILL.md',
+    '.grok/skills/planr-verify-web/SKILL.md',
+    '.grok/skills/planr-task-graph/SKILL.md',
+    '.grok/skills/planr-plan/SKILL.md',
+    '.grok/skills/planr-work/SKILL.md',
+    '.grok/skills/planr-review/SKILL.md',
+    '.grok/skills/planr-status/SKILL.md',
+    '.grok/skills/planr-summary/SKILL.md',
+  ],
 };
 const hookPaths = {
   codex: '.codex/hooks.json',
@@ -143,6 +165,10 @@ for (const client of agentClientIds) {
     for (const sentinel of integrationSentinels[client]) {
       firstInstall.set(sentinel, await readFile(path.join(workspace, sentinel)));
     }
+    if (client === 'grok') {
+      const grokConfig = await readFile(path.join(workspace, '.grok/config.toml'), 'utf8');
+      assert.doesNotMatch(grokConfig, /xai|api[_-]?key|token/i, 'grok project config must contain no xAI credential material');
+    }
 
     run(workspace, client, ['install', client]);
     for (const [sentinel, firstContent] of firstInstall) {
@@ -164,21 +190,35 @@ for (const client of agentClientIds) {
     );
 
     run(conflictingWorkspace, client, ['project', 'init', 'Conflicting Recipe Contract', '--json']);
-    const hookPath = path.join(conflictingWorkspace, hookPaths[client]);
-    const conflictingContent = `{ user-owned-${client}-configuration\n`;
-    await mkdir(path.dirname(hookPath), { recursive: true });
-    await writeFile(hookPath, conflictingContent);
-    const conflict = run(conflictingWorkspace, client, ['install', client]);
-    assert.match(
-      conflict.stdout,
-      /exists but is not a JSON object planr can merge into; hooks skipped/,
-      `${client}: conflicting hand-edited hooks must produce actionable preservation output`,
-    );
-    assert.equal(
-      await readFile(hookPath, 'utf8'),
-      conflictingContent,
-      `${client}: conflicting hand-edited hooks must be preserved byte-for-byte`,
-    );
+    if (client === 'grok') {
+      const configPath = path.join(conflictingWorkspace, '.grok/config.toml');
+      const conflictingContent = '[mcp_servers.planr]\ncommand = "custom-planr"\n';
+      await mkdir(path.dirname(configPath), { recursive: true });
+      await writeFile(configPath, conflictingContent);
+      const conflict = run(conflictingWorkspace, client, ['install', client], { expectSuccess: false });
+      assert.match(conflict.stderr, /re-run with --force/, 'grok: conflicting Planr MCP table must explain the override gate');
+      assert.equal(await readFile(configPath, 'utf8'), conflictingContent, 'grok: conflicting project MCP must be preserved byte-for-byte');
+      await assert.rejects(
+        access(path.join(conflictingWorkspace, '.grok/skills/planr/SKILL.md')),
+        'grok: a config conflict must stop before workflow assets are written',
+      );
+    } else {
+      const hookPath = path.join(conflictingWorkspace, hookPaths[client]);
+      const conflictingContent = `{ user-owned-${client}-configuration\n`;
+      await mkdir(path.dirname(hookPath), { recursive: true });
+      await writeFile(hookPath, conflictingContent);
+      const conflict = run(conflictingWorkspace, client, ['install', client]);
+      assert.match(
+        conflict.stdout,
+        /exists but is not a JSON object planr can merge into; hooks skipped/,
+        `${client}: conflicting hand-edited hooks must produce actionable preservation output`,
+      );
+      assert.equal(
+        await readFile(hookPath, 'utf8'),
+        conflictingContent,
+        `${client}: conflicting hand-edited hooks must be preserved byte-for-byte`,
+      );
+    }
   } finally {
     await Promise.all([
       rm(workspace, { recursive: true, force: true }),
@@ -191,7 +231,7 @@ const normalizedSnapshot = JSON.stringify(agentRecipes);
 const snapshotHash = createHash('sha256').update(normalizedSnapshot).digest('hex');
 assert.equal(
   snapshotHash,
-  '1c19ac87bdf0faae0b2e6ca2cdefaf6d8825f643989af49178d71dada204c4b6',
+  '1c55e99d48e52c4e33829f1a465d8d826092a5ecf12f05abf5886e1c75a59fb8',
   `agent recipe snapshot changed (${snapshotHash}); inspect the full client contract before accepting it`,
 );
 

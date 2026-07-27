@@ -13,8 +13,49 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  router:
+    name: Verification Router
+    runs-on: ubuntu-latest
+    outputs:
+      profile: ${{ steps.route.outputs.profile }}
+      policy_version: ${{ steps.route.outputs.policy_version }}
+      policy_digest: ${{ steps.route.outputs.policy_digest }}
+      changed_files_digest: ${{ steps.route.outputs.changed_files_digest }}
+      docs: ${{ steps.route.outputs.docs }}
+      quality: ${{ steps.route.outputs.quality }}
+      release: ${{ steps.route.outputs.release }}
+      linux_portability: ${{ steps.route.outputs.linux_portability }}
+    steps:
+      - name: Checkout complete change history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Route affected verification gates
+        id: route
+        env:
+          PLANR_BASE_REVISION: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
+          PLANR_HEAD_REVISION: ${{ github.sha }}
+        run: |
+          mkdir -p .planr/ci
+          node scripts/ci-router.mjs route \
+            --base "$PLANR_BASE_REVISION" \
+            --head "$PLANR_HEAD_REVISION" \
+            --github-output "$GITHUB_OUTPUT" \
+            --selection-output .planr/ci/selection.json
+
+      - name: Save explicit routing evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: verification-selection
+          path: .planr/ci/selection.json
+          retention-days: 7
+
   docs:
     name: Documentation
+    needs: router
+    if: needs.router.outputs.docs == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -65,7 +106,7 @@ jobs:
           pnpm docs:start > /tmp/planr-docs-server.log 2>&1 &
           docs_server_pid=$!
           trap 'kill "$docs_server_pid"' EXIT
-          for attempt in $(seq 1 120); do
+          for _attempt in $(seq 1 120); do
             if curl --fail --silent http://127.0.0.1:3000/llms.txt >/dev/null; then
               break
             fi
@@ -92,17 +133,14 @@ jobs:
 
   quality:
     name: Quality Gates
+    needs: router
+    if: needs.router.outputs.quality == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
-      - name: Install system tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y shellcheck
 
       - name: Install Rust components
         run: |
@@ -117,14 +155,33 @@ jobs:
       - name: Rust tests
         run: cargo test
 
-      - name: Deterministic local release-eval contract
-        run: npm run verify:release-eval-gate
+  release-contracts:
+    name: Release and Security Gates
+    needs: router
+    if: needs.router.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - name: Deterministic release orchestration contract
-        run: npm run verify:release-script
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
 
-      - name: Shell lint
-        run: shellcheck scripts/*.sh
+      - name: Install system tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Verify workflow routing and release contracts
+        run: |
+          npm run verify:github-actions
+          npm run verify:release-eval-gate
+          npm run verify:release-script
+          shellcheck scripts/*.sh
 
       - name: Release dry-run
         run: |
@@ -139,8 +196,56 @@ jobs:
           fi
           cargo audit --deny warnings
 
+      - name: Install pinned security scanners
+        env:
+          TRUFFLEHOG_SHA256: 7105f1cd6577f058a9e39d0578f1a99c8a1e481e4d3512cd8a09acfe22a0fdc0
+          TRIVY_SHA256: 8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9
+          ZIZMOR_SHA256: a8000f3c683319a523d3b20df0e75457ba591f049cfcbfa98966631b56733c03
+        run: |
+          tools_dir="$RUNNER_TEMP/planr-security-tools"
+          mkdir -p "$tools_dir"
+          curl --fail --location --proto '=https' --tlsv1.2 --retry 3 \
+            --output "$RUNNER_TEMP/trufflehog.tar.gz" \
+            https://github.com/trufflesecurity/trufflehog/releases/download/v3.96.0/trufflehog_3.96.0_linux_amd64.tar.gz
+          printf '%s  %s\n' "$TRUFFLEHOG_SHA256" "$RUNNER_TEMP/trufflehog.tar.gz" | sha256sum --check -
+          tar -xzf "$RUNNER_TEMP/trufflehog.tar.gz" -C "$tools_dir" trufflehog
+          curl --fail --location --proto '=https' --tlsv1.2 --retry 3 \
+            --output "$RUNNER_TEMP/trivy.tar.gz" \
+            https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-64bit.tar.gz
+          printf '%s  %s\n' "$TRIVY_SHA256" "$RUNNER_TEMP/trivy.tar.gz" | sha256sum --check -
+          tar -xzf "$RUNNER_TEMP/trivy.tar.gz" -C "$tools_dir" trivy
+          curl --fail --location --proto '=https' --tlsv1.2 --retry 3 \
+            --output "$RUNNER_TEMP/zizmor.tar.gz" \
+            https://github.com/zizmorcore/zizmor/releases/download/v1.24.1/zizmor-x86_64-unknown-linux-gnu.tar.gz
+          printf '%s  %s\n' "$ZIZMOR_SHA256" "$RUNNER_TEMP/zizmor.tar.gz" | sha256sum --check -
+          tar -xzf "$RUNNER_TEMP/zizmor.tar.gz" -C "$tools_dir" zizmor
+          echo "$tools_dir" >> "$GITHUB_PATH"
+
+      - name: Repository security and privacy checks
+        run: |
+          sh scripts/check-repository-privacy.sh
+          node scripts/hooks/block-forbidden-staged-files.mjs
+          trufflehog git "file://$GITHUB_WORKSPACE" --results=verified --fail --no-update --github-actions
+          trivy fs \
+            --scanners vuln,secret,misconfig \
+            --ignorefile .trivyignore.yaml \
+            --skip-check-update \
+            --skip-dirs target \
+            --skip-dirs dist \
+            --skip-dirs node_modules \
+            --exit-code 1 \
+            .
+          zizmor . \
+            --persona regular \
+            --min-severity medium \
+            --min-confidence medium \
+            --no-progress \
+            --format plain
+
   linux-portability:
     name: Portable Linux ${{ matrix.target }}
+    needs: router
+    if: needs.router.outputs.linux_portability == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -179,7 +284,8 @@ jobs:
 
   linux-portability-checksums:
     name: Portable Linux aggregate checksums
-    needs: linux-portability
+    needs: [router, linux-portability]
+    if: needs.router.outputs.linux_portability == 'true' && needs.linux-portability.result == 'success'
     runs-on: ubuntu-24.04
     steps:
       - name: Download exact Linux release tarballs
@@ -201,3 +307,56 @@ jobs:
         with:
           name: portable-linux-sha256sums
           path: assets/SHA256SUMS
+
+  summary:
+    name: CI Summary
+    if: always()
+    needs: [router, docs, quality, release-contracts, linux-portability-checksums]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout summary verifier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Require every selected job and intentional skips
+        run: |
+          node scripts/ci-router.mjs summary \
+            --router-result "${{ needs.router.result }}" \
+            --selected "docs=${{ needs.router.outputs.docs }}" \
+            --selected "quality=${{ needs.router.outputs.quality }}" \
+            --selected "release=${{ needs.router.outputs.release }}" \
+            --selected "linux_portability=${{ needs.router.outputs.linux_portability }}" \
+            --result "docs=${{ needs.docs.result }}" \
+            --result "quality=${{ needs.quality.result }}" \
+            --result "release=${{ needs.release-contracts.result }}" \
+            --result "linux_portability=${{ needs.linux-portability-checksums.result }}"
+
+      - name: Record selected policy identity
+        env:
+          PLANR_PROFILE: ${{ needs.router.outputs.profile }}
+          PLANR_POLICY_VERSION: ${{ needs.router.outputs.policy_version }}
+          PLANR_POLICY_DIGEST: ${{ needs.router.outputs.policy_digest }}
+          PLANR_CHANGED_FILES_DIGEST: ${{ needs.router.outputs.changed_files_digest }}
+        run: |
+          printf 'profile=%s\npolicy_version=%s\npolicy_digest=%s\nchanged_files_digest=%s\n' \
+            "$PLANR_PROFILE" "$PLANR_POLICY_VERSION" "$PLANR_POLICY_DIGEST" "$PLANR_CHANGED_FILES_DIGEST" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Write exact-SHA promotion receipt
+        env:
+          PLANR_PROFILE: ${{ needs.router.outputs.profile }}
+          PLANR_POLICY_VERSION: ${{ needs.router.outputs.policy_version }}
+          PLANR_POLICY_DIGEST: ${{ needs.router.outputs.policy_digest }}
+          PLANR_CHANGED_FILES_DIGEST: ${{ needs.router.outputs.changed_files_digest }}
+          PLANR_DOCS_RESULT: ${{ needs.docs.result }}
+          PLANR_QUALITY_RESULT: ${{ needs.quality.result }}
+          PLANR_RELEASE_RESULT: ${{ needs.release-contracts.result }}
+          PLANR_LINUX_RESULT: ${{ needs.linux-portability-checksums.result }}
+        run: node scripts/write-ci-promotion-receipt.mjs .planr/ci/promotion-receipt.json
+
+      - name: Save exact-SHA promotion receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-promotion-${{ github.sha }}
+          path: .planr/ci/promotion-receipt.json
+          retention-days: 7

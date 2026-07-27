@@ -1,4 +1,4 @@
-export const agentClientIds = ['codex', 'claude', 'cursor'] as const;
+export const agentClientIds = ['codex', 'claude', 'cursor', 'grok'] as const;
 
 export type AgentClientId = (typeof agentClientIds)[number];
 
@@ -89,12 +89,15 @@ function setupPrompt(input: {
   const pluginInstruction = input.pluginSteps.length
     ? `Install or verify the official Planr plugin using only these host commands:\n${input.pluginSteps.map((step) => `   - ${step}`).join('\n')}`
     : 'This client needs no separate plugin step; the project installer owns its Planr agents and skills.';
+  const hostInstruction = input.client === 'grok'
+    ? ' Use only repository-native `.grok/agents`, `.grok/skills`, and portable project MCP configuration; do not request, read, copy, or store xAI credentials.'
+    : '';
 
   return `Set up Planr for ${input.displayName} in this repository. Perform setup only; do not implement product work.
 
 1. Detect the current host, repository root, OS, available package manager, Planr binary path/version, existing Planr project, and existing client configuration. If network access exists, consult the stable Planr Agent Bootstrap page; if it does not, continue with these self-contained steps.
 2. If Planr is missing, install the CLI only through a trusted supported method (prefer \`brew install instructa/tap/planr\` when Homebrew is available, otherwise the official GitHub Release installer), then run \`planr --version\` and report the resolved binary path.
-3. ${pluginInstruction}
+3. ${pluginInstruction}${hostInstruction}
 4. Run \`planr project show --json\`. If and only if no Planr project exists, infer a concise name from the repository and run \`planr project init "<repository-name>"\` once, without a client flag. This creates Planr project state without writing client integration files. Never reinitialize an existing project.
 5. Run \`planr install ${input.client} --dry-run\`. Explain every project path that would be reconciled. Then run \`planr install ${input.client}\` only for project-scoped, non-conflicting changes. Preserve hand edits; never use \`--force\`, global MCP configuration, or a user-level install/deeplink without my explicit approval. Re-running setup must be idempotent.
 6. Run \`planr project show --json\` and \`planr doctor --client ${input.client} --json\`. Do not claim success unless the project is readable and diagnostics are reported honestly.
@@ -198,6 +201,33 @@ const recipes = {
       client: 'cursor',
       pluginSteps: [],
       reloadGuidance: 'Reload the Cursor window after setup so newly installed project agents and skills are discovered.',
+    }),
+    nextPrompts: agentPrompts,
+  },
+  grok: {
+    id: 'grok',
+    displayName: 'Grok Build',
+    logoPath: '/agents/grok.svg',
+    logoAlt: 'Grok Build monogram',
+    cardSummary: 'Native project agents, skills, and portable MCP',
+    invocationLabel: '$planr',
+    pluginRequired: false,
+    pluginSetup: [],
+    projectInstallerCommand: 'planr install grok',
+    expectedArtifacts: [
+      { path: '.grok/config.toml', owner: 'planr install', purpose: 'Portable project MCP configuration' },
+      { path: '.grok/agents/planr-{worker,reviewer}.md', owner: 'planr install', purpose: 'Native project worker/reviewer agents' },
+      { path: '.grok/skills/planr*/SKILL.md', owner: 'planr install', purpose: 'All ten native workflow skills' },
+    ],
+    reloadGuidance: 'Start a fresh Grok Build session after setup so repository-native agents, skills, and project MCP configuration are rediscovered.',
+    integrationUrl: '/docs/integrations/grok-build',
+    safetyRequirements,
+    successReceiptFields: setupReceiptFields,
+    setupPrompt: setupPrompt({
+      displayName: 'Grok Build',
+      client: 'grok',
+      pluginSteps: [],
+      reloadGuidance: 'Start a fresh Grok Build session after setup so repository-native agents, skills, and project MCP configuration are rediscovered.',
     }),
     nextPrompts: agentPrompts,
   },

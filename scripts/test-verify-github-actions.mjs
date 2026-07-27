@@ -12,6 +12,7 @@ const fixtureWorkflows = path.join(fixtureRoot, ".github", "workflows");
 const verifier = path.join(fixtureScripts, "verify-github-actions.mjs");
 const releaseWorkflow = path.join(fixtureWorkflows, "release.yml");
 const ciWorkflow = path.join(fixtureWorkflows, "ci.yml");
+const linuxReceiptsWorkflow = path.join(fixtureWorkflows, "linux-receipts.yml");
 const securityWorkflow = path.join(fixtureWorkflows, "security.yml");
 const linuxBuildScript = path.join(fixtureScripts, "build-linux-release.sh");
 const linuxBuilderDockerfile = path.join(fixtureScripts, "linux-release-builder.Dockerfile");
@@ -47,7 +48,7 @@ try {
   const baseline = runVerifier();
   assert.equal(baseline.status, 0, `baseline workflow fixture must pass:\n${baseline.stderr}`);
 
-  const fixtureFiles = [releaseWorkflow, ciWorkflow, securityWorkflow, linuxBuildScript, linuxBuilderDockerfile, linuxVerifyScript, publicLifecycleScript, buildReleaseScript, prepareReleaseScript, releaseScript, localSecurityScript, trivyIgnoreFile];
+  const fixtureFiles = [releaseWorkflow, ciWorkflow, linuxReceiptsWorkflow, securityWorkflow, linuxBuildScript, linuxBuilderDockerfile, linuxVerifyScript, publicLifecycleScript, buildReleaseScript, prepareReleaseScript, releaseScript, localSecurityScript, trivyIgnoreFile];
   const baselineSources = new Map(
     await Promise.all(fixtureFiles.map(async (file) => [file, await readFile(file, "utf8")])),
   );
@@ -203,6 +204,27 @@ try {
     ),
     /must aggregate the exact two Linux tarballs/u,
     "incomplete aggregate checksums",
+  );
+  await expectRejected(
+    linuxReceiptsWorkflow,
+    (value) => value.replace("runner: ubuntu-24.04-arm", "runner: ubuntu-24.04"),
+    /must bind linux-arm64 to ubuntu-24\.04-arm/u,
+    "incompatible native receipt host",
+  );
+  await expectRejected(
+    linuxReceiptsWorkflow,
+    (value) => value.replace("            .planr/receipts/${{ matrix.target }}.json\n", ""),
+    /each native target upload must retain its runner receipt/u,
+    "missing native target receipt upload",
+  );
+  await expectRejected(
+    linuxReceiptsWorkflow,
+    (value) => value.replace(
+      /          node scripts\/verification-runner\.mjs verify-linux-target \\\n            --receipt \.planr\/receipts\/linux-arm64\.json \\\n            --input \.planr\/ci\/selection\.json \\\n            --head "\$GITHUB_SHA"\n/u,
+      "",
+    ),
+    /must replay exactly two target receipts/u,
+    "missing aggregate target receipt replay",
   );
   await expectRejected(
     securityWorkflow,

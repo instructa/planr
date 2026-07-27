@@ -5,15 +5,11 @@ description: Install Planr's repository-native Grok skills, agents, and portable
 
 Grok Build is a first-class, explicitly opted-in Planr host. It operates on the same local `.planr` graph as every other client; Planr does not call xAI, choose a model, or manage your Grok login.
 
-## Install in one repository
+First-class Grok Build support is available in Planr 1.8.0. Upgrade the local `planr` binary before using the install commands below; no xAI credential is required by Planr or its CI.
 
-Preview the complete path set, then apply it:
+<AgentRecipe client="grok" />
 
-```bash
-planr install grok --dry-run
-planr install grok
-planr doctor --client grok --json
-```
+## Technical details
 
 The install writes `.grok/config.toml`, both Planr roles under `.grok/agents/`, and the canonical Planr workflow tree under `.grok/skills/`. It copies those workflows from the same packaged `plugins/planr` sources used by other hosts; there is no Grok-specific fork or runtime dependency.
 
@@ -47,7 +43,7 @@ The v1 behavior was verified against `xai-org/grok-build` commit `b41c75a578f98b
 grok inspect --json
 ```
 
-Confirm that Planr skills and agents originate under this repository's `.grok/` tree and that the Planr MCP origin is the project config. If a scanner reports Planr disabled, first check that you are not diagnosing `.grok/plugins`; Planr v1 deliberately installs no project plugin. Re-run `planr install grok --dry-run` and compare the native paths before using `--force`.
+Confirm that Planr skills and agents originate under this repository's `.grok/` tree and that the Planr MCP origin is the project config. If a scanner reports Planr disabled, first check that you are not diagnosing `.grok/plugins`; Planr v1 deliberately installs no project plugin. Re-run the typed recipe's preview step and compare the native paths before using `--force`.
 
 ## Hooks and live verification
 
@@ -55,4 +51,4 @@ Grok has no Planr hooks in v1. `--no-hooks` is accepted for CLI parity but chang
 
 Deterministic tests and CI never install or invoke Grok and never receive xAI credentials. A maintainer may perform a local authenticated release check with an existing Grok login in a disposable repository. Record only redacted discovery/origin, diagnostics, and the disposable Planr project identity—never tokens, auth files, prompts, responses, transcripts, or private content.
 
-Continue with the shared [Daily Worker Loop](/docs/guides/daily-worker-loop) or generate Grok-specific host guidance with `planr prompt routing --client grok`.
+Continue with the shared [Agent Prompt Recipes](/docs/agents/prompt-recipes), the [Daily Worker Loop](/docs/guides/daily-worker-loop), or generate Grok-specific host guidance with `planr prompt routing --client grok`. The recipe above is rendered from the same typed contract used by the landing page and focused verification.

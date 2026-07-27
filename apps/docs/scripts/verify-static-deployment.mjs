@@ -38,6 +38,24 @@ assert.equal(apiMarkdown.length, contentFiles.length, 'static API Markdown count
 assert.equal(publicMarkdown.length, contentFiles.length, 'public Markdown count must match authored pages');
 assert.equal(docsHtml.length, contentFiles.length, 'static docs HTML count must match authored pages');
 
+const agentQuickstart = await readFile(path.join(outputRoot, 'docs', 'agents', 'quickstart.md'), 'utf8');
+for (const route of [
+  '/docs/integrations/codex',
+  '/docs/integrations/claude-code',
+  '/docs/integrations/cursor',
+  '/docs/integrations/grok-build',
+  '/docs/integrations/generic-mcp',
+  '/docs/integrations/cli-only',
+]) {
+  assert.ok(agentQuickstart.includes(route), `static agent quickstart omits ${route}`);
+}
+assert.ok(!/planr install (codex|claude|cursor|grok)/.test(agentQuickstart), 'static agent quickstart duplicated a runtime setup recipe');
+
+const grokGuide = await readFile(path.join(outputRoot, 'docs', 'integrations', 'grok-build.md'), 'utf8');
+for (const marker of ['Planr 1.8.0', 'planr install grok', 'no xAI credential is required']) {
+  assert.ok(grokGuide.includes(marker), `static Grok guide omits ${marker}`);
+}
+
 const search = JSON.parse(await readFile(path.join(outputRoot, 'api', 'search'), 'utf8'));
 assert.equal(search.type, 'advanced', 'search export must be the advanced Orama index');
 for (const route of ['/docs/getting-started/installation', '/docs/agents/quickstart', '/docs/reference/mcp-schemas-generated']) {

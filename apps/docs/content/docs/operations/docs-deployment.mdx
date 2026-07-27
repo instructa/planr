@@ -11,7 +11,9 @@ The documentation site is a Next.js App Router application that reads local MDX 
 
 <CommandBlock command="pnpm docs:content && pnpm docs:typecheck && pnpm docs:lint && pnpm docs:build" label="Validate and build" />
 
-<CommandBlock command="pnpm docs:verify-deployment" label="Build the static Cloudflare artifact" />
+<CommandBlock command="pnpm docs:verify-deployment" label="Verify the existing static Cloudflare artifact" />
+
+`docs:build` is the only production build in a documentation verification environment. `docs:verify-deployment` consumes the existing `apps/docs/out` tree: it performs the Wrangler dry run and checks HTML, Markdown, search, headers, redirects, and worker routing without invoking Next again.
 
 Local deployment credentials belong in the Alchemy profile created by OAuth; do not copy Cloudflare tokens into `.env.local`. CI instead supplies `CLOUDFLARE_ACCOUNT_ID` and a scoped `CLOUDFLARE_API_TOKEN`. The production Alchemy build sets `NEXT_PUBLIC_SITE_URL=https://planr.so` so canonical metadata matches the attached hostname. Archive the commit SHA, stage, Node and pnpm versions, build log, Cloudflare resource identity, and deployed URL.
 
@@ -19,11 +21,11 @@ Local deployment credentials belong in the Alchemy profile created by OAuth; do 
 
 <CommandBlock command="pnpm --filter @planr/docs exec alchemy login --configure" label="Authenticate interactively" />
 
-<CommandBlock command="pnpm docs:deploy" label="Deploy planr.so" />
+<CommandBlock command="pnpm docs:deploy -- --receipt .planr/receipts/docs.json --input .planr/ci/selection.json --head $(git rev-parse HEAD)" label="Promote the reviewed artifact to planr.so" />
 
-The command deploys the Alchemy production stack with the complete checked export. HTML, React navigation payloads, the client-side search database, per-page Markdown, LLM indexes, and the recovery 404 are immutable build assets. A small edge worker owns permanent legacy redirects and the response content types for agent-readable Markdown, search, and LLM routes.
+The promotion command first validates the green receipt against the exact checked-out source revision, verification policy, changed-file set, commands, and `out` digest. It stops before any external mutation when that binding is stale or altered. It then performs exactly one Alchemy production deploy and runs a bounded five-route HTTP/content oracle. HTML, React navigation payloads, the client-side search database, per-page Markdown, LLM indexes, and the recovery 404 are immutable build assets. A small edge worker owns permanent legacy redirects and the response content types for agent-readable Markdown, search, and LLM routes.
 
-`apps/docs/alchemy.run.ts` is authoritative. `Cloudflare.Website.StaticSite` runs the static export and serves `out` with `404-page` fallback behavior. Its worker-first inventory is limited to exact entries from `redirects.mjs` plus `/docs/*.md`, `/api/search`, `/llms.txt`, and `/llms-full.txt`; all human pages and ordinary static assets bypass the worker. It adopts the named `planr-docs-prod` resource when present and passes `domain: 'planr.so'` only for the `prod` stage. The `planr.so` zone must already be available in the authenticated Cloudflare account; Cloudflare provisions the custom-domain record and certificate. `Cloudflare.state()` keeps stack state remotely available to local and CI deploys.
+`apps/docs/alchemy.run.ts` is authoritative. `Cloudflare.Website.StaticSite` hashes and serves the existing `out` with `404-page` fallback behavior; it never starts another Next build during promotion. Its worker-first inventory is limited to exact entries from `redirects.mjs` plus `/docs/*.md`, `/api/search`, `/llms.txt`, and `/llms-full.txt`; all human pages and ordinary static assets bypass the worker. It adopts the named `planr-docs-prod` resource when present and passes `domain: 'planr.so'` only for the `prod` stage. The `planr.so` zone must already be available in the authenticated Cloudflare account; Cloudflare provisions the custom-domain record and certificate. `Cloudflare.state()` keeps stack state remotely available to local and CI deploys.
 
 For Cloudflare-local development, use `pnpm docs:alchemy:dev`. Normal content work can continue to use `pnpm docs:dev` without cloud credentials.
 
@@ -31,7 +33,7 @@ For Cloudflare-local development, use `pnpm docs:alchemy:dev`. Normal content wo
 
 Require successful HTTP responses and expected content from `/`, `/docs`, a representative deep route such as `/docs/getting-started/installation`, `/docs/getting-started/installation.md`, and `/api/search`. Confirm canonical metadata uses the configured origin, the browser finds Installation through the client-side search index, an unknown route renders the recovery 404, and static assets load without browser errors.
 
-Run `PLANR_DOCS_URL=https://planr.so pnpm docs:verify-release-live` and `PLANR_DOCS_URL=https://planr.so pnpm docs:verify-shell` after deployment. The verifier produces a JSON report and screenshots under `.planr/artifacts/docs-shell/`.
+The promotion command automatically checks `/`, `/docs`, the Installation HTML and Markdown routes, and `/api/search`, with a ten-second request bound per route. Run the broader `PLANR_DOCS_URL=https://planr.so pnpm docs:verify-shell` browser suite only when the reviewed change or release policy explicitly calls for browser evidence; a successful promotion does not replay that broad suite by default.
 
 ## Promote
 

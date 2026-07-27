@@ -1,35 +1,32 @@
 ---
 title: Agent Quickstart
-description: Let Codex, Claude Code, Cursor, or explicitly opted-in Grok Build set up Planr safely and reach the first public Planr prompt.
+description: Choose one of Planr's six integration guides, verify the shared setup receipt, and reach the first public Planr prompt.
 ---
 
-This path delegates installation and project integration to your coding agent while keeping every mutation previewable and project-scoped. Choose exactly one client setup below, use its recipe or linked explicit guide, and wait for the receipt before asking for product work.
+This path delegates installation and project integration to the guide that owns your runtime while keeping every mutation previewable and project-scoped. Choose exactly one integration below, follow its setup, and return here for the shared receipt before asking for product work.
 
 <Callout type="info" title="Start with the right entry">
   After setup, start ordinary Planr requests with `$planr`. For bounded autonomous delivery, use `$planr-goal` first and then the generated `$planr-loop` handoff.
 </Callout>
 
-## Codex setup
+## Choose your integration
 
-<AgentRecipe client="codex" />
+<Cards>
+  <Card title="Codex" href="/docs/integrations/codex" description="Install the canonical Codex recipe, project MCP, and hooks." />
+  <Card title="Claude Code" href="/docs/integrations/claude-code" description="Install the canonical Claude Code recipe, plugin, and project MCP." />
+  <Card title="Cursor" href="/docs/integrations/cursor" description="Install the canonical Cursor recipe, MCP, agents, skills, and hooks." />
+  <Card title="Grok Build" href="/docs/integrations/grok-build" description="Explicitly opt in to native project skills, agents, and portable MCP." />
+  <Card title="Generic MCP" href="/docs/integrations/generic-mcp" description="Connect any stdio-capable MCP host to the current workspace." />
+  <Card title="CLI only" href="/docs/integrations/cli-only" description="Use Planr from a terminal, script, or CI without client files." />
+</Cards>
 
-## Claude Code setup
-
-<AgentRecipe client="claude" />
-
-## Cursor setup
-
-<AgentRecipe client="cursor" />
-
-## Grok Build setup
-
-Grok setup is an explicit repository opt-in rather than part of `--client all`. Follow the [Grok Build integration](/docs/integrations/grok-build) to preview and install the native project assets, then return here for the shared receipt and first `$planr` request.
+The integration pages are the only owners of runtime-specific setup recipes. Grok Build remains an explicit repository opt-in rather than part of `--client all`.
 
 ## Verify the setup receipt
 
 Do not accept “installed” as the only result. The agent must report the detected client and repository, resolved Planr binary and version, whether the project already existed, every integration path changed or preserved, plugin/skill status, structured doctor result, any reload or trust action, and the exact next `$planr` prompt.
 
-The setup is complete only when `planr project show --json` reads the project and `planr doctor --client <client> --json` reports the real client status. A missing reload action or a preserved conflict is an honest incomplete step, not permission to overwrite configuration.
+The setup is complete only when `planr project show --json` reads the project. For Codex, Claude Code, Cursor, or Grok Build, also require `planr doctor --client <client> --json` to report the real client status; generic MCP and CLI-only operators should replay the read-only commands in their integration guide. A missing reload action or a preserved conflict is an honest incomplete step, not permission to overwrite configuration.
 
 ## Start your first request
 
