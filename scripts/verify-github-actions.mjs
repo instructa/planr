@@ -186,6 +186,7 @@ for (const command of ["project init", "plan new", "plan split", "map build", "p
 assert.match(ciWorkflow, /^  linux-portability:\n/mu, "PR CI must contain a Linux portability matrix job");
 assert.match(ciWorkflow, /^  linux-portability-checksums:\n/mu, "PR CI must aggregate both Linux tarball checksums");
 assert.match(ciWorkflow, /^  router:\n/mu, "PR CI must contain an always-running verification router");
+assert.match(ciWorkflow, /^  workflow_dispatch:$/mu, "CI must support an explicit native-Linux-only dispatch on a reviewed branch SHA");
 const routerStart = ciWorkflow.indexOf("\n  router:\n");
 const routerEnd = ciWorkflow.indexOf("\n  docs:\n", routerStart);
 const routerJob = ciWorkflow.slice(routerStart, routerEnd);
@@ -195,6 +196,7 @@ for (const output of ["profile", "policy_version", "policy_digest", "changed_fil
 }
 assert.match(routerJob, /node scripts\/ci-router\.mjs route/u, "verification router must use the repository-owned deterministic helper");
 assert.match(routerJob, /name: verification-selection/u, "verification routing evidence must cross jobs only as an explicit artifact");
+assert.match(routerJob, /docs=false\\nquality=false\\nrelease=false\\nlinux_portability=true/u, "manual CI dispatch must select only native Linux evidence");
 for (const [jobHeader, condition] of [
   ["  docs:\n    name: Documentation\n", "if: needs.router.outputs.docs == 'true'"],
   ["  quality:\n    name: Quality Gates\n", "if: needs.router.outputs.quality == 'true'"],
@@ -219,9 +221,13 @@ const portabilityStart = ciWorkflow.indexOf("\n  linux-portability:\n");
 const portabilityEnd = ciWorkflow.indexOf("\n  linux-portability-checksums:\n", portabilityStart);
 const portabilityJob = ciWorkflow.slice(portabilityStart, portabilityEnd);
 assert.doesNotMatch(portabilityJob, /secrets\./u, "PR Linux portability CI must not consume secrets");
-assert.match(portabilityJob, /scripts\/build-linux-release\.sh/u, "PR Linux portability CI must use the canonical pinned build");
-assert.match(portabilityJob, /scripts\/verify-linux-release-artifact\.sh/u, "PR Linux portability CI must use the canonical compatibility verifier");
+assert.equal((portabilityJob.match(/run-linux-target/g) ?? []).length, 1, "the native matrix must invoke each target runner exactly once");
+assert.match(portabilityJob, /^            \.planr\/receipts\/\$\{\{ matrix\.target \}\}\.json$/mu, "PR Linux portability CI must upload each native target receipt");
+const portabilityAggregate = ciWorkflow.slice(portabilityEnd, summaryStart);
+assert.equal((portabilityAggregate.match(/verify-linux-target/g) ?? []).length, 2, "PR CI aggregate must replay exactly two native target receipts");
+assert.match(portabilityAggregate, /name: native-linux-receipts-\$\{\{ github\.sha \}\}/u, "PR CI must retain exact-SHA native receipt evidence");
 assert.match(ciWorkflow, /sha256sum planr-linux-arm64\.tar\.gz planr-linux-x86_64\.tar\.gz > SHA256SUMS/u, "PR CI must aggregate the exact two Linux tarballs");
+assert.equal((summaryJob.match(/if: github\.event_name != 'workflow_dispatch'/g) ?? []).length, 2, "manual native-only runs must not emit a promotion receipt");
 
 assert.match(linuxReceiptsWorkflow, /^name: Native Linux receipts$/mu, "native Linux evidence must have one stable workflow identity");
 assert.match(linuxReceiptsWorkflow, /^  workflow_dispatch:$/mu, "native Linux evidence must be explicitly dispatched for a reviewed SHA");

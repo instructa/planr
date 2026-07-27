@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -35,7 +36,7 @@ jobs:
       - name: Route affected verification gates
         id: route
         env:
-          PLANR_BASE_REVISION: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
+          PLANR_BASE_REVISION: ${{ github.event.pull_request.base.sha || github.event.before || format('{0}^', github.sha) }}
           PLANR_HEAD_REVISION: ${{ github.sha }}
         run: |
           mkdir -p .planr/ci
@@ -44,6 +45,9 @@ jobs:
             --head "$PLANR_HEAD_REVISION" \
             --github-output "$GITHUB_OUTPUT" \
             --selection-output .planr/ci/selection.json
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            printf 'docs=false\nquality=false\nrelease=false\nlinux_portability=true\n' >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Save explicit routing evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -263,23 +267,27 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Build portable Linux artifact
-        env:
-          PLANR_TARGET: ${{ matrix.target }}
-          PLANR_CARGO_TARGET: ${{ matrix.rust_target }}
-        run: scripts/build-linux-release.sh
+      - name: Download exact-SHA selection
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: verification-selection
+          path: .planr/ci
 
-      - name: Verify static linkage, lifecycle, checksums, and npm bytes
-        env:
-          PLANR_TARGET: ${{ matrix.target }}
-          PLANR_CARGO_TARGET: ${{ matrix.rust_target }}
-        run: scripts/verify-linux-release-artifact.sh
+      - name: Build and verify on the compatible native host
+        run: |
+          node scripts/verification-runner.mjs run-linux-target \
+            --target "${{ matrix.target }}" \
+            --receipt ".planr/receipts/${{ matrix.target }}.json" \
+            --input .planr/ci/selection.json \
+            --head "$GITHUB_SHA"
 
-      - name: Save exact Linux release tarball
+      - name: Save exact Linux archive and target receipt
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: portable-${{ matrix.target }}
-          path: dist/planr-${{ matrix.target }}.tar.gz
+          path: |
+            dist/planr-${{ matrix.target }}.tar.gz
+            .planr/receipts/${{ matrix.target }}.json
           compression-level: 0
 
   linux-portability-checksums:
@@ -288,25 +296,50 @@ jobs:
     if: needs.router.outputs.linux_portability == 'true' && needs.linux-portability.result == 'success'
     runs-on: ubuntu-24.04
     steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download exact-SHA selection
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: verification-selection
+          path: .planr/ci
+
       - name: Download exact Linux release tarballs
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: portable-linux-*
-          path: assets
+          path: .
           merge-multiple: true
 
-      - name: Verify complete aggregate checksum set
+      - name: Verify both receipts and complete aggregate checksum set
         run: |
-          test "$(find assets -maxdepth 1 -name 'planr-linux-*.tar.gz' -type f | wc -l)" -eq 2
-          cd assets
+          node scripts/verification-runner.mjs verify-linux-target \
+            --receipt .planr/receipts/linux-x86_64.json \
+            --input .planr/ci/selection.json \
+            --head "$GITHUB_SHA"
+          node scripts/verification-runner.mjs verify-linux-target \
+            --receipt .planr/receipts/linux-arm64.json \
+            --input .planr/ci/selection.json \
+            --head "$GITHUB_SHA"
+          test "$(find dist -maxdepth 1 -name 'planr-linux-*.tar.gz' -type f | wc -l)" -eq 2
+          cd dist
           sha256sum planr-linux-arm64.tar.gz planr-linux-x86_64.tar.gz > SHA256SUMS
           sha256sum -c SHA256SUMS
 
-      - name: Save aggregate checksum evidence
+      - name: Save exact-SHA native Linux evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: portable-linux-sha256sums
-          path: assets/SHA256SUMS
+          name: native-linux-receipts-${{ github.sha }}
+          path: |
+            dist/planr-linux-x86_64.tar.gz
+            dist/planr-linux-arm64.tar.gz
+            dist/SHA256SUMS
+            .planr/receipts/linux-x86_64.json
+            .planr/receipts/linux-arm64.json
+          compression-level: 0
 
   summary:
     name: CI Summary
@@ -343,6 +376,7 @@ jobs:
             "$PLANR_PROFILE" "$PLANR_POLICY_VERSION" "$PLANR_POLICY_DIGEST" "$PLANR_CHANGED_FILES_DIGEST" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Write exact-SHA promotion receipt
+        if: github.event_name != 'workflow_dispatch'
         env:
           PLANR_PROFILE: ${{ needs.router.outputs.profile }}
           PLANR_POLICY_VERSION: ${{ needs.router.outputs.policy_version }}
@@ -355,6 +389,7 @@ jobs:
         run: node scripts/write-ci-promotion-receipt.mjs .planr/ci/promotion-receipt.json
 
       - name: Save exact-SHA promotion receipt
+        if: github.event_name != 'workflow_dispatch'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-promotion-${{ github.sha }}
