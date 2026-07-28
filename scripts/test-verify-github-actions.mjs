@@ -12,7 +12,9 @@ const fixtureWorkflows = path.join(fixtureRoot, ".github", "workflows");
 const verifier = path.join(fixtureScripts, "verify-github-actions.mjs");
 const releaseWorkflow = path.join(fixtureWorkflows, "release.yml");
 const ciWorkflow = path.join(fixtureWorkflows, "ci.yml");
+const linuxReceiptsWorkflow = path.join(fixtureWorkflows, "linux-receipts.yml");
 const securityWorkflow = path.join(fixtureWorkflows, "security.yml");
+const fixturePackageJson = path.join(fixtureRoot, "package.json");
 const linuxBuildScript = path.join(fixtureScripts, "build-linux-release.sh");
 const linuxBuilderDockerfile = path.join(fixtureScripts, "linux-release-builder.Dockerfile");
 const linuxVerifyScript = path.join(fixtureScripts, "verify-linux-release-artifact.sh");
@@ -20,7 +22,6 @@ const publicLifecycleScript = path.join(fixtureScripts, "verify-public-lifecycle
 const buildReleaseScript = path.join(fixtureScripts, "build-release.sh");
 const prepareReleaseScript = path.join(fixtureScripts, "prepare-release-candidate.sh");
 const releaseScript = path.join(fixtureScripts, "release.sh");
-const trivyIgnoreFile = path.join(fixtureRoot, ".trivyignore.yaml");
 const localSecurityScript = path.join(fixtureScripts, "security-local.sh");
 
 function runVerifier() {
@@ -41,13 +42,13 @@ try {
   await cp(path.join(repoRoot, "scripts", "prepare-release-candidate.sh"), prepareReleaseScript);
   await cp(path.join(repoRoot, "scripts", "release.sh"), releaseScript);
   await cp(path.join(repoRoot, "scripts", "security-local.sh"), localSecurityScript);
-  await cp(path.join(repoRoot, ".trivyignore.yaml"), trivyIgnoreFile);
+  await cp(path.join(repoRoot, "package.json"), fixturePackageJson);
   await cp(path.join(repoRoot, ".github", "workflows"), fixtureWorkflows, { recursive: true });
 
   const baseline = runVerifier();
   assert.equal(baseline.status, 0, `baseline workflow fixture must pass:\n${baseline.stderr}`);
 
-  const fixtureFiles = [releaseWorkflow, ciWorkflow, securityWorkflow, linuxBuildScript, linuxBuilderDockerfile, linuxVerifyScript, publicLifecycleScript, buildReleaseScript, prepareReleaseScript, releaseScript, localSecurityScript, trivyIgnoreFile];
+  const fixtureFiles = [releaseWorkflow, ciWorkflow, linuxReceiptsWorkflow, linuxBuildScript, linuxBuilderDockerfile, linuxVerifyScript, publicLifecycleScript, buildReleaseScript, prepareReleaseScript, releaseScript, localSecurityScript, fixturePackageJson];
   const baselineSources = new Map(
     await Promise.all(fixtureFiles.map(async (file) => [file, await readFile(file, "utf8")])),
   );
@@ -205,91 +206,53 @@ try {
     "incomplete aggregate checksums",
   );
   await expectRejected(
-    securityWorkflow,
-    (value) => value.replace("7105f1cd6577f058a9e39d0578f1a99c8a1e481e4d3512cd8a09acfe22a0fdc0", "0".repeat(64)),
-    /must pin the reviewed TruffleHog release digest/u,
-    "mutated TruffleHog binary digest",
+    linuxReceiptsWorkflow,
+    (value) => value.replace("runner: ubuntu-24.04-arm", "runner: ubuntu-24.04"),
+    /must bind linux-arm64 to ubuntu-24\.04-arm/u,
+    "incompatible native receipt host",
   );
   await expectRejected(
-    securityWorkflow,
-    (value) => value.replace("8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9", "0".repeat(64)),
-    /must pin the reviewed Trivy release digest/u,
-    "mutated Trivy binary digest",
+    linuxReceiptsWorkflow,
+    (value) => value.replace("            .planr/receipts/${{ matrix.target }}.json\n", ""),
+    /each native target upload must retain its runner receipt/u,
+    "missing native target receipt upload",
   );
   await expectRejected(
-    securityWorkflow,
-    (value) => value.replace(" --results=verified --fail --no-update --github-actions", " --results=verified --no-update --github-actions"),
-    /must fail closed while scanning verified secrets/u,
-    "non-blocking TruffleHog scan",
+    linuxReceiptsWorkflow,
+    (value) => value.replace(
+      /          node scripts\/verification-runner\.mjs verify-linux-target \\\n            --receipt \.planr\/receipts\/linux-arm64\.json \\\n            --input \.planr\/ci\/selection\.json \\\n            --head "\$GITHUB_SHA"\n/u,
+      "",
+    ),
+    /must replay exactly two target receipts/u,
+    "missing aggregate target receipt replay",
   );
   await expectRejected(
-    securityWorkflow,
-    (value) => value.replace(" --results=verified --fail", " --fail"),
-    /must fail closed while scanning verified secrets/u,
-    "unverified-only TruffleHog contract removed",
+    ciWorkflow,
+    (value) => `${value}\n# cargo audit --deny warnings\n`,
+    /must not run automatic security, secret, or dependency scanners/u,
+    "automatic cargo audit",
   );
   await expectRejected(
-    securityWorkflow,
-    (value) => value.replace("--scanners secret,misconfig", "--scanners secret"),
-    /must scan secrets and misconfigurations/u,
-    "Trivy misconfiguration scan removed",
+    ciWorkflow,
+    (value) => `${value}\n# trivy fs --scanners vuln,secret .\n`,
+    /must not run automatic security, secret, or dependency scanners/u,
+    "automatic Trivy scan",
   );
   await expectRejected(
-    securityWorkflow,
-    (value) => value.replace("      - name: Install pinned security scanners\n", "      - uses: trufflesecurity/trufflehog@6f3c981e7b77f235fd2702dd74af25fc4b72bf11 # v3.96.0\n\n      - name: Install pinned security scanners\n"),
-    /uses unreviewed action trufflesecurity\/trufflehog|GitHub-owned-only repository action policy/u,
-    "disallowed third-party Security action",
+    ciWorkflow,
+    (value) => `${value}\n# pnpm docs:verify-shell\n`,
+    /retired blanket browser suite/u,
+    "automatic blanket browser suite",
   );
-  await expectRejected(
-    trivyIgnoreFile,
-    (value) => value.replaceAll("scripts/linux-release-builder.Dockerfile", "**"),
-    /exceptions must remain limited to the two expiring build-only Dockerfile findings/u,
-    "globally broadened Trivy exceptions",
-  );
-  await expectRejected(
-    trivyIgnoreFile,
-    (value) => `${value}  - id: AVD-DS-0001\n`,
-    /exceptions must remain limited to the two expiring build-only Dockerfile findings/u,
-    "additional Trivy exception",
-  );
-  await expectRejected(
-    trivyIgnoreFile,
-    (value) => value.replaceAll("    expired_at: 2027-07-26\n", ""),
-    /exceptions must remain limited to the two expiring build-only Dockerfile findings/u,
-    "missing Trivy exception expiry",
-  );
-  await expectRejected(
-    securityWorkflow,
-    (value) => value.replace("a8000f3c683319a523d3b20df0e75457ba591f049cfcbfa98966631b56733c03", "0".repeat(64)),
-    /must pin the reviewed zizmor release digest/u,
-    "mutated zizmor binary digest",
-  );
-  await expectRejected(
-    securityWorkflow,
-    (value) => value.replaceAll("v1.24.1", "v1.24.2"),
-    /must pin the reviewed zizmor release URL/u,
-    "mutated zizmor version",
-  );
-  await expectRejected(
-    securityWorkflow,
-    (value) => value.replace("          npm run verify:github-actions\n", "          npm run verify:github-actions\n          python3 -m pip install --user uv\n          uvx zizmor==1.24.1 .\n"),
-    /must not install mutable uv or zizmor inputs/u,
-    "mutable uv and zizmor installation",
-  );
-  await expectRejected(
-    securityWorkflow,
-    (value) => value.replace("            --skip-check-update \\\n", ""),
-    /must use the checks bundled with the reviewed binary/u,
-    "unpinned Trivy checks update",
-  );
-  await expectRejected(
-    localSecurityScript,
-    (value) => value.replace("    --skip-check-update \\\n", ""),
-    /Local Trivy must use the checks bundled with the reviewed binary/u,
-    "unpinned local Trivy checks update",
-  );
+  await resetFixtures();
+  await writeFile(securityWorkflow, "name: Security\non:\n  pull_request:\njobs:\n  scan:\n    runs-on: ubuntu-latest\n    steps:\n      - run: trivy fs .\n");
+  const addedSecurityWorkflow = runVerifier();
+  assert.notEqual(addedSecurityWorkflow.status, 0, "a new automatic security workflow must fail verification");
+  assert.match(`${addedSecurityWorkflow.stdout}\n${addedSecurityWorkflow.stderr}`, /must not run automatic|must remain absent/u);
+  await rm(securityWorkflow);
+  adversarialCases += 1;
 
-  console.log(`github_actions_regression=passed adversarial_cases=${adversarialCases} same_runner_smoke_insufficient=true musl_native_pins_lifecycle_checksums_npm_fail_closed=true security_jobs_fail_closed=true immutable_security_toolchain=true`);
+  console.log(`github_actions_regression=passed adversarial_cases=${adversarialCases} same_runner_smoke_insufficient=true musl_native_pins_lifecycle_checksums_npm_fail_closed=true automatic_scanners_absent=true docs_build_once=true`);
 } finally {
   await rm(fixtureRoot, { recursive: true, force: true });
 }

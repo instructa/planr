@@ -7,10 +7,15 @@ import path from "node:path";
 import process from "node:process";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { routeSelection } from "./ci-router.mjs";
+import { classifyChanges } from "./verification-policy.mjs";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const prepareSource = fs.readFileSync(path.join(repo, "scripts/prepare-release-candidate.sh"), "utf8");
 const releaseSource = fs.readFileSync(path.join(repo, "scripts/release.sh"), "utf8");
+const promotionSource = fs.readFileSync(path.join(repo, "scripts/verify-release-promotion.mjs"), "utf8");
+const ciRouterSource = fs.readFileSync(path.join(repo, "scripts/ci-router.mjs"), "utf8");
+const verificationPolicySource = fs.readFileSync(path.join(repo, "scripts/verification-policy.mjs"), "utf8");
 const changelogLinksSource = fs.readFileSync(path.join(repo, "scripts/verify-changelog-release-links.sh"), "utf8");
 const repositoryVersion = JSON.parse(fs.readFileSync(path.join(repo, "package.json"), "utf8")).version;
 const version = "9.9.9";
@@ -128,6 +133,9 @@ function run(name, script, prepared, env = {}) {
       PLANR_RELEASE_EVAL_RECEIPT: path.join(test.root, "receipt.json"),
       PLANR_RELEASE_EVAL_SUITE: path.join(test.root, "suite.json"),
       PLANR_RELEASE_EVAL_DB: path.join(test.root, "eval.sqlite"),
+      PLANR_RELEASE_PLANR_BIN: path.join(test.root, "planr"),
+      PLANR_RELEASE_CI_RECEIPT: path.join(test.root, "ci-receipt.json"),
+      PLANR_RELEASE_APPROVAL: path.join(test.root, "approval.json"),
     },
   });
   const calls = fs.readFileSync(test.log, "utf8").trim().split("\n").filter(Boolean);
@@ -225,14 +233,7 @@ assert.ok(!unprepared.calls.some((call) => call.startsWith("git tag") || call.st
 const released = run("release-pass", "release.sh", true);
 assert.equal(released.result.status, 0, released.result.stderr);
 const expected = [
-  "pnpm install --frozen-lockfile",
-  "pnpm --filter @planr/docs reference:check",
-  "cargo build --quiet",
-  "node scripts/verify-release-eval-receipt.mjs",
-  "cargo test",
-  "npm run verify:release-eval-gate",
-  "npm pack --dry-run",
-  "security-local",
+  "node scripts/verify-release-promotion.mjs",
   `git tag -a v${version}`,
   `git push origin HEAD v${version}`,
 ];
@@ -242,6 +243,181 @@ for (const prefix of expected) {
   assert.ok(index > cursor, `missing or reordered publication command: ${prefix}`);
   cursor = index;
 }
+for (const repeatedGate of ["pnpm install", "cargo build", "cargo test", "npm pack", "security-local"]) {
+  assert.ok(!released.calls.some((call) => call.startsWith(repeatedGate)), `publication must not replay ${repeatedGate}`);
+}
+
+const promotionRoot = path.join(tmp, "promotion-verifier");
+const promotionBin = path.join(promotionRoot, "bin");
+const sourceSha = "a".repeat(40);
+const baseSha = "d".repeat(40);
+write(path.join(promotionRoot, "scripts/verify-release-promotion.mjs"), promotionSource);
+write(path.join(promotionRoot, "scripts/ci-router.mjs"), ciRouterSource);
+write(path.join(promotionRoot, "scripts/verification-policy.mjs"), verificationPolicySource);
+write(path.join(promotionBin, "git"), `#!/bin/sh
+set -eu
+case "$1 \${2:-}" in
+  "rev-parse --verify")
+    case "\${3:-}" in HEAD*) printf '%s\\n' "$SOURCE_SHA" ;; *) printf '%s\\n' "$BASE_SHA" ;; esac
+    ;;
+  "merge-base --is-ancestor") ;;
+  "describe --tags") printf 'v9.9.8\\n' ;;
+  "diff --name-only") printf '%s\\n' "\${DIFF_PATHS:-README.md}" ;;
+  "diff --name-status") printf 'M\\0%s\\0' "\${DIFF_PATH:-README.md}" ;;
+  *) echo "unexpected git command: $*" >&2; exit 2 ;;
+esac
+`, 0o755);
+write(path.join(promotionBin, "gh"), `#!/bin/sh
+set -eu
+if [ "$1" = "api" ]; then
+  printf '{"id":123,"run_attempt":1,"name":"CI","event":"push","head_branch":"main","head_sha":"%s","conclusion":"%s","repository":{"full_name":"instructa/planr"}}\\n' "$SOURCE_SHA" "\${GH_CONCLUSION:-success}"
+  exit 0
+fi
+if [ "$1 $2" = "run download" ]; then
+  destination=""
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = "--dir" ]; then destination="$2"; shift 2; continue; fi
+    shift
+  done
+  cp "$AUTHENTIC_RECEIPT" "$destination/promotion-receipt.json"
+  exit 0
+fi
+echo "unexpected gh command: $*" >&2
+exit 2
+`, 0o755);
+const fixtureSelection = classifyChanges([{ status: "M", path: "README.md" }], {
+  baseRevision: baseSha,
+  headRevision: sourceSha,
+});
+const fixtureRouting = routeSelection(fixtureSelection);
+const ciReceipt = {
+  schema_version: "planr.ci-promotion-receipt.v1",
+  repository: "instructa/planr",
+  workflow: "CI",
+  run_id: "123",
+  run_attempt: "1",
+  event: "push",
+  source_ref: "refs/heads/main",
+  source_base_sha: baseSha,
+  source_sha: sourceSha,
+  conclusion: "success",
+  policy: {
+    profile: fixtureSelection.profile,
+    version: fixtureSelection.policyVersion,
+    digest: fixtureSelection.policyDigest,
+    changed_files_digest: fixtureSelection.changedFilesDigest,
+  },
+  jobs: Object.fromEntries(Object.entries(fixtureRouting)
+    .filter(([key]) => ["docs", "quality", "release", "linux_portability"].includes(key))
+    .map(([key, selected]) => [key, selected === "true" ? "success" : "skipped"])),
+};
+const approval = {
+  schema_version: "planr.release-approval.v1",
+  approval_id: "approval-123",
+  source_sha: sourceSha,
+  version,
+  decision: "approved",
+  approved_by: "maintainer@example.invalid",
+  approved_at: new Date(Date.now() - 60_000).toISOString(),
+};
+write(path.join(promotionRoot, "ci.json"), `${JSON.stringify(ciReceipt)}\n`);
+write(path.join(promotionRoot, "approval.json"), `${JSON.stringify(approval)}\n`);
+function verifyPromotion({ receipt = "ci.json", authenticReceipt = "ci.json", env = {} } = {}) {
+  return spawnSync(process.execPath, [
+    "scripts/verify-release-promotion.mjs",
+    "--version", version,
+    "--ci-receipt", receipt,
+    "--approval", "approval.json",
+  ], {
+    cwd: promotionRoot,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      ...env,
+      PATH: `${promotionBin}:${process.env.PATH}`,
+      SOURCE_SHA: sourceSha,
+      BASE_SHA: baseSha,
+      AUTHENTIC_RECEIPT: path.join(promotionRoot, authenticReceipt),
+    },
+  });
+}
+const promoted = verifyPromotion();
+assert.equal(promoted.status, 0, promoted.stderr);
+assert.equal(JSON.parse(promoted.stdout).evaluation, "not_required");
+const failedCi = verifyPromotion({ env: { GH_CONCLUSION: "failure" } });
+assert.notEqual(failedCi.status, 0, "authoritative failed CI must block promotion");
+const evalRequired = verifyPromotion({ env: { DIFF_PATHS: "plugins/planr/skills/planr-loop/SKILL.md" } });
+assert.notEqual(evalRequired.status, 0, "evaluated-subject changes must require external eval evidence");
+
+function rejectBoundMutation(name, mutate, errorPattern, message) {
+  const candidate = mutate(structuredClone(ciReceipt));
+  const file = `${name}.json`;
+  write(path.join(promotionRoot, file), `${JSON.stringify(candidate)}\n`);
+  const result = verifyPromotion({ receipt: file, authenticReceipt: file });
+  assert.notEqual(result.status, 0, message);
+  assert.match(result.stderr, errorPattern, `${name} must fail for its binding check`);
+}
+rejectBoundMutation("forged-policy", (receipt) => {
+  receipt.policy.digest = `sha256:${"b".repeat(64)}`;
+  return receipt;
+}, /policy digest is stale/u, "forged current-run policy digest must fail closed");
+rejectBoundMutation("forged-policy-version", (receipt) => {
+  receipt.policy.version = "0.0.0";
+  return receipt;
+}, /policy version is stale/u, "forged current-run policy version must fail closed");
+rejectBoundMutation("forged-changes", (receipt) => {
+  receipt.policy.changed_files_digest = `sha256:${"c".repeat(64)}`;
+  return receipt;
+}, /changed-files digest mismatch/u, "forged current-run changed-files digest must fail closed");
+rejectBoundMutation("forged-profile", (receipt) => {
+  receipt.policy.profile = "core";
+  return receipt;
+}, /profile mismatch/u, "forged current-run profile must fail closed");
+rejectBoundMutation("forged-jobs", (receipt) => {
+  receipt.jobs.docs = "skipped";
+  return receipt;
+}, /does not match the current policy selection/u, "selected job recorded as skipped must fail closed");
+rejectBoundMutation("copied-receipt", (receipt) => {
+  receipt.source_sha = "f".repeat(40);
+  return receipt;
+}, /does not bind the current candidate SHA/u, "receipt copied from another source SHA must fail closed");
+
+const unauthenticatedReceipt = structuredClone(ciReceipt);
+unauthenticatedReceipt.policy.digest = `sha256:${"e".repeat(64)}`;
+write(path.join(promotionRoot, "unauthenticated-local.json"), `${JSON.stringify(unauthenticatedReceipt)}\n`);
+const unauthenticated = verifyPromotion({ receipt: "unauthenticated-local.json", authenticReceipt: "ci.json" });
+assert.notEqual(unauthenticated.status, 0, "locally forged receipt must not replace the run artifact");
+assert.match(unauthenticated.stderr, /does not match the authenticated run artifact/u);
+
+const writtenReceipt = path.join(tmp, "written-promotion-receipt.json");
+const eventPath = path.join(tmp, "push-event.json");
+write(eventPath, `${JSON.stringify({ before: baseSha })}\n`);
+const writeReceiptResult = spawnSync(process.execPath, ["scripts/write-ci-promotion-receipt.mjs", writtenReceipt], {
+  cwd: repo,
+  encoding: "utf8",
+  env: {
+    ...process.env,
+    GITHUB_REPOSITORY: "instructa/planr",
+    GITHUB_WORKFLOW: "CI",
+    GITHUB_RUN_ID: "123",
+    GITHUB_RUN_ATTEMPT: "1",
+    GITHUB_EVENT_NAME: "push",
+    GITHUB_REF: "refs/heads/main",
+    GITHUB_SHA: sourceSha,
+    GITHUB_EVENT_PATH: eventPath,
+    PLANR_PROFILE: fixtureSelection.profile,
+    PLANR_POLICY_VERSION: fixtureSelection.policyVersion,
+    PLANR_POLICY_DIGEST: fixtureSelection.policyDigest,
+    PLANR_CHANGED_FILES_DIGEST: fixtureSelection.changedFilesDigest,
+    PLANR_DOCS_RESULT: ciReceipt.jobs.docs,
+    PLANR_QUALITY_RESULT: ciReceipt.jobs.quality,
+    PLANR_RELEASE_RESULT: ciReceipt.jobs.release,
+    PLANR_LINUX_RESULT: ciReceipt.jobs.linux_portability,
+  },
+});
+assert.equal(writeReceiptResult.status, 0, writeReceiptResult.stderr);
+assert.equal(JSON.parse(fs.readFileSync(writtenReceipt, "utf8")).source_sha, sourceSha);
+assert.equal(JSON.parse(fs.readFileSync(writtenReceipt, "utf8")).source_base_sha, baseSha);
 
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(JSON.stringify({
@@ -251,4 +427,8 @@ console.log(JSON.stringify({
   reviewed_source_mutation_during_publication: false,
   candidate_git_mutation: false,
   fail_closed_cases: ["lockfile drift", "reference drift", "stale changelog comparison", "missing changelog comparison", "unprepared version"],
+  exact_sha_promotion: true,
+  repeated_publication_gates: 0,
+  conditional_external_evaluation: true,
+  rejected_receipt_binding_regressions: 7,
 }, null, 2));
