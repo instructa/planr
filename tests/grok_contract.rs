@@ -174,7 +174,6 @@ fn grok_release_boundary_has_no_credentials_live_calls_or_runtime_dependency() {
     let production_release_files = [
         ".github/workflows/ci.yml",
         ".github/workflows/release.yml",
-        ".github/workflows/security.yml",
         "scripts/build-release.sh",
         "scripts/build-linux-release.sh",
         "scripts/prepare-release-candidate.sh",

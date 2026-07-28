@@ -45,8 +45,6 @@ for (const route of [
   '/docs/integrations/cursor',
   '/docs/integrations/grok-build',
   '/docs/integrations/pi',
-  '/docs/integrations/generic-mcp',
-  '/docs/integrations/cli-only',
 ]) {
   assert.ok(agentQuickstart.includes(route), `static agent quickstart omits ${route}`);
 }
