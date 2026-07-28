@@ -231,7 +231,7 @@ const recipes = {
     id: 'pi',
     displayName: 'Pi',
     logoPath: '/agents/pi.svg',
-    logoAlt: 'Pi monogram',
+    logoAlt: 'Pi badge',
     cardSummary: 'Native Agent Skills and optional pi-subagents roles',
     invocationLabel: '/skill:planr',
     pluginRequired: false,

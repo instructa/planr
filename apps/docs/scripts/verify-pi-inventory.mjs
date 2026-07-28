@@ -25,8 +25,8 @@ const required = new Map([
   ['apps/docs/content/docs/getting-started/full-lifecycle.mdx', ['explicitly opted-in Grok Build or Pi']],
   ['apps/docs/content/docs/agents/index.mdx', ['/skill:planr']],
   ['apps/docs/content/docs/agents/quickstart.mdx', [
-    '<AgentRecipe client="pi" />',
-    'Pi setup is an explicit repository opt-in',
+    '/docs/integrations/pi',
+    'Use the explicit Pi opt-in guide',
   ]],
   ['apps/docs/content/docs/getting-started/why-planr.mdx', ['explicitly opted-in Grok Build and Pi']],
   ['apps/docs/content/docs/concepts/local-first-model.mdx', ['explicitly opted-in Grok Build and Pi']],
@@ -50,6 +50,17 @@ const required = new Map([
     "projectInstallerCommand: 'planr install pi'",
     "integrationUrl: '/docs/integrations/pi'",
     "invocationLabel: '/skill:planr'",
+    "logoAlt: 'Pi badge'",
+  ]],
+  ['apps/docs/public/agents/README.md', [
+    'https://pi.dev/press-kit',
+    'https://pi.dev/favicon.svg',
+    'Pi badge',
+  ]],
+  ['apps/docs/public/agents/pi.svg', [
+    'viewBox="0 0 800 800"',
+    'fill="#09090b"',
+    'M165.29 165.29',
   ]],
   ['apps/docs/components/agent-setup-panel.tsx', [
     'href="/docs/integrations/pi">Pi</Link>',

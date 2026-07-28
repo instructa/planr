@@ -1,5 +1,21 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80" role="img" aria-labelledby="title">
-  <title id="title">Pi monogram</title>
-  <rect width="80" height="80" rx="18" fill="#312E81"/>
-  <path d="M22 27h36M29 27v27M51 27v20c0 5 2.5 8 7 8" fill="none" stroke="#F8FAFC" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800">
+  <rect width="800" height="800" rx="120" fill="#09090b"/>
+  <path fill="#fff" fill-rule="evenodd" d="
+    M165.29 165.29
+    H517.36
+    V400
+    H400
+    V517.36
+    H282.65
+    V634.72
+    H165.29
+    Z
+    M282.65 282.65
+    V400
+    H400
+    V282.65
+    Z
+  "/>
+  <path fill="#fff" d="M517.36 400 H634.72 V634.72 H517.36 Z"/>
 </svg>

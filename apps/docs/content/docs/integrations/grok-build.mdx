@@ -55,4 +55,14 @@ Grok has no Planr hooks in v1. `--no-hooks` is accepted for CLI parity but chang
 
 Deterministic tests and CI never install or invoke Grok and never receive xAI credentials. A maintainer may perform a local authenticated release check with an existing Grok login in a disposable repository. Record only redacted discovery/origin, diagnostics, and the disposable Planr project identity—never tokens, auth files, prompts, responses, transcripts, or private content.
 
+## Copy/paste first prompt
+
+After setup, paste this first prompt into Grok Build:
+
+```text
+Use $planr. Inspect this repository and tell me the verified next step.
+```
+
+This request is intentionally read-first. It lets Planr inspect the local graph, active reviews, and stored evidence before choosing whether the next move is planning, mapped work, review, recovery, or status.
+
 Continue with the shared [Daily Worker Loop](/docs/guides/daily-worker-loop) or generate Grok-specific host guidance with `planr prompt routing --client grok`.
