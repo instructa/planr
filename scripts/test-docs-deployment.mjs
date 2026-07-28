@@ -11,6 +11,11 @@ const options = {
 const commands = deploymentCommands(options);
 assert.equal(commands.filter(({ args }) => args.includes('deploy')).length, 1, 'promotion performs exactly one deployment');
 assert.equal(commands.filter(({ args }) => args.includes('build')).length, 0, 'promotion never starts another build');
+assert.equal(
+  commands[0].args[commands[0].args.indexOf('--gates') + 1],
+  'docs-content,docs-typecheck,docs-lint,docs-build,docs-artifact',
+  'promotion verifies the same job-scoped docs receipt produced by CI',
+);
 assert.equal(commands.find(({ args }) => args.includes('deploy')).env.PLANR_DOCS_RECEIPT_VALIDATED, '1');
 assert.deepEqual(commands.map(({ label }) => label), ['reviewed receipt', 'Alchemy production deployment', 'bounded live oracle']);
 

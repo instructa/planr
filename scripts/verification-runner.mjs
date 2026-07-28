@@ -17,7 +17,7 @@ import { classifyChanges, parseGitNameStatus, POLICY_DIGEST, POLICY_VERSION } fr
 
 export const RECEIPT_SCHEMA = "planr.verification-receipt.v3";
 export const LINUX_TARGET_RECEIPT_SCHEMA = "planr.linux-target-receipt.v1";
-export const RUNNER_VERSION = "1.2.0";
+export const RUNNER_VERSION = "1.2.1";
 
 const LINUX_TARGETS = deepFreeze({
   "linux-x86_64": { cargoTarget: "x86_64-unknown-linux-musl", hostArchitecture: "x64" },
@@ -80,6 +80,26 @@ export function commandPlanFor(selection) {
     }
   }
   return plan;
+}
+
+export function selectVerificationGates(selection, requestedGates) {
+  assertSelection(selection);
+  if (!Array.isArray(requestedGates) || requestedGates.length === 0) {
+    throw new Error("at least one verification gate is required");
+  }
+  if (new Set(requestedGates).size !== requestedGates.length) {
+    throw new Error("verification gates must be unique");
+  }
+  for (const gate of requestedGates) {
+    if (!selection.selectedGates.includes(gate)) {
+      throw new Error(`verification gate was not selected for this change: ${gate}`);
+    }
+  }
+  return {
+    ...selection,
+    selectedGates: [...requestedGates],
+    reasons: selection.reasons.filter(({ gate }) => requestedGates.includes(gate)),
+  };
 }
 
 export function linuxTargetCommandPlan(target) {
@@ -598,10 +618,12 @@ function selectionFromCli(values, root) {
   } else {
     throw new Error("--input, --base, or --profile is required");
   }
-  const selection = classifyChanges(changes, { baseRevision: base ?? null, headRevision: head });
+  let selection = classifyChanges(changes, { baseRevision: base ?? null, headRevision: head });
   if (explicitProfile && explicitProfile !== selection.profile) {
     throw new Error(`explicit profile ${explicitProfile} does not match classified profile ${selection.profile}`);
   }
+  const requestedGates = values.get("--gates");
+  if (requestedGates) selection = selectVerificationGates(selection, requestedGates.split(","));
   return selection;
 }
 

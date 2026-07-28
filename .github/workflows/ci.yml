@@ -93,6 +93,7 @@ jobs:
           node scripts/verification-runner.mjs run \
             --input .planr/ci/selection.json \
             --head "$GITHUB_SHA" \
+            --gates "docs-content,docs-typecheck,docs-lint,docs-build,docs-artifact" \
             --receipt .planr/receipts/docs.json
 
       - name: Replay documented onboarding against this repository

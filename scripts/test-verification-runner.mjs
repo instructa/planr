@@ -9,6 +9,7 @@ import {
   linuxTargetCommandPlan,
   runLinuxTargetVerification,
   runVerification,
+  selectVerificationGates,
   verifyLinuxTargetReceipt,
   verifyReceipt,
 } from "./verification-runner.mjs";
@@ -141,6 +142,23 @@ const plan = commandPlanFor(fullSelection);
 assert.equal(plan.filter(({ executable, args }) => [executable, ...args].join(" ").includes("@planr/docs build")).length, 1);
 assert.equal(plan.filter(({ executable, args }) => [executable, ...args].join(" ").includes("cargo install")).length, 0);
 assert.equal(new Set(plan.map((entry) => JSON.stringify([entry.executable, entry.args]))).size, plan.length);
+
+const fullDocsSelection = selectVerificationGates(fullSelection, [
+  "docs-content", "docs-typecheck", "docs-lint", "docs-build", "docs-artifact",
+]);
+const fullDocsReceipt = runVerification({
+  selection: fullDocsSelection,
+  repoRoot: root,
+  execute: () => ({ status: 0 }),
+});
+assert.equal(fullDocsReceipt.verdict, "pass", "a full-profile docs job runs without parallel Linux receipts");
+assert.equal(fullDocsReceipt.commands.every(({ gate }) => gate.startsWith("docs-")), true);
+assert.equal(fullDocsReceipt.commands.filter(({ gate }) => gate === "docs-build").length, 1);
+assert.throws(
+  () => selectVerificationGates(docsSelection, ["linux-portability"]),
+  /verification gate was not selected/,
+  "a job cannot claim a gate excluded by the exact change selection",
+);
 
 const releaseSelection = classifyChanges([{ status: "M", path: "scripts/release.sh" }]);
 const releasePlan = commandPlanFor(releaseSelection);

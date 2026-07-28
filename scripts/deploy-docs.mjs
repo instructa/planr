@@ -11,7 +11,13 @@ export function deploymentCommands({ receipt, input, head = 'HEAD', url = 'https
     {
       label: 'reviewed receipt',
       executable: process.execPath,
-      args: ['scripts/verification-runner.mjs', 'verify', '--receipt', receipt, '--input', input, '--head', head],
+      args: [
+        'scripts/verification-runner.mjs', 'verify',
+        '--receipt', receipt,
+        '--input', input,
+        '--head', head,
+        '--gates', 'docs-content,docs-typecheck,docs-lint,docs-build,docs-artifact',
+      ],
     },
     {
       label: 'Alchemy production deployment',
