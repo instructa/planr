@@ -51,7 +51,11 @@ for (const route of [
 assert.ok(!/planr install (codex|claude|cursor|grok)/.test(agentQuickstart), 'static agent quickstart duplicated a runtime setup recipe');
 
 const grokGuide = await readFile(path.join(outputRoot, 'docs', 'integrations', 'grok-build.md'), 'utf8');
-for (const marker of ['Planr 1.8.0', 'planr install grok', 'no xAI credential is required']) {
+for (const marker of [
+  'planr install grok',
+  'no xAI credential is required',
+  'Use $planr. Inspect this repository and tell me the verified next step.',
+]) {
   assert.ok(grokGuide.includes(marker), `static Grok guide omits ${marker}`);
 }
 
