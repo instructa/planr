@@ -25,7 +25,7 @@ export default function HomePage() {
         <div className="hero-copy">
           <div className="hero-kicker">
             <Sparkles aria-hidden="true" />
-            Local-first coordination for coding agents
+            Planr 1.9.0 with Pi runtime integration
           </div>
           <h1 id="home-title">
             Give every agent a plan.
@@ -33,7 +33,7 @@ export default function HomePage() {
           </h1>
           <p className="hero-lede">
             Planr turns product intent into a durable task graph that Codex, Claude Code, Cursor,
-            MCP clients, and humans can share without losing ownership or evidence.
+            Grok Build, Pi, MCP clients, and humans can share without losing ownership or evidence.
           </p>
           <div className="hero-actions">
             <Link prefetch={false} className="button-primary" href="#agent-setup">
@@ -48,7 +48,7 @@ export default function HomePage() {
           <div className="trust-row" aria-label="Product guarantees">
             <span><ShieldCheck aria-hidden="true" /> Local by default</span>
             <span><GitBranch aria-hidden="true" /> Graph-owned state</span>
-            <span><UsersRound aria-hidden="true" /> Multi-client</span>
+            <span><UsersRound aria-hidden="true" /> 1.9.0 release</span>
           </div>
         </div>
         <div className="hero-terminal">
@@ -73,7 +73,7 @@ export default function HomePage() {
         <div className="agent-heading">
           <p>Works with your coding agent</p>
           <h2 id="agent-title">Keep the tool you already trust.</h2>
-          <span>Planr gives every client the same durable plan, task graph, and evidence trail.</span>
+          <span>Planr gives Codex, Claude Code, Cursor, Grok Build, Pi, and MCP clients the same durable plan, task graph, and evidence trail.</span>
         </div>
         <div className="agent-grid">
           {agentRecipeList.map((recipe) => (
@@ -112,7 +112,7 @@ export default function HomePage() {
             href="/docs/integrations"
             eyebrow="Connecting clients"
             title="Use your preferred coding agent"
-            description="Set up Codex, Claude Code, Cursor, a generic MCP host, or a CLI-only workflow."
+            description="Set up Codex, Claude Code, Cursor, Grok Build, Pi, a generic MCP host, or a CLI-only workflow."
             icon={<Braces />}
           />
         </div>
