@@ -15,6 +15,8 @@ The documentation site is a Next.js App Router application that reads local MDX 
 
 `docs:build` is the only production build in a documentation verification environment. `docs:verify-deployment` consumes the existing `apps/docs/out` tree: it performs the Wrangler dry run and checks HTML, Markdown, search, headers, redirects, and worker routing without invoking Next again.
 
+A Markdown-only change selects only the `Documentation` job and the final `CI Summary`. It does not start Rust, portable Linux, release, security, or browser work. Interactive application changes remain explicitly marked for one focused browser check outside automatic CI.
+
 Local deployment credentials belong in the Alchemy profile created by OAuth; do not copy Cloudflare tokens into `.env.local`. CI instead supplies `CLOUDFLARE_ACCOUNT_ID` and a scoped `CLOUDFLARE_API_TOKEN`. The production Alchemy build sets `NEXT_PUBLIC_SITE_URL=https://planr.so` so canonical metadata matches the attached hostname. Archive the commit SHA, stage, Node and pnpm versions, build log, Cloudflare resource identity, and deployed URL.
 
 ## Deploy with Alchemy
