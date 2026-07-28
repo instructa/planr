@@ -53,37 +53,24 @@ for manifest in \
   fi
 done
 
-# Recheck generated, version-derived references and frozen workspace state.
-# Every command must leave the reviewed commit byte-clean.
-pnpm install --frozen-lockfile
-pnpm --filter @planr/docs reference:check
-cargo build --quiet
-if [ -n "$(git status --porcelain)" ]; then
-  echo "release verification changed the reviewed candidate source" >&2
+ci_receipt="${PLANR_RELEASE_CI_RECEIPT:-}"
+approval="${PLANR_RELEASE_APPROVAL:-}"
+if [ -z "$ci_receipt" ] || [ -z "$approval" ]; then
+  echo "PLANR_RELEASE_CI_RECEIPT and PLANR_RELEASE_APPROVAL are required" >&2
   exit 1
 fi
 
-eval_receipt="${PLANR_RELEASE_EVAL_RECEIPT:-}"
-eval_suite="${PLANR_RELEASE_EVAL_SUITE:-}"
-eval_db="${PLANR_RELEASE_EVAL_DB:-}"
-if [ -z "$eval_receipt" ] || [ -z "$eval_suite" ] || [ -z "$eval_db" ]; then
-  echo "PLANR_RELEASE_EVAL_RECEIPT, PLANR_RELEASE_EVAL_SUITE, and PLANR_RELEASE_EVAL_DB are required" >&2
-  exit 1
-fi
-node scripts/verify-release-eval-receipt.mjs \
-  --receipt "$eval_receipt" \
-  --db "$eval_db" \
-  --suite "$eval_suite" \
-  --planr-bin target/debug/planr
-
-cargo test
-npm run verify:release-eval-gate
-npm pack --dry-run
-scripts/security-local.sh
-if [ -n "$(git status --porcelain)" ]; then
-  echo "release gates changed the reviewed candidate source" >&2
-  exit 1
-fi
+# Promote independent exact-SHA evidence. Evaluation evidence is required by
+# the verifier only when the evaluated subject or its explicit policy changed.
+set -- \
+  --version "$version" \
+  --ci-receipt "$ci_receipt" \
+  --approval "$approval"
+if [ -n "${PLANR_RELEASE_EVAL_RECEIPT:-}" ]; then set -- "$@" --eval-receipt "$PLANR_RELEASE_EVAL_RECEIPT"; fi
+if [ -n "${PLANR_RELEASE_EVAL_SUITE:-}" ]; then set -- "$@" --eval-suite "$PLANR_RELEASE_EVAL_SUITE"; fi
+if [ -n "${PLANR_RELEASE_EVAL_DB:-}" ]; then set -- "$@" --eval-db "$PLANR_RELEASE_EVAL_DB"; fi
+if [ -n "${PLANR_RELEASE_PLANR_BIN:-}" ]; then set -- "$@" --planr-bin "$PLANR_RELEASE_PLANR_BIN"; fi
+node scripts/verify-release-promotion.mjs "$@"
 
 git tag -a "v$version" -m "planr v$version: $summary"
 git push origin HEAD "v$version"

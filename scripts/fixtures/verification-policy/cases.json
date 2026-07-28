@@ -1,0 +1,16 @@
+[
+  {"name":"docs-only","changes":[{"status":"M","path":"apps/docs/content/docs/agents/quickstart.mdx"}],"profile":"focused-docs","classes":["docs-content"],"included":["docs-content","docs-build","docs-artifact"],"excluded":["rust-test"],"browser":false},
+  {"name":"interactive-docs","changes":[{"status":"M","path":"apps/docs/components/command-block.tsx"}],"profile":"docs","classes":["docs-interactive"],"included":["docs-build"],"excluded":["rust-test"],"browser":true},
+  {"name":"static-docs-image","changes":[{"status":"M","path":"apps/docs/public/agents/pi.svg"}],"profile":"docs","classes":["docs-app"],"included":["docs-artifact"],"excluded":["rust-test"],"browser":false},
+  {"name":"rust","changes":[{"status":"M","path":"src/app/application.rs"}],"profile":"core","classes":["rust"],"included":["rust-test","generated-reference"],"excluded":["docs-build"],"browser":false},
+  {"name":"mixed","changes":[{"status":"M","path":"README.md"},{"status":"M","path":"src/model.rs"}],"profile":"core","classes":["docs-content","rust"],"included":["docs-content","rust-test"],"browser":false},
+  {"name":"release-workflow","changes":[{"status":"M","path":".github/workflows/ci.yml"}],"profile":"release-critical","classes":["release-critical"],"included":["github-actions","release-contract"],"excluded":["docs-build"],"browser":false},
+  {"name":"lockfile","changes":[{"status":"M","path":"pnpm-lock.yaml"}],"profile":"full","classes":["lockfile"],"escalation":"lockfile_path","browser":false},
+  {"name":"generated-reference","changes":[{"status":"M","path":"apps/docs/content/docs/reference/cli-generated.mdx"}],"profile":"full","classes":["generated-reference"],"escalation":"generated-reference_path","browser":false},
+  {"name":"deleted-docs","changes":[{"status":"D","path":"apps/docs/content/docs/retired.mdx"}],"profile":"focused-docs","classes":["docs-content"],"included":["docs-build"],"browser":false},
+  {"name":"renamed-docs","changes":[{"status":"R100","oldPath":"apps/docs/content/docs/faq.mdx","newPath":"apps/docs/content/docs/troubleshooting.mdx"}],"profile":"focused-docs","classes":["docs-content"],"browser":false},
+  {"name":"renamed-to-interactive","changes":[{"status":"R100","oldPath":"apps/docs/content/docs/widget.mdx","newPath":"apps/docs/components/widget.tsx"}],"profile":"docs","classes":["docs-content","docs-interactive"],"browser":true},
+  {"name":"unknown","changes":[{"status":"A","path":"mystery/new-owner.xyz"}],"profile":"full","classes":["unknown"],"escalation":"unknown_path","browser":false},
+  {"name":"sensitive-overlap","changes":[{"status":"M","path":"README.md"},{"status":"M","path":"scripts/release.sh"}],"profile":"full","classes":["docs-content","release-critical"],"escalation":"sensitive_overlap","browser":false},
+  {"name":"ambiguous","changes":[{"status":"U","path":"src/model.rs"}],"profile":"full","classes":[],"escalation":"ambiguous_status","browser":false}
+]

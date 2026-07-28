@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,14 +14,65 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  router:
+    name: Verification Router
+    runs-on: ubuntu-latest
+    outputs:
+      profile: ${{ steps.route.outputs.profile }}
+      policy_version: ${{ steps.route.outputs.policy_version }}
+      policy_digest: ${{ steps.route.outputs.policy_digest }}
+      changed_files_digest: ${{ steps.route.outputs.changed_files_digest }}
+      live_browser: ${{ steps.route.outputs.live_browser }}
+      docs: ${{ steps.route.outputs.docs }}
+      quality: ${{ steps.route.outputs.quality }}
+      release: ${{ steps.route.outputs.release }}
+      linux_portability: ${{ steps.route.outputs.linux_portability }}
+    steps:
+      - name: Checkout complete change history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Route affected verification gates
+        id: route
+        env:
+          PLANR_BASE_REVISION: ${{ github.event.pull_request.base.sha || github.event.before || format('{0}^', github.sha) }}
+          PLANR_HEAD_REVISION: ${{ github.sha }}
+        run: |
+          mkdir -p .planr/ci
+          node scripts/ci-router.mjs route \
+            --base "$PLANR_BASE_REVISION" \
+            --head "$PLANR_HEAD_REVISION" \
+            --github-output "$GITHUB_OUTPUT" \
+            --selection-output .planr/ci/selection.json
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            printf 'docs=false\nquality=false\nrelease=false\nlinux_portability=true\n' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Save explicit routing evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: verification-selection
+          path: .planr/ci/selection.json
+          retention-days: 7
+
   docs:
     name: Documentation
+    needs: router
+    if: needs.router.outputs.docs == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Download exact-source selection
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: verification-selection
+          path: .planr/ci
 
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -36,20 +88,13 @@ jobs:
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Validate documentation content
-        run: pnpm docs:content
-
-      - name: Typecheck documentation
-        run: pnpm docs:typecheck
-
-      - name: Lint documentation
-        run: pnpm docs:lint
-
-      - name: Build documentation
-        run: pnpm docs:build
-
-      - name: Build Cloudflare static deployment artifact
-        run: pnpm docs:verify-deployment
+      - name: Run selected documentation gates once
+        run: |
+          node scripts/verification-runner.mjs run \
+            --input .planr/ci/selection.json \
+            --head "$GITHUB_SHA" \
+            --gates "docs-content,docs-typecheck,docs-lint,docs-build,docs-artifact" \
+            --receipt .planr/receipts/docs.json
 
       - name: Replay documented onboarding against this repository
         run: pnpm docs:verify-onboarding
@@ -72,19 +117,27 @@ jobs:
       - name: Verify documentation release inventory and links
         run: pnpm docs:verify-release
 
+      - name: Save exact-source documentation output
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: reviewed-docs-${{ github.sha }}
+          path: |
+            apps/docs/out
+            .planr/ci/selection.json
+            .planr/receipts/docs.json
+          compression-level: 0
+          retention-days: 7
+
   quality:
     name: Quality Gates
+    needs: router
+    if: needs.router.outputs.quality == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
-      - name: Install system tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y shellcheck
 
       - name: Install Rust components
         run: |
@@ -99,14 +152,33 @@ jobs:
       - name: Rust tests
         run: cargo test
 
-      - name: Deterministic local release-eval contract
-        run: npm run verify:release-eval-gate
+  release-contracts:
+    name: Release Contracts
+    needs: router
+    if: needs.router.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - name: Deterministic release orchestration contract
-        run: npm run verify:release-script
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
 
-      - name: Shell lint
-        run: shellcheck scripts/*.sh
+      - name: Install system tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Verify workflow routing and release contracts
+        run: |
+          npm run verify:github-actions
+          npm run verify:release-eval-gate
+          npm run verify:release-script
+          shellcheck scripts/*.sh
 
       - name: Release dry-run
         run: |
@@ -114,15 +186,10 @@ jobs:
           npm pack --dry-run
           node npm/bin/planr.js --version
 
-      - name: Cargo audit
-        run: |
-          if ! command -v cargo-audit >/dev/null 2>&1; then
-            cargo install cargo-audit --locked
-          fi
-          cargo audit --deny warnings
-
   linux-portability:
     name: Portable Linux ${{ matrix.target }}
+    needs: router
+    if: needs.router.outputs.linux_portability == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -140,46 +207,132 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Build portable Linux artifact
-        env:
-          PLANR_TARGET: ${{ matrix.target }}
-          PLANR_CARGO_TARGET: ${{ matrix.rust_target }}
-        run: scripts/build-linux-release.sh
+      - name: Download exact-SHA selection
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: verification-selection
+          path: .planr/ci
 
-      - name: Verify static linkage, lifecycle, checksums, and npm bytes
-        env:
-          PLANR_TARGET: ${{ matrix.target }}
-          PLANR_CARGO_TARGET: ${{ matrix.rust_target }}
-        run: scripts/verify-linux-release-artifact.sh
+      - name: Build and verify on the compatible native host
+        run: |
+          node scripts/verification-runner.mjs run-linux-target \
+            --target "${{ matrix.target }}" \
+            --receipt ".planr/receipts/${{ matrix.target }}.json" \
+            --input .planr/ci/selection.json \
+            --head "$GITHUB_SHA"
 
-      - name: Save exact Linux release tarball
+      - name: Save exact Linux archive and target receipt
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: portable-${{ matrix.target }}
-          path: dist/planr-${{ matrix.target }}.tar.gz
+          path: |
+            dist/planr-${{ matrix.target }}.tar.gz
+            .planr/receipts/${{ matrix.target }}.json
           compression-level: 0
 
   linux-portability-checksums:
     name: Portable Linux aggregate checksums
-    needs: linux-portability
+    needs: [router, linux-portability]
+    if: needs.router.outputs.linux_portability == 'true' && needs.linux-portability.result == 'success'
     runs-on: ubuntu-24.04
     steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download exact-SHA selection
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: verification-selection
+          path: .planr/ci
+
       - name: Download exact Linux release tarballs
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: portable-linux-*
-          path: assets
+          path: .
           merge-multiple: true
 
-      - name: Verify complete aggregate checksum set
+      - name: Verify both receipts and complete aggregate checksum set
         run: |
-          test "$(find assets -maxdepth 1 -name 'planr-linux-*.tar.gz' -type f | wc -l)" -eq 2
-          cd assets
+          node scripts/verification-runner.mjs verify-linux-target \
+            --receipt .planr/receipts/linux-x86_64.json \
+            --input .planr/ci/selection.json \
+            --head "$GITHUB_SHA"
+          node scripts/verification-runner.mjs verify-linux-target \
+            --receipt .planr/receipts/linux-arm64.json \
+            --input .planr/ci/selection.json \
+            --head "$GITHUB_SHA"
+          test "$(find dist -maxdepth 1 -name 'planr-linux-*.tar.gz' -type f | wc -l)" -eq 2
+          cd dist
           sha256sum planr-linux-arm64.tar.gz planr-linux-x86_64.tar.gz > SHA256SUMS
           sha256sum -c SHA256SUMS
 
-      - name: Save aggregate checksum evidence
+      - name: Save exact-SHA native Linux evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: portable-linux-sha256sums
-          path: assets/SHA256SUMS
+          name: native-linux-receipts-${{ github.sha }}
+          path: |
+            dist/planr-linux-x86_64.tar.gz
+            dist/planr-linux-arm64.tar.gz
+            dist/SHA256SUMS
+            .planr/receipts/linux-x86_64.json
+            .planr/receipts/linux-arm64.json
+          compression-level: 0
+
+  summary:
+    name: CI Summary
+    if: always()
+    needs: [router, docs, quality, release-contracts, linux-portability-checksums]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout summary verifier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Require every selected job and intentional skips
+        run: |
+          node scripts/ci-router.mjs summary \
+            --router-result "${{ needs.router.result }}" \
+            --selected "docs=${{ needs.router.outputs.docs }}" \
+            --selected "quality=${{ needs.router.outputs.quality }}" \
+            --selected "release=${{ needs.router.outputs.release }}" \
+            --selected "linux_portability=${{ needs.router.outputs.linux_portability }}" \
+            --result "docs=${{ needs.docs.result }}" \
+            --result "quality=${{ needs.quality.result }}" \
+            --result "release=${{ needs.release-contracts.result }}" \
+            --result "linux_portability=${{ needs.linux-portability-checksums.result }}"
+
+      - name: Record selected policy identity
+        env:
+          PLANR_PROFILE: ${{ needs.router.outputs.profile }}
+          PLANR_POLICY_VERSION: ${{ needs.router.outputs.policy_version }}
+          PLANR_POLICY_DIGEST: ${{ needs.router.outputs.policy_digest }}
+          PLANR_CHANGED_FILES_DIGEST: ${{ needs.router.outputs.changed_files_digest }}
+          PLANR_LIVE_BROWSER: ${{ needs.router.outputs.live_browser }}
+        run: |
+          printf 'profile=%s\npolicy_version=%s\npolicy_digest=%s\nchanged_files_digest=%s\nlive_browser=%s\n' \
+            "$PLANR_PROFILE" "$PLANR_POLICY_VERSION" "$PLANR_POLICY_DIGEST" "$PLANR_CHANGED_FILES_DIGEST" "$PLANR_LIVE_BROWSER" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Write exact-SHA promotion receipt
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          PLANR_PROFILE: ${{ needs.router.outputs.profile }}
+          PLANR_POLICY_VERSION: ${{ needs.router.outputs.policy_version }}
+          PLANR_POLICY_DIGEST: ${{ needs.router.outputs.policy_digest }}
+          PLANR_CHANGED_FILES_DIGEST: ${{ needs.router.outputs.changed_files_digest }}
+          PLANR_DOCS_RESULT: ${{ needs.docs.result }}
+          PLANR_QUALITY_RESULT: ${{ needs.quality.result }}
+          PLANR_RELEASE_RESULT: ${{ needs.release-contracts.result }}
+          PLANR_LINUX_RESULT: ${{ needs.linux-portability-checksums.result }}
+        run: node scripts/write-ci-promotion-receipt.mjs .planr/ci/promotion-receipt.json
+
+      - name: Save exact-SHA promotion receipt
+        if: github.event_name != 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-promotion-${{ github.sha }}
+          path: .planr/ci/promotion-receipt.json
+          retention-days: 7

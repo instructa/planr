@@ -58,7 +58,9 @@ planr artifact add "verify-web screenshot" --item <item-id> --path <screenshot-p
 planr artifact add "verify-web recording" --item <item-id> --path <recording.mp4> --kind video
 ```
 
-The replay command is mandatory. The reviewer reruns it instead of trusting this run; a verification that cannot be replayed is not evidence.
+The replay command is mandatory. The reviewer validates the evidence and reruns it only when it is cheap, missing, failing, or explicitly high-risk; a verification that cannot be replayed when needed is not evidence. A successful bounded live smoke joins the existing coherent review boundary and does not automatically trigger another full build or reviewer replay.
+
+For a deployment oracle, require an approved deployment decision before the deploy begins. After deployment, keep the live check bounded to the changed routes, content, or interaction and record the deployed source/receipt identity in the summary.
 
 ## When Verification Is Impossible
 

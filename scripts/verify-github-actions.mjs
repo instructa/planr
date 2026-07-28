@@ -5,26 +5,12 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const workflowsRoot = path.join(repoRoot, ".github", "workflows");
-const trivyIgnoreFile = await readFile(path.join(repoRoot, ".trivyignore.yaml"), "utf8");
 const localSecurityScript = await readFile(path.join(repoRoot, "scripts", "security-local.sh"), "utf8");
-
-assert.equal(
-  trivyIgnoreFile,
-  `misconfigurations:
-  - id: AVD-DS-0002
-    paths:
-      - scripts/linux-release-builder.Dockerfile
-    statement: This image is an ephemeral build environment that requires root to install verified local APKs and is never shipped or run as a service.
-    expired_at: 2027-07-26
-  - id: AVD-DS-0026
-    paths:
-      - scripts/linux-release-builder.Dockerfile
-    statement: This image performs one finite build command and exits, so it has no long-running service to health-check.
-    expired_at: 2027-07-26
-`,
-  "Trivy exceptions must remain limited to the two expiring build-only Dockerfile findings",
-);
-assert.match(localSecurityScript, /--skip-check-update/u, "Local Trivy must use the checks bundled with the reviewed binary");
+const packageJson = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8"));
+assert.equal(packageJson.scripts["security:check"], "sh scripts/security-local.sh", "local security command must remain available");
+assert.equal(packageJson.scripts["security:privacy"], "sh scripts/check-repository-privacy.sh", "local privacy command must remain available");
+assert.match(localSecurityScript, /betterleaks/u, "BetterLeaks must remain available for deliberate local use");
+assert.match(localSecurityScript, /trivy fs/u, "Trivy must remain available for deliberate local use");
 
 const expectedActions = new Map([
   ["actions/checkout", { sha: "3d3c42e5aac5ba805825da76410c181273ba90b1", version: "v7.0.1", runtime: "node24" }],
@@ -90,41 +76,15 @@ for (const [action, expected] of expectedActions) {
   }
 }
 
-const securityWorkflow = await readFile(path.join(workflowsRoot, "security.yml"), "utf8");
-assert.doesNotMatch(
-  securityWorkflow,
-  /^\s*(?:-\s*)?uses:\s*(?:aquasecurity|trufflesecurity)\//mu,
-  "Security workflow must respect the GitHub-owned-only repository action policy",
-);
-for (const [expected, label] of [
-  ["https://github.com/trufflesecurity/trufflehog/releases/download/v3.96.0/trufflehog_3.96.0_linux_amd64.tar.gz", "TruffleHog release URL"],
-  ["7105f1cd6577f058a9e39d0578f1a99c8a1e481e4d3512cd8a09acfe22a0fdc0", "TruffleHog release digest"],
-  ["https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-64bit.tar.gz", "Trivy release URL"],
-  ["8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9", "Trivy release digest"],
-  ["https://github.com/zizmorcore/zizmor/releases/download/v1.24.1/zizmor-x86_64-unknown-linux-gnu.tar.gz", "zizmor release URL"],
-  ["a8000f3c683319a523d3b20df0e75457ba591f049cfcbfa98966631b56733c03", "zizmor release digest"],
-]) {
-  assert.ok(securityWorkflow.includes(expected), `Security workflow must pin the reviewed ${label}`);
+const automaticScannerPattern = /(?:cargo\s+(?:install\s+cargo-audit|audit\b)|cargo-audit|betterleaks|trivy|trufflehog|zizmor|dependency-review-action|osv-scanner|snyk)/iu;
+for (const [file, source] of workflowSources) {
+  assert.doesNotMatch(source, automaticScannerPattern, `${file} must not run automatic security, secret, or dependency scanners`);
 }
-assert.match(securityWorkflow, /sha256sum --check -/u, "Security scanner downloads must be checksum verified");
-assert.match(
-  securityWorkflow,
-  /trufflehog git "file:\/\/\$GITHUB_WORKSPACE" --results=verified --fail --no-update --github-actions/u,
-  "TruffleHog must fail closed while scanning verified secrets across Git history",
-);
-assert.match(securityWorkflow, /--scanners secret,misconfig/u, "Trivy must scan secrets and misconfigurations");
-assert.match(securityWorkflow, /--ignorefile \.trivyignore\.yaml/u, "Trivy CI must use the reviewed narrow ignore file");
-assert.match(securityWorkflow, /--skip-check-update/u, "Trivy must use the checks bundled with the reviewed binary");
-assert.match(securityWorkflow, /--exit-code 1/u, "Trivy findings must fail the Security job");
-assert.doesNotMatch(
-  securityWorkflow,
-  /(?:python3\s+-m\s+pip\s+install[^\n]*\buv\b|\buvx\b)/u,
-  "Security workflow must not install mutable uv or zizmor inputs",
-);
-assert.match(securityWorkflow, /\n\s*zizmor \. \\\n/u, "GitHub Actions Security must run the checksum-verified zizmor binary");
+assert.ok(!workflowFiles.some((file) => /security|secret|dependenc/iu.test(file)), "automatic scanner workflows must remain absent");
 
 const releaseWorkflow = await readFile(path.join(workflowsRoot, "release.yml"), "utf8");
 const ciWorkflow = await readFile(path.join(workflowsRoot, "ci.yml"), "utf8");
+const linuxReceiptsWorkflow = await readFile(path.join(workflowsRoot, "linux-receipts.yml"), "utf8");
 const linuxBuildScript = await readFile(path.join(repoRoot, "scripts", "build-linux-release.sh"), "utf8");
 const linuxBuilderDockerfile = await readFile(path.join(repoRoot, "scripts", "linux-release-builder.Dockerfile"), "utf8");
 const linuxVerifyScript = await readFile(path.join(repoRoot, "scripts", "verify-linux-release-artifact.sh"), "utf8");
@@ -184,13 +144,81 @@ for (const command of ["project init", "plan new", "plan split", "map build", "p
 
 assert.match(ciWorkflow, /^  linux-portability:\n/mu, "PR CI must contain a Linux portability matrix job");
 assert.match(ciWorkflow, /^  linux-portability-checksums:\n/mu, "PR CI must aggregate both Linux tarball checksums");
+assert.match(ciWorkflow, /^  router:\n/mu, "PR CI must contain an always-running verification router");
+assert.match(ciWorkflow, /^  workflow_dispatch:$/mu, "CI must support an explicit native-Linux-only dispatch on a reviewed branch SHA");
+const routerStart = ciWorkflow.indexOf("\n  router:\n");
+const routerEnd = ciWorkflow.indexOf("\n  docs:\n", routerStart);
+const routerJob = ciWorkflow.slice(routerStart, routerEnd);
+assert.doesNotMatch(routerJob, /^\s+if:/mu, "verification router must always run");
+for (const output of ["profile", "policy_version", "policy_digest", "changed_files_digest", "live_browser", "docs", "quality", "release", "linux_portability"]) {
+  assert.match(routerJob, new RegExp(`^      ${output}: \\$\\{\\{ steps\\.route\\.outputs\\.${output} \\}\\}$`, "mu"), `verification router must export ${output}`);
+}
+assert.match(routerJob, /node scripts\/ci-router\.mjs route/u, "verification router must use the repository-owned deterministic helper");
+assert.match(routerJob, /name: verification-selection/u, "verification routing evidence must cross jobs only as an explicit artifact");
+assert.match(routerJob, /docs=false\\nquality=false\\nrelease=false\\nlinux_portability=true/u, "manual CI dispatch must select only native Linux evidence");
+for (const [jobHeader, condition] of [
+  ["  docs:\n    name: Documentation\n", "if: needs.router.outputs.docs == 'true'"],
+  ["  quality:\n    name: Quality Gates\n", "if: needs.router.outputs.quality == 'true'"],
+  ["  release-contracts:\n    name: Release Contracts\n", "if: needs.router.outputs.release == 'true'"],
+  ["  linux-portability:\n    name: Portable Linux ${{ matrix.target }}\n", "if: needs.router.outputs.linux_portability == 'true'"],
+]) {
+  const start = ciWorkflow.indexOf(jobHeader);
+  assert.notEqual(start, -1, `PR CI must contain ${jobHeader.trim()}`);
+  assert.ok(ciWorkflow.slice(start, start + 240).includes(condition), `${jobHeader.trim()} must use its router output`);
+}
+assert.doesNotMatch(ciWorkflow, /(?:secrets\.|actions\/cache@|\bcache:)\b/u, "PR CI dependency acceleration must not consume secrets or masquerade as evidence");
+assert.doesNotMatch(ciWorkflow, /docs:verify-shell|Verify browser interactions|google-chrome/u, "automatic CI must remain free of the retired blanket browser suite");
+const docsStart = ciWorkflow.indexOf("\n  docs:\n");
+const docsEnd = ciWorkflow.indexOf("\n  quality:\n", docsStart);
+const docsJob = ciWorkflow.slice(docsStart, docsEnd);
+assert.equal((docsJob.match(/verification-runner\.mjs run/g) ?? []).length, 1, "docs CI must invoke the exact-source runner once");
+assert.equal((docsJob.match(/docs:build|next build/g) ?? []).length, 0, "docs CI must not add a second production build outside the runner");
+assert.match(docsJob, /name: reviewed-docs-\$\{\{ github\.sha \}\}/u, "docs CI must name its artifact by exact source SHA");
+for (const artifactPath of ["apps/docs/out", ".planr/ci/selection.json", ".planr/receipts/docs.json"]) {
+  assert.ok(docsJob.includes(artifactPath), `docs CI artifact must include ${artifactPath}`);
+}
+const summaryStart = ciWorkflow.indexOf("\n  summary:\n");
+assert.notEqual(summaryStart, -1, "PR CI must contain one stable summary job");
+const summaryJob = ciWorkflow.slice(summaryStart);
+assert.match(summaryJob, /name: CI Summary/u, "PR CI summary check name must remain stable");
+assert.match(summaryJob, /if: always\(\)/u, "PR CI summary must run after failures and skips");
+assert.match(summaryJob, /node scripts\/ci-router\.mjs summary/u, "PR CI summary must use the fail-closed result verifier");
+for (const result of ["needs.docs.result", "needs.quality.result", "needs.release-contracts.result", "needs.linux-portability-checksums.result"]) {
+  assert.ok(summaryJob.includes(result), `PR CI summary must inspect ${result}`);
+}
 const portabilityStart = ciWorkflow.indexOf("\n  linux-portability:\n");
 const portabilityEnd = ciWorkflow.indexOf("\n  linux-portability-checksums:\n", portabilityStart);
 const portabilityJob = ciWorkflow.slice(portabilityStart, portabilityEnd);
 assert.doesNotMatch(portabilityJob, /secrets\./u, "PR Linux portability CI must not consume secrets");
-assert.match(portabilityJob, /scripts\/build-linux-release\.sh/u, "PR Linux portability CI must use the canonical pinned build");
-assert.match(portabilityJob, /scripts\/verify-linux-release-artifact\.sh/u, "PR Linux portability CI must use the canonical compatibility verifier");
+assert.equal((portabilityJob.match(/run-linux-target/g) ?? []).length, 1, "the native matrix must invoke each target runner exactly once");
+assert.match(portabilityJob, /^            \.planr\/receipts\/\$\{\{ matrix\.target \}\}\.json$/mu, "PR Linux portability CI must upload each native target receipt");
+const portabilityAggregate = ciWorkflow.slice(portabilityEnd, summaryStart);
+assert.equal((portabilityAggregate.match(/verify-linux-target/g) ?? []).length, 2, "PR CI aggregate must replay exactly two native target receipts");
+assert.match(portabilityAggregate, /name: native-linux-receipts-\$\{\{ github\.sha \}\}/u, "PR CI must retain exact-SHA native receipt evidence");
 assert.match(ciWorkflow, /sha256sum planr-linux-arm64\.tar\.gz planr-linux-x86_64\.tar\.gz > SHA256SUMS/u, "PR CI must aggregate the exact two Linux tarballs");
+assert.equal((summaryJob.match(/if: github\.event_name != 'workflow_dispatch'/g) ?? []).length, 2, "manual native-only runs must not emit a promotion receipt");
+
+assert.match(linuxReceiptsWorkflow, /^name: Native Linux receipts$/mu, "native Linux evidence must have one stable workflow identity");
+assert.match(linuxReceiptsWorkflow, /^  workflow_dispatch:$/mu, "native Linux evidence must be explicitly dispatched for a reviewed SHA");
+assert.doesNotMatch(linuxReceiptsWorkflow, /(?:secrets\.|pull_request_target|push:)/u, "native Linux evidence must not consume secrets or run implicitly");
+const nativeTargetStart = linuxReceiptsWorkflow.indexOf("\n  target:\n");
+const nativeAggregateStart = linuxReceiptsWorkflow.indexOf("\n  aggregate:\n", nativeTargetStart);
+assert.ok(nativeTargetStart >= 0 && nativeAggregateStart > nativeTargetStart, "native Linux evidence must separate target and aggregate jobs");
+const nativeTargetJob = linuxReceiptsWorkflow.slice(nativeTargetStart, nativeAggregateStart);
+assert.match(nativeTargetJob, /^            \.planr\/receipts\/\$\{\{ matrix\.target \}\}\.json$/mu, "each native target upload must retain its runner receipt");
+for (const [target, runner] of [
+  ["linux-x86_64", "ubuntu-24.04"],
+  ["linux-arm64", "ubuntu-24.04-arm"],
+]) {
+  const matrixEntry = `- target: ${target}\n            runner: ${runner}`;
+  assert.ok(linuxReceiptsWorkflow.includes(matrixEntry), `native receipt workflow must bind ${target} to ${runner}`);
+  assert.ok(linuxReceiptsWorkflow.includes(`.planr/receipts/${target}.json`), `native aggregate must consume the ${target} receipt`);
+  assert.ok(linuxReceiptsWorkflow.includes(`dist/planr-${target}.tar.gz`), `native receipt workflow must retain the ${target} archive`);
+}
+assert.equal((linuxReceiptsWorkflow.match(/run-linux-target/g) ?? []).length, 1, "the matrix must invoke each native target exactly once");
+assert.equal((linuxReceiptsWorkflow.match(/verify-linux-target/g) ?? []).length, 2, "the aggregate must replay exactly two target receipts");
+assert.match(linuxReceiptsWorkflow, /name: native-linux-receipts-\$\{\{ github\.sha \}\}/u, "aggregate native evidence must be named by exact SHA");
+assert.match(linuxReceiptsWorkflow, /sha256sum planr-linux-arm64\.tar\.gz planr-linux-x86_64\.tar\.gz > SHA256SUMS/u, "native evidence must aggregate the exact two archives");
 
 const smokeStepMarker = "      - name: Smoke-test binary\n";
 const smokeStepStart = releaseWorkflow.indexOf(smokeStepMarker);

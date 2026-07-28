@@ -158,7 +158,6 @@ fn pi_release_boundary_has_no_live_runtime_or_dependency() {
     let production_release_files = [
         ".github/workflows/ci.yml",
         ".github/workflows/release.yml",
-        ".github/workflows/security.yml",
         "scripts/build-release.sh",
         "scripts/build-linux-release.sh",
         "scripts/prepare-release-candidate.sh",

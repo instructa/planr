@@ -102,7 +102,7 @@ const deployment = await readPage('operations', 'docs-deployment');
 requireMarkers(deployment, 'deployment runbook', [
   'Node.js 22', 'pnpm install --frozen-lockfile', 'NEXT_PUBLIC_SITE_URL',
   'Alchemy v2', 'direct Cloudflare assets', 'planr.so', 'pnpm docs:deploy',
-  '/api/search', 'PLANR_DOCS_URL=https://planr.so pnpm docs:verify-release-live',
+  '/api/search', '--receipt .planr/receipts/docs.json', 'live_browser=true',
 ]);
 
 const rollback = await readPage('operations', 'rollback');
@@ -155,14 +155,15 @@ for (const [name, version] of Object.entries({ ...packageJson.dependencies, ...p
 }
 assert(packageJson.engines.node === '>=22', 'apps/docs must require Node.js 22 or newer');
 assert(
-  packageJson.scripts.deploy === 'alchemy deploy --stage prod --yes',
-  'apps/docs deploy must target the Alchemy prod stage',
+  packageJson.scripts.deploy === 'node ../../scripts/deploy-docs.mjs',
+  'apps/docs deploy must validate the reviewed receipt before targeting Alchemy prod',
 );
 assert(packageJson.scripts.destroy === 'alchemy destroy --stage prod', 'apps/docs destroy must target the Alchemy prod stage explicitly');
 assert(packageJson.scripts.build === 'next build && node scripts/prepare-static-assets.mjs', 'docs build must prepare the deployable static artifact');
 assert(packageJson.scripts.start === 'wrangler dev --config wrangler.jsonc --port 3000 --local', 'docs start must emulate Cloudflare static routing');
-assert(packageJson.scripts['verify:deployment'].includes('wrangler deploy --config wrangler.jsonc --dry-run'), 'deployment verification must run Wrangler without deploying');
-assert(packageJson.scripts['verify:deployment'].includes('verify-static-deployment.mjs'), 'deployment verification must inspect the complete static artifact');
+assert(packageJson.scripts['verify:deployment'] === 'pnpm run verify:artifact', 'deployment verification must consume the existing static artifact');
+assert(packageJson.scripts['verify:artifact'].includes('wrangler deploy --config wrangler.jsonc --dry-run'), 'artifact verification must run Wrangler without deploying');
+assert(packageJson.scripts['verify:artifact'].includes('verify-static-deployment.mjs'), 'artifact verification must inspect the complete static artifact');
 assert(packageJson.scripts['verify:shell'] === undefined, 'docs package must not restore the retired browser verifier command');
 assert(packageJson.devDependencies['axe-core'] === undefined, 'docs package must not restore the retired browser verifier dependency');
 const rootPackageJson = JSON.parse(await read('package.json'));
@@ -239,7 +240,8 @@ requireMarkers(alchemyConfig, 'Alchemy deployment wiring', [
   'Alchemy.Stack(', 'Cloudflare.providers()', 'Cloudflare.state()',
   'Cloudflare.Website.StaticSite(', 'planr-docs-${stage}',
   'stage === "prod"', 'planr.so', 'AdoptPolicy.adopt(true)',
-  'command: "pnpm run build"', 'outdir: "out"', 'main: "worker.mjs"',
+  'PLANR_DOCS_RECEIPT_VALIDATED',
+  'command: "node scripts/use-existing-output.mjs"', 'outdir: "out"', 'main: "worker.mjs"',
   'notFoundHandling: "404-page"', 'runWorkerFirst:', 'legacyRedirects.map', 'NEXT_PUBLIC_SITE_URL',
 ]);
 requireMarkers(await read('apps/docs/wrangler.jsonc'), 'Wrangler static asset configuration', [
@@ -269,9 +271,9 @@ const sourceChecks = [
   ['apps/docs/public/agents/claude.svg', ['<svg', 'fill="#D97757"']],
   ['apps/docs/public/agents/cursor.svg', ['<svg', 'fill: #26251e']],
   ['apps/docs/scripts/verify-static-deployment.mjs', ['static_deployment_verification=passed', 'api/markdown/', '_redirects']],
-  ['.github/workflows/ci.yml', ['Build Cloudflare static deployment artifact', 'pnpm docs:verify-deployment']],
+  ['.github/workflows/ci.yml', ['verification-runner.mjs run', 'reviewed-docs-${{ github.sha }}', 'apps/docs/out']],
   ['scripts/prepare-release-candidate.sh', ['Prepare the exact source state', 'pnpm install --frozen-lockfile', 'reference:generate']],
-  ['scripts/release.sh', ['Publish an already prepared, reviewed release commit', 'cargo test', 'scripts/security-local.sh', 'git tag -a']],
+  ['scripts/release.sh', ['Publish an already prepared, reviewed release commit', 'PLANR_RELEASE_CI_RECEIPT', 'verify-release-promotion.mjs', 'git tag -a']],
   ['docs/RELEASE.md', ['only supported publication path', 'annotated `vx.y.z` tag']],
   ['apps/docs/redirects.mjs', ['legacyRedirects', 'permanent: true']],
   ['apps/docs/worker.mjs', ["from './redirects.mjs'", 'status: 308', 'env.ASSETS.fetch(request)']],

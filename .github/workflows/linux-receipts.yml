@@ -1,0 +1,130 @@
+name: Native Linux receipts
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-linux-receipts-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  selection:
+    name: Bind exact source selection
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Write exact-SHA selection
+        run: |
+          mkdir -p .planr/ci
+          node scripts/ci-router.mjs route \
+            --base "${GITHUB_SHA}^" \
+            --head "$GITHUB_SHA" \
+            --selection-output .planr/ci/selection.json
+
+      - name: Save exact-SHA selection
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-linux-selection-${{ github.sha }}
+          path: .planr/ci/selection.json
+          retention-days: 7
+
+  target:
+    name: Native ${{ matrix.target }} receipt
+    needs: selection
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x86_64
+            runner: ubuntu-24.04
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download exact-SHA selection
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: native-linux-selection-${{ github.sha }}
+          path: .planr/ci
+
+      - name: Build and verify on the compatible native host
+        run: |
+          node scripts/verification-runner.mjs run-linux-target \
+            --target "${{ matrix.target }}" \
+            --receipt ".planr/receipts/${{ matrix.target }}.json" \
+            --input .planr/ci/selection.json \
+            --head "$GITHUB_SHA"
+
+      - name: Save exact archive and target receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-${{ matrix.target }}-${{ github.sha }}
+          path: |
+            dist/planr-${{ matrix.target }}.tar.gz
+            .planr/receipts/${{ matrix.target }}.json
+          compression-level: 0
+          retention-days: 7
+
+  aggregate:
+    name: Bind native Linux receipt set
+    needs: [selection, target]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download exact-SHA selection
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: native-linux-selection-${{ github.sha }}
+          path: .planr/ci
+
+      - name: Download both native target results
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: native-linux-*-${{ github.sha }}
+          path: .
+          merge-multiple: true
+
+      - name: Verify both receipts and aggregate exact archives
+        run: |
+          node scripts/verification-runner.mjs verify-linux-target \
+            --receipt .planr/receipts/linux-x86_64.json \
+            --input .planr/ci/selection.json \
+            --head "$GITHUB_SHA"
+          node scripts/verification-runner.mjs verify-linux-target \
+            --receipt .planr/receipts/linux-arm64.json \
+            --input .planr/ci/selection.json \
+            --head "$GITHUB_SHA"
+          test "$(find dist -maxdepth 1 -name 'planr-linux-*.tar.gz' -type f | wc -l)" -eq 2
+          cd dist
+          sha256sum planr-linux-arm64.tar.gz planr-linux-x86_64.tar.gz > SHA256SUMS
+          sha256sum -c SHA256SUMS
+
+      - name: Save exact-SHA native Linux evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-linux-receipts-${{ github.sha }}
+          path: |
+            dist/planr-linux-x86_64.tar.gz
+            dist/planr-linux-arm64.tar.gz
+            dist/SHA256SUMS
+            .planr/receipts/linux-x86_64.json
+            .planr/receipts/linux-arm64.json
+          compression-level: 0
+          retention-days: 7

@@ -24,25 +24,44 @@ full candidate verification and independent review on that exact commit.
 
 `scripts/release.sh` is the only supported publication path. It runs on clean
 `main`, requires every version and generated reference to already match the
-requested version, reruns the local eval and deterministic gates, and rejects
-any command that changes the reviewed source. Only then does it create and push
-the annotated tag. Editing manifests by hand or publishing an unprepared commit
-skips this ownership boundary.
+requested version, verifies an independently green CI run and human approval
+for the exact `HEAD` SHA, and only then creates and pushes the annotated tag.
+It does not replay the Rust, docs, or packaging suites already proven by that
+CI run. Security, secret, dependency, and workflow scanners are deliberate
+local maintainer preflight commands rather than automatic pull-request or push
+CI evidence. Editing manifests by hand or publishing an unprepared commit skips
+this ownership boundary.
 
 ```bash
 scripts/prepare-release-candidate.sh 1.2.0
 ```
 
 ```bash
+export PLANR_RELEASE_CI_RECEIPT=/path/to/downloaded/promotion-receipt.json
+export PLANR_RELEASE_APPROVAL=/path/to/exact-sha-release-approval.json
+scripts/release.sh 1.2.0 "one-line release summary"
+```
+
+Download `release-promotion-<sha>` from the successful `CI` run for the exact
+main commit. The approval file uses schema `planr.release-approval.v1` and
+contains only `approval_id`, `source_sha`, `version`, `decision: "approved"`,
+`approved_by`, and `approved_at` in addition to `schema_version`. Publication
+queries the recorded GitHub Actions run and rejects a stale SHA, non-main or
+non-push run, failed conclusion, repository mismatch, or non-approved decision.
+
+External evaluation is conditional. When the evaluated workflow subject or its
+explicit evaluation policy changed since the previous release tag, also set:
+
+```bash
 export PLANR_RELEASE_EVAL_SUITE="$HOME/projects/planr-evals/suites/planr-lean-skills-dogfood.suite.json"
 export PLANR_RELEASE_EVAL_RECEIPT=/path/to/sanitized-release-eval-receipt.json
 export PLANR_RELEASE_EVAL_DB=/path/to/planr-evals/results/eval.sqlite
-scripts/release.sh 1.2.0 "one-line release summary"
+export PLANR_RELEASE_PLANR_BIN=/path/to/reviewed/candidate/planr
 ```
 
 Maintainer benchmarks, baselines, model/effort runs, and results live outside
 the public repository in `~/projects/planr-evals`; that workspace and its exact
-layout are not a Planr runtime contract. All three paths above are explicit so a
+layout are not a Planr runtime contract. All external evaluation paths above are explicit so a
 release cannot silently use the product repository's ordinary `.planr` database
 or a stale bundled suite. The receipt is a short-lived local pointer containing
 only `schema_version`, comparison and candidate-run identities, suite and
@@ -76,7 +95,7 @@ The two scripts enforce, in order:
 4. the candidate build synchronizes `Cargo.lock`, then regenerates and strictly checks both references without Git mutation;
 5. candidate source, changelog, contracts, and generated files are committed and independently reviewed before publication approval;
 6. publication requires clean `main`, the exact prepared versions/references, a committed changelog section, and no existing tag;
-7. the candidate binary validates the sanitized receipt and recomputed comparison, then deterministic tests, package, and security gates run without changing source;
+7. publication validates the exact-SHA CI and approval receipts; when the evaluated subject or policy changed, the reviewed candidate binary also validates the sanitized eval receipt and recomputed comparison;
 8. publication creates and pushes only the annotated `vx.y.z` tag for that reviewed commit.
 
 Two independent gates back the script:
@@ -144,6 +163,11 @@ Run:
 scripts/ci-local.sh
 scripts/security-local.sh
 ```
+
+`scripts/security-local.sh`, `cargo audit --deny warnings`, and local
+`zizmor .` are on-demand maintainer checks. Pull-request and push workflows do
+not install or execute BetterLeaks, Trivy, TruffleHog, cargo-audit, zizmor, or
+equivalent dependency/security scanners.
 
 The external consumer E2E suite must pass when available on the release machine.
 Pull-request CI separately builds both Linux architectures through the canonical

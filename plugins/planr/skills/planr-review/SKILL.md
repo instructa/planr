@@ -18,7 +18,9 @@ planr --json pick --work-type review
 
 `--work-type review` leases only review items, so a checker never accidentally takes maker work. Add `--plan <plan-id>` when your dispatch names a plan so the lease stays inside that scope. The pick packet inlines the target item and its evidence logs under `target` — one command is enough to see what is being audited, its status (`in_review` while waiting on you), files, and verification commands. If you already hold a review id, `planr --json trace item <review-id>` returns the same packet. Use `planr log list --item <target-id>` or `planr map show --json` only for deeper reads.
 
-Inspect the actual changed files and re-run the logged verification evidence. Then close the review exactly once:
+Inspect the actual changed files and acceptance criteria, then independently judge whether the evidence proves them. When the repository owns a versioned verification policy, verify the logged receipt against its exact source revision, policy digest, changed-file digest, selected gates, command results, and artifact digests. Use the repository's receipt validator (for this repository, `npm run verification:verify -- --receipt <path> --base <base-revision> --head <source-revision>`), not a visual read of JSON.
+
+Replay only evidence that is cheap, missing, failing, or explicitly high-risk. An already-green expensive gate bound to the reviewed source is normally validated from its receipt rather than rerun. Receipt validation does not replace judgment: inspect the diff for security, correctness, scope, and acceptance-criteria gaps, and record a finding when the policy selection or receipt is inadequate. Then close the review exactly once:
 
 ```bash
 planr review close <review-id> --verdict complete --reviewer <your-id> --close-target
@@ -36,8 +38,10 @@ planr review close <review-id> --verdict not-complete --reviewer <your-id> --fin
 
 - Findings must be specific and actionable.
 - Missing tests are findings when acceptance criteria need proof.
+- A stale, mismatched, unvalidated, or insufficiently scoped receipt is a finding.
 - Architecture or ownership drift is a finding when it creates duplicate policy or state owners.
 - If evidence is insufficient, use `--verdict unclear` rather than complete.
+- Deployment remains gated by explicit approval and a bounded live oracle where applicable. A successful live smoke does not by itself require another broad build or a second full review; replay it only under the same cheap/missing/failing/explicitly-high-risk rule.
 
 ## Single-Agent Mode
 

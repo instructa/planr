@@ -144,8 +144,8 @@ const staleCandidateSource = spawnSync(process.execPath, [
 assert.notEqual(staleCandidateSource.status, 0, "receipt must fail after any release source file changes");
 
 const release = fs.readFileSync(path.join(repo, "scripts/release.sh"), "utf8");
-const gateIndex = release.indexOf("node scripts/verify-release-eval-receipt.mjs");
-assert.ok(gateIndex > release.indexOf("cargo build --quiet"), "eval gate must run after candidate build");
+const gateIndex = release.indexOf("node scripts/verify-release-promotion.mjs");
+assert.ok(gateIndex >= 0, "publication must verify exact-SHA promotion evidence");
 for (const mutation of ["git tag ", "git push "]) {
   assert.ok(gateIndex < release.indexOf(mutation), `eval gate must precede ${mutation.trim()}`);
 }
@@ -155,9 +155,9 @@ for (const forbiddenMutation of ["git add ", "git commit "]) {
 for (const forbidden of ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "NPM_TOKEN", "raw_prompt", "raw_completion"]) {
   assert.ok(!release.includes(forbidden), `release path must not request ${forbidden}`);
 }
-assert.ok(!release.includes("PLANR_RELEASE_PLANR_BIN"), "release gate must execute the freshly built candidate binary");
-assert.ok(release.includes("PLANR_RELEASE_EVAL_SUITE"), "release path must require an explicit external suite");
-assert.ok(release.includes("PLANR_RELEASE_EVAL_DB"), "release path must require an explicit external eval database");
+assert.ok(release.includes("PLANR_RELEASE_PLANR_BIN"), "conditional eval verification must use an explicit reviewed candidate binary");
+assert.ok(release.includes("PLANR_RELEASE_EVAL_SUITE"), "conditional eval path must accept an explicit external suite");
+assert.ok(release.includes("PLANR_RELEASE_EVAL_DB"), "conditional eval path must accept an explicit external eval database");
 const privateSuitePath = ["examples", "eval", "lean-skills"].join("/");
 for (const source of [release, fs.readFileSync(verifier, "utf8"), fs.readFileSync(fileURLToPath(import.meta.url), "utf8")]) {
   assert.ok(!source.includes(privateSuitePath), "public gate code must not depend on the private lean-skills path");
