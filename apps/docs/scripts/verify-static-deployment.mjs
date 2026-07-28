@@ -53,7 +53,7 @@ assert.ok(!/planr install (codex|claude|cursor|grok)/.test(agentQuickstart), 'st
 const grokGuide = await readFile(path.join(outputRoot, 'docs', 'integrations', 'grok-build.md'), 'utf8');
 for (const marker of [
   'planr install grok',
-  'no xAI credential is required',
+  'contains no xAI credential',
   'Use $planr. Inspect this repository and tell me the verified next step.',
 ]) {
   assert.ok(grokGuide.includes(marker), `static Grok guide omits ${marker}`);
