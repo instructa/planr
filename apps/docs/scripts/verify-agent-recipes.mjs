@@ -243,7 +243,7 @@ const normalizedSnapshot = JSON.stringify(agentRecipes);
 const snapshotHash = createHash('sha256').update(normalizedSnapshot).digest('hex');
 assert.equal(
   snapshotHash,
-  'dbf208af3f6dd8ec00b4c917b6c4cb8f5636be90c817fae32eb3fe0aa75e8c5b',
+  '0dd353a783a65e3846ec5b7866c2e1e32986dd062e9eba543550730839db5d04',
   `agent recipe snapshot changed (${snapshotHash}); inspect the full client contract before accepting it`,
 );
 

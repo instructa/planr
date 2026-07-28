@@ -3,33 +3,23 @@ title: Agent Quickstart
 description: Let Codex, Claude Code, Cursor, Pi, or explicitly opted-in Grok Build set up Planr safely and reach the first public Planr prompt.
 ---
 
-This path delegates installation and project integration to your coding agent while keeping every mutation previewable and project-scoped. Choose exactly one client setup below, use its recipe or linked explicit guide, and wait for the receipt before asking for product work.
+This path delegates installation and project integration to your coding agent while keeping every mutation previewable and project-scoped. Choose exactly one client setup guide below, use its complete recipe, and wait for the receipt before asking for product work.
 
 <Callout type="info" title="Start with the right entry">
   After setup, start ordinary Planr requests with `$planr`. Pi uses its native `/skill:planr` spelling instead. For bounded autonomous delivery, use the runtime-specific Planr Goal prompt first and then its generated Planr Loop handoff.
 </Callout>
 
-## Codex setup
+## Choose a setup guide
 
-<AgentRecipe client="codex" />
+Each integration page owns its complete setup recipe, expected artifacts, reload or trust guidance, and first prompt.
 
-## Claude Code setup
-
-<AgentRecipe client="claude" />
-
-## Cursor setup
-
-<AgentRecipe client="cursor" />
-
-## Pi setup
-
-<AgentRecipe client="pi" />
-
-Pi setup is an explicit repository opt-in rather than part of `--client all`.
-
-## Grok Build setup
-
-Grok setup is an explicit repository opt-in rather than part of `--client all`. Follow the [Grok Build integration](/docs/integrations/grok-build) to preview and install the native project assets, then return here for the shared receipt and first `$planr` request.
+<Cards>
+  <Card title="Codex" href="/docs/integrations/codex" description="Use the Codex recipe for project MCP, skills, and hooks." />
+  <Card title="Claude Code" href="/docs/integrations/claude-code" description="Use the Claude Code recipe for plugin skills, roles, hooks, and project MCP." />
+  <Card title="Cursor" href="/docs/integrations/cursor" description="Use the Cursor recipe for project MCP, agents, skills, and hooks." />
+  <Card title="Grok Build" href="/docs/integrations/grok-build" description="Use the explicit Grok Build opt-in guide for native skills, agents, and MCP." />
+  <Card title="Pi" href="/docs/integrations/pi" description="Use the explicit Pi opt-in guide for native Agent Skills and optional roles." />
+</Cards>
 
 ## Verify the setup receipt
 
@@ -39,7 +29,7 @@ The setup is complete only when `planr project show --json` reads the project an
 
 ## Start your first request
 
-Reload the client if the receipt says to, open a fresh session, and paste the recipe's exact first prompt. For Codex, Claude Code, Cursor, and Grok Build that prompt is:
+Reload the client if the receipt says to, open a fresh session, and paste the integration guide's exact first prompt. For Codex, Claude Code, Cursor, and Grok Build that prompt is:
 
 <PromptBlock prompt="first" label="First Planr request" />
 

@@ -264,7 +264,7 @@ const sourceChecks = [
   ['apps/docs/alchemy.run.ts', ['planr.so', 'Cloudflare.Website.StaticSite', 'AdoptPolicy.adopt(true)', 'outdir: "out"']],
   ['apps/docs/app/page.tsx', ['Works with your coding agent', "agentRecipeList.map((recipe) =>"]],
   ['apps/docs/lib/agent-recipes.ts', ['/agents/codex.svg', '/agents/claude.svg', '/agents/cursor.svg', 'satisfies Record<AgentClientId, AgentRecipe>']],
-  ['apps/docs/public/agents/README.md', ['developers.openai.com/assets/OpenAI-black-monoblossom.svg', 'anthropic.com/press-kit', 'cursor.com/brand']],
+  ['apps/docs/public/agents/README.md', ['developers.openai.com/assets/OpenAI-black-monoblossom.svg', 'anthropic.com/press-kit', 'cursor.com/brand', 'pi.dev/press-kit']],
   ['apps/docs/public/agents/codex.svg', ['<svg', 'fill="black"']],
   ['apps/docs/public/agents/claude.svg', ['<svg', 'fill="#D97757"']],
   ['apps/docs/public/agents/cursor.svg', ['<svg', 'fill: #26251e']],

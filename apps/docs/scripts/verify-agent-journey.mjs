@@ -55,8 +55,15 @@ for (const route of ['/docs/agents/quickstart', '/docs/agents/prompt-recipes', '
 }
 
 const quickstart = await read('agents/quickstart.mdx');
-for (const client of ['codex', 'claude', 'cursor', 'pi']) {
-  assert(quickstart.includes(`<AgentRecipe client="${client}" />`));
+assert(!quickstart.includes('<AgentRecipe'), 'Agent Quickstart must link to integration recipes instead of duplicating them');
+for (const route of [
+  '/docs/integrations/codex',
+  '/docs/integrations/claude-code',
+  '/docs/integrations/cursor',
+  '/docs/integrations/grok-build',
+  '/docs/integrations/pi',
+]) {
+  assert(quickstart.includes(route), `Agent Quickstart omits integration link ${route}`);
 }
 assert(quickstart.includes('<PromptBlock prompt="first"'));
 assert.match(quickstart, /Start with the right entry/);
@@ -96,4 +103,4 @@ for (const file of await collectMdx()) {
   assert(!forbiddenUnscopedDriver.test(content), `${path.relative(contentRoot, file)} recommends an unscoped host driver`);
 }
 
-console.log(`agent_journey_contract=passed prompts=${Object.keys(agentPrompts).length} pages=4 clients=4`);
+console.log(`agent_journey_contract=passed prompts=${Object.keys(agentPrompts).length} pages=4 integration_links=5`);

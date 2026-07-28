@@ -24,11 +24,17 @@ const required = new Map([
   ['apps/docs/content/docs/faq.mdx', ['explicitly opted-in Grok Build']],
   ['apps/docs/content/docs/getting-started/full-lifecycle.mdx', ['explicitly opted-in Grok Build']],
   ['apps/docs/content/docs/agents/index.mdx', ['explicitly opted-in Grok Build']],
+  ['apps/docs/content/docs/agents/quickstart.mdx', [
+    '/docs/integrations/grok-build',
+    'Use the explicit Grok Build opt-in guide',
+  ]],
   ['apps/docs/content/docs/getting-started/why-planr.mdx', ['explicitly opted-in Grok Build']],
   ['apps/docs/content/docs/concepts/local-first-model.mdx', ['explicitly opted-in Grok Build']],
   ['apps/docs/content/docs/integrations/grok-build.mdx', [
     'not included by `--client all`',
     'Grok has no Planr hooks in v1',
+    '## Copy/paste first prompt',
+    'Use $planr. Inspect this repository and tell me the verified next step.',
   ]],
   ['apps/docs/scripts/verify-release-readiness.mjs', [
     'explicitly opted-in Grok Build',

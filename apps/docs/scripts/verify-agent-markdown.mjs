@@ -127,11 +127,19 @@ async function main() {
 
     const agentQuickstart = await (await fetch(`${baseUrl}/docs/agents/quickstart.md`)).text();
     assert.match(agentQuickstart, /Use \$planr\. Inspect this repository/);
-    for (const client of ['codex', 'claude', 'cursor', 'pi']) {
-      assert.match(agentQuickstart, new RegExp(`planr install ${client} --dry-run`));
+    for (const route of [
+      '/docs/integrations/codex',
+      '/docs/integrations/claude-code',
+      '/docs/integrations/cursor',
+      '/docs/integrations/grok-build',
+      '/docs/integrations/pi',
+    ]) {
+      assert.match(agentQuickstart, new RegExp(route.replaceAll('/', '\\/')));
     }
-    assert.match(agentQuickstart, /\/docs\/integrations\/grok-build/);
-    assert.match(agentQuickstart, /Use \/skill:planr\. Inspect this repository/);
+    for (const client of ['codex', 'claude', 'cursor', 'pi']) {
+      assert.doesNotMatch(agentQuickstart, new RegExp(`planr install ${client} --dry-run`));
+    }
+    assert.doesNotMatch(agentQuickstart, /Copyable setup prompt/);
     assert(!agentQuickstart.includes('<PromptBlock'));
 
     const promptRecipes = await (await fetch(`${baseUrl}/docs/agents/prompt-recipes.md`)).text();
