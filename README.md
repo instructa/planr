@@ -2,7 +2,7 @@
 
 ![Planr — turn chaotic agent work into a verified task graph](public/planr_banner1.webp)
 
-Planr is a local-first planning and execution coordination tool for coding agents. It combines reviewable Markdown plans with a dependency-aware work map so Codex, Claude Code, Cursor, Grok Build, generic MCP clients, and human operators can drive the same work safely — from idea to verified completion.
+Planr is a local-first planning and execution coordination tool for coding agents. It combines reviewable Markdown plans with a dependency-aware work map so Codex, Claude Code, Cursor, Grok Build, Pi, generic MCP clients, and human operators can drive the same work safely — from idea to verified completion.
 
 [**View the Demo →**](https://x.com/kevinkern/status/2066957434564808884?s=20)
 
@@ -53,13 +53,23 @@ curl -fsSL https://raw.githubusercontent.com/instructa/planr/main/scripts/instal
 > On an affected Linux release, build from source on the target distribution or upgrade to v1.7.3.
 <!-- planr:linux-release-portability:end surface=README schema=1 -->
 
-Then initialize a project. When selected, Claude Code and Cursor also receive standalone project worker/reviewer roles; Codex workflow skills come from its plugin. Grok Build is a separate explicit opt-in and is not included by `all`:
+Then initialize a project. When selected, Claude Code and Cursor also receive standalone project worker/reviewer roles; Codex workflow skills come from its plugin. Grok Build and Pi are separate explicit opt-ins and are not included by `all`:
 
 ```bash
 planr project init "My Product" --client all
 ```
 
 Manual downloads, from-source builds, and client wiring details: [Install Guide](https://planr.so/docs/getting-started/installation).
+
+To add Pi's native Agent Skills and optional pi-subagents roles to a trusted repository, select it explicitly:
+
+```bash
+planr install pi --dry-run
+planr install pi
+planr project init "My Product" --client pi
+```
+
+Planr writes repository-local `.pi/skills/` workflow assets and optional `.pi/agents/` roles only. It does not install Pi, pi-subagents, MCP config, hooks, global settings, provider credentials, or session state. Full setup and trust guidance: [Pi integration](https://planr.so/docs/integrations/pi).
 
 ## Install The Plugin (Skills)
 
@@ -120,6 +130,22 @@ grok inspect --json
 ```
 
 Planr writes portable `.grok/config.toml` MCP configuration plus native `.grok/agents/` and `.grok/skills/` assets. It writes no Grok plugin, hooks, xAI credentials, model setting, or provider runtime dependency. Live authenticated verification is maintainer-local only and never runs in CI. See the [Grok Build guide](https://planr.so/docs/integrations/grok-build).
+
+</details>
+
+<a id="install-pi"></a>
+<details>
+<summary><strong>Pi</strong></summary>
+
+Preview or install the repository-local Pi integration:
+
+```bash
+planr install pi --dry-run
+planr install pi
+planr doctor --client pi --json
+```
+
+Planr writes native `.pi/skills/` workflow assets and optional `.pi/agents/` role files for `pi-subagents`. It writes no MCP configuration, hooks, extension package, global Pi settings, provider credentials, model pin, or session reference. Pi is intentionally explicit opt-in and is not part of `--client all`. See the [Pi integration guide](https://planr.so/docs/integrations/pi).
 
 </details>
 
@@ -200,6 +226,7 @@ The watcher is likewise a human-only observer. It defaults to the condensed diag
 
 ## What's new
 
+- **1.9.0 — First-class Pi integration:** Added an explicit repository opt-in that installs native Pi Agent Skills plus optional `pi-subagents` worker/reviewer roles without treating Pi as an MCP host. The integration writes no Pi global settings, hooks, provider credentials, model pin, or session reference, and `--client all` remains unchanged for existing Codex, Claude Code, Cursor, and Grok setup. See the [Pi integration guide](https://planr.so/docs/integrations/pi), [Pi contract](docs/contracts/PI_INTEGRATION_V1.md), and [1.9.0 changelog](CHANGELOG.md#190---2026-07-27).
 - **1.8.0 — First-class Grok Build integration:** Added an explicit repository opt-in that installs portable project MCP configuration plus native Grok agents and all ten Planr workflow skills. The integration writes no plugin, hooks, model setting, xAI credentials, or provider runtime dependency; authenticated verification remains maintainer-local and never runs in CI. See the [Grok Build guide](https://planr.so/docs/integrations/grok-build) and [1.8.0 changelog](CHANGELOG.md#180---2026-07-27).
 - **1.7.2 — Reproducible release candidates:** Locked the pnpm workspace inventory, made external eval fixtures self-contained, refreshed reviewed workflow runtimes, and made all four published architectures execute the exact tagged version before upload. Model-backed evaluation remains a local, candidate-bound maintainer gate; this patch makes no unmeasured speed or quality claim. See the [1.7.2 changelog](CHANGELOG.md#172---2026-07-25) and [release guidance](https://planr.so/docs/operations/release).
 - **1.7.1 — Leaner agent guidance and safer local releases:** Slimmed the hot-path Planr skills while preserving their execution and review contracts, moved maintainer benchmark inputs and results outside the public repository, added a fail-closed local release-evidence gate without API keys in CI, and verified the optional external Switchloom v0.3.2 integration. The public 1.7 eval CLI remains available in this patch. See the [1.7.1 changelog](CHANGELOG.md#171---2026-07-25) and [release guidance](https://planr.so/docs/operations/release).
@@ -220,7 +247,7 @@ Full documentation lives at [planr.so/docs](https://planr.so/docs).
 - [Plugins and Model Routing](https://planr.so/docs/plugins) · [Recipes](https://planr.so/docs/guides/recipes)
 - [Integrations and Host Hooks](https://planr.so/docs/integrations)
 - [CLI Reference](https://planr.so/docs/reference/cli) · [MCP Reference](https://planr.so/docs/reference/mcp)
-- [Codex](https://planr.so/docs/integrations/codex) · [Claude Code](https://planr.so/docs/integrations/claude-code) · [Cursor](https://planr.so/docs/integrations/cursor) · [Grok Build](https://planr.so/docs/integrations/grok-build)
+- [Codex](https://planr.so/docs/integrations/codex) · [Claude Code](https://planr.so/docs/integrations/claude-code) · [Cursor](https://planr.so/docs/integrations/cursor) · [Grok Build](https://planr.so/docs/integrations/grok-build) · [Pi](https://planr.so/docs/integrations/pi)
 - [Daily Worker Loop](https://planr.so/docs/guides/daily-worker-loop)
 - [Task Graph Model](https://planr.so/docs/concepts/graph-and-readiness)
 - [Architecture](https://planr.so/docs/contributing/architecture)
