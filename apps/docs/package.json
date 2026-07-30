@@ -19,6 +19,7 @@
     "verify:agent-journey": "node scripts/verify-agent-journey.mjs",
     "verify:agent-landing": "node scripts/verify-agent-landing.mjs",
     "verify:concepts": "node scripts/verify-concept-semantics.mjs",
+    "verify:evidence-docs": "node scripts/verify-evidence-docs.mjs && node scripts/test-evidence-scenario-helper.mjs",
     "verify:maintenance": "node scripts/test-release-contract.mjs && node scripts/verify-maintenance.mjs",
     "sync:linux-portability": "node scripts/sync-linux-portability-notices.mjs",
     "check:linux-portability": "node scripts/sync-linux-portability-notices.mjs --check",
@@ -28,8 +29,10 @@
     "verify:release": "node scripts/sync-linux-portability-notices.mjs --check && node scripts/test-linux-portability-contract.mjs && node scripts/verify-release-readiness.mjs",
     "verify:release-live": "node scripts/verify-release-readiness.mjs --live",
     "verify:clean-install": "node scripts/verify-clean-install.mjs",
-    "reference:generate": "node scripts/generate-cli-reference.mjs && node scripts/generate-mcp-reference.mjs",
-    "reference:check": "node scripts/generate-cli-reference.mjs --check && node scripts/generate-mcp-reference.mjs --check",
+    "evidence-examples:generate": "node scripts/generate-evidence-examples.mjs",
+    "evidence-examples:check": "node scripts/generate-evidence-examples.mjs --check && node scripts/test-evidence-examples.mjs",
+    "reference:generate": "node scripts/generate-cli-reference.mjs && node scripts/generate-mcp-reference.mjs && node scripts/generate-evidence-examples.mjs",
+    "reference:check": "node scripts/generate-cli-reference.mjs --check && node scripts/generate-mcp-reference.mjs --check && node scripts/generate-evidence-examples.mjs --check && node scripts/test-evidence-examples.mjs && node scripts/verify-evidence-docs.mjs",
     "verify:reference": "node scripts/verify-reference.mjs"
   },
   "engines": {

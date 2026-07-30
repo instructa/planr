@@ -1,6 +1,6 @@
 import { notFound } from 'next/navigation';
 import { getLLMText, markdownResponse } from '@/lib/llm';
-import { source } from '@/lib/source';
+import { getSortedPages, source } from '@/lib/source';
 
 type RouteProps = {
   params: Promise<{ slug: string[] }>;
@@ -20,7 +20,7 @@ export async function GET(_request: Request, { params }: RouteProps) {
 }
 
 export function generateStaticParams() {
-  return source.getPages().map((page) => {
+  return getSortedPages().map((page) => {
     const slug = page.slugs.length ? [...page.slugs] : ['index'];
     slug[slug.length - 1] = `${slug.at(-1)}.md`;
     return { slug };

@@ -86,7 +86,7 @@ function internalLinks(page) {
 
 const pages = await collectPages(contentRoot);
 const routeMap = new Map(pages.map((page) => [page.route, page]));
-assert.equal(routeMap.size, 63, 'release inventory must contain exactly 63 unique MDX routes');
+assert.equal(routeMap.size, 66, 'release inventory must contain exactly 66 unique MDX routes');
 const retiredBrowserVerifier = /docs:verify-shell|verify:shell|browser verifier|production browser verifier|shell verifiers|docs-shell|axe results/i;
 for (const page of pages) {
   assert.doesNotMatch(page.content, retiredBrowserVerifier, `${page.route} references the retired browser verifier`);
@@ -153,7 +153,7 @@ const linuxPortability = verifyLinuxPortabilityContract({
 
 const requirementAudit = [
   { id: 1, requirement: 'Latest stable compatible Fumadocs app, pinned and integrated', evidence: 'exact dependency gate, lockfile install, CONTRACT stack decision, CI scripts' },
-  { id: 2, requirement: 'Clear English task-oriented content and copyable commands', evidence: '63 frontmatter-valid pages, authoring contract, CommandBlock browser interaction' },
+  { id: 2, requirement: 'Clear English task-oriented content and copyable commands', evidence: '66 frontmatter-valid pages, authoring contract, CommandBlock browser interaction' },
   { id: 3, requirement: 'Landing, installation, quickstart, and complete lifecycle', evidence: 'published route inventory plus clean-install onboarding replay' },
   { id: 4, requirement: 'Core concepts and canonical ownership', evidence: 'concept page tree plus semantic graph replay' },
   { id: 5, requirement: 'Codex, Claude Code, Cursor, explicitly opted-in Grok Build and Pi, CLI-only, and generic MCP', evidence: 'seven integration routes plus client dry-run diagnostics' },
@@ -163,7 +163,7 @@ const requirementAudit = [
   { id: 9, requirement: 'Content, build, link, orphan, semantic, deployment, and live-route guardrails', evidence: 'CI plus release, maintenance, reference, onboarding, concepts, and deployment verifiers' },
   { id: 10, requirement: 'Obvious repository documentation entry points', evidence: 'root README and apps/docs README checks' },
   { id: 11, requirement: 'Official Fumadocs and AgentRig research with recorded decisions', evidence: 'CONTRACT sources and adopted/rejected ADRs' },
-  { id: 12, requirement: 'Audited public-surface coverage with no unexplained gaps', evidence: '63-route COVERAGE inventory with agent and human journeys, link/orphan checks, drift verifiers' },
+  { id: 12, requirement: 'Audited public-surface coverage with no unexplained gaps', evidence: '66-route COVERAGE inventory with agent and human journeys, link/orphan checks, drift verifiers' },
 ];
 
 const report = {

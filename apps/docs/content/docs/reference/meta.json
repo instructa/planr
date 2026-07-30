@@ -1,5 +1,5 @@
 {
   "title": "Reference",
   "description": "Canonical executable and data contracts.",
-  "pages": ["index", "cli", "cli-generated", "mcp", "mcp-schemas-generated", "http-api", "configuration-and-storage", "data-and-status", "outputs-and-errors", "support-matrix", "maintenance"]
+  "pages": ["index", "cli", "cli-generated", "mcp", "mcp-schemas-generated", "http-api", "evidence", "configuration-and-storage", "data-and-status", "outputs-and-errors", "support-matrix", "maintenance"]
 }

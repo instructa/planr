@@ -5,11 +5,14 @@ import {
   getAgentRecipe,
   type AgentClientId,
 } from '@/lib/agent-recipes';
-import { source } from '@/lib/source';
+import {
+  canonicalPathForPage,
+  getSortedPages,
+  type SourcePage,
+} from '@/lib/source';
 
 const siteOrigin = 'https://planr.so';
 
-type SourcePage = ReturnType<typeof source.getPages>[number];
 type MarkdownData = SourcePage['data'] & {
   _markdown?: string;
   _exports?: { _markdown?: string };
@@ -122,10 +125,6 @@ export function markdownPathForPage(page: SourcePage) {
   return markdownPathForSlugs(page.slugs);
 }
 
-export function canonicalPathForPage(page: SourcePage) {
-  return page.slugs.length ? `/docs/${page.slugs.join('/')}` : '/docs';
-}
-
 export async function getLLMText(page: SourcePage) {
   const data = page.data as MarkdownData;
   const processed = data._markdown ?? data._exports?._markdown;
@@ -175,9 +174,7 @@ Planr is a local-first planning and execution coordination tool for coding agent
 }
 
 export async function getLLMFullText() {
-  const pages = [...source.getPages()].sort((left, right) =>
-    canonicalPathForPage(left).localeCompare(canonicalPathForPage(right)),
-  );
+  const pages = getSortedPages();
   const rendered = await Promise.all(pages.map((page) => getLLMText(page)));
   return `# Planr complete documentation corpus\n\n${rendered.join('\n\n---\n\n')}`;
 }

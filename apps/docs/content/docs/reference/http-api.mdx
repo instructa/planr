@@ -37,6 +37,19 @@ Start the server with `planr serve --port 7526`. It binds only `127.0.0.1`; ther
 | POST | `/v1/items/{id}/approval/request`, `/v1/items/{id}/approval/approve`, `/v1/items/{id}/approval/deny` |
 | GET | `/v1/approvals?open=true` |
 | GET, POST | `/v1/items/{id}/review-evidence` |
+| GET | `/v1/evidence/policy` |
+| GET, POST | `/v1/evidence/obligations` |
+| GET | `/v1/evidence/obligations/{id}` |
+| GET | `/v1/evidence/capabilities` |
+| GET | `/v1/evidence/capabilities/{id}` |
+| POST | `/v1/evidence/run` |
+| POST | `/v1/evidence/import` |
+| POST | `/v1/evidence/migrate` |
+| GET | `/v1/evidence/classifications` |
+| POST | `/v1/evidence/host-capture/import`, `/v1/evidence/host-capture/run` |
+| GET | `/v1/evidence/attempts`, `/v1/evidence/attempts/{id}` |
+| GET | `/v1/evidence/receipts`, `/v1/evidence/receipts/{id}` |
+| POST | `/v1/evidence/coverage`, `/v1/evidence/explain` |
 | POST | `/v1/items/{id}/review-annotations`, `/v1/items/{id}/review-feedback` |
 | POST | `/v1/reviews/{id}/close` |
 | GET, POST | `/v1/reviews/{id}/artifact` |
