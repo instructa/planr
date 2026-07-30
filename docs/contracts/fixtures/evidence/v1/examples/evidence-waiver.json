@@ -1,0 +1,31 @@
+{
+  "id": "ewaiver-api-health-expiry",
+  "schema_version": "evidence.contract.v1",
+  "scope": {
+    "kind": "item",
+    "id": "item-example",
+    "plan_id": "pln-example"
+  },
+  "observation_ids": ["obs-http-200"],
+  "source": {
+    "revision": "0123456789abcdef0123456789abcdef01234567",
+    "tree_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+    "dirty": false
+  },
+  "target": {
+    "kind": "local_service",
+    "uri": "http://127.0.0.1:4173/health",
+    "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+  },
+  "reason": "temporary approved exception for local fixture downtime",
+  "created_by": "user@example.com",
+  "created_at": "2026-07-28T12:00:00Z",
+  "expires_at": "2026-07-29T12:00:00Z",
+  "approval_ref": "approval-123",
+  "audit_trail": [
+    {
+      "event": "created",
+      "at": "2026-07-28T12:00:00Z"
+    }
+  ]
+}

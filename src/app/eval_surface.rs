@@ -1,4 +1,5 @@
 use super::App;
+use crate::canonical_json::{canonical_json_bytes, sha256_json_digest_without_top_level_field};
 use crate::cli::{
     EvalCommand, EvalEvidenceAttachmentKind, EvalEvidenceTargetKind, EvalInvalidationTargetKind,
     EvalShowKind,
@@ -13,7 +14,6 @@ use crate::util::collect_rows;
 use anyhow::{Context, Result, anyhow, bail};
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -253,24 +253,25 @@ impl App {
             }
         }
         let computed_digest = sha256_json_digest_without_top_level_digest(&manifest)?;
-        if computed_digest != digest {
+        if !eval_manifest_digest_matches(&digest, &computed_digest, &manifest)? {
             bail!("eval suite digest mismatch: expected {digest}, computed {computed_digest}");
         }
-        validate_scorer_control_admission(&manifest)?;
+        let canonical_manifest = canonical_eval_suite_snapshot_value(&manifest, &digest);
+        validate_scorer_control_admission(&canonical_manifest)?;
         let suite_id = string_field(&input, "suite_id")
-            .or_else(|| string_field(&manifest, "suite_id"))
+            .or_else(|| string_field(&canonical_manifest, "suite_id"))
             .unwrap_or_else(|| "default".to_string());
         let suite_version = string_field(&input, "suite_version")
-            .or_else(|| string_field(&manifest, "suite_version"))
+            .or_else(|| string_field(&canonical_manifest, "suite_version"))
             .unwrap_or_else(|| "v1".to_string());
         let policy_digest = string_field(&input, "comparison_policy_digest")
-            .or_else(|| string_field(&manifest, "comparison_policy_digest"))
+            .or_else(|| string_field(&canonical_manifest, "comparison_policy_digest"))
             .unwrap_or_else(|| "default".to_string());
         self.insert_eval_suite_snapshot(EvalSuiteSnapshotInput {
             digest: digest.clone(),
             suite_id,
             suite_version,
-            normalized_manifest: manifest,
+            normalized_manifest: canonical_manifest,
             fixture_digests: input
                 .get("fixture_digests")
                 .cloned()
@@ -2287,10 +2288,46 @@ fn validate_sha256_manifest_digest(expected: &str, manifest: &Value) -> Result<(
         bail!("eval suite snapshot digest field does not match {expected}");
     }
     let actual = sha256_json_digest_without_top_level_digest(manifest)?;
-    if actual != expected {
+    if !eval_manifest_digest_matches(expected, &actual, manifest)? {
         bail!("eval suite digest mismatch: expected {expected}, computed {actual}");
     }
     Ok(())
+}
+
+fn eval_manifest_digest_matches(expected: &str, actual: &str, manifest: &Value) -> Result<bool> {
+    if expected == actual {
+        return Ok(true);
+    }
+    Ok(expected == legacy_sha256_json_digest_without_top_level_digest(manifest)?)
+}
+
+fn legacy_sha256_json_digest_without_top_level_digest(value: &Value) -> Result<String> {
+    let mut canonical = legacy_sorted_json_value(value);
+    if let Some(object) = canonical.as_object_mut() {
+        object.remove("digest");
+    }
+    let bytes =
+        serde_json::to_vec(&canonical).context("canonicalizing legacy eval suite manifest")?;
+    Ok(sha256_prefixed_bytes(&bytes))
+}
+
+fn legacy_sorted_json_value(value: &Value) -> Value {
+    match value {
+        Value::Array(values) => Value::Array(values.iter().map(legacy_sorted_json_value).collect()),
+        Value::Object(object) => {
+            let mut entries = object
+                .iter()
+                .map(|(key, value)| (key.clone(), legacy_sorted_json_value(value)))
+                .collect::<Vec<_>>();
+            entries.sort_by(|left, right| left.0.cmp(&right.0));
+            let mut sorted = serde_json::Map::new();
+            for (key, value) in entries {
+                sorted.insert(key, value);
+            }
+            Value::Object(sorted)
+        }
+        scalar => scalar.clone(),
+    }
 }
 
 fn validate_sha256_digest_format(digest: &str) -> Result<()> {
@@ -2304,24 +2341,96 @@ fn validate_sha256_digest_format(digest: &str) -> Result<()> {
 }
 
 fn sha256_json_digest_without_top_level_digest(value: &Value) -> Result<String> {
-    let mut canonical = canonical_json_value(value);
-    if let Some(object) = canonical.as_object_mut() {
-        object.remove("digest");
+    let value = normalized_eval_suite_digest_value(value);
+    sha256_json_digest_without_top_level_field(&value, "digest")
+        .context("canonicalizing eval suite manifest")
+}
+
+fn canonical_eval_suite_snapshot_value(value: &Value, digest: &str) -> Value {
+    let mut normalized = normalized_eval_suite_digest_value(value);
+    if let Some(object) = normalized.as_object_mut() {
+        object.insert("digest".to_string(), Value::String(digest.to_string()));
     }
-    let bytes = serde_json::to_vec(&canonical).context("canonicalizing eval suite manifest")?;
-    Ok(format!("sha256:{:x}", Sha256::digest(&bytes)))
+    normalized
+}
+
+fn normalized_eval_suite_digest_value(value: &Value) -> Value {
+    let mut normalized = value.clone();
+    let Some(object) = normalized.as_object_mut() else {
+        return normalized;
+    };
+    object.remove("digest");
+    sort_object_array_by_string_field(object, "fixtures", "id");
+    sort_scorers_by_id_version(object);
+    sort_object_array_by_string_field(object, "cases", "case_id");
+    if let Some(cases) = object.get_mut("cases").and_then(Value::as_array_mut) {
+        for case in cases {
+            let Some(case_object) = case.as_object_mut() else {
+                continue;
+            };
+            sort_string_array_field(case_object, "fixture_ids");
+            sort_string_array_field(case_object, "scorer_ids");
+            sort_string_array_field(case_object, "measures");
+        }
+    }
+    normalized
+}
+
+fn sort_scorers_by_id_version(object: &mut serde_json::Map<String, Value>) {
+    if let Some(values) = object.get_mut("scorers").and_then(Value::as_array_mut) {
+        values.sort_by(|left, right| {
+            scorer_id_version_key(left)
+                .as_str()
+                .cmp(scorer_id_version_key(right).as_str())
+        });
+    }
+}
+
+fn scorer_id_version_key(value: &Value) -> String {
+    let id = value.get("id").and_then(Value::as_str).unwrap_or_default();
+    let version = value
+        .get("version")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    format!("{id}@{version}")
+}
+
+fn sort_object_array_by_string_field(
+    object: &mut serde_json::Map<String, Value>,
+    array_field: &str,
+    key_field: &str,
+) {
+    if let Some(values) = object.get_mut(array_field).and_then(Value::as_array_mut) {
+        values.sort_by(|left, right| {
+            let left_key = left
+                .get(key_field)
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let right_key = right
+                .get(key_field)
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            left_key.cmp(right_key)
+        });
+    }
+}
+
+fn sort_string_array_field(object: &mut serde_json::Map<String, Value>, field: &str) {
+    if let Some(values) = object.get_mut(field).and_then(Value::as_array_mut) {
+        values.sort_by(|left, right| {
+            let left = left.as_str().unwrap_or_default();
+            let right = right.as_str().unwrap_or_default();
+            left.cmp(right)
+        });
+    }
 }
 
 fn sha256_prefixed_bytes(bytes: &[u8]) -> String {
-    format!("sha256:{:x}", Sha256::digest(bytes))
-}
-
-fn canonical_json_bytes(value: &Value) -> Result<Vec<u8>> {
-    serde_json::to_vec(&canonical_json_value(value)).context("canonicalizing eval JSON value")
+    crate::canonical_json::sha256_prefixed_bytes(bytes)
 }
 
 fn runner_binding_scope(value: &Value) -> Value {
-    json!({
+    normalized_eval_suite_digest_value(&json!({
         "schema_version": value.get("schema_version").cloned().unwrap_or(Value::Null),
         "suite_id": value.get("suite_id").cloned().unwrap_or(Value::Null),
         "suite_version": value.get("suite_version").cloned().unwrap_or(Value::Null),
@@ -2329,7 +2438,7 @@ fn runner_binding_scope(value: &Value) -> Value {
         "scorers": value.get("scorers").cloned().unwrap_or(Value::Null),
         "cases": value.get("cases").cloned().unwrap_or(Value::Null),
         "safety": value.get("safety").cloned().unwrap_or(Value::Null),
-    })
+    }))
 }
 
 fn validate_scorer_control_admission(manifest: &Value) -> Result<()> {
@@ -2433,25 +2542,6 @@ fn validate_scorer_control_admission(manifest: &Value) -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn canonical_json_value(value: &Value) -> Value {
-    match value {
-        Value::Array(values) => Value::Array(values.iter().map(canonical_json_value).collect()),
-        Value::Object(object) => {
-            let mut entries = object
-                .iter()
-                .map(|(key, value)| (key.clone(), canonical_json_value(value)))
-                .collect::<Vec<_>>();
-            entries.sort_by(|left, right| left.0.cmp(&right.0));
-            let mut sorted = serde_json::Map::new();
-            for (key, value) in entries {
-                sorted.insert(key, value);
-            }
-            Value::Object(sorted)
-        }
-        scalar => scalar.clone(),
-    }
 }
 
 fn eval_case_input(value: &Value) -> Result<EvalCaseResultInput> {
@@ -2918,6 +3008,124 @@ mod tests {
                 })
                 .collect(),
         }
+    }
+
+    #[test]
+    fn suite_digest_is_stable_for_authoring_order() {
+        let ordered = json!({
+            "schema_version": "eval.suite.v1",
+            "suite_id": "ordering-suite",
+            "suite_version": "v1",
+            "fixtures": [
+                {"id": "a-fixture", "path": "a.json", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+                {"id": "b-fixture", "path": "b.json", "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+            ],
+            "scorers": [
+                {"id": "a-score", "version": "v1", "kind": "test"},
+                {"id": "b-score", "version": "v1", "kind": "test"}
+            ],
+            "cases": [
+                {
+                    "case_id": "a-case",
+                    "fixture_ids": ["a-fixture", "b-fixture"],
+                    "scorer_ids": ["a-score@v1", "b-score@v1"],
+                    "measures": ["cost_micros", "duration_ms"],
+                    "sampling": {"repetitions": 1}
+                },
+                {
+                    "case_id": "b-case",
+                    "fixture_ids": ["b-fixture", "a-fixture"],
+                    "scorer_ids": ["b-score@v1", "a-score@v1"],
+                    "measures": ["duration_ms", "cost_micros"],
+                    "sampling": {"repetitions": 1}
+                }
+            ],
+            "safety": {"allow_shell": false, "max_concurrency": 1, "allow_environment_capture": false}
+        });
+        let reordered = json!({
+            "schema_version": "eval.suite.v1",
+            "suite_id": "ordering-suite",
+            "suite_version": "v1",
+            "fixtures": [
+                {"id": "b-fixture", "path": "b.json", "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+                {"id": "a-fixture", "path": "a.json", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+            ],
+            "scorers": [
+                {"id": "b-score", "version": "v1", "kind": "test"},
+                {"id": "a-score", "version": "v1", "kind": "test"}
+            ],
+            "cases": [
+                {
+                    "case_id": "b-case",
+                    "fixture_ids": ["a-fixture", "b-fixture"],
+                    "scorer_ids": ["a-score@v1", "b-score@v1"],
+                    "measures": ["cost_micros", "duration_ms"],
+                    "sampling": {"repetitions": 1}
+                },
+                {
+                    "case_id": "a-case",
+                    "fixture_ids": ["b-fixture", "a-fixture"],
+                    "scorer_ids": ["b-score@v1", "a-score@v1"],
+                    "measures": ["duration_ms", "cost_micros"],
+                    "sampling": {"repetitions": 1}
+                }
+            ],
+            "safety": {"allow_shell": false, "max_concurrency": 1, "allow_environment_capture": false}
+        });
+
+        assert_eq!(
+            sha256_json_digest_without_top_level_digest(&ordered).unwrap(),
+            sha256_json_digest_without_top_level_digest(&reordered).unwrap()
+        );
+    }
+
+    #[test]
+    fn suite_digest_sorts_same_id_scorers_by_version() {
+        let ordered = json!({
+            "schema_version": "eval.suite.v1",
+            "suite_id": "versioned-scorer-ordering-suite",
+            "suite_version": "v1",
+            "fixtures": [
+                {"id": "fixture", "path": "fixture.json", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+            ],
+            "scorers": [
+                {"id": "score", "version": "v1", "kind": "test", "config": {"weight": 1}},
+                {"id": "score", "version": "v2", "kind": "test", "config": {"weight": 2}}
+            ],
+            "cases": [{
+                "case_id": "case",
+                "fixture_ids": ["fixture"],
+                "scorer_ids": ["score@v2", "score@v1"],
+                "measures": ["duration_ms"],
+                "sampling": {"repetitions": 1}
+            }],
+            "safety": {"allow_shell": false, "max_concurrency": 1, "allow_environment_capture": false}
+        });
+        let reordered = json!({
+            "schema_version": "eval.suite.v1",
+            "suite_id": "versioned-scorer-ordering-suite",
+            "suite_version": "v1",
+            "fixtures": [
+                {"id": "fixture", "path": "fixture.json", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+            ],
+            "scorers": [
+                {"id": "score", "version": "v2", "kind": "test", "config": {"weight": 2}},
+                {"id": "score", "version": "v1", "kind": "test", "config": {"weight": 1}}
+            ],
+            "cases": [{
+                "case_id": "case",
+                "fixture_ids": ["fixture"],
+                "scorer_ids": ["score@v1", "score@v2"],
+                "measures": ["duration_ms"],
+                "sampling": {"repetitions": 1}
+            }],
+            "safety": {"allow_shell": false, "max_concurrency": 1, "allow_environment_capture": false}
+        });
+
+        assert_eq!(
+            sha256_json_digest_without_top_level_digest(&ordered).unwrap(),
+            sha256_json_digest_without_top_level_digest(&reordered).unwrap()
+        );
     }
 
     #[test]

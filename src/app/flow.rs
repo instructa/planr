@@ -166,7 +166,12 @@ impl App {
                 "downstream items depend on {item_id} but this log has no --cmd/--tests evidence; attach it with `planr log add {item_id} --summary ... --cmd ...`"
             )
         });
-        Ok(json!({"unlocked": unlocked, "post_condition": post_condition, "hint": hint}))
+        Ok(json!({
+            "unlocked": unlocked,
+            "post_condition": post_condition,
+            "hint": hint,
+            "proof": self.proof_status_for_item(item_id)?,
+        }))
     }
 
     pub(crate) fn settlement_extras_human(extras: &Value) -> String {
@@ -181,6 +186,9 @@ impl App {
         }
         if let Some(hint) = extras["hint"].as_str() {
             human.push_str(&format!("\nhint: {hint}"));
+        }
+        if let Some(language) = extras["proof"]["completion_language"].as_str() {
+            human.push_str(&format!("\nproof: {language}"));
         }
         human
     }
@@ -290,6 +298,7 @@ impl App {
                 "unlocked": extras["unlocked"],
                 "post_condition": extras["post_condition"],
                 "hint": extras["hint"],
+                "proof": extras["proof"],
                 "next": next,
                 "remaining": progress,
             }),

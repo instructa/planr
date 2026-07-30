@@ -1,0 +1,27 @@
+{
+  "id": "cverdict-blocked-stale-reason",
+  "schema_version": "evidence.contract.v1",
+  "scope": {
+    "kind": "criterion",
+    "id": "criterion-api-health"
+  },
+  "evaluated_at": "2026-07-28T12:00:08Z",
+  "status": "blocked",
+  "observation_coverage": [
+    {
+      "requirement_id": "obs-http-200",
+      "status": "blocked",
+      "gap_reason": "stale_source"
+    }
+  ],
+  "validation_details": {
+    "trust": {
+      "status": "failed",
+      "checked_at": "2026-07-28T12:00:08Z",
+      "receipt_ids": [],
+      "gap_reasons": ["stale_source"]
+    }
+  },
+  "suggested_next_action": "restore capability",
+  "actionable_now": true
+}

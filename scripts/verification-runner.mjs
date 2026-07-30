@@ -102,6 +102,21 @@ export function selectVerificationGates(selection, requestedGates) {
   };
 }
 
+export function worktreeChanges(root, base) {
+  const changes = parseGitNameStatus(git(root, ["diff", "--name-status", "-z", "--find-renames", base]));
+  const seen = new Set(changes.flatMap((change) => [change.path, change.oldPath, change.newPath].filter(Boolean)));
+  const fields = git(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "."]).split("\0");
+  if (fields.at(-1) === "") fields.pop();
+  for (const field of fields) {
+    if (!field.startsWith("?? ")) continue;
+    const relativePath = field.slice(3);
+    if (seen.has(relativePath)) continue;
+    changes.push({ status: "A", path: relativePath });
+    seen.add(relativePath);
+  }
+  return changes;
+}
+
 export function linuxTargetCommandPlan(target) {
   const config = LINUX_TARGETS[target];
   if (!config) throw new Error(`unknown Linux release target: ${target}`);
@@ -363,13 +378,17 @@ function validateLinuxTargetReceipt(receipt, { root, selection }) {
 }
 
 function currentSourceIdentity(root, selection, { allowedDirtyPaths = [] } = {}) {
-  const requestedRevision = git(root, ["rev-parse", "--verify", `${selection.headRevision ?? "HEAD"}^{commit}`]).trim();
+  const selectedWorktree = selection.headRevision === "worktree";
+  const requestedRevision = selectedWorktree
+    ? git(root, ["rev-parse", "--verify", "HEAD^{commit}"]).trim()
+    : git(root, ["rev-parse", "--verify", `${selection.headRevision ?? "HEAD"}^{commit}`]).trim();
   const revision = git(root, ["rev-parse", "--verify", "HEAD^{commit}"]).trim();
   if (!/^[0-9a-f]{40,64}$/u.test(revision)) throw new Error("current source revision is not a commit SHA");
   if (requestedRevision !== revision) {
     throw new Error(`selected source revision ${requestedRevision} is not checked out at HEAD ${revision}`);
   }
-  const exclusions = allowedDirtyPaths.map((relativePath) => {
+  const selectedDirtyPaths = selectedWorktree ? selection.changes.flatMap(({ paths }) => paths) : [];
+  const exclusions = [...new Set([...allowedDirtyPaths, ...selectedDirtyPaths])].map((relativePath) => {
     safeRepositoryPath(root, relativePath);
     return `:(literal,exclude)${relativePath}`;
   });
@@ -614,7 +633,9 @@ function selectionFromCli(values, root) {
     changes = Array.isArray(input) ? input : input.changes;
   } else if (base || explicitProfile) {
     base ??= `${head}^`;
-    changes = parseGitNameStatus(git(root, ["diff", "--name-status", "-z", "--find-renames", base, head]));
+    changes = head === "worktree"
+      ? worktreeChanges(root, base)
+      : parseGitNameStatus(git(root, ["diff", "--name-status", "-z", "--find-renames", base, head]));
   } else {
     throw new Error("--input, --base, or --profile is required");
   }

@@ -184,6 +184,10 @@ impl App {
             "would_unlock": close_effect.would_unlock,
             "would_remain_blocked": close_effect.would_remain_blocked,
         });
+        packet["proof"] = self.proof_status_for_item(item_id)?;
+        if let Some(next_action) = packet["proof"]["next_action"].as_str() {
+            packet["proof_next_action"] = json!(next_action);
+        }
         packet["possible_file_conflicts"] = json!(self.possible_file_conflicts(item_id)?);
         // Advisory model routing from .planr/agents.toml; the dispatching
         // host stays the authority. Omitted when nothing resolves.

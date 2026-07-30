@@ -1,0 +1,39 @@
+{
+  "id": "eatt-failed-zero-exit",
+  "schema_version": "evidence.contract.v1",
+  "criterion_id": "criterion-api-health",
+  "obligation_id": "pob-planr-api-health-v1",
+  "capability_instance_id": "vcinst-planr-http-process-v1",
+  "started_at": "2026-07-28T12:00:05Z",
+  "ended_at": "2026-07-28T12:00:06Z",
+  "status": "failed",
+  "resolved_command": {
+    "kind": "command",
+    "command": ["curl", "-fsS", "http://127.0.0.1:4173/health"],
+    "cwd": "$PLANR_REPOSITORY_ROOT"
+  },
+  "exit": {
+    "exit_code": 0,
+    "signal": null,
+    "error": null
+  },
+  "retry_lineage": {
+    "attempt_number": 1,
+    "max_attempts": 1,
+    "previous_attempt_ids": []
+  },
+  "stdout_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "stderr_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "raw_result": {
+    "kind": "artifact",
+    "artifact_id": "artifact-http-response",
+    "digest": "sha256:8888888888888888888888888888888888888888888888888888888888888888"
+  },
+  "artifacts": [],
+  "output_bounds": {
+    "stdout_bytes": 2,
+    "stderr_bytes": 0,
+    "stdout_truncated": false,
+    "stderr_truncated": false
+  }
+}

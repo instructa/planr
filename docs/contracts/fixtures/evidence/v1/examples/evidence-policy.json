@@ -1,0 +1,117 @@
+{
+  "id": "epolicy-default-v1",
+  "schema_version": "evidence.contract.v1",
+  "policy_digest": "sha256:c1a2a26ece3ee7a3cf3166cd849664d723fe2fffda2dc0773b2c92dc8d1ae8c1",
+  "defaults": {
+    "preset_id": "preset-http-health",
+    "binding": true,
+    "assurance_level": "standard"
+  },
+  "named_presets": [
+    {
+      "id": "preset-http-health",
+      "schema_version": "evidence.contract.v1",
+      "namespace": "planr.api",
+      "observations": [
+        {
+          "id": "obs-http-200",
+          "type": "planr.api.http.response",
+          "subject": "GET /health",
+          "expected": {
+            "status": 200
+          },
+          "target": {
+            "kind": "local_service",
+            "uri": "http://127.0.0.1:4173/health"
+          },
+          "environment": {
+            "kind": "local",
+            "id": "dev-shell",
+            "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+          },
+          "runtime_target": {
+            "kind": "process",
+            "id": "planr-doc-fixture"
+          }
+        }
+      ]
+    }
+  ],
+  "observation_schema_registrations": [
+    {
+      "type": "planr.api.http.response",
+      "schema_ref": "planr.api.http.response@v1",
+      "schema_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "owning_namespace": "planr.api"
+    }
+  ],
+  "adapter_registrations": [
+    {
+      "manifest_id": "vcap-planr-http-process-v1",
+      "manifest_path": "docs/contracts/fixtures/evidence/v1/examples/verification-capability-manifest.json",
+      "manifest_digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+      "observation_types": ["planr.api.http.response"],
+      "payload_schemas": [
+        {
+          "type": "planr.api.http.response",
+          "schema_ref": "planr.api.http.response@v1",
+          "schema_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      ],
+      "provenance_path": "planr_observed_execution",
+      "execution_contract": {
+        "kind": "process",
+        "executable": "curl",
+        "args": ["--fail", "--silent", "http://127.0.0.1:4173/health"],
+        "working_directory": ".",
+        "timeout_ms": 10000,
+        "stdout_limit_bytes": 1048576,
+        "stderr_limit_bytes": 1048576,
+        "payload_schema": {
+          "type": "planr.api.http.response",
+          "schema_ref": "planr.api.http.response@v1",
+          "schema_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      }
+    }
+  ],
+  "extension_namespaces": ["planr.api"],
+  "trust_policy": {
+    "accepted_provenance": ["planr_observed_execution"],
+    "min_receipt_status": "trusted",
+    "allow_user_attestation": false
+  },
+  "freshness_policy": {
+    "max_age_seconds": 3600,
+    "invalidate_on": [
+      "source_change",
+      "target_change",
+      "policy_change",
+      "adapter_schema_change",
+      "configuration_change"
+    ]
+  },
+  "fixture_policy": {
+    "fixtures_allowed": false,
+    "mocks_allowed": false,
+    "disclosure_required": true
+  },
+  "completion_policy": {
+    "require_satisfied_or_waived": true,
+    "allow_inconclusive_completion": false,
+    "require_review_evidence": true
+  },
+  "layering_policy": {
+    "mode": "monotonic_strengthening",
+    "weakening_requires_waiver": true,
+    "layers": [
+      {
+        "scope": {
+          "kind": "plan",
+          "id": "pln-example"
+        },
+        "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ]
+  }
+}

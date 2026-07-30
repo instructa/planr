@@ -1,0 +1,22 @@
+{
+  "id": "eatt-empty-passed",
+  "schema_version": "evidence.contract.v1",
+  "criterion_id": "criterion-api-health",
+  "obligation_id": "pob-planr-api-health-v1",
+  "capability_instance_id": "vcinst-planr-http-process-v1",
+  "started_at": "2026-07-28T12:00:05Z",
+  "ended_at": "2026-07-28T12:00:06Z",
+  "status": "passed",
+  "resolved_command": {},
+  "exit": {},
+  "retry_lineage": {},
+  "stdout_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "stderr_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "raw_result": {
+    "kind": "artifact",
+    "artifact_id": "artifact-http-response",
+    "digest": "sha256:8888888888888888888888888888888888888888888888888888888888888888"
+  },
+  "artifacts": [],
+  "output_bounds": {}
+}

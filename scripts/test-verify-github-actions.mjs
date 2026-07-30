@@ -180,7 +180,7 @@ try {
   );
   await expectRejected(
     linuxVerifyScript,
-    (value) => value.replace("readelf -l \"$binary\" | grep -q 'INTERP'", "false"),
+    (value) => value.replace("readelf -l \"$executable\" | grep -q 'INTERP'", "false"),
     /must reject a dynamic program interpreter/u,
     "missing static ELF interpreter check",
   );
@@ -195,6 +195,12 @@ try {
     (value) => value.replace("cmp \"$binary\" \"$npm_fixture/npm/native/$target/planr\"", "true"),
     /must contain the exact extracted artifact bytes/u,
     "missing npm byte identity check",
+  );
+  await expectRejected(
+    linuxVerifyScript,
+    (value) => value.replace("cmp \"$validator\" \"$npm_fixture/npm/native/$target/planr-host-capability-validator\"", "true"),
+    /must contain the exact extracted validator bytes/u,
+    "missing npm validator byte identity check",
   );
   await expectRejected(
     ciWorkflow,

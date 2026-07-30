@@ -313,6 +313,7 @@ impl App {
                     "runtime": self.item_runtime(id)?,
                     "recovery": self.item_recovery(id)?,
                     "conditions": self.item_conditions(id)?,
+                    "proof": self.proof_status_for_item(id)?,
                 }))
             })
             .collect()

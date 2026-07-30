@@ -1,10 +1,18 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
+mod common;
 mod eval;
+mod evidence;
 mod policy;
+mod prime;
+mod project_plan;
+pub(crate) use common::*;
 pub(crate) use eval::*;
+pub(crate) use evidence::*;
 pub(crate) use policy::PolicyCommand;
+pub(crate) use prime::*;
+pub(crate) use project_plan::*;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -48,12 +56,17 @@ pub(crate) enum Command {
     /// Evaluate stored run evidence: suite check, run, show, compare, gate,
     /// invalidate, and rescore through the shared eval services.
     Eval(EvalArgs),
+    /// Manage trusted Evidence policy, obligations, migrations, classifications,
+    /// capabilities, runs, imports, attempts, receipts, coverage, and explanations.
+    Evidence(EvidenceArgs),
     Context(ContextArgs),
     Note(NoteArgs),
     Search(SearchArgs),
     Doctor(DoctorArgs),
     /// Compact state block for host hooks (session start / post-compaction).
     Prime(PrimeArgs),
+    /// Decide whether a host Stop hook should continue an active Planr goal.
+    Stop(StopArgs),
     Install(InstallArgs),
     Prompt(PromptArgs),
     Mcp,
@@ -66,167 +79,6 @@ pub(crate) enum Command {
     Recover(RecoverArgs),
     Export(ExportArgs),
     Import(ImportArgs),
-}
-
-#[derive(Args, Debug)]
-pub(crate) struct AgentsArgs {
-    #[command(subcommand)]
-    pub(crate) command: AgentsCommand,
-}
-
-#[derive(Subcommand, Debug)]
-pub(crate) enum AgentsCommand {
-    /// Show resolved profiles, routes, and validation warnings.
-    List(JsonOnlyArgs),
-    /// Validate the registry; exits non-zero only on parse failure.
-    Check,
-    /// Write a commented starter registry with cost-tiering defaults.
-    Init(AgentsInitArgs),
-    /// The driver dispatch block (alias for `planr prompt routing`).
-    Routing(PromptPrintArgs),
-}
-
-#[derive(Args, Debug)]
-pub(crate) struct PrimeArgs {
-    /// Emit the Claude Code SessionStart hook envelope
-    /// (hookSpecificOutput.additionalContext).
-    #[arg(long, conflicts_with = "cursor_json")]
-    pub(crate) hook_json: bool,
-    /// Emit the Cursor command-hook envelope (additional_context).
-    #[arg(long)]
-    pub(crate) cursor_json: bool,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum PrimeEnvelope {
-    Plain,
-    HookJson,
-    CursorJson,
-}
-
-impl PrimeArgs {
-    pub(crate) fn envelope(&self) -> PrimeEnvelope {
-        if self.hook_json {
-            PrimeEnvelope::HookJson
-        } else if self.cursor_json {
-            PrimeEnvelope::CursorJson
-        } else {
-            PrimeEnvelope::Plain
-        }
-    }
-}
-
-#[derive(Args, Debug)]
-pub(crate) struct AgentsInitArgs {
-    /// Overwrite an existing .planr/agents.toml.
-    #[arg(long)]
-    pub(crate) force: bool,
-    /// Declare a profile: <id>=<client>/<model>[@<effort>][#<tier>]. Repeatable.
-    #[arg(long = "profile", value_name = "SPEC")]
-    pub(crate) profiles: Vec<String>,
-    /// Pair a declared profile with a skill: <profile>=<skill>. Repeatable.
-    #[arg(long = "skill", value_name = "SPEC")]
-    pub(crate) skills: Vec<String>,
-    /// Route a work type: <work_type>=<profile>[,<fallback>...]. Repeatable.
-    #[arg(long = "route", value_name = "SPEC")]
-    pub(crate) routes: Vec<String>,
-    /// Default route: <profile>[,<fallback>...].
-    #[arg(long = "default-route", value_name = "SPEC")]
-    pub(crate) default_route: Option<String>,
-    /// Build the registry through guided prompts (requires a terminal).
-    #[arg(
-        long,
-        conflicts_with_all = ["profiles", "skills", "routes", "default_route"]
-    )]
-    pub(crate) interactive: bool,
-}
-
-#[derive(Args, Debug)]
-pub(crate) struct ProjectArgs {
-    #[command(subcommand)]
-    pub(crate) command: ProjectCommand,
-}
-
-#[derive(Subcommand, Debug)]
-pub(crate) enum ProjectCommand {
-    Init(ProjectInitArgs),
-    Show(JsonOnlyArgs),
-    List(JsonOnlyArgs),
-    Delete(ProjectDeleteArgs),
-}
-
-#[derive(Args, Debug)]
-pub(crate) struct ProjectInitArgs {
-    #[arg(long, value_enum)]
-    pub(crate) client: Option<ClientArg>,
-    #[arg(long)]
-    pub(crate) force: bool,
-    #[arg(default_value = "Planr Project")]
-    pub(crate) name: String,
-}
-
-#[derive(Args, Debug)]
-pub(crate) struct ProjectDeleteArgs {
-    pub(crate) target: String,
-    #[arg(long)]
-    pub(crate) with_files: bool,
-    #[arg(long)]
-    pub(crate) confirm: bool,
-}
-
-#[derive(Args, Debug)]
-pub(crate) struct JsonOnlyArgs {
-    #[arg(long)]
-    pub(crate) json: bool,
-}
-
-#[derive(Args, Debug)]
-pub(crate) struct PlanArgs {
-    #[command(subcommand)]
-    pub(crate) command: PlanCommand,
-}
-
-#[derive(Subcommand, Debug)]
-pub(crate) enum PlanCommand {
-    New(PlanNewArgs),
-    Refine(PlanRefineArgs),
-    Split(PlanSplitArgs),
-    Check(IdArg),
-    Audit(IdArg),
-    Show(IdArg),
-    List(PlanListArgs),
-    Archive(IdArg),
-}
-
-#[derive(Args, Debug)]
-pub(crate) struct PlanNewArgs {
-    pub(crate) title: String,
-    #[arg(long)]
-    pub(crate) platform: Option<String>,
-    #[arg(long)]
-    pub(crate) ai: bool,
-    #[arg(long)]
-    pub(crate) backend: bool,
-}
-
-#[derive(Args, Debug)]
-pub(crate) struct PlanRefineArgs {
-    pub(crate) id: String,
-    #[arg(long)]
-    pub(crate) note: Option<String>,
-}
-
-#[derive(Args, Debug)]
-pub(crate) struct PlanSplitArgs {
-    pub(crate) id: String,
-    #[arg(long)]
-    pub(crate) slice: String,
-}
-
-#[derive(Args, Debug)]
-pub(crate) struct PlanListArgs {
-    #[arg(long, value_enum)]
-    pub(crate) stage: Option<PlanStageArg>,
 }
 
 #[derive(Args, Debug)]
@@ -686,6 +538,39 @@ pub(crate) struct DoneArgs {
 }
 
 #[derive(Args, Debug)]
+pub(crate) struct StopArgs {
+    #[command(subcommand)]
+    pub(crate) command: Option<StopCommand>,
+    /// Read the host hook JSON envelope from a file instead of stdin.
+    #[arg(long, value_name = "PATH")]
+    pub(crate) input: Option<PathBuf>,
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum StopCommand {
+    /// Activate Stop enforcement for a plan in this explicit session/thread.
+    Activate(StopActivateArgs),
+    /// Cancel/deactivate Stop enforcement for a plan in this explicit session/thread.
+    Deactivate(StopDeactivateArgs),
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct StopActivateArgs {
+    #[arg(long)]
+    pub(crate) plan: String,
+    #[arg(long)]
+    pub(crate) session: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct StopDeactivateArgs {
+    #[arg(long)]
+    pub(crate) plan: Option<String>,
+    #[arg(long)]
+    pub(crate) session: Option<String>,
+}
+
+#[derive(Args, Debug)]
 pub(crate) struct ReviewArgs {
     #[command(subcommand)]
     pub(crate) command: ReviewCommand,
@@ -1008,11 +893,6 @@ pub(crate) struct ImportArgs {
     pub(crate) preview: bool,
     #[arg(long)]
     pub(crate) confirm: bool,
-}
-
-#[derive(Args, Debug)]
-pub(crate) struct IdArg {
-    pub(crate) id: String,
 }
 
 #[derive(ValueEnum, Clone, Debug)]

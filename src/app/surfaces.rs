@@ -20,6 +20,7 @@ impl App {
             "recovery": self.item_recovery(item_id)?,
             "conditions": self.item_conditions(item_id)?,
             "approval": self.item_approval(item_id)?,
+            "proof": self.proof_status_for_item(item_id)?,
         });
         // Only present when a route is declared or a run recorded a
         // profile, so opted-out projects keep their exact trace shape.
@@ -31,6 +32,7 @@ impl App {
                 value["target"] = json!({
                     "item": self.get_item(&target.id)?,
                     "logs": self.list_logs(Some(&target.id))?,
+                    "proof": self.proof_status_for_item(&target.id)?,
                 });
             }
         }
@@ -68,6 +70,16 @@ impl App {
             }
         }
         render_logs(&mut out, "log", &trace["logs"]);
+        if let Some(proof) = trace.get("proof") {
+            out.push_str(&format!(
+                "\n  proof {}: {}",
+                proof["status"].as_str().unwrap_or("unknown"),
+                proof["completion_language"].as_str().unwrap_or_default(),
+            ));
+            if let Some(next_action) = proof["next_action"].as_str() {
+                out.push_str(&format!("\n    next proof action: {next_action}"));
+            }
+        }
         // Advisory styling only: mismatches inform, they never alarm.
         if let Some(routing) = trace.get("routing") {
             match routing["declared"]["profile"].as_str() {

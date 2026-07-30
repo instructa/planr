@@ -8,31 +8,39 @@ mod agents;
 mod agents_init;
 mod application;
 mod audit;
+mod audit_evidence;
 mod commands;
 mod eval_surface;
+mod evidence;
 mod flow;
 mod git_review;
 mod graph;
 mod grok;
 mod hooks;
 mod http;
+mod http_evidence;
 mod inspection;
 mod lease;
 mod mcp;
+mod mcp_evidence;
 mod packages;
 mod pi;
 mod policy;
 mod prime;
 mod prompts;
+mod proof;
+mod proof_coverage;
 mod recall;
 mod recovery;
 mod render;
 mod repository;
 mod review;
 mod review_workspace;
+pub(crate) mod stop;
 mod surfaces;
 
 pub(crate) use eval_surface::EvalCliExit;
+pub(crate) use evidence::EvidenceCliExit;
 pub(crate) use flow::LogInput;
 pub(crate) use repository::eval::EvalReusableCaseEvidence;
 pub(crate) use review::ReviewArtifactInput;
@@ -123,11 +131,13 @@ impl App {
             Command::Done(args) => self.done(args),
             Command::Review(args) => self.review(args.command),
             Command::Eval(args) => self.eval(args.command),
+            Command::Evidence(args) => self.evidence(args.command),
             Command::Context(args) => self.context(args.command),
             Command::Note(args) => self.context(args.command),
             Command::Search(args) => self.search(args),
             Command::Doctor(args) => self.doctor(args),
             Command::Prime(args) => self.prime(args.envelope()),
+            Command::Stop(args) => self.stop(args),
             Command::Install(args) => self.install(args.command),
             Command::Prompt(args) => self.prompt(args.command),
             Command::Mcp => self.mcp(),

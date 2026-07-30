@@ -1,0 +1,39 @@
+{
+  "id": "vcinst-planr-http-process-v1",
+  "schema_version": "evidence.contract.v1",
+  "manifest_id": "vcap-planr-http-process-v1",
+  "manifest_digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+  "host": "codex",
+  "surface": "local-process",
+  "host_version": "1.0.0",
+  "adapter_version": "1.0.0",
+  "environment": {
+    "kind": "local",
+    "id": "dev-shell",
+    "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+  },
+  "permissions": {
+    "network": "localhost_only",
+    "filesystem": "read_workspace"
+  },
+  "availability": {
+    "status": "available"
+  },
+  "probe_result": {
+    "probe_execution_id": "probe-20260728-curl",
+    "outcome": "passed",
+    "observed_at": "2026-07-28T12:00:04Z",
+    "checks": [
+      {
+        "name": "curl-present",
+        "outcome": "passed"
+      }
+    ]
+  },
+  "observed_payload_contract": {
+    "schema_ref": "planr.api.http.response@v1",
+    "observation_types": ["planr.api.http.response"]
+  },
+  "limitations": ["localhost target must be running"],
+  "captured_at": "2026-07-28T12:00:04Z"
+}

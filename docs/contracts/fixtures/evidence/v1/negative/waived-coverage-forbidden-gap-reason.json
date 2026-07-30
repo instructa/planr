@@ -1,0 +1,28 @@
+{
+  "id": "cverdict-waived-forbidden-gap",
+  "schema_version": "evidence.contract.v1",
+  "scope": {
+    "kind": "criterion",
+    "id": "criterion-api-health"
+  },
+  "evaluated_at": "2026-07-28T12:00:08Z",
+  "status": "waived",
+  "observation_coverage": [
+    {
+      "requirement_id": "obs-http-200",
+      "status": "waived",
+      "gap_reason": "waiver_expired",
+      "waiver_id": "ewaiver-api-health-v1"
+    }
+  ],
+  "validation_details": {
+    "trust": {
+      "status": "failed",
+      "checked_at": "2026-07-28T12:00:08Z",
+      "receipt_ids": [],
+      "gap_reasons": ["waiver_expired"]
+    }
+  },
+  "suggested_next_action": "renew waiver",
+  "actionable_now": true
+}

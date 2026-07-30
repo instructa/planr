@@ -1,0 +1,14 @@
+{
+  "id": "cverdict-empty-satisfied",
+  "schema_version": "evidence.contract.v1",
+  "scope": {
+    "kind": "criterion",
+    "id": "criterion-api-health"
+  },
+  "evaluated_at": "2026-07-28T12:00:08Z",
+  "status": "satisfied",
+  "observation_coverage": [],
+  "validation_details": {},
+  "suggested_next_action": "none",
+  "actionable_now": false
+}

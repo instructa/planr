@@ -126,9 +126,9 @@ assert.match(linuxBuilderDockerfile, /apk --no-network --repositories-file \/dev
 assert.ok(linuxVerifyScript.includes(`alpine:3.20.8@${runtimeImageDigest}`), "Linux runtime image must use the reviewed immutable older-runtime digest");
 assert.match(linuxBuildScript, /uname -m\):\$target:\$cargo_target/u, "Linux build must bind target selection to the native runner architecture");
 assert.match(linuxVerifyScript, /uname -m\):\$target:\$cargo_target/u, "Linux verification must bind target selection to the native runner architecture");
-assert.match(linuxVerifyScript, /readelf -l "\$binary" \| grep -q 'INTERP'/u, "Linux verification must reject a dynamic program interpreter");
-assert.match(linuxVerifyScript, /readelf -d "\$binary" \| grep -q '\(NEEDED\)'/u, "Linux verification must reject shared-library dependencies");
-assert.match(linuxVerifyScript, /strings "\$binary" \| grep -Eq 'GLIBC_\[0-9\]'/u, "Linux verification must reject glibc symbol requirements");
+assert.match(linuxVerifyScript, /readelf -l "\$executable" \| grep -q 'INTERP'/u, "Linux verification must reject a dynamic program interpreter");
+assert.match(linuxVerifyScript, /readelf -d "\$executable" \| grep -q '\(NEEDED\)'/u, "Linux verification must reject shared-library dependencies");
+assert.match(linuxVerifyScript, /strings "\$executable" \| grep -Eq 'GLIBC_\[0-9\]'/u, "Linux verification must reject glibc symbol requirements");
 assert.match(linuxVerifyScript, /sha256sum -c SHA256SUMS/u, "Linux verification must check embedded artifact checksums");
 assert.match(linuxVerifyScript, /--network none/u, "older-runtime lifecycle verification must not use the network");
 assert.match(
@@ -137,7 +137,17 @@ assert.match(
   "Linux verification must execute the fresh public lifecycle",
 );
 assert.match(linuxVerifyScript, /cmp "\$binary" "\$npm_fixture\/npm\/native\/\$target\/planr"/u, "npm fixture must contain the exact extracted artifact bytes");
+assert.match(
+  linuxVerifyScript,
+  /cmp "\$validator" "\$npm_fixture\/npm\/native\/\$target\/planr-host-capability-validator"/u,
+  "npm fixture must contain the exact extracted validator bytes",
+);
 assert.match(linuxVerifyScript, /node npm\/bin\/planr\.js --version/u, "Linux verification must execute the npm wrapper over bundled bytes");
+assert.ok(releaseWorkflow.includes("npm/native/$target/planr-host-capability-validator"), "npm publish must bundle validator binaries per target");
+assert.ok(
+  releaseWorkflow.includes("./npm/native/linux-x86_64/planr-host-capability-validator --identity"),
+  "npm publish must smoke-test the bundled validator",
+);
 for (const command of ["project init", "plan new", "plan split", "map build", "pick", "done", "export"]) {
   assert.ok(publicLifecycleScript.includes(command), `public lifecycle must exercise ${command}`);
 }

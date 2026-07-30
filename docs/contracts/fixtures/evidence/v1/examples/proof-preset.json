@@ -1,0 +1,28 @@
+{
+  "id": "preset-http-health",
+  "schema_version": "evidence.contract.v1",
+  "namespace": "planr.api",
+  "observations": [
+    {
+      "id": "obs-http-200",
+      "type": "planr.api.http.response",
+      "subject": "GET /health",
+      "expected": {
+        "status": 200
+      },
+      "target": {
+        "kind": "local_service",
+        "uri": "http://127.0.0.1:4173/health"
+      },
+      "environment": {
+        "kind": "local",
+        "id": "dev-shell",
+        "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+      },
+      "runtime_target": {
+        "kind": "process",
+        "id": "planr-doc-fixture"
+      }
+    }
+  ]
+}

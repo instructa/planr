@@ -1,0 +1,27 @@
+{
+  "id": "cverdict-stale-inconclusive-reason",
+  "schema_version": "evidence.contract.v1",
+  "scope": {
+    "kind": "criterion",
+    "id": "criterion-api-health"
+  },
+  "evaluated_at": "2026-07-28T12:00:08Z",
+  "status": "stale",
+  "observation_coverage": [
+    {
+      "requirement_id": "obs-http-200",
+      "status": "stale",
+      "gap_reason": "inconclusive_result"
+    }
+  ],
+  "validation_details": {
+    "freshness": {
+      "status": "failed",
+      "checked_at": "2026-07-28T12:00:08Z",
+      "receipt_ids": [],
+      "gap_reasons": ["inconclusive_result"]
+    }
+  },
+  "suggested_next_action": "refresh evidence",
+  "actionable_now": true
+}

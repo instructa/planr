@@ -7,6 +7,7 @@
 //! overwritten destructively.
 
 use super::App;
+use crate::codex_compat::codex_0145_hook_event_supported;
 use anyhow::Result;
 use serde_json::{Value, json};
 use std::fs;
@@ -15,6 +16,8 @@ const PRIME_COMMAND_CODEX: &str = "planr prime 2>/dev/null || true";
 const PRIME_COMMAND_CURSOR: &str = "planr prime --cursor-json 2>/dev/null || true";
 const PRIME_COMMAND_CLAUDE: &str = "planr prime --hook-json 2>/dev/null || true";
 const GUARD_RELATIVE: &str = ".cursor/hooks/planr-evidence-guard.sh";
+const CODEX_STOP_RELATIVE: &str = ".codex/hooks/planr-codex-stop.sh";
+const CODEX_STOP_SCRIPT: &str = include_str!("../../scripts/hooks/planr-codex-stop.sh");
 
 /// Advisory stop-time guard: reminds an ending subagent about held picks
 /// that have no completion log yet. Scoped to the current worker
@@ -120,18 +123,36 @@ impl App {
                 )?;
             }
             "codex" => {
+                let stop_path = self.root.join(CODEX_STOP_RELATIVE);
+                let stop_current = fs::read_to_string(&stop_path).ok();
+                if stop_current.as_deref() != Some(CODEX_STOP_SCRIPT) {
+                    crate::util::write_if_missing(&stop_path, CODEX_STOP_SCRIPT, true)?;
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        fs::set_permissions(&stop_path, fs::Permissions::from_mode(0o755))?;
+                    }
+                    result.written.push(CODEX_STOP_RELATIVE.to_string());
+                }
                 // SessionStart covers fresh and post-compaction session
                 // starts; PostCompact ignores stdout for context, so it
                 // is deliberately not wired.
                 self.merge_hook_file(
                     ".codex/hooks.json",
-                    json!({}),
-                    None,
-                    &[(
-                        "SessionStart",
-                        "planr prime",
-                        json!({"hooks": [{"type": "command", "command": PRIME_COMMAND_CODEX, "timeout": 10}]}),
-                    )],
+                    json!({"hooks": {}}),
+                    Some("hooks"),
+                    &[
+                        (
+                            "SessionStart",
+                            "planr prime",
+                            json!({"hooks": [{"type": "command", "command": PRIME_COMMAND_CODEX, "timeout": 10}]}),
+                        ),
+                        (
+                            "Stop",
+                            "planr-codex-stop",
+                            json!({"hooks": [{"type": "command", "command": CODEX_STOP_RELATIVE, "timeout": 10}]}),
+                        ),
+                    ],
                     &mut result,
                 )?;
                 result.warnings.push(
@@ -171,12 +192,77 @@ impl App {
         } else {
             default
         };
+        let mut changed = false;
         let events = match events_key {
             Some(key) => {
+                if relative == ".codex/hooks.json"
+                    && codex_hooks_have_unsupported_events(&root, key)
+                    && !codex_unsupported_sidecar_mergeable(&path, result)?
+                {
+                    return Ok(());
+                }
                 let object = root.as_object_mut().expect("checked object above");
+                let legacy_codex_events = if relative == ".codex/hooks.json" {
+                    object
+                        .iter()
+                        .filter(|(name, value)| name.as_str() != key && value.is_array())
+                        .map(|(name, _value)| name.clone())
+                        .collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                };
+                let mut moved_legacy_codex_events = Vec::new();
+                for event in legacy_codex_events {
+                    if codex_0145_hook_event_supported(&event) {
+                        if let Some(value) = object.remove(&event) {
+                            moved_legacy_codex_events.push((event, value));
+                            changed = true;
+                        }
+                    } else if let Some(value) = object.remove(&event) {
+                        preserve_unsupported_codex_event(&path, &event, value, result)?;
+                        changed = true;
+                    }
+                }
+                for (event, marker, _) in entries {
+                    if let Some(list) = object.get_mut(*event).and_then(Value::as_array_mut) {
+                        let before = list.len();
+                        list.retain(|entry| !entry.to_string().contains(marker));
+                        changed |= list.len() != before;
+                        if list.is_empty() {
+                            object.remove(*event);
+                        }
+                    }
+                }
                 let entry = object.entry(key.to_string()).or_insert_with(|| json!({}));
                 match entry.as_object_mut() {
-                    Some(events) => events,
+                    Some(events) => {
+                        if relative == ".codex/hooks.json" {
+                            let unsupported_nested = events
+                                .iter()
+                                .filter(|(name, _value)| !codex_0145_hook_event_supported(name))
+                                .map(|(name, _value)| name.clone())
+                                .collect::<Vec<_>>();
+                            for event in unsupported_nested {
+                                if let Some(value) = events.remove(&event) {
+                                    preserve_unsupported_codex_event(&path, &event, value, result)?;
+                                    changed = true;
+                                }
+                            }
+                        }
+                        for (event, value) in moved_legacy_codex_events {
+                            let target = events.entry(event).or_insert_with(|| json!([]));
+                            if let (Some(target), Some(source)) =
+                                (target.as_array_mut(), value.as_array())
+                            {
+                                for hook in source {
+                                    if !target.iter().any(|existing| existing == hook) {
+                                        target.push(hook.clone());
+                                    }
+                                }
+                            }
+                        }
+                        events
+                    }
                     None => {
                         result.warnings.push(format!(
                             "{relative} has a non-object `{key}` section; hooks skipped — add them manually (https://planr.so/docs/integrations)"
@@ -187,7 +273,6 @@ impl App {
             }
             None => root.as_object_mut().expect("checked object above"),
         };
-        let mut changed = false;
         // Retired events: earlier planr versions wired pre/post-compaction
         // events that cannot inject context. Planr-owned entries there are
         // removed on re-install; foreign entries stay.
@@ -212,6 +297,145 @@ impl App {
             result.written.push(relative.to_string());
         }
         Ok(())
+    }
+}
+
+fn preserve_unsupported_codex_event(
+    hooks_path: &std::path::Path,
+    event: &str,
+    value: Value,
+    result: &mut HookInstall,
+) -> Result<()> {
+    result.warnings.push(format!(
+        ".codex/hooks.json contains unsupported Codex hook event {event}; preserved it in .codex/hooks.planr-unsupported.json and omitted it from active hooks"
+    ));
+    let unsupported_path = hooks_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("hooks.planr-unsupported.json");
+    let mut preserved_root = if unsupported_path.exists() {
+        let text = fs::read_to_string(&unsupported_path)?;
+        match serde_json::from_str::<Value>(&text)? {
+            Value::Object(object) => object,
+            _ => {
+                anyhow::bail!(
+                    ".codex/hooks.planr-unsupported.json exists but is not a JSON object planr can merge into"
+                );
+            }
+        }
+    } else {
+        serde_json::Map::new()
+    };
+    merge_unsupported_codex_value(&mut preserved_root, event, value);
+    if let Some(parent) = unsupported_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(
+        unsupported_path,
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&Value::Object(preserved_root))?
+        ),
+    )?;
+    if !result
+        .written
+        .iter()
+        .any(|written| written == ".codex/hooks.planr-unsupported.json")
+    {
+        result
+            .written
+            .push(".codex/hooks.planr-unsupported.json".to_string());
+    }
+    Ok(())
+}
+
+fn codex_hooks_have_unsupported_events(root: &Value, key: &str) -> bool {
+    let Some(object) = root.as_object() else {
+        return false;
+    };
+    if object.iter().any(|(name, value)| {
+        name.as_str() != key && value.is_array() && !codex_0145_hook_event_supported(name)
+    }) {
+        return true;
+    }
+    object
+        .get(key)
+        .and_then(Value::as_object)
+        .is_some_and(|events| {
+            events
+                .keys()
+                .any(|name| !codex_0145_hook_event_supported(name))
+        })
+}
+
+fn codex_unsupported_sidecar_mergeable(
+    hooks_path: &std::path::Path,
+    result: &mut HookInstall,
+) -> Result<bool> {
+    let unsupported_path = hooks_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("hooks.planr-unsupported.json");
+    if !unsupported_path.exists() {
+        return Ok(true);
+    }
+    let text = fs::read_to_string(&unsupported_path)?;
+    match serde_json::from_str::<Value>(&text) {
+        Ok(Value::Object(_)) => Ok(true),
+        Ok(_) => {
+            result.warnings.push(
+                ".codex/hooks.planr-unsupported.json exists but is not a JSON object planr can merge into; Codex unsupported hooks skipped to avoid data loss — fix or remove the sidecar and rerun install".to_string(),
+            );
+            Ok(false)
+        }
+        Err(error) => {
+            result.warnings.push(format!(
+                ".codex/hooks.planr-unsupported.json is not valid JSON ({error}); Codex unsupported hooks skipped to avoid data loss — fix or remove the sidecar and rerun install"
+            ));
+            Ok(false)
+        }
+    }
+}
+
+fn merge_unsupported_codex_value(
+    preserved_root: &mut serde_json::Map<String, Value>,
+    event: &str,
+    value: Value,
+) {
+    match preserved_root.remove(event) {
+        None => {
+            preserved_root.insert(event.to_string(), value);
+        }
+        Some(existing) => {
+            preserved_root.insert(event.to_string(), merge_json_values(existing, value));
+        }
+    }
+}
+
+fn merge_json_values(existing: Value, incoming: Value) -> Value {
+    match (existing, incoming) {
+        (Value::Array(mut existing), Value::Array(incoming)) => {
+            for entry in incoming {
+                if !existing.iter().any(|seen| seen == &entry) {
+                    existing.push(entry);
+                }
+            }
+            Value::Array(existing)
+        }
+        (Value::Array(mut existing), incoming) => {
+            if !existing.iter().any(|seen| seen == &incoming) {
+                existing.push(incoming);
+            }
+            Value::Array(existing)
+        }
+        (existing, Value::Array(mut incoming)) => {
+            if !incoming.iter().any(|seen| seen == &existing) {
+                incoming.insert(0, existing);
+            }
+            Value::Array(incoming)
+        }
+        (existing, incoming) if existing == incoming => existing,
+        (existing, incoming) => Value::Array(vec![existing, incoming]),
     }
 }
 

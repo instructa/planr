@@ -475,6 +475,16 @@ impl App {
         body.push_str("\n## Git And PR Evidence\n\n");
         if let Some(evidence) = &evidence {
             body.push_str(&format!(
+                "- Proof status: {} ({})\n",
+                evidence["proof"]["status"].as_str().unwrap_or("unknown"),
+                evidence["proof"]["completion_language"]
+                    .as_str()
+                    .unwrap_or_default()
+            ));
+            if let Some(next_action) = evidence["proof"]["next_action"].as_str() {
+                body.push_str(&format!("- Next proof action: {next_action}\n"));
+            }
+            body.push_str(&format!(
                 "- Source content included: {}\n",
                 evidence["dirty_worktree_safety"]["source_content_included"]
                     .as_bool()
