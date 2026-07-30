@@ -40,40 +40,50 @@ sha256_tool() {
 
 target="${PLANR_TARGET:-$(detect_target)}"
 cargo_target="${PLANR_CARGO_TARGET:-}"
-target_dir="dist/planr-$version"
+dist_dir="${PLANR_DIST_DIR:-dist}"
+target_dir="$dist_dir/planr-$version"
 asset="planr-$target.tar.gz"
 
-rm -rf "$target_dir" "dist/$asset"
+mkdir -p "$dist_dir"
+rm -rf "${target_dir:?}" "${dist_dir:?}/$asset"
 mkdir -p "$target_dir"
 
 if [ -n "$cargo_target" ]; then
   cargo build --release --target "$cargo_target"
   built_bin="target/$cargo_target/release/planr"
+  built_validator="target/$cargo_target/release/planr-host-capability-validator"
 else
   cargo build --release
   built_bin="target/release/planr"
+  built_validator="target/release/planr-host-capability-validator"
 fi
 
 cp "$built_bin" "$target_dir/planr"
+mkdir -p "$target_dir/scripts" "$target_dir/tests/fixtures/evidence"
+cp "$built_validator" "$target_dir/scripts/planr-host-capability-validator"
+cp scripts/host-capability-experiment.mjs "$target_dir/scripts/"
+cp -R tests/fixtures/evidence/host-capabilities "$target_dir/tests/fixtures/evidence/"
 cp README.md LICENSE.md "$target_dir/"
 
 (
   cd "$target_dir"
-  sha256_tool planr README.md LICENSE.md > SHA256SUMS
+  find planr scripts tests README.md LICENSE.md -type f -print | LC_ALL=C sort | while IFS= read -r file; do
+    sha256_tool "$file"
+  done > SHA256SUMS
 )
 
 (
   cd "$target_dir"
-  tar -czf "../$asset" planr README.md LICENSE.md SHA256SUMS
+  tar -czf "../$asset" planr scripts tests README.md LICENSE.md SHA256SUMS
 )
 
 # Aggregate checksums over every asset present in dist/ so multi-target
 # builds into the same dist directory produce one complete SHA256SUMS.
 (
-  cd dist
+  cd "$dist_dir"
   sha256_tool planr-*.tar.gz > SHA256SUMS
 )
 
 echo "release artifact prepared at $target_dir"
 echo "checksums: $target_dir/SHA256SUMS"
-echo "download asset: dist/$asset"
+echo "download asset: $dist_dir/$asset"

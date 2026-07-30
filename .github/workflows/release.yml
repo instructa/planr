@@ -234,12 +234,15 @@ jobs:
             mkdir -p "extract/$target" "npm/native/$target"
             tar -xzf "assets/planr-$target.tar.gz" -C "extract/$target"
             install -m 755 "extract/$target/planr" "npm/native/$target/planr"
+            install -m 755 "extract/$target/scripts/planr-host-capability-validator" \
+              "npm/native/$target/planr-host-capability-validator"
           done
           reported="$(./npm/native/linux-x86_64/planr --version)"
           if [ "$reported" != "planr $version" ]; then
             echo "bundled binary reports '$reported', expected 'planr $version'" >&2
             exit 1
           fi
+          ./npm/native/linux-x86_64/planr-host-capability-validator --identity >/dev/null
           node npm/bin/planr.js --version
 
       - name: Publish to npm
