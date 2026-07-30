@@ -1,0 +1,96 @@
+{
+  "schema_version": "planr.host_capability_observed_raw.v1",
+  "payload_version": "host-capability-raw/1.0.0",
+  "experiment_id": "exp-mcp-browser",
+  "host_identity": {
+    "host": "codex",
+    "surface": "mcp-browser",
+    "version": "missing",
+    "adapter_version": "planr-host-experiment-harness/1.0.0"
+  },
+  "surface": "mcp-browser",
+  "tool_name": "mcp__playwright__browser_tabs",
+  "event_source": "mcp:playwright",
+  "started_at": "2026-07-29T18:38:17Z",
+  "ended_at": "2026-07-29T18:38:17Z",
+  "input": {
+    "input_kind": "controlled_probe",
+    "tool": "browser_tabs",
+    "arguments": {
+      "action": "list"
+    }
+  },
+  "events": [
+    {
+      "sequence": 1,
+      "event_name": "started",
+      "payload_version": "host-event/1.0.0",
+      "tool_name": "mcp__playwright__browser_tabs",
+      "event_source": "mcp:playwright",
+      "payload": {
+        "input_kind": "controlled_probe"
+      }
+    },
+    {
+      "sequence": 2,
+      "event_name": "final",
+      "final": true,
+      "payload_version": "host-event/1.0.0",
+      "tool_name": "mcp__playwright__browser_tabs",
+      "event_source": "mcp:playwright",
+      "payload": {
+        "final_status": "degraded",
+        "call_tool_keys": [
+          "content"
+        ]
+      }
+    }
+  ],
+  "result": {
+    "final_status": "degraded",
+    "permissions": {
+      "network": "not_probed",
+      "filesystem": "not_probed",
+      "environment": "tool is callable but the browser profile is locked by another instance",
+      "secrets": "not_requested"
+    },
+    "sandbox": {
+      "mode": "mcp-playwright",
+      "writable_roots": []
+    },
+    "missing_fields": [
+      "network_events",
+      "console_events",
+      "isError",
+      "structuredContent",
+      "rendered_snapshot",
+      "host_version"
+    ],
+    "blind_spots": [
+      "Playwright MCP tool is callable but returned a text-only lock error in this session"
+    ],
+    "artifact_refs": [
+      {
+        "id": "artifact-mcp-playwright-tabs",
+        "kind": "mcp-text-result",
+        "root_kind": "fixture_root",
+        "path": "artifacts/mcp-playwright/tabs.txt",
+        "digest": "sha256:c4b56e4fe6cda2adb869831a9b4fe178a383257796018e2c3616d17727a3899c"
+      }
+    ],
+    "artifact_digests": {
+      "artifact-mcp-playwright-tabs": "sha256:c4b56e4fe6cda2adb869831a9b4fe178a383257796018e2c3616d17727a3899c"
+    },
+    "experiment_plan": [
+      "Extend live capture with navigation, visible state, console, and network events before trusting rendered-browser observations."
+    ],
+    "notes": [
+      "Callable but degraded; this is not rendered-browser support."
+    ],
+    "availability_reason": "Playwright MCP is callable but did not produce rendered-browser evidence"
+  },
+  "provenance_ref": {
+    "path": "provenance/host-capability-captures.json",
+    "digest": "sha256:3c1cd2f4322c22f0e41c82983728b7b3e3cf774d49c46b1d3ffecb6fd184c483"
+  }
+}

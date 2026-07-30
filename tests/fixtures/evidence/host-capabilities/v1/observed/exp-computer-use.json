@@ -1,0 +1,82 @@
+{
+  "schema_version": "planr.host_capability_observed_raw.v1",
+  "payload_version": "host-capability-raw/1.0.0",
+  "experiment_id": "exp-computer-use",
+  "host_identity": {
+    "host": "codex",
+    "surface": "computer-use",
+    "version": "missing",
+    "adapter_version": "planr-host-experiment-harness/1.0.0"
+  },
+  "surface": "computer-use",
+  "tool_name": "computer-use-client setupComputerUseRuntime sky.list_apps",
+  "event_source": "computer-use-client:sky",
+  "started_at": "2026-07-29T18:38:17Z",
+  "ended_at": "2026-07-29T18:38:17Z",
+  "input": {
+    "input_kind": "mechanical_availability_probe",
+    "probe": "setupComputerUseRuntime and read-only sky.list_apps()",
+    "ui_write_actions": false
+  },
+  "events": [
+    {
+      "sequence": 1,
+      "event_name": "final",
+      "final": true,
+      "payload_version": "host-event/1.0.0",
+      "tool_name": "computer-use-client setupComputerUseRuntime sky.list_apps",
+      "event_source": "computer-use-client:sky",
+      "payload": {
+        "final_status": "permission_denied",
+        "isError": true,
+        "redacted_message": "Mac locked and automatic unlock failed; manual unlock required"
+      }
+    }
+  ],
+  "result": {
+    "final_status": "permission_denied",
+    "permissions": {
+      "network": "not_probed",
+      "filesystem": "not_probed",
+      "environment": "Mac was locked and automatic unlock failed before app inventory could be read",
+      "secrets": "not_requested"
+    },
+    "sandbox": {
+      "mode": "computer-use-runtime",
+      "writable_roots": []
+    },
+    "missing_fields": [
+      "app_inventory",
+      "screen_snapshot",
+      "accessibility_tree",
+      "click_or_type_events",
+      "approval_trace",
+      "host_version"
+    ],
+    "blind_spots": [
+      "Computer Use wrapper is present, but the environment denied read-only app inventory while the Mac was locked"
+    ],
+    "artifact_refs": [
+      {
+        "id": "artifact-computer-use-error",
+        "kind": "permission-error",
+        "root_kind": "fixture_root",
+        "path": "artifacts/computer-use/error.txt",
+        "digest": "sha256:4f39ce870cbb4f857e77278e05eb525fd2a5ef34bd4de1a0c78e5140bee0542d"
+      }
+    ],
+    "artifact_digests": {
+      "artifact-computer-use-error": "sha256:4f39ce870cbb4f857e77278e05eb525fd2a5ef34bd4de1a0c78e5140bee0542d"
+    },
+    "experiment_plan": [
+      "Unlock the Mac in a disposable desktop session and rerun read-only app inventory.",
+      "Capture app name, screenshot or accessibility tree, action events, approval prompts, final status, and artifacts only after read-only inventory succeeds.",
+      "Classify denied app or website access as permission_denied, not product failure."
+    ],
+    "availability_reason": "Computer Use wrapper was callable but environment denied read-only app inventory"
+  },
+  "provenance_ref": {
+    "path": "provenance/host-capability-captures.json",
+    "digest": "sha256:3c1cd2f4322c22f0e41c82983728b7b3e3cf774d49c46b1d3ffecb6fd184c483"
+  }
+}

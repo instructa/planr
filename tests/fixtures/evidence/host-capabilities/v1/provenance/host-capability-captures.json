@@ -1,0 +1,443 @@
+{
+  "schema_version": "planr.host_capability_provenance.v1",
+  "schema_ref": "schemas/host-capability-provenance.schema.json",
+  "schema_digest": "sha256:a0158fddce49ad15f708b1a1149be878be576bf7abae7757d26686e491f185a1",
+  "suite_id": "codex-host-capability-phase1",
+  "captures": [
+    {
+      "experiment_id": "exp-terminal",
+      "source_kind": "external_observed_capture",
+      "host": "codex",
+      "surface": "terminal",
+      "input_kind": "controlled_probe",
+      "tool_name": "functions.exec_command",
+      "event_source": "codex.developer_tool.exec_command",
+      "host_version": "missing",
+      "adapter_version": "planr-host-experiment-harness/1.0.0",
+      "claim_source": "observed_capture",
+      "availability_reason": "terminal exec produced a final event and verified stdout artifact",
+      "probe_checks": [
+        {
+          "name": "final-event",
+          "outcome": "passed",
+          "detail": "exact final event and artifact digest replayed"
+        }
+      ],
+      "missing_fields": [
+        "host_version"
+      ],
+      "artifact_ids": [
+        "artifact-terminal-stdout"
+      ],
+      "captured_at": "2026-07-29T18:38:17Z",
+      "observation_mode": "observed_payload"
+    },
+    {
+      "experiment_id": "exp-local-function",
+      "source_kind": "external_observed_capture",
+      "host": "codex",
+      "surface": "local-function",
+      "input_kind": "controlled_probe",
+      "tool_name": "mcp__node_repl__js",
+      "event_source": "mcp:node_repl",
+      "host_version": "missing",
+      "adapter_version": "planr-host-experiment-harness/1.0.0",
+      "claim_source": "observed_capture",
+      "availability_reason": "Node REPL MCP returned content,isError and metadata key presence",
+      "probe_checks": [
+        {
+          "name": "final-event",
+          "outcome": "passed",
+          "detail": "MCP local function returned a final text block without storing metadata values"
+        }
+      ],
+      "missing_fields": [
+        "host_version"
+      ],
+      "artifact_ids": [
+        "artifact-mcp-node-repl-result"
+      ],
+      "captured_at": "2026-07-29T18:38:17Z",
+      "observation_mode": "observed_payload"
+    },
+    {
+      "experiment_id": "exp-codex-app-server",
+      "source_kind": "unprobed_placeholder",
+      "host": "codex",
+      "surface": "codex-app-server",
+      "input_kind": "unprobed_placeholder",
+      "tool_name": "codex app-server",
+      "event_source": "process:codex",
+      "host_version": "missing",
+      "adapter_version": "planr-host-experiment-harness/1.0.0",
+      "claim_source": "capture_mode_placeholder",
+      "availability_reason": "app-server payload was not observed",
+      "probe_checks": [
+        {
+          "name": "no-doc-only-support",
+          "outcome": "unavailable",
+          "detail": "documentation defines the target but does not prove availability"
+        }
+      ],
+      "missing_fields": [
+        "host_version",
+        "json_rpc_stream",
+        "final_agent_event",
+        "artifact_contract"
+      ],
+      "artifact_ids": [],
+      "captured_at": "2026-07-29T18:38:17Z",
+      "observation_mode": "unprobed_placeholder"
+    },
+    {
+      "experiment_id": "exp-codex-exec",
+      "source_kind": "unprobed_placeholder",
+      "host": "codex",
+      "surface": "codex-exec",
+      "input_kind": "unprobed_placeholder",
+      "tool_name": "codex exec",
+      "event_source": "process:codex",
+      "host_version": "missing",
+      "adapter_version": "planr-host-experiment-harness/1.0.0",
+      "claim_source": "capture_mode_placeholder",
+      "availability_reason": "codex exec event stream was not observed",
+      "probe_checks": [
+        {
+          "name": "no-doc-only-support",
+          "outcome": "unavailable",
+          "detail": "non-interactive mode remains an experiment plan until captured"
+        }
+      ],
+      "missing_fields": [
+        "host_version",
+        "exec_event_stream",
+        "model_response_contract",
+        "artifact_contract"
+      ],
+      "artifact_ids": [],
+      "captured_at": "2026-07-29T18:38:17Z",
+      "observation_mode": "unprobed_placeholder"
+    },
+    {
+      "experiment_id": "exp-codex-mcp-server",
+      "source_kind": "unprobed_placeholder",
+      "host": "codex",
+      "surface": "codex-mcp-server",
+      "input_kind": "unprobed_placeholder",
+      "tool_name": "codex mcp-server",
+      "event_source": "process:codex",
+      "host_version": "missing",
+      "adapter_version": "planr-host-experiment-harness/1.0.0",
+      "claim_source": "capture_mode_placeholder",
+      "availability_reason": "Codex MCP server payload was not observed",
+      "probe_checks": [
+        {
+          "name": "no-doc-only-support",
+          "outcome": "unavailable",
+          "detail": "MCP server support remains unverified until tools/list and tool result payloads replay"
+        }
+      ],
+      "missing_fields": [
+        "host_version",
+        "tools_list",
+        "tool_call_result",
+        "structured_content_contract"
+      ],
+      "artifact_ids": [],
+      "captured_at": "2026-07-29T18:38:17Z",
+      "observation_mode": "unprobed_placeholder"
+    },
+    {
+      "experiment_id": "exp-mcp-browser",
+      "source_kind": "external_observed_capture",
+      "host": "codex",
+      "surface": "mcp-browser",
+      "input_kind": "controlled_probe",
+      "tool_name": "mcp__playwright__browser_tabs",
+      "event_source": "mcp:playwright",
+      "host_version": "missing",
+      "adapter_version": "planr-host-experiment-harness/1.0.0",
+      "claim_source": "observed_capture",
+      "availability_reason": "Playwright MCP is callable but did not produce rendered-browser evidence",
+      "probe_checks": [
+        {
+          "name": "callable-tool",
+          "outcome": "inconclusive",
+          "detail": "tool returned text-only browser lock error"
+        }
+      ],
+      "missing_fields": [
+        "network_events",
+        "console_events",
+        "isError",
+        "structuredContent",
+        "rendered_snapshot",
+        "host_version"
+      ],
+      "artifact_ids": [
+        "artifact-mcp-playwright-tabs"
+      ],
+      "captured_at": "2026-07-29T18:38:17Z",
+      "observation_mode": "observed_payload"
+    },
+    {
+      "experiment_id": "exp-built-in-browser",
+      "source_kind": "mechanical_unavailable_probe",
+      "host": "codex",
+      "surface": "built-in-browser",
+      "input_kind": "mechanical_availability_probe",
+      "tool_name": "browser-client.mjs setupAtlasRuntime",
+      "event_source": "browser-client:iab",
+      "host_version": "missing",
+      "adapter_version": "planr-host-experiment-harness/1.0.0",
+      "claim_source": "mechanical_unavailable_probe",
+      "availability_reason": "browser-client iab setup failed with runtime incompatibility",
+      "probe_checks": [
+        {
+          "name": "setup-runtime",
+          "outcome": "unavailable",
+          "detail": "setupAtlasRuntime failed with Cannot redefine property: process"
+        }
+      ],
+      "missing_fields": [
+        "setup_runtime",
+        "navigation_event",
+        "visible_dom_or_screenshot",
+        "final_status_payload",
+        "host_version"
+      ],
+      "artifact_ids": [
+        "artifact-built-in-browser-error"
+      ],
+      "captured_at": "2026-07-29T18:38:17Z",
+      "observation_mode": "mechanical_invocation"
+    },
+    {
+      "experiment_id": "exp-chrome-cdp",
+      "source_kind": "mechanical_unavailable_probe",
+      "host": "codex",
+      "surface": "chrome-cdp",
+      "input_kind": "mechanical_availability_probe",
+      "tool_name": "mcp__chrome_devtools_tileborn__list_pages",
+      "event_source": "mcp:chrome_devtools_tileborn",
+      "host_version": "missing",
+      "adapter_version": "planr-host-experiment-harness/1.0.0",
+      "claim_source": "mechanical_unavailable_probe",
+      "availability_reason": "Chrome DevTools MCP could not connect to a browser websocket",
+      "probe_checks": [
+        {
+          "name": "cdp-connection",
+          "outcome": "unavailable",
+          "detail": "list_pages returned a redacted connection failure"
+        }
+      ],
+      "missing_fields": [
+        "target_id",
+        "protocol_events",
+        "screenshot_or_dom_artifact",
+        "host_version"
+      ],
+      "artifact_ids": [
+        "artifact-chrome-devtools-error"
+      ],
+      "captured_at": "2026-07-29T18:38:17Z",
+      "observation_mode": "mechanical_invocation"
+    },
+    {
+      "experiment_id": "exp-codex-hook-events",
+      "source_kind": "unprobed_placeholder",
+      "host": "codex",
+      "surface": "codex-hook-events",
+      "input_kind": "unprobed_placeholder",
+      "tool_name": "codex hook event stream",
+      "event_source": "codex:hook",
+      "host_version": "missing",
+      "adapter_version": "planr-host-experiment-harness/1.0.0",
+      "claim_source": "capture_mode_placeholder",
+      "availability_reason": "no live hook event payload was observed",
+      "probe_checks": [
+        {
+          "name": "hook-event-stream",
+          "outcome": "unavailable",
+          "detail": "hook payload stream is absent from this harness"
+        }
+      ],
+      "missing_fields": [
+        "host_version",
+        "hook_event_name",
+        "hook_payload_version",
+        "session_id",
+        "final_status_payload"
+      ],
+      "artifact_ids": [],
+      "captured_at": "2026-07-29T18:38:17Z",
+      "observation_mode": "unprobed_placeholder"
+    },
+    {
+      "experiment_id": "exp-chrome-browser-client",
+      "source_kind": "external_observed_capture",
+      "host": "codex",
+      "surface": "chrome-browser-client",
+      "input_kind": "controlled_probe",
+      "tool_name": "browser-client.mjs chrome Runtime.evaluate",
+      "event_source": "browser-client:chrome",
+      "host_version": "missing",
+      "adapter_version": "planr-host-experiment-harness/1.0.0",
+      "claim_source": "observed_capture",
+      "availability_reason": "native Chrome browser-client produced CDP Runtime.evaluate and DOM observations; screenshot evidence was unavailable in the persisted artifact",
+      "probe_checks": [
+        {
+          "name": "rendered-dom",
+          "outcome": "passed",
+          "detail": "Example Domain heading was visible exactly once"
+        },
+        {
+          "name": "event-stream",
+          "outcome": "inconclusive",
+          "detail": "readEvents returned no matching Page.loadEventFired or Runtime.consoleAPICalled events"
+        }
+      ],
+      "missing_fields": [
+        "host_version",
+        "matching_page_load_event",
+        "matching_console_event",
+        "screenshot_artifact",
+        "screenshot_digest"
+      ],
+      "artifact_ids": [
+        "artifact-chrome-browser-client-cdp-result"
+      ],
+      "captured_at": "2026-07-29T18:38:17Z",
+      "observation_mode": "observed_payload"
+    },
+    {
+      "experiment_id": "exp-computer-use",
+      "source_kind": "mechanical_unavailable_probe",
+      "host": "codex",
+      "surface": "computer-use",
+      "input_kind": "mechanical_availability_probe",
+      "tool_name": "computer-use-client setupComputerUseRuntime sky.list_apps",
+      "event_source": "computer-use-client:sky",
+      "host_version": "missing",
+      "adapter_version": "planr-host-experiment-harness/1.0.0",
+      "claim_source": "mechanical_unavailable_probe",
+      "availability_reason": "Computer Use wrapper was callable but environment denied read-only app inventory",
+      "probe_checks": [
+        {
+          "name": "read-only-app-inventory",
+          "outcome": "unavailable",
+          "detail": "sky.list_apps failed because the Mac was locked and automatic unlock failed"
+        }
+      ],
+      "missing_fields": [
+        "app_inventory",
+        "screen_snapshot",
+        "accessibility_tree",
+        "click_or_type_events",
+        "approval_trace",
+        "host_version"
+      ],
+      "artifact_ids": [
+        "artifact-computer-use-error"
+      ],
+      "captured_at": "2026-07-29T18:38:17Z",
+      "observation_mode": "mechanical_invocation"
+    },
+    {
+      "experiment_id": "exp-claude-code-host-capture",
+      "source_kind": "mechanical_unavailable_probe",
+      "host": "claude",
+      "surface": "claude-code",
+      "input_kind": "mechanical_availability_probe",
+      "observation_mode": "mechanical_invocation",
+      "tool_name": "$HOME/.local/bin/claude --version",
+      "event_source": "process:claude-code",
+      "host_version": "2.1.133",
+      "adapter_version": "planr-host-experiment-harness/1.0.0",
+      "claim_source": "mechanical_unavailable_probe",
+      "availability_reason": "claude claude-code mechanical version probe returned 2.1.133, but no host capture payload/event contract was observed",
+      "probe_checks": [
+        {
+          "name": "final-event",
+          "outcome": "unavailable",
+          "detail": "final event and artifact contract validated by replay"
+        }
+      ],
+      "missing_fields": [
+        "live_event_stream",
+        "final_result_payload",
+        "artifact_contract"
+      ],
+      "artifact_ids": [
+        "artifact-claude-code-host-capture-result",
+        "artifact-claude-code-host-capture-stderr",
+        "artifact-claude-code-host-capture-stdout"
+      ],
+      "captured_at": "2026-07-30T08:17:48Z"
+    },
+    {
+      "experiment_id": "exp-cursor-agent-host-capture",
+      "source_kind": "mechanical_unavailable_probe",
+      "host": "cursor",
+      "surface": "cursor-agent",
+      "input_kind": "mechanical_availability_probe",
+      "observation_mode": "mechanical_invocation",
+      "tool_name": "$HOME/.local/bin/cursor-agent --version",
+      "event_source": "process:cursor-agent",
+      "host_version": "2026.07.17-3e2a980",
+      "adapter_version": "planr-host-experiment-harness/1.0.0",
+      "claim_source": "mechanical_unavailable_probe",
+      "availability_reason": "cursor cursor-agent mechanical version probe returned 2026.07.17-3e2a980, but no host capture payload/event contract was observed",
+      "probe_checks": [
+        {
+          "name": "final-event",
+          "outcome": "unavailable",
+          "detail": "final event and artifact contract validated by replay"
+        }
+      ],
+      "missing_fields": [
+        "live_event_stream",
+        "final_result_payload",
+        "artifact_contract"
+      ],
+      "artifact_ids": [
+        "artifact-cursor-agent-host-capture-result",
+        "artifact-cursor-agent-host-capture-stderr",
+        "artifact-cursor-agent-host-capture-stdout"
+      ],
+      "captured_at": "2026-07-30T08:17:48Z"
+    },
+    {
+      "experiment_id": "exp-pi-cli-host-capture",
+      "source_kind": "mechanical_unavailable_probe",
+      "host": "pi",
+      "surface": "pi-cli",
+      "input_kind": "mechanical_availability_probe",
+      "observation_mode": "mechanical_invocation",
+      "tool_name": "$HOME/.local/bin/pi --version",
+      "event_source": "process:pi-cli",
+      "host_version": "0.82.1",
+      "adapter_version": "planr-host-experiment-harness/1.0.0",
+      "claim_source": "mechanical_unavailable_probe",
+      "availability_reason": "pi pi-cli mechanical version probe returned 0.82.1, but no host capture payload/event contract was observed",
+      "probe_checks": [
+        {
+          "name": "final-event",
+          "outcome": "unavailable",
+          "detail": "final event and artifact contract validated by replay"
+        }
+      ],
+      "missing_fields": [
+        "live_event_stream",
+        "final_result_payload",
+        "artifact_contract"
+      ],
+      "artifact_ids": [
+        "artifact-pi-cli-host-capture-result",
+        "artifact-pi-cli-host-capture-stderr",
+        "artifact-pi-cli-host-capture-stdout"
+      ],
+      "captured_at": "2026-07-30T08:17:48Z"
+    }
+  ]
+}

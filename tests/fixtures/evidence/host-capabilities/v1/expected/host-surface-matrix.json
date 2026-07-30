@@ -1,0 +1,400 @@
+{
+  "schema_version": "planr.host_surface_capability_matrix.v1",
+  "fixture_contract": "host-capability-raw/1.0.0",
+  "suite_id": "codex-host-capability-phase1",
+  "surfaces": [
+    {
+      "host": "codex",
+      "surface": "terminal",
+      "host_version": "missing",
+      "trusted_adapter_enabled": false,
+      "availability_status": "available",
+      "reason": "terminal exec produced a final event and verified stdout artifact",
+      "observation_types": [
+        "host.codex.terminal"
+      ],
+      "provenance": {
+        "claim_source": "observed_capture",
+        "source_kind": "external_observed_capture",
+        "observation_mode": "observed_payload"
+      },
+      "permissions": {
+        "network": "not_used",
+        "filesystem": "workspace",
+        "environment": "not_captured",
+        "secrets": "not_requested"
+      },
+      "artifact_kinds": [
+        "stdout"
+      ],
+      "blind_spots": [
+        "shell PTY internals and private agent transcript are intentionally not captured"
+      ]
+    },
+    {
+      "host": "codex",
+      "surface": "local-function",
+      "host_version": "missing",
+      "trusted_adapter_enabled": false,
+      "availability_status": "available",
+      "reason": "Node REPL MCP returned content,isError and metadata key presence",
+      "observation_types": [
+        "host.codex.local_function"
+      ],
+      "provenance": {
+        "claim_source": "observed_capture",
+        "source_kind": "external_observed_capture",
+        "observation_mode": "observed_payload"
+      },
+      "permissions": {
+        "network": "not_used",
+        "filesystem": "workspace-read-observed",
+        "environment": "mcp-node-repl session",
+        "secrets": "not_requested"
+      },
+      "artifact_kinds": [
+        "mcp-text-json-summary"
+      ],
+      "blind_spots": [
+        "requestMeta values are not stored; only the observed key names are retained"
+      ]
+    },
+    {
+      "host": "codex",
+      "surface": "codex-app-server",
+      "host_version": "missing",
+      "trusted_adapter_enabled": false,
+      "availability_status": "unavailable",
+      "reason": "app-server payload was not observed",
+      "observation_types": [
+        "host.codex.app_server"
+      ],
+      "provenance": {
+        "claim_source": "capture_mode_placeholder",
+        "source_kind": "unprobed_placeholder",
+        "observation_mode": "unprobed_placeholder"
+      },
+      "permissions": {
+        "network": "not_probed",
+        "filesystem": "not_probed",
+        "environment": "not invoked in deterministic replay",
+        "secrets": "not_requested"
+      },
+      "artifact_kinds": [],
+      "blind_spots": [
+        "capture mode emitted an explicit placeholder, not an observed support claim"
+      ]
+    },
+    {
+      "host": "codex",
+      "surface": "codex-exec",
+      "host_version": "missing",
+      "trusted_adapter_enabled": false,
+      "availability_status": "unavailable",
+      "reason": "codex exec event stream was not observed",
+      "observation_types": [
+        "host.codex.exec"
+      ],
+      "provenance": {
+        "claim_source": "capture_mode_placeholder",
+        "source_kind": "unprobed_placeholder",
+        "observation_mode": "unprobed_placeholder"
+      },
+      "permissions": {
+        "network": "not_probed",
+        "filesystem": "not_probed",
+        "environment": "not invoked in deterministic replay",
+        "secrets": "not_requested"
+      },
+      "artifact_kinds": [],
+      "blind_spots": [
+        "capture mode emitted an explicit placeholder, not an observed support claim"
+      ]
+    },
+    {
+      "host": "codex",
+      "surface": "codex-mcp-server",
+      "host_version": "missing",
+      "trusted_adapter_enabled": false,
+      "availability_status": "unavailable",
+      "reason": "Codex MCP server payload was not observed",
+      "observation_types": [
+        "host.codex.mcp_server"
+      ],
+      "provenance": {
+        "claim_source": "capture_mode_placeholder",
+        "source_kind": "unprobed_placeholder",
+        "observation_mode": "unprobed_placeholder"
+      },
+      "permissions": {
+        "network": "not_probed",
+        "filesystem": "not_probed",
+        "environment": "not invoked in deterministic replay",
+        "secrets": "not_requested"
+      },
+      "artifact_kinds": [],
+      "blind_spots": [
+        "capture mode emitted an explicit placeholder, not an observed support claim"
+      ]
+    },
+    {
+      "host": "codex",
+      "surface": "mcp-browser",
+      "host_version": "missing",
+      "trusted_adapter_enabled": false,
+      "availability_status": "degraded",
+      "reason": "Playwright MCP is callable but did not produce rendered-browser evidence",
+      "observation_types": [
+        "host.codex.mcp_browser"
+      ],
+      "provenance": {
+        "claim_source": "observed_capture",
+        "source_kind": "external_observed_capture",
+        "observation_mode": "observed_payload"
+      },
+      "permissions": {
+        "network": "not_probed",
+        "filesystem": "not_probed",
+        "environment": "tool is callable but the browser profile is locked by another instance",
+        "secrets": "not_requested"
+      },
+      "artifact_kinds": [
+        "mcp-text-result"
+      ],
+      "blind_spots": [
+        "Playwright MCP tool is callable but returned a text-only lock error in this session"
+      ]
+    },
+    {
+      "host": "codex",
+      "surface": "built-in-browser",
+      "host_version": "missing",
+      "trusted_adapter_enabled": false,
+      "availability_status": "unavailable",
+      "reason": "browser-client iab setup failed with runtime incompatibility",
+      "observation_types": [
+        "host.codex.built_in_browser"
+      ],
+      "provenance": {
+        "claim_source": "mechanical_unavailable_probe",
+        "source_kind": "mechanical_unavailable_probe",
+        "observation_mode": "mechanical_invocation"
+      },
+      "permissions": {
+        "network": "not_probed",
+        "filesystem": "not_probed",
+        "environment": "browser-client iab setup failed before any browser event capture",
+        "secrets": "not_requested"
+      },
+      "artifact_kinds": [
+        "setup-error"
+      ],
+      "blind_spots": [
+        "In-app browser backend failed during setup, so no user-equivalent browser observation is present"
+      ]
+    },
+    {
+      "host": "codex",
+      "surface": "chrome-cdp",
+      "host_version": "missing",
+      "trusted_adapter_enabled": false,
+      "availability_status": "unavailable",
+      "reason": "Chrome DevTools MCP could not connect to a browser websocket",
+      "observation_types": [
+        "host.codex.chrome_cdp"
+      ],
+      "provenance": {
+        "claim_source": "mechanical_unavailable_probe",
+        "source_kind": "mechanical_unavailable_probe",
+        "observation_mode": "mechanical_invocation"
+      },
+      "permissions": {
+        "network": "not_probed",
+        "filesystem": "not_probed",
+        "environment": "tool returned isError true because Chrome websocket URL was unavailable",
+        "secrets": "not_requested"
+      },
+      "artifact_kinds": [
+        "mcp-text-error"
+      ],
+      "blind_spots": [
+        "A future CDP adapter must prove target binding and rendered state from observed protocol events"
+      ]
+    },
+    {
+      "host": "codex",
+      "surface": "codex-hook-events",
+      "host_version": "missing",
+      "trusted_adapter_enabled": false,
+      "availability_status": "unavailable",
+      "reason": "no live hook event payload was observed",
+      "observation_types": [
+        "host.codex.hook_events"
+      ],
+      "provenance": {
+        "claim_source": "capture_mode_placeholder",
+        "source_kind": "unprobed_placeholder",
+        "observation_mode": "unprobed_placeholder"
+      },
+      "permissions": {
+        "network": "not_probed",
+        "filesystem": "not_probed",
+        "environment": "no hook payload stream is delivered to this developer harness",
+        "secrets": "not_requested"
+      },
+      "artifact_kinds": [],
+      "blind_spots": [
+        "capture mode emitted an explicit placeholder, not an observed support claim"
+      ]
+    },
+    {
+      "host": "codex",
+      "surface": "chrome-browser-client",
+      "host_version": "missing",
+      "trusted_adapter_enabled": false,
+      "availability_status": "available",
+      "reason": "native Chrome browser-client produced CDP Runtime.evaluate and DOM observations; screenshot evidence was unavailable in the persisted artifact",
+      "observation_types": [
+        "host.codex.chrome_browser_client"
+      ],
+      "provenance": {
+        "claim_source": "observed_capture",
+        "source_kind": "external_observed_capture",
+        "observation_mode": "observed_payload"
+      },
+      "permissions": {
+        "network": "https://example.com/",
+        "filesystem": "not_used",
+        "environment": "Chrome extension browser client",
+        "secrets": "not_requested"
+      },
+      "artifact_kinds": [
+        "cdp-json-result"
+      ],
+      "blind_spots": [
+        "CDP readEvents returned cursor 27 with no matching Page.loadEventFired or Runtime.consoleAPICalled events"
+      ]
+    },
+    {
+      "host": "codex",
+      "surface": "computer-use",
+      "host_version": "missing",
+      "trusted_adapter_enabled": false,
+      "availability_status": "permission_denied",
+      "reason": "Computer Use wrapper was callable but environment denied read-only app inventory",
+      "observation_types": [
+        "host.codex.computer_use"
+      ],
+      "provenance": {
+        "claim_source": "mechanical_unavailable_probe",
+        "source_kind": "mechanical_unavailable_probe",
+        "observation_mode": "mechanical_invocation"
+      },
+      "permissions": {
+        "network": "not_probed",
+        "filesystem": "not_probed",
+        "environment": "Mac was locked and automatic unlock failed before app inventory could be read",
+        "secrets": "not_requested"
+      },
+      "artifact_kinds": [
+        "permission-error"
+      ],
+      "blind_spots": [
+        "Computer Use wrapper is present, but the environment denied read-only app inventory while the Mac was locked"
+      ]
+    },
+    {
+      "host": "claude",
+      "surface": "claude-code",
+      "host_version": "2.1.133",
+      "trusted_adapter_enabled": false,
+      "availability_status": "unavailable",
+      "reason": "claude claude-code mechanical version probe returned 2.1.133, but no host capture payload/event contract was observed",
+      "observation_types": [
+        "host.claude.claude_code"
+      ],
+      "provenance": {
+        "claim_source": "mechanical_unavailable_probe",
+        "source_kind": "mechanical_unavailable_probe",
+        "observation_mode": "mechanical_invocation"
+      },
+      "permissions": {
+        "network": "not_used",
+        "filesystem": "read_only_binary_version_probe",
+        "environment": "version probe only; no host session launched",
+        "secrets": "not_requested"
+      },
+      "artifact_kinds": [
+        "invocation-result",
+        "invocation-stderr",
+        "invocation-stdout"
+      ],
+      "blind_spots": [
+        "installed binary version does not prove host capture payload support",
+        "no paid/network host run was performed"
+      ]
+    },
+    {
+      "host": "cursor",
+      "surface": "cursor-agent",
+      "host_version": "2026.07.17-3e2a980",
+      "trusted_adapter_enabled": false,
+      "availability_status": "unavailable",
+      "reason": "cursor cursor-agent mechanical version probe returned 2026.07.17-3e2a980, but no host capture payload/event contract was observed",
+      "observation_types": [
+        "host.cursor.cursor_agent"
+      ],
+      "provenance": {
+        "claim_source": "mechanical_unavailable_probe",
+        "source_kind": "mechanical_unavailable_probe",
+        "observation_mode": "mechanical_invocation"
+      },
+      "permissions": {
+        "network": "not_used",
+        "filesystem": "read_only_binary_version_probe",
+        "environment": "version probe only; no host session launched",
+        "secrets": "not_requested"
+      },
+      "artifact_kinds": [
+        "invocation-result",
+        "invocation-stderr",
+        "invocation-stdout"
+      ],
+      "blind_spots": [
+        "installed binary version does not prove host capture payload support",
+        "no paid/network host run was performed"
+      ]
+    },
+    {
+      "host": "pi",
+      "surface": "pi-cli",
+      "host_version": "0.82.1",
+      "trusted_adapter_enabled": false,
+      "availability_status": "unavailable",
+      "reason": "pi pi-cli mechanical version probe returned 0.82.1, but no host capture payload/event contract was observed",
+      "observation_types": [
+        "host.pi.pi_cli"
+      ],
+      "provenance": {
+        "claim_source": "mechanical_unavailable_probe",
+        "source_kind": "mechanical_unavailable_probe",
+        "observation_mode": "mechanical_invocation"
+      },
+      "permissions": {
+        "network": "not_used",
+        "filesystem": "read_only_binary_version_probe",
+        "environment": "version probe only; no host session launched",
+        "secrets": "not_requested"
+      },
+      "artifact_kinds": [
+        "invocation-result",
+        "invocation-stderr",
+        "invocation-stdout"
+      ],
+      "blind_spots": [
+        "installed binary version does not prove host capture payload support",
+        "no paid/network host run was performed"
+      ]
+    }
+  ]
+}

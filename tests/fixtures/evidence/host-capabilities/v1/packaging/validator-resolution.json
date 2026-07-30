@@ -1,0 +1,28 @@
+{
+  "schema_version": "planr.host_capability_validator_packaging.v1",
+  "validator_binary": "planr-host-capability-validator",
+  "default_resolution": {
+    "kind": "packaged_sibling",
+    "relative_to": "host-capability harness executable",
+    "entrypoint": "scripts/planr-host-capability-validator",
+    "entrypoint_resolution_order": [
+      "npm/native/<target>/planr-host-capability-validator",
+      "target/release/planr-host-capability-validator",
+      "target/debug/planr-host-capability-validator",
+      "cargo build --manifest-path <package-root>/Cargo.toml --bin planr-host-capability-validator"
+    ],
+    "platform_suffix": {
+      "windows": ".exe",
+      "other": ""
+    }
+  },
+  "configured_resolution": {
+    "environment": "PLANR_HOST_CAPABILITY_VALIDATOR",
+    "path_requirement": "absolute built binary path"
+  },
+  "forbidden_default_resolution": [
+    "process current working directory",
+    "cargo run",
+    "relative companion-directory environment overrides"
+  ]
+}

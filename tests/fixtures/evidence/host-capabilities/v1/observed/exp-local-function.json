@@ -1,0 +1,81 @@
+{
+  "schema_version": "planr.host_capability_observed_raw.v1",
+  "payload_version": "host-capability-raw/1.0.0",
+  "experiment_id": "exp-local-function",
+  "host_identity": {
+    "host": "codex",
+    "surface": "local-function",
+    "version": "missing",
+    "adapter_version": "planr-host-experiment-harness/1.0.0"
+  },
+  "surface": "local-function",
+  "tool_name": "mcp__node_repl__js",
+  "event_source": "mcp:node_repl",
+  "started_at": "2026-07-29T18:38:17Z",
+  "ended_at": "2026-07-29T18:38:17Z",
+  "input": {
+    "input_kind": "controlled_probe",
+    "javascript": "JSON.stringify({ cwd: nodeRepl.cwd, requestMetaKeys: Object.keys(nodeRepl.requestMeta).sort() })"
+  },
+  "events": [
+    {
+      "sequence": 1,
+      "event_name": "started",
+      "payload_version": "host-event/1.0.0",
+      "tool_name": "mcp__node_repl__js",
+      "event_source": "mcp:node_repl",
+      "payload": {
+        "input_kind": "controlled_probe"
+      }
+    },
+    {
+      "sequence": 2,
+      "event_name": "final",
+      "final": true,
+      "payload_version": "host-event/1.0.0",
+      "tool_name": "mcp__node_repl__js",
+      "event_source": "mcp:node_repl",
+      "payload": {
+        "final_status": "available"
+      }
+    }
+  ],
+  "result": {
+    "final_status": "available",
+    "permissions": {
+      "network": "not_used",
+      "filesystem": "workspace-read-observed",
+      "environment": "mcp-node-repl session",
+      "secrets": "not_requested"
+    },
+    "sandbox": {
+      "mode": "mcp-node-repl",
+      "writable_roots": [
+        "tests/fixtures/evidence/host-capabilities/v1"
+      ]
+    },
+    "missing_fields": [
+      "host_version"
+    ],
+    "blind_spots": [
+      "requestMeta values are not stored; only the observed key names are retained"
+    ],
+    "artifact_refs": [
+      {
+        "id": "artifact-mcp-node-repl-result",
+        "kind": "mcp-text-json-summary",
+        "root_kind": "fixture_root",
+        "path": "artifacts/mcp-node-repl/result.json",
+        "digest": "sha256:95fc1a2b9bebecd83588ea90d66d5c3b76b9e1539b36b3e5419b6df5c88d4a3d"
+      }
+    ],
+    "artifact_digests": {
+      "artifact-mcp-node-repl-result": "sha256:95fc1a2b9bebecd83588ea90d66d5c3b76b9e1539b36b3e5419b6df5c88d4a3d"
+    },
+    "availability_reason": "Node REPL MCP returned content,isError and metadata key presence"
+  },
+  "provenance_ref": {
+    "path": "provenance/host-capability-captures.json",
+    "digest": "sha256:3c1cd2f4322c22f0e41c82983728b7b3e3cf774d49c46b1d3ffecb6fd184c483"
+  }
+}

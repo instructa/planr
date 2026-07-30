@@ -1,0 +1,170 @@
+{
+  "schema_version": "planr.host_capability_experiment_suite.v1",
+  "suite_id": "codex-host-capability-phase1",
+  "docs_are_experiment_design_only": true,
+  "source_docs": [
+    {
+      "surface": "codex-app-server",
+      "url": "https://developers.openai.com/codex/app-server",
+      "usage": "experiment design only"
+    },
+    {
+      "surface": "codex-exec",
+      "url": "https://developers.openai.com/codex/non-interactive-mode",
+      "usage": "experiment design only"
+    },
+    {
+      "surface": "codex-mcp-server",
+      "url": "https://developers.openai.com/codex/mcp-server",
+      "usage": "experiment design only"
+    },
+    {
+      "surface": "computer-use-approval",
+      "url": "https://developers.openai.com/codex/sandboxing/auto-review",
+      "usage": "experiment design only"
+    },
+    {
+      "surface": "claude-code",
+      "source": "read-only-version-probe",
+      "usage": "experiment design only"
+    },
+    {
+      "surface": "cursor-agent",
+      "source": "read-only-version-probe",
+      "usage": "experiment design only"
+    },
+    {
+      "surface": "pi-cli",
+      "source": "read-only-version-probe",
+      "usage": "experiment design only"
+    }
+  ],
+  "experiments": [
+    {
+      "id": "exp-terminal",
+      "host": "codex",
+      "surface": "terminal",
+      "input_kind": "controlled_probe",
+      "expected_tool_name": "functions.exec_command",
+      "expected_event_source": "codex.developer_tool.exec_command",
+      "expected_result_status": "available"
+    },
+    {
+      "id": "exp-local-function",
+      "host": "codex",
+      "surface": "local-function",
+      "input_kind": "controlled_probe",
+      "expected_tool_name": "mcp__node_repl__js",
+      "expected_event_source": "mcp:node_repl",
+      "expected_result_status": "available"
+    },
+    {
+      "id": "exp-codex-app-server",
+      "host": "codex",
+      "surface": "codex-app-server",
+      "input_kind": "unprobed_placeholder",
+      "expected_tool_name": "codex app-server",
+      "expected_event_source": "process:codex",
+      "expected_result_status": "unavailable"
+    },
+    {
+      "id": "exp-codex-exec",
+      "host": "codex",
+      "surface": "codex-exec",
+      "input_kind": "unprobed_placeholder",
+      "expected_tool_name": "codex exec",
+      "expected_event_source": "process:codex",
+      "expected_result_status": "unavailable"
+    },
+    {
+      "id": "exp-codex-mcp-server",
+      "host": "codex",
+      "surface": "codex-mcp-server",
+      "input_kind": "unprobed_placeholder",
+      "expected_tool_name": "codex mcp-server",
+      "expected_event_source": "process:codex",
+      "expected_result_status": "unavailable"
+    },
+    {
+      "id": "exp-mcp-browser",
+      "host": "codex",
+      "surface": "mcp-browser",
+      "input_kind": "controlled_probe",
+      "expected_tool_name": "mcp__playwright__browser_tabs",
+      "expected_event_source": "mcp:playwright",
+      "expected_result_status": "degraded"
+    },
+    {
+      "id": "exp-built-in-browser",
+      "host": "codex",
+      "surface": "built-in-browser",
+      "input_kind": "mechanical_availability_probe",
+      "expected_tool_name": "browser-client.mjs setupAtlasRuntime",
+      "expected_event_source": "browser-client:iab",
+      "expected_result_status": "unavailable"
+    },
+    {
+      "id": "exp-chrome-cdp",
+      "host": "codex",
+      "surface": "chrome-cdp",
+      "input_kind": "mechanical_availability_probe",
+      "expected_tool_name": "mcp__chrome_devtools_tileborn__list_pages",
+      "expected_event_source": "mcp:chrome_devtools_tileborn",
+      "expected_result_status": "unavailable"
+    },
+    {
+      "id": "exp-chrome-browser-client",
+      "host": "codex",
+      "surface": "chrome-browser-client",
+      "input_kind": "controlled_probe",
+      "expected_tool_name": "browser-client.mjs chrome Runtime.evaluate",
+      "expected_event_source": "browser-client:chrome",
+      "expected_result_status": "available"
+    },
+    {
+      "id": "exp-codex-hook-events",
+      "host": "codex",
+      "surface": "codex-hook-events",
+      "input_kind": "unprobed_placeholder",
+      "expected_tool_name": "codex hook event stream",
+      "expected_event_source": "codex:hook",
+      "expected_result_status": "unavailable"
+    },
+    {
+      "id": "exp-computer-use",
+      "host": "codex",
+      "surface": "computer-use",
+      "input_kind": "mechanical_availability_probe",
+      "expected_tool_name": "computer-use-client setupComputerUseRuntime sky.list_apps",
+      "expected_event_source": "computer-use-client:sky",
+      "expected_result_status": "permission_denied"
+    },
+    {
+      "id": "exp-claude-code-host-capture",
+      "host": "claude",
+      "surface": "claude-code",
+      "input_kind": "mechanical_availability_probe",
+      "expected_tool_name": "$HOME/.local/bin/claude --version",
+      "expected_event_source": "process:claude-code",
+      "expected_result_status": "unavailable"
+    },
+    {
+      "id": "exp-cursor-agent-host-capture",
+      "host": "cursor",
+      "surface": "cursor-agent",
+      "input_kind": "mechanical_availability_probe",
+      "expected_tool_name": "$HOME/.local/bin/cursor-agent --version",
+      "expected_event_source": "process:cursor-agent",
+      "expected_result_status": "unavailable"
+    },
+    {
+      "id": "exp-pi-cli-host-capture",
+      "host": "pi",
+      "surface": "pi-cli",
+      "input_kind": "mechanical_availability_probe",
+      "expected_tool_name": "$HOME/.local/bin/pi --version",
+      "expected_event_source": "process:pi-cli",
+      "expected_result_status": "unavailable"
+    }
+  ]
+}

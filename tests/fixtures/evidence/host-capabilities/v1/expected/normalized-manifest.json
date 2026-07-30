@@ -1,0 +1,873 @@
+{
+  "schema_version": "planr.host_capability_expected_manifest.v1",
+  "payload_version": "host-capability-expected/1.0.0",
+  "suite_id": "codex-host-capability-phase1",
+  "capability_instances": [
+    {
+      "raw_capture_id": "exp-terminal",
+      "claim_source": "observed_capture",
+      "trusted_adapter_enabled": false,
+      "capability_instance": {
+        "id": "host-exp-terminal",
+        "schema_version": "evidence.contract.v1",
+        "manifest_id": "host-terminal-manifest",
+        "manifest_digest": "sha256:5a513b1fa1043298b4e6f4e3d27bccf65c79af1d607a770727d9521138ed9513",
+        "host": "codex",
+        "surface": "terminal",
+        "host_version": "missing",
+        "adapter_version": "planr-host-experiment-harness/1.0.0",
+        "environment": {
+          "kind": "phase1-codex",
+          "id": "env-exp-terminal",
+          "digest": "sha256:e74fef18cfc9ae8f9cba0f864046a223aacb4e0b2560fc5de3a8b60dedb1b069"
+        },
+        "permissions": {
+          "network": "not_used",
+          "filesystem": "workspace",
+          "environment": "not_captured",
+          "secrets": "not_requested"
+        },
+        "availability": {
+          "status": "available",
+          "reason": "terminal exec produced a final event and verified stdout artifact"
+        },
+        "probe_result": {
+          "probe_execution_id": "probe-exp-terminal",
+          "outcome": "passed",
+          "observed_at": "2026-07-29T18:38:17Z",
+          "checks": [
+            {
+              "name": "final-event",
+              "outcome": "passed",
+              "detail": "exact final event and artifact digest replayed"
+            }
+          ]
+        },
+        "observed_payload_contract": {
+          "schema_ref": "schemas/host-capability-observed-raw.schema.json",
+          "observation_types": [
+            "host.codex.terminal"
+          ]
+        },
+        "limitations": [
+          "shell PTY internals and private agent transcript are intentionally not captured"
+        ],
+        "captured_at": "2026-07-29T18:38:17Z"
+      },
+      "manifest_ref": {
+        "path": "manifests/phase1-host-capability-manifests.json",
+        "digest": "sha256:5a513b1fa1043298b4e6f4e3d27bccf65c79af1d607a770727d9521138ed9513"
+      },
+      "provenance_ref": {
+        "path": "provenance/host-capability-captures.json",
+        "digest": "sha256:3c1cd2f4322c22f0e41c82983728b7b3e3cf774d49c46b1d3ffecb6fd184c483"
+      }
+    },
+    {
+      "raw_capture_id": "exp-local-function",
+      "claim_source": "observed_capture",
+      "trusted_adapter_enabled": false,
+      "capability_instance": {
+        "id": "host-exp-local-function",
+        "schema_version": "evidence.contract.v1",
+        "manifest_id": "host-local-function-manifest",
+        "manifest_digest": "sha256:5a513b1fa1043298b4e6f4e3d27bccf65c79af1d607a770727d9521138ed9513",
+        "host": "codex",
+        "surface": "local-function",
+        "host_version": "missing",
+        "adapter_version": "planr-host-experiment-harness/1.0.0",
+        "environment": {
+          "kind": "phase1-codex",
+          "id": "env-exp-local-function",
+          "digest": "sha256:0649e709c69000eb0155a2741308b5f8051f433131800e64a670420b2afa9a34"
+        },
+        "permissions": {
+          "network": "not_used",
+          "filesystem": "workspace-read-observed",
+          "environment": "mcp-node-repl session",
+          "secrets": "not_requested"
+        },
+        "availability": {
+          "status": "available",
+          "reason": "Node REPL MCP returned content,isError and metadata key presence"
+        },
+        "probe_result": {
+          "probe_execution_id": "probe-exp-local-function",
+          "outcome": "passed",
+          "observed_at": "2026-07-29T18:38:17Z",
+          "checks": [
+            {
+              "name": "final-event",
+              "outcome": "passed",
+              "detail": "MCP local function returned a final text block without storing metadata values"
+            }
+          ]
+        },
+        "observed_payload_contract": {
+          "schema_ref": "schemas/host-capability-observed-raw.schema.json",
+          "observation_types": [
+            "host.codex.local_function"
+          ]
+        },
+        "limitations": [
+          "requestMeta values are not stored; only the observed key names are retained"
+        ],
+        "captured_at": "2026-07-29T18:38:17Z"
+      },
+      "manifest_ref": {
+        "path": "manifests/phase1-host-capability-manifests.json",
+        "digest": "sha256:5a513b1fa1043298b4e6f4e3d27bccf65c79af1d607a770727d9521138ed9513"
+      },
+      "provenance_ref": {
+        "path": "provenance/host-capability-captures.json",
+        "digest": "sha256:3c1cd2f4322c22f0e41c82983728b7b3e3cf774d49c46b1d3ffecb6fd184c483"
+      }
+    },
+    {
+      "raw_capture_id": "exp-codex-app-server",
+      "claim_source": "capture_mode_placeholder",
+      "trusted_adapter_enabled": false,
+      "capability_instance": {
+        "id": "host-exp-codex-app-server",
+        "schema_version": "evidence.contract.v1",
+        "manifest_id": "host-codex-app-server-manifest",
+        "manifest_digest": "sha256:5a513b1fa1043298b4e6f4e3d27bccf65c79af1d607a770727d9521138ed9513",
+        "host": "codex",
+        "surface": "codex-app-server",
+        "host_version": "missing",
+        "adapter_version": "planr-host-experiment-harness/1.0.0",
+        "environment": {
+          "kind": "phase1-codex",
+          "id": "env-exp-codex-app-server",
+          "digest": "sha256:b50eaaba7737b6d31de9ee8da741d0fb5a6047962cc412be12d935b507971c21"
+        },
+        "permissions": {
+          "network": "not_probed",
+          "filesystem": "not_probed",
+          "environment": "not invoked in deterministic replay",
+          "secrets": "not_requested"
+        },
+        "availability": {
+          "status": "unavailable",
+          "reason": "app-server payload was not observed"
+        },
+        "probe_result": {
+          "probe_execution_id": "probe-exp-codex-app-server",
+          "outcome": "unavailable",
+          "observed_at": "2026-07-29T18:38:17Z",
+          "checks": [
+            {
+              "name": "no-doc-only-support",
+              "outcome": "unavailable",
+              "detail": "documentation defines the target but does not prove availability"
+            }
+          ]
+        },
+        "observed_payload_contract": {
+          "schema_ref": "schemas/host-capability-observed-raw.schema.json",
+          "observation_types": [
+            "host.codex.app_server"
+          ]
+        },
+        "limitations": [
+          "capture mode emitted an explicit placeholder, not an observed support claim"
+        ],
+        "captured_at": "2026-07-29T18:38:17Z"
+      },
+      "manifest_ref": {
+        "path": "manifests/phase1-host-capability-manifests.json",
+        "digest": "sha256:5a513b1fa1043298b4e6f4e3d27bccf65c79af1d607a770727d9521138ed9513"
+      },
+      "provenance_ref": {
+        "path": "provenance/host-capability-captures.json",
+        "digest": "sha256:3c1cd2f4322c22f0e41c82983728b7b3e3cf774d49c46b1d3ffecb6fd184c483"
+      }
+    },
+    {
+      "raw_capture_id": "exp-codex-exec",
+      "claim_source": "capture_mode_placeholder",
+      "trusted_adapter_enabled": false,
+      "capability_instance": {
+        "id": "host-exp-codex-exec",
+        "schema_version": "evidence.contract.v1",
+        "manifest_id": "host-codex-exec-manifest",
+        "manifest_digest": "sha256:5a513b1fa1043298b4e6f4e3d27bccf65c79af1d607a770727d9521138ed9513",
+        "host": "codex",
+        "surface": "codex-exec",
+        "host_version": "missing",
+        "adapter_version": "planr-host-experiment-harness/1.0.0",
+        "environment": {
+          "kind": "phase1-codex",
+          "id": "env-exp-codex-exec",
+          "digest": "sha256:97c495278205de5d4a594f4cba2c71d206595064aeab40470742edbc5d96ec4c"
+        },
+        "permissions": {
+          "network": "not_probed",
+          "filesystem": "not_probed",
+          "environment": "not invoked in deterministic replay",
+          "secrets": "not_requested"
+        },
+        "availability": {
+          "status": "unavailable",
+          "reason": "codex exec event stream was not observed"
+        },
+        "probe_result": {
+          "probe_execution_id": "probe-exp-codex-exec",
+          "outcome": "unavailable",
+          "observed_at": "2026-07-29T18:38:17Z",
+          "checks": [
+            {
+              "name": "no-doc-only-support",
+              "outcome": "unavailable",
+              "detail": "non-interactive mode remains an experiment plan until captured"
+            }
+          ]
+        },
+        "observed_payload_contract": {
+          "schema_ref": "schemas/host-capability-observed-raw.schema.json",
+          "observation_types": [
+            "host.codex.exec"
+          ]
+        },
+        "limitations": [
+          "capture mode emitted an explicit placeholder, not an observed support claim"
+        ],
+        "captured_at": "2026-07-29T18:38:17Z"
+      },
+      "manifest_ref": {
+        "path": "manifests/phase1-host-capability-manifests.json",
+        "digest": "sha256:5a513b1fa1043298b4e6f4e3d27bccf65c79af1d607a770727d9521138ed9513"
+      },
+      "provenance_ref": {
+        "path": "provenance/host-capability-captures.json",
+        "digest": "sha256:3c1cd2f4322c22f0e41c82983728b7b3e3cf774d49c46b1d3ffecb6fd184c483"
+      }
+    },
+    {
+      "raw_capture_id": "exp-codex-mcp-server",
+      "claim_source": "capture_mode_placeholder",
+      "trusted_adapter_enabled": false,
+      "capability_instance": {
+        "id": "host-exp-codex-mcp-server",
+        "schema_version": "evidence.contract.v1",
+        "manifest_id": "host-codex-mcp-server-manifest",
+        "manifest_digest": "sha256:5a513b1fa1043298b4e6f4e3d27bccf65c79af1d607a770727d9521138ed9513",
+        "host": "codex",
+        "surface": "codex-mcp-server",
+        "host_version": "missing",
+        "adapter_version": "planr-host-experiment-harness/1.0.0",
+        "environment": {
+          "kind": "phase1-codex",
+          "id": "env-exp-codex-mcp-server",
+          "digest": "sha256:20ec7ad50240fe0a455dd8dd2cb8c2c1a2551326c9d065bd508feffb0fe07fa9"
+        },
+        "permissions": {
+          "network": "not_probed",
+          "filesystem": "not_probed",
+          "environment": "not invoked in deterministic replay",
+          "secrets": "not_requested"
+        },
+        "availability": {
+          "status": "unavailable",
+          "reason": "Codex MCP server payload was not observed"
+        },
+        "probe_result": {
+          "probe_execution_id": "probe-exp-codex-mcp-server",
+          "outcome": "unavailable",
+          "observed_at": "2026-07-29T18:38:17Z",
+          "checks": [
+            {
+              "name": "no-doc-only-support",
+              "outcome": "unavailable",
+              "detail": "MCP server support remains unverified until tools/list and tool result payloads replay"
+            }
+          ]
+        },
+        "observed_payload_contract": {
+          "schema_ref": "schemas/host-capability-observed-raw.schema.json",
+          "observation_types": [
+            "host.codex.mcp_server"
+          ]
+        },
+        "limitations": [
+          "capture mode emitted an explicit placeholder, not an observed support claim"
+        ],
+        "captured_at": "2026-07-29T18:38:17Z"
+      },
+      "manifest_ref": {
+        "path": "manifests/phase1-host-capability-manifests.json",
+        "digest": "sha256:5a513b1fa1043298b4e6f4e3d27bccf65c79af1d607a770727d9521138ed9513"
+      },
+      "provenance_ref": {
+        "path": "provenance/host-capability-captures.json",
+        "digest": "sha256:3c1cd2f4322c22f0e41c82983728b7b3e3cf774d49c46b1d3ffecb6fd184c483"
+      }
+    },
+    {
+      "raw_capture_id": "exp-mcp-browser",
+      "claim_source": "observed_capture",
+      "trusted_adapter_enabled": false,
+      "capability_instance": {
+        "id": "host-exp-mcp-browser",
+        "schema_version": "evidence.contract.v1",
+        "manifest_id": "host-mcp-browser-manifest",
+        "manifest_digest": "sha256:5a513b1fa1043298b4e6f4e3d27bccf65c79af1d607a770727d9521138ed9513",
+        "host": "codex",
+        "surface": "mcp-browser",
+        "host_version": "missing",
+        "adapter_version": "planr-host-experiment-harness/1.0.0",
+        "environment": {
+          "kind": "phase1-codex",
+          "id": "env-exp-mcp-browser",
+          "digest": "sha256:5b0c08c85af8dc868a93598ed1f50bc13971ceb62f97f62bd4435e307136e50d"
+        },
+        "permissions": {
+          "network": "not_probed",
+          "filesystem": "not_probed",
+          "environment": "tool is callable but the browser profile is locked by another instance",
+          "secrets": "not_requested"
+        },
+        "availability": {
+          "status": "degraded",
+          "reason": "Playwright MCP is callable but did not produce rendered-browser evidence"
+        },
+        "probe_result": {
+          "probe_execution_id": "probe-exp-mcp-browser",
+          "outcome": "inconclusive",
+          "observed_at": "2026-07-29T18:38:17Z",
+          "checks": [
+            {
+              "name": "callable-tool",
+              "outcome": "inconclusive",
+              "detail": "tool returned text-only browser lock error"
+            }
+          ]
+        },
+        "observed_payload_contract": {
+          "schema_ref": "schemas/host-capability-observed-raw.schema.json",
+          "observation_types": [
+            "host.codex.mcp_browser"
+          ]
+        },
+        "limitations": [
+          "Playwright MCP tool is callable but returned a text-only lock error in this session"
+        ],
+        "captured_at": "2026-07-29T18:38:17Z"
+      },
+      "manifest_ref": {
+        "path": "manifests/phase1-host-capability-manifests.json",
+        "digest": "sha256:5a513b1fa1043298b4e6f4e3d27bccf65c79af1d607a770727d9521138ed9513"
+      },
+      "provenance_ref": {
+        "path": "provenance/host-capability-captures.json",
+        "digest": "sha256:3c1cd2f4322c22f0e41c82983728b7b3e3cf774d49c46b1d3ffecb6fd184c483"
+      }
+    },
+    {
+      "raw_capture_id": "exp-built-in-browser",
+      "claim_source": "mechanical_unavailable_probe",
+      "trusted_adapter_enabled": false,
+      "capability_instance": {
+        "id": "host-exp-built-in-browser",
+        "schema_version": "evidence.contract.v1",
+        "manifest_id": "host-built-in-browser-manifest",
+        "manifest_digest": "sha256:5a513b1fa1043298b4e6f4e3d27bccf65c79af1d607a770727d9521138ed9513",
+        "host": "codex",
+        "surface": "built-in-browser",
+        "host_version": "missing",
+        "adapter_version": "planr-host-experiment-harness/1.0.0",
+        "environment": {
+          "kind": "phase1-codex",
+          "id": "env-exp-built-in-browser",
+          "digest": "sha256:63a9fa76c659a7b7715a9bcba6bccf188667f3487cdb33e35c9c368af6e707ae"
+        },
+        "permissions": {
+          "network": "not_probed",
+          "filesystem": "not_probed",
+          "environment": "browser-client iab setup failed before any browser event capture",
+          "secrets": "not_requested"
+        },
+        "availability": {
+          "status": "unavailable",
+          "reason": "browser-client iab setup failed with runtime incompatibility"
+        },
+        "probe_result": {
+          "probe_execution_id": "probe-exp-built-in-browser",
+          "outcome": "unavailable",
+          "observed_at": "2026-07-29T18:38:17Z",
+          "checks": [
+            {
+              "name": "setup-runtime",
+              "outcome": "unavailable",
+              "detail": "setupAtlasRuntime failed with Cannot redefine property: process"
+            }
+          ]
+        },
+        "observed_payload_contract": {
+          "schema_ref": "schemas/host-capability-observed-raw.schema.json",
+          "observation_types": [
+            "host.codex.built_in_browser"
+          ]
+        },
+        "limitations": [
+          "In-app browser backend failed during setup, so no user-equivalent browser observation is present"
+        ],
+        "captured_at": "2026-07-29T18:38:17Z"
+      },
+      "manifest_ref": {
+        "path": "manifests/phase1-host-capability-manifests.json",
+        "digest": "sha256:5a513b1fa1043298b4e6f4e3d27bccf65c79af1d607a770727d9521138ed9513"
+      },
+      "provenance_ref": {
+        "path": "provenance/host-capability-captures.json",
+        "digest": "sha256:3c1cd2f4322c22f0e41c82983728b7b3e3cf774d49c46b1d3ffecb6fd184c483"
+      }
+    },
+    {
+      "raw_capture_id": "exp-chrome-cdp",
+      "claim_source": "mechanical_unavailable_probe",
+      "trusted_adapter_enabled": false,
+      "capability_instance": {
+        "id": "host-exp-chrome-cdp",
+        "schema_version": "evidence.contract.v1",
+        "manifest_id": "host-chrome-cdp-manifest",
+        "manifest_digest": "sha256:5a513b1fa1043298b4e6f4e3d27bccf65c79af1d607a770727d9521138ed9513",
+        "host": "codex",
+        "surface": "chrome-cdp",
+        "host_version": "missing",
+        "adapter_version": "planr-host-experiment-harness/1.0.0",
+        "environment": {
+          "kind": "phase1-codex",
+          "id": "env-exp-chrome-cdp",
+          "digest": "sha256:66af8b2506bf3c190daee4322e9a5ced1f3128777a5c50756b176dfe70943460"
+        },
+        "permissions": {
+          "network": "not_probed",
+          "filesystem": "not_probed",
+          "environment": "tool returned isError true because Chrome websocket URL was unavailable",
+          "secrets": "not_requested"
+        },
+        "availability": {
+          "status": "unavailable",
+          "reason": "Chrome DevTools MCP could not connect to a browser websocket"
+        },
+        "probe_result": {
+          "probe_execution_id": "probe-exp-chrome-cdp",
+          "outcome": "unavailable",
+          "observed_at": "2026-07-29T18:38:17Z",
+          "checks": [
+            {
+              "name": "cdp-connection",
+              "outcome": "unavailable",
+              "detail": "list_pages returned a redacted connection failure"
+            }
+          ]
+        },
+        "observed_payload_contract": {
+          "schema_ref": "schemas/host-capability-observed-raw.schema.json",
+          "observation_types": [
+            "host.codex.chrome_cdp"
+          ]
+        },
+        "limitations": [
+          "A future CDP adapter must prove target binding and rendered state from observed protocol events"
+        ],
+        "captured_at": "2026-07-29T18:38:17Z"
+      },
+      "manifest_ref": {
+        "path": "manifests/phase1-host-capability-manifests.json",
+        "digest": "sha256:5a513b1fa1043298b4e6f4e3d27bccf65c79af1d607a770727d9521138ed9513"
+      },
+      "provenance_ref": {
+        "path": "provenance/host-capability-captures.json",
+        "digest": "sha256:3c1cd2f4322c22f0e41c82983728b7b3e3cf774d49c46b1d3ffecb6fd184c483"
+      }
+    },
+    {
+      "raw_capture_id": "exp-codex-hook-events",
+      "claim_source": "capture_mode_placeholder",
+      "trusted_adapter_enabled": false,
+      "capability_instance": {
+        "id": "host-exp-codex-hook-events",
+        "schema_version": "evidence.contract.v1",
+        "manifest_id": "host-codex-hook-events-manifest",
+        "manifest_digest": "sha256:5a513b1fa1043298b4e6f4e3d27bccf65c79af1d607a770727d9521138ed9513",
+        "host": "codex",
+        "surface": "codex-hook-events",
+        "host_version": "missing",
+        "adapter_version": "planr-host-experiment-harness/1.0.0",
+        "environment": {
+          "kind": "phase1-codex",
+          "id": "env-exp-codex-hook-events",
+          "digest": "sha256:2955978300dc6b3c73cd319f3879da4d90f27df45450186fccf635c199e02a66"
+        },
+        "permissions": {
+          "network": "not_probed",
+          "filesystem": "not_probed",
+          "environment": "no hook payload stream is delivered to this developer harness",
+          "secrets": "not_requested"
+        },
+        "availability": {
+          "status": "unavailable",
+          "reason": "no live hook event payload was observed"
+        },
+        "probe_result": {
+          "probe_execution_id": "probe-exp-codex-hook-events",
+          "outcome": "unavailable",
+          "observed_at": "2026-07-29T18:38:17Z",
+          "checks": [
+            {
+              "name": "hook-event-stream",
+              "outcome": "unavailable",
+              "detail": "hook payload stream is absent from this harness"
+            }
+          ]
+        },
+        "observed_payload_contract": {
+          "schema_ref": "schemas/host-capability-observed-raw.schema.json",
+          "observation_types": [
+            "host.codex.hook_events"
+          ]
+        },
+        "limitations": [
+          "capture mode emitted an explicit placeholder, not an observed support claim"
+        ],
+        "captured_at": "2026-07-29T18:38:17Z"
+      },
+      "manifest_ref": {
+        "path": "manifests/phase1-host-capability-manifests.json",
+        "digest": "sha256:5a513b1fa1043298b4e6f4e3d27bccf65c79af1d607a770727d9521138ed9513"
+      },
+      "provenance_ref": {
+        "path": "provenance/host-capability-captures.json",
+        "digest": "sha256:3c1cd2f4322c22f0e41c82983728b7b3e3cf774d49c46b1d3ffecb6fd184c483"
+      }
+    },
+    {
+      "raw_capture_id": "exp-chrome-browser-client",
+      "claim_source": "observed_capture",
+      "trusted_adapter_enabled": false,
+      "capability_instance": {
+        "id": "host-exp-chrome-browser-client",
+        "schema_version": "evidence.contract.v1",
+        "manifest_id": "host-chrome-browser-client-manifest",
+        "manifest_digest": "sha256:5a513b1fa1043298b4e6f4e3d27bccf65c79af1d607a770727d9521138ed9513",
+        "host": "codex",
+        "surface": "chrome-browser-client",
+        "host_version": "missing",
+        "adapter_version": "planr-host-experiment-harness/1.0.0",
+        "environment": {
+          "kind": "phase1-codex",
+          "id": "env-exp-chrome-browser-client",
+          "digest": "sha256:fa620cec23da71696b705904132e6942a46027d22073d6790563974a0e495cf0"
+        },
+        "permissions": {
+          "network": "https://example.com/",
+          "filesystem": "not_used",
+          "environment": "Chrome extension browser client",
+          "secrets": "not_requested"
+        },
+        "availability": {
+          "status": "available",
+          "reason": "native Chrome browser-client produced CDP Runtime.evaluate and DOM observations; screenshot evidence was unavailable in the persisted artifact"
+        },
+        "probe_result": {
+          "probe_execution_id": "probe-exp-chrome-browser-client",
+          "outcome": "passed",
+          "observed_at": "2026-07-29T18:38:17Z",
+          "checks": [
+            {
+              "name": "rendered-dom",
+              "outcome": "passed",
+              "detail": "Example Domain heading was visible exactly once"
+            },
+            {
+              "name": "event-stream",
+              "outcome": "inconclusive",
+              "detail": "readEvents returned no matching Page.loadEventFired or Runtime.consoleAPICalled events"
+            }
+          ]
+        },
+        "observed_payload_contract": {
+          "schema_ref": "schemas/host-capability-observed-raw.schema.json",
+          "observation_types": [
+            "host.codex.chrome_browser_client"
+          ]
+        },
+        "limitations": [
+          "CDP readEvents returned cursor 27 with no matching Page.loadEventFired or Runtime.consoleAPICalled events"
+        ],
+        "captured_at": "2026-07-29T18:38:17Z"
+      },
+      "manifest_ref": {
+        "path": "manifests/phase1-host-capability-manifests.json",
+        "digest": "sha256:5a513b1fa1043298b4e6f4e3d27bccf65c79af1d607a770727d9521138ed9513"
+      },
+      "provenance_ref": {
+        "path": "provenance/host-capability-captures.json",
+        "digest": "sha256:3c1cd2f4322c22f0e41c82983728b7b3e3cf774d49c46b1d3ffecb6fd184c483"
+      }
+    },
+    {
+      "raw_capture_id": "exp-computer-use",
+      "claim_source": "mechanical_unavailable_probe",
+      "trusted_adapter_enabled": false,
+      "capability_instance": {
+        "id": "host-exp-computer-use",
+        "schema_version": "evidence.contract.v1",
+        "manifest_id": "host-computer-use-manifest",
+        "manifest_digest": "sha256:5a513b1fa1043298b4e6f4e3d27bccf65c79af1d607a770727d9521138ed9513",
+        "host": "codex",
+        "surface": "computer-use",
+        "host_version": "missing",
+        "adapter_version": "planr-host-experiment-harness/1.0.0",
+        "environment": {
+          "kind": "phase1-codex",
+          "id": "env-exp-computer-use",
+          "digest": "sha256:e923b9dea58a8736777b75e2c67e5d51ee6a515a35debbd393b97a583a3a4b2a"
+        },
+        "permissions": {
+          "network": "not_probed",
+          "filesystem": "not_probed",
+          "environment": "Mac was locked and automatic unlock failed before app inventory could be read",
+          "secrets": "not_requested"
+        },
+        "availability": {
+          "status": "permission_denied",
+          "reason": "Computer Use wrapper was callable but environment denied read-only app inventory"
+        },
+        "probe_result": {
+          "probe_execution_id": "probe-exp-computer-use",
+          "outcome": "unavailable",
+          "observed_at": "2026-07-29T18:38:17Z",
+          "checks": [
+            {
+              "name": "read-only-app-inventory",
+              "outcome": "unavailable",
+              "detail": "sky.list_apps failed because the Mac was locked and automatic unlock failed"
+            }
+          ]
+        },
+        "observed_payload_contract": {
+          "schema_ref": "schemas/host-capability-observed-raw.schema.json",
+          "observation_types": [
+            "host.codex.computer_use"
+          ]
+        },
+        "limitations": [
+          "Computer Use wrapper is present, but the environment denied read-only app inventory while the Mac was locked"
+        ],
+        "captured_at": "2026-07-29T18:38:17Z"
+      },
+      "manifest_ref": {
+        "path": "manifests/phase1-host-capability-manifests.json",
+        "digest": "sha256:5a513b1fa1043298b4e6f4e3d27bccf65c79af1d607a770727d9521138ed9513"
+      },
+      "provenance_ref": {
+        "path": "provenance/host-capability-captures.json",
+        "digest": "sha256:3c1cd2f4322c22f0e41c82983728b7b3e3cf774d49c46b1d3ffecb6fd184c483"
+      }
+    },
+    {
+      "raw_capture_id": "exp-claude-code-host-capture",
+      "claim_source": "mechanical_unavailable_probe",
+      "trusted_adapter_enabled": false,
+      "manifest_ref": {
+        "path": "manifests/phase1-host-capability-manifests.json",
+        "digest": "sha256:5a513b1fa1043298b4e6f4e3d27bccf65c79af1d607a770727d9521138ed9513"
+      },
+      "provenance_ref": {
+        "path": "provenance/host-capability-captures.json",
+        "digest": "sha256:3c1cd2f4322c22f0e41c82983728b7b3e3cf774d49c46b1d3ffecb6fd184c483"
+      },
+      "capability_instance": {
+        "id": "host-exp-claude-code-host-capture",
+        "schema_version": "evidence.contract.v1",
+        "manifest_id": "host-claude-code-host-capture-manifest",
+        "manifest_digest": "sha256:5a513b1fa1043298b4e6f4e3d27bccf65c79af1d607a770727d9521138ed9513",
+        "host": "claude",
+        "surface": "claude-code",
+        "host_version": "2.1.133",
+        "adapter_version": "planr-host-experiment-harness/1.0.0",
+        "environment": {
+          "kind": "capture-mode-darwin",
+          "id": "env-exp-claude-code-host-capture",
+          "digest": "sha256:8bc876f062ad021bf6f743863a2a489df53ac49f8880175cd1456dfaae96c07b"
+        },
+        "permissions": {
+          "network": "not_used",
+          "filesystem": "read_only_binary_version_probe",
+          "environment": "version probe only; no host session launched",
+          "secrets": "not_requested"
+        },
+        "availability": {
+          "status": "unavailable",
+          "reason": "claude claude-code mechanical version probe returned 2.1.133, but no host capture payload/event contract was observed"
+        },
+        "probe_result": {
+          "probe_execution_id": "probe-exp-claude-code-host-capture",
+          "outcome": "unavailable",
+          "observed_at": "2026-07-30T08:17:48Z",
+          "checks": [
+            {
+              "name": "final-event",
+              "outcome": "unavailable",
+              "detail": "final event and artifact contract validated by replay"
+            }
+          ]
+        },
+        "observed_payload_contract": {
+          "schema_ref": "schemas/host-capability-observed-raw.schema.json",
+          "observation_types": [
+            "host.claude.claude_code"
+          ]
+        },
+        "limitations": [
+          "installed binary version does not prove host capture payload support",
+          "no paid/network host run was performed"
+        ],
+        "captured_at": "2026-07-30T08:17:48Z"
+      }
+    },
+    {
+      "raw_capture_id": "exp-cursor-agent-host-capture",
+      "claim_source": "mechanical_unavailable_probe",
+      "trusted_adapter_enabled": false,
+      "manifest_ref": {
+        "path": "manifests/phase1-host-capability-manifests.json",
+        "digest": "sha256:5a513b1fa1043298b4e6f4e3d27bccf65c79af1d607a770727d9521138ed9513"
+      },
+      "provenance_ref": {
+        "path": "provenance/host-capability-captures.json",
+        "digest": "sha256:3c1cd2f4322c22f0e41c82983728b7b3e3cf774d49c46b1d3ffecb6fd184c483"
+      },
+      "capability_instance": {
+        "id": "host-exp-cursor-agent-host-capture",
+        "schema_version": "evidence.contract.v1",
+        "manifest_id": "host-cursor-agent-host-capture-manifest",
+        "manifest_digest": "sha256:5a513b1fa1043298b4e6f4e3d27bccf65c79af1d607a770727d9521138ed9513",
+        "host": "cursor",
+        "surface": "cursor-agent",
+        "host_version": "2026.07.17-3e2a980",
+        "adapter_version": "planr-host-experiment-harness/1.0.0",
+        "environment": {
+          "kind": "capture-mode-darwin",
+          "id": "env-exp-cursor-agent-host-capture",
+          "digest": "sha256:23c1c08c753f54a808c586af8d650db57447a61b0f239dfc875597ddc65e9fa4"
+        },
+        "permissions": {
+          "network": "not_used",
+          "filesystem": "read_only_binary_version_probe",
+          "environment": "version probe only; no host session launched",
+          "secrets": "not_requested"
+        },
+        "availability": {
+          "status": "unavailable",
+          "reason": "cursor cursor-agent mechanical version probe returned 2026.07.17-3e2a980, but no host capture payload/event contract was observed"
+        },
+        "probe_result": {
+          "probe_execution_id": "probe-exp-cursor-agent-host-capture",
+          "outcome": "unavailable",
+          "observed_at": "2026-07-30T08:17:48Z",
+          "checks": [
+            {
+              "name": "final-event",
+              "outcome": "unavailable",
+              "detail": "final event and artifact contract validated by replay"
+            }
+          ]
+        },
+        "observed_payload_contract": {
+          "schema_ref": "schemas/host-capability-observed-raw.schema.json",
+          "observation_types": [
+            "host.cursor.cursor_agent"
+          ]
+        },
+        "limitations": [
+          "installed binary version does not prove host capture payload support",
+          "no paid/network host run was performed"
+        ],
+        "captured_at": "2026-07-30T08:17:48Z"
+      }
+    },
+    {
+      "raw_capture_id": "exp-pi-cli-host-capture",
+      "claim_source": "mechanical_unavailable_probe",
+      "trusted_adapter_enabled": false,
+      "manifest_ref": {
+        "path": "manifests/phase1-host-capability-manifests.json",
+        "digest": "sha256:5a513b1fa1043298b4e6f4e3d27bccf65c79af1d607a770727d9521138ed9513"
+      },
+      "provenance_ref": {
+        "path": "provenance/host-capability-captures.json",
+        "digest": "sha256:3c1cd2f4322c22f0e41c82983728b7b3e3cf774d49c46b1d3ffecb6fd184c483"
+      },
+      "capability_instance": {
+        "id": "host-exp-pi-cli-host-capture",
+        "schema_version": "evidence.contract.v1",
+        "manifest_id": "host-pi-cli-host-capture-manifest",
+        "manifest_digest": "sha256:5a513b1fa1043298b4e6f4e3d27bccf65c79af1d607a770727d9521138ed9513",
+        "host": "pi",
+        "surface": "pi-cli",
+        "host_version": "0.82.1",
+        "adapter_version": "planr-host-experiment-harness/1.0.0",
+        "environment": {
+          "kind": "capture-mode-darwin",
+          "id": "env-exp-pi-cli-host-capture",
+          "digest": "sha256:3a9113eec76801986ad54362f917645f7e724da2ed9090e44d50c77d256776ce"
+        },
+        "permissions": {
+          "network": "not_used",
+          "filesystem": "read_only_binary_version_probe",
+          "environment": "version probe only; no host session launched",
+          "secrets": "not_requested"
+        },
+        "availability": {
+          "status": "unavailable",
+          "reason": "pi pi-cli mechanical version probe returned 0.82.1, but no host capture payload/event contract was observed"
+        },
+        "probe_result": {
+          "probe_execution_id": "probe-exp-pi-cli-host-capture",
+          "outcome": "unavailable",
+          "observed_at": "2026-07-30T08:17:48Z",
+          "checks": [
+            {
+              "name": "final-event",
+              "outcome": "unavailable",
+              "detail": "final event and artifact contract validated by replay"
+            }
+          ]
+        },
+        "observed_payload_contract": {
+          "schema_ref": "schemas/host-capability-observed-raw.schema.json",
+          "observation_types": [
+            "host.pi.pi_cli"
+          ]
+        },
+        "limitations": [
+          "installed binary version does not prove host capture payload support",
+          "no paid/network host run was performed"
+        ],
+        "captured_at": "2026-07-30T08:17:48Z"
+      }
+    }
+  ],
+  "schema_refs": {
+    "raw": {
+      "path": "schemas/host-capability-observed-raw.schema.json",
+      "digest": "sha256:62af9c2d7402090ac908cd4fdb1fc7873bb0425ba9c10c91326296ed46ab2f60"
+    },
+    "expected": {
+      "path": "schemas/host-capability-expected-manifest.schema.json",
+      "digest": "sha256:c6544423eff39ca8004ec9a241294c83b9875200822b3b574581d3988a8368b5"
+    },
+    "provenance": {
+      "path": "schemas/host-capability-provenance.schema.json",
+      "digest": "sha256:a0158fddce49ad15f708b1a1149be878be576bf7abae7757d26686e491f185a1"
+    }
+  },
+  "provenance_ref": {
+    "path": "provenance/host-capability-captures.json",
+    "digest": "sha256:3c1cd2f4322c22f0e41c82983728b7b3e3cf774d49c46b1d3ffecb6fd184c483"
+  }
+}

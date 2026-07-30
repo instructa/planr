@@ -1,0 +1,68 @@
+{
+  "schema_version": "planr.host_capability_observed_raw.v1",
+  "payload_version": "host-capability-raw/1.0.0",
+  "experiment_id": "exp-codex-app-server",
+  "host_identity": {
+    "host": "codex",
+    "surface": "codex-app-server",
+    "version": "missing",
+    "adapter_version": "planr-host-experiment-harness/1.0.0"
+  },
+  "surface": "codex-app-server",
+  "tool_name": "codex app-server",
+  "event_source": "process:codex",
+  "started_at": "2026-07-29T18:38:17Z",
+  "ended_at": "2026-07-29T18:38:17Z",
+  "input": {
+    "input_kind": "unprobed_placeholder",
+    "probe": "capture-mode placeholder",
+    "replay_mode": "unprobed-placeholder"
+  },
+  "events": [
+    {
+      "sequence": 1,
+      "event_name": "final",
+      "final": true,
+      "payload_version": "host-event/1.0.0",
+      "tool_name": "codex app-server",
+      "event_source": "process:codex",
+      "payload": {
+        "final_status": "unavailable"
+      }
+    }
+  ],
+  "result": {
+    "final_status": "unavailable",
+    "permissions": {
+      "network": "not_probed",
+      "filesystem": "not_probed",
+      "environment": "not invoked in deterministic replay",
+      "secrets": "not_requested"
+    },
+    "sandbox": {
+      "mode": "not_entered",
+      "writable_roots": []
+    },
+    "missing_fields": [
+      "host_version",
+      "json_rpc_stream",
+      "final_agent_event",
+      "artifact_contract"
+    ],
+    "blind_spots": [
+      "capture mode emitted an explicit placeholder, not an observed support claim"
+    ],
+    "artifact_refs": [],
+    "artifact_digests": {},
+    "experiment_plan": [
+      "Run codex app-server on a trusted local host.",
+      "Capture JSON-RPC request, streamed events, final event, permissions, and artifacts.",
+      "Keep capability unavailable until replay validates the raw contract."
+    ],
+    "availability_reason": "app-server payload was not observed"
+  },
+  "provenance_ref": {
+    "path": "provenance/host-capability-captures.json",
+    "digest": "sha256:3c1cd2f4322c22f0e41c82983728b7b3e3cf774d49c46b1d3ffecb6fd184c483"
+  }
+}

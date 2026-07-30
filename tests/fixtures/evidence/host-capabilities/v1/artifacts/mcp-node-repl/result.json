@@ -1,0 +1,1 @@
+{"call_tool_keys":["content","isError"],"isError":false,"content_blocks":["text"],"request_meta_keys":["progressToken","threadId","x-codex-turn-metadata"],"cwd":"$PLANR_REPOSITORY_ROOT"}

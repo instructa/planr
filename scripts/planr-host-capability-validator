@@ -1,0 +1,51 @@
+#!/usr/bin/env sh
+set -eu
+
+script_dir="$(CDPATH=; cd -- "$(dirname -- "$0")" && pwd)"
+package_root="$(CDPATH=; cd -- "$script_dir/.." && pwd)"
+
+detect_target() {
+  os_name="$(uname -s | tr '[:upper:]' '[:lower:]')"
+  arch_name="$(uname -m)"
+
+  case "$os_name" in
+    darwin) os_name="darwin" ;;
+    linux) os_name="linux" ;;
+    *)
+      echo "unsupported OS for planr-host-capability-validator: $os_name" >&2
+      exit 127
+      ;;
+  esac
+
+  case "$arch_name" in
+    arm64 | aarch64) arch_name="arm64" ;;
+    x86_64 | amd64) arch_name="x86_64" ;;
+    *)
+      echo "unsupported architecture for planr-host-capability-validator: $arch_name" >&2
+      exit 127
+      ;;
+  esac
+
+  printf '%s-%s\n' "$os_name" "$arch_name"
+}
+
+target="${PLANR_TARGET:-$(detect_target)}"
+
+for candidate in \
+  "$package_root/npm/native/$target/planr-host-capability-validator" \
+  "$package_root/target/release/planr-host-capability-validator" \
+  "$package_root/target/debug/planr-host-capability-validator"
+do
+  if [ -x "$candidate" ]; then
+    exec "$candidate" "$@"
+  fi
+done
+
+if [ -f "$package_root/Cargo.toml" ]; then
+  cargo build --manifest-path "$package_root/Cargo.toml" --bin planr-host-capability-validator >/dev/null
+  exec "$package_root/target/debug/planr-host-capability-validator" "$@"
+fi
+
+echo "planr-host-capability-validator binary was not found for $target" >&2
+echo "Expected npm/native/$target/planr-host-capability-validator or a local cargo build." >&2
+exit 127
