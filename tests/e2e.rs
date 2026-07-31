@@ -8914,6 +8914,96 @@ fn eval_cli_and_mcp_share_one_surface() {
         legacy_suite_digest
     );
 
+    let legacy_supplied_attempt = json!({
+        "id": "legacy-numeric-supplied-attempt",
+        "attempt_index": 0,
+        "terminal_status": "verified_success",
+        "countable": true,
+        "effective_client": "codex",
+        "effective_provider": "openai",
+        "effective_runtime": "codex-cli",
+        "effective_model": "gpt-5.6-terra",
+        "effective_effort": "low",
+        "effective_profile_id": "eval-terra-low",
+        "profile_config_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "runner_harness_version": "supplied-evidence-v1",
+        "route_observation": verified_eval_route_observation(
+            "codex",
+            "gpt-5.6-terra",
+            "low",
+            "eval-terra-low"
+        ),
+        "outcome": {"status": "verified_success"}
+    });
+    let legacy_supplied_sample = json!({
+        "id": "legacy-numeric-supplied-duration",
+        "repetition_index": 0,
+        "warmup": false,
+        "seed": 1,
+        "measure": "duration_ms",
+        "value": 1,
+        "unit": "ms",
+        "source": "process",
+        "metering_basis": "actual_trusted",
+        "basis_source": "process",
+        "basis_confidence": "verified",
+        "attempt": legacy_supplied_attempt
+    });
+    let legacy_supplied_case = json!({
+        "case": {
+            "case_id": "legacy-case",
+            "scorer_id": "score",
+            "scorer_version": "v1",
+            "fixture_digest": legacy_fixture_digest,
+            "status": "pass",
+            "repetition_count": 1,
+            "warmup_count": 0,
+            "assertions": [{"kind": "quality_pass", "status": "pass"}],
+            "command": {"runner": "supplied-evidence"},
+            "reasons": []
+        },
+        "samples": [legacy_supplied_sample]
+    });
+    let legacy_supplied_input = json!({
+        "id": "legacy-numeric-supplied",
+        "suite_digest": legacy_suite_digest.clone(),
+        "subject": {"kind": "local_authenticated_agent", "revision": "legacy-numeric-supplied", "argv": ["maintainer-eval"]},
+        "runner_version": "eval-runner-v1",
+        "planr_version": env!("CARGO_PKG_VERSION"),
+        "testbed_fingerprint": {},
+        "source_state": {"revision": "legacy-numeric-supplied"},
+        "status": "success",
+        "cases": [legacy_supplied_case]
+    });
+    let legacy_supplied_path = dir.path().join("legacy-supplied.json");
+    fs::write(
+        &legacy_supplied_path,
+        serde_json::to_vec_pretty(&legacy_supplied_input).unwrap(),
+    )
+    .unwrap();
+    let legacy_supplied_output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "run",
+            "--input",
+            legacy_supplied_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let legacy_supplied_value = single_json_document(&legacy_supplied_output);
+    assert_eval_envelope(&legacy_supplied_value, "eval.run", true);
+    assert_eq!(
+        legacy_supplied_value["object"]["run"]["suite_digest"],
+        legacy_suite_digest
+    );
+
     let runner_fixture = dir.path().join("fixture.json");
     let runner_fixture_bytes = br#"{"fixture":true}"#;
     fs::write(&runner_fixture, runner_fixture_bytes).unwrap();

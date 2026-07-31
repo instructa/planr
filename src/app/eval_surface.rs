@@ -256,7 +256,11 @@ impl App {
         if !eval_manifest_digest_matches(&digest, &computed_digest, &manifest)? {
             bail!("eval suite digest mismatch: expected {digest}, computed {computed_digest}");
         }
-        let canonical_manifest = canonical_eval_suite_snapshot_value(&manifest, &digest);
+        let canonical_manifest = if computed_digest == digest {
+            canonical_eval_suite_snapshot_value(&manifest, &digest)
+        } else {
+            canonical_legacy_eval_suite_snapshot_value(&manifest, &digest)
+        };
         validate_scorer_control_admission(&canonical_manifest)?;
         let suite_id = string_field(&input, "suite_id")
             .or_else(|| string_field(&canonical_manifest, "suite_id"))
@@ -2348,6 +2352,14 @@ fn sha256_json_digest_without_top_level_digest(value: &Value) -> Result<String> 
 
 fn canonical_eval_suite_snapshot_value(value: &Value, digest: &str) -> Value {
     let mut normalized = normalized_eval_suite_digest_value(value);
+    if let Some(object) = normalized.as_object_mut() {
+        object.insert("digest".to_string(), Value::String(digest.to_string()));
+    }
+    normalized
+}
+
+fn canonical_legacy_eval_suite_snapshot_value(value: &Value, digest: &str) -> Value {
+    let mut normalized = legacy_sorted_json_value(value);
     if let Some(object) = normalized.as_object_mut() {
         object.insert("digest".to_string(), Value::String(digest.to_string()));
     }
