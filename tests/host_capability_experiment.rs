@@ -384,7 +384,11 @@ fn hex_bytes(hex: &str) -> Vec<u8> {
 }
 
 fn current_utc_second() -> String {
-    OffsetDateTime::now_utc()
+    format_utc_second(OffsetDateTime::now_utc())
+}
+
+fn format_utc_second(value: OffsetDateTime) -> String {
+    value
         .replace_nanosecond(0)
         .unwrap()
         .format(&Rfc3339)
@@ -1436,34 +1440,6 @@ fn host_capability_experiment_validator_boundary_fails_closed() {
     let source_summary: Value = serde_json::from_slice(&source_checkout_replay.stdout).unwrap();
     assert_eq!(source_summary["verdict"], "pass");
 
-    let npm_pack = Command::new("npm")
-        .current_dir(repo_root())
-        .args(["pack", "--dry-run", "--json"])
-        .output()
-        .expect("npm pack dry-run must run");
-    assert!(
-        npm_pack.status.success(),
-        "npm pack dry-run failed: {}",
-        String::from_utf8_lossy(&npm_pack.stderr)
-    );
-    let npm_pack_json: Value = serde_json::from_slice(&npm_pack.stdout).unwrap();
-    let files: BTreeSet<_> = npm_pack_json[0]["files"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|entry| entry["path"].as_str())
-        .collect();
-    for expected in [
-        "scripts/host-capability-experiment.mjs",
-        "scripts/planr-host-capability-validator",
-        "tests/fixtures/evidence/host-capabilities/v1/observed/exp-chrome-browser-client.json",
-    ] {
-        assert!(
-            files.contains(expected),
-            "npm pack dry-run omitted {expected}; files={files:?}"
-        );
-    }
-
     let package_dir = tempdir().unwrap();
     let production_like_default = replay_with_packaged_layout(&fixture_root, package_dir.path());
     assert!(
@@ -1478,7 +1454,7 @@ fn host_capability_experiment_validator_boundary_fails_closed() {
     for expected in [
         "scripts/planr-host-capability-validator",
         "scripts/host-capability-experiment.mjs",
-        "tests/fixtures/evidence/host-capabilities",
+        "scripts/host-capability-runtime",
     ] {
         assert!(
             release_script.contains(expected),
@@ -1487,8 +1463,8 @@ fn host_capability_experiment_validator_boundary_fails_closed() {
     }
     assert!(
         release_script
-            .contains("tar -czf \"../$asset\" planr scripts tests README.md LICENSE.md SHA256SUMS"),
-        "release tarball must include replay scripts and fixture evidence"
+            .contains("tar -czf \"../$asset\" planr scripts README.md LICENSE.md SHA256SUMS"),
+        "release tarball must include runtime scripts without test fixtures"
     );
 
     let missing_default_dir = tempdir().unwrap();
@@ -2084,23 +2060,32 @@ fn host_capability_release_archive_replays_without_validator_override() {
         "release checksums failed: {}",
         String::from_utf8_lossy(&checksum.stderr)
     );
-    let replay = Command::new("node")
+    let capture = tempdir().unwrap();
+    let capture_out = fs::canonicalize(capture.path())
+        .unwrap()
+        .join("host-capability-capture");
+    let capture_output = Command::new("node")
         .current_dir(extract.path())
         .env_remove("PLANR_HOST_CAPABILITY_VALIDATOR")
         .args([
             "scripts/host-capability-experiment.mjs",
-            "replay",
-            "--fixture-root",
-            "tests/fixtures/evidence/host-capabilities/v1",
+            "capture",
+            "--out-dir",
+            capture_out.to_str().unwrap(),
         ])
         .output()
-        .expect("extracted release replay must run");
+        .expect("extracted release capture must run");
     assert!(
-        replay.status.success(),
-        "extracted release replay failed: {}",
-        String::from_utf8_lossy(&replay.stderr)
+        capture_output.status.success(),
+        "extracted release capture failed: {}",
+        String::from_utf8_lossy(&capture_output.stderr)
     );
-    run_host_capability_doc_smoke(extract.path());
+    assert!(
+        capture_out
+            .join("expected/normalized-manifest.json")
+            .exists(),
+        "extracted release capture must write replayable expected manifest"
+    );
 }
 
 #[test]
@@ -2116,10 +2101,6 @@ fn host_capability_npm_package_replays_with_native_validator_bytes() {
     fs::copy(repo_root().join("LICENSE.md"), package.join("LICENSE.md")).unwrap();
     copy_dir(&repo_root().join("npm"), &package.join("npm"));
     copy_dir(&repo_root().join("scripts"), &package.join("scripts"));
-    copy_dir(
-        &repo_root().join("tests/fixtures/evidence/host-capabilities"),
-        &package.join("tests/fixtures/evidence/host-capabilities"),
-    );
     let native_dir = package.join("npm/native").join(native_target());
     fs::create_dir_all(&native_dir).unwrap();
     fs::copy(env!("CARGO_BIN_EXE_planr"), native_dir.join("planr")).unwrap();
@@ -2161,7 +2142,11 @@ fn host_capability_npm_package_replays_with_native_validator_bytes() {
             native_target()
         ),
         "scripts/host-capability-experiment.mjs".to_string(),
-        "tests/fixtures/evidence/host-capabilities/v1/observed/exp-chrome-browser-client.json"
+        "scripts/host-capability-runtime/v1/schemas/host-capability-observed-raw.schema.json"
+            .to_string(),
+        "scripts/host-capability-runtime/v1/schemas/host-capability-expected-manifest.schema.json"
+            .to_string(),
+        "scripts/host-capability-runtime/v1/schemas/host-capability-provenance.schema.json"
             .to_string(),
     ] {
         assert!(
@@ -2169,6 +2154,10 @@ fn host_capability_npm_package_replays_with_native_validator_bytes() {
             "npm pack omitted {expected}"
         );
     }
+    assert!(
+        files.iter().all(|file| !file.starts_with("tests/")),
+        "npm package must not include test fixture paths; files={files:?}"
+    );
 
     let tarball = fs::read_dir(pack_dir.path())
         .unwrap()
@@ -2191,23 +2180,32 @@ fn host_capability_npm_package_replays_with_native_validator_bytes() {
         String::from_utf8_lossy(&tar.stderr)
     );
     let extracted = extract.path().join("package");
-    let replay = Command::new("node")
+    let capture = tempdir().unwrap();
+    let capture_out = fs::canonicalize(capture.path())
+        .unwrap()
+        .join("host-capability-capture");
+    let capture_output = Command::new("node")
         .current_dir(&extracted)
         .env_remove("PLANR_HOST_CAPABILITY_VALIDATOR")
         .args([
             "scripts/host-capability-experiment.mjs",
-            "replay",
-            "--fixture-root",
-            "tests/fixtures/evidence/host-capabilities/v1",
+            "capture",
+            "--out-dir",
+            capture_out.to_str().unwrap(),
         ])
         .output()
-        .expect("extracted npm replay must run");
+        .expect("extracted npm capture must run");
     assert!(
-        replay.status.success(),
-        "extracted npm replay failed: {}",
-        String::from_utf8_lossy(&replay.stderr)
+        capture_output.status.success(),
+        "extracted npm capture failed: {}",
+        String::from_utf8_lossy(&capture_output.stderr)
     );
-    run_host_capability_doc_smoke(&extracted);
+    assert!(
+        capture_out
+            .join("expected/normalized-manifest.json")
+            .exists(),
+        "extracted npm capture must write replayable expected manifest"
+    );
 }
 
 #[test]
@@ -2749,7 +2747,14 @@ fn host_capability_capture_import_rejects_forged_connector_data() {
 
     let producer_before_capture = observed_bundle(|root| {
         let mut envelope = read_json(root, "external-capture-envelope.json");
-        envelope["producer"]["captured_at"] = json!("2026-07-29T18:38:16Z");
+        let capture_started_at = OffsetDateTime::parse(
+            envelope["captures"][0]["started_at"].as_str().unwrap(),
+            &Rfc3339,
+        )
+        .unwrap();
+        envelope["producer"]["captured_at"] = json!(format_utc_second(
+            capture_started_at - time::Duration::seconds(1)
+        ));
         write_json(root, "external-capture-envelope.json", &envelope);
     });
     let output = capture_import(tempdir().unwrap().path(), &producer_before_capture);

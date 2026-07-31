@@ -162,6 +162,10 @@ function packagedFixtureRoot() {
   return path.join(packageRoot(), "tests/fixtures/evidence/host-capabilities");
 }
 
+function packagedRuntimeRoot() {
+  return path.join(packageRoot(), "scripts/host-capability-runtime");
+}
+
 function readJson(file) {
   try {
     return JSON.parse(readFileSync(file, "utf8"));
@@ -1560,10 +1564,13 @@ function validateOutputDestination(outDir, options = {}) {
   const parentReal = realpathSync(parent);
   const destinationReal = existsSync(destination) ? realpathSync(destination) : path.join(parentReal, path.basename(destination));
   const repoRoot = realpathSync(packageRoot());
-  const fixtureRoot = realpathSync(packagedFixtureRoot());
+  const protectedRuntimeRoots = [
+    ["host capability runtime root", packagedRuntimeRoot()],
+    ["host capability fixture root", packagedFixtureRoot()],
+  ].filter(([, protectedRoot]) => existsSync(protectedRoot));
   for (const [label, protectedRoot] of [
     ["repository root", repoRoot],
-    ["host capability fixture root", fixtureRoot],
+    ...protectedRuntimeRoots.map(([label, protectedRoot]) => [label, realpathSync(protectedRoot)]),
   ]) {
     if (destinationReal === protectedRoot || isSameOrInside(protectedRoot, destinationReal)) {
       fail(`capture --out-dir must not target ${label} or one of its ancestors`);
@@ -2300,7 +2307,9 @@ function writeManifestReference(outDir, captures) {
 }
 
 function writeSchemaReferences(outDir) {
-  const sourceRoot = path.join(packagedFixtureRoot(), "v1");
+  const sourceRoot = existsSync(path.join(packagedRuntimeRoot(), "v1"))
+    ? path.join(packagedRuntimeRoot(), "v1")
+    : path.join(packagedFixtureRoot(), "v1");
   const refs = {};
   for (const [key, relativePath] of [
     ["raw", RAW_SCHEMA_REF_PATH],

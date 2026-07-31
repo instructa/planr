@@ -47,14 +47,16 @@ for required in \
   planr \
   scripts/host-capability-experiment.mjs \
   scripts/planr-host-capability-validator \
-  tests/fixtures/evidence/host-capabilities/v1/observed/exp-chrome-browser-client.json
+  scripts/host-capability-runtime/v1/schemas/host-capability-observed-raw.schema.json \
+  scripts/host-capability-runtime/v1/schemas/host-capability-expected-manifest.schema.json \
+  scripts/host-capability-runtime/v1/schemas/host-capability-provenance.schema.json
 do
   if ! printf '%s\n' "$actual_members" | grep -Fx "$required" >/dev/null; then
     echo "release tarball is missing required path: $required" >&2
     exit 1
   fi
 done
-unexpected_members="$(printf '%s\n' "$actual_members" | grep -Ev '^(LICENSE.md|README.md|SHA256SUMS|planr|scripts/host-capability-experiment\.mjs|scripts/planr-host-capability-validator|tests/fixtures/evidence/host-capabilities/)' || true)"
+unexpected_members="$(printf '%s\n' "$actual_members" | grep -Ev '^(LICENSE.md|README.md|SHA256SUMS|planr|scripts/host-capability-experiment\.mjs|scripts/planr-host-capability-validator|scripts/host-capability-runtime/v1/schemas/host-capability-(observed-raw|expected-manifest|provenance)\.schema\.json)' || true)"
 if [ -n "$unexpected_members" ]; then
   echo "release tarball contains unexpected paths:" >&2
   printf '%s\n' "$unexpected_members" >&2

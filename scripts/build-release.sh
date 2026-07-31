@@ -59,22 +59,22 @@ else
 fi
 
 cp "$built_bin" "$target_dir/planr"
-mkdir -p "$target_dir/scripts" "$target_dir/tests/fixtures/evidence"
+mkdir -p "$target_dir/scripts"
 cp "$built_validator" "$target_dir/scripts/planr-host-capability-validator"
 cp scripts/host-capability-experiment.mjs "$target_dir/scripts/"
-cp -R tests/fixtures/evidence/host-capabilities "$target_dir/tests/fixtures/evidence/"
+cp -R scripts/host-capability-runtime "$target_dir/scripts/"
 cp README.md LICENSE.md "$target_dir/"
 
 (
   cd "$target_dir"
-  find planr scripts tests README.md LICENSE.md -type f -print | LC_ALL=C sort | while IFS= read -r file; do
+  find planr scripts README.md LICENSE.md -type f -print | LC_ALL=C sort | while IFS= read -r file; do
     sha256_tool "$file"
   done > SHA256SUMS
 )
 
 (
   cd "$target_dir"
-  tar -czf "../$asset" planr scripts tests README.md LICENSE.md SHA256SUMS
+  tar -czf "../$asset" planr scripts README.md LICENSE.md SHA256SUMS
 )
 
 # Aggregate checksums over every asset present in dist/ so multi-target
