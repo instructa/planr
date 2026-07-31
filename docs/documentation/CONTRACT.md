@@ -34,7 +34,7 @@ Use these terms exactly. Prefer the lowercase form in prose unless it starts a s
 | pick | An atomic lease of one ready item to one worker. | assignment, claim unless explaining the concept |
 | worker | The identity holding the active pick. | agent when ownership specifically matters |
 | log | Durable evidence or progress attached to an item. | transcript |
-| verification log | A log with kind `verification` that records a live oracle. | test result alone |
+| verification log | A claim-only narrative log for a live oracle; frozen pre-Evidence compatibility may inspect it. | binding Evidence receipt or coverage verdict |
 | review | A graph gate that checks evidence and can create fix/follow-up work. | approval; approvals are a separate human gate |
 | approval | An explicit requested/approved/denied human decision on an item. | review |
 | context | A durable discovery, decision, constraint, or goal contract. | memory |

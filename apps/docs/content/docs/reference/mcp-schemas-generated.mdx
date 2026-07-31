@@ -1,6 +1,6 @@
 ---
 title: Generated MCP Tool Schemas
-description: Complete Planr 1.10.0-alpha.1 tools/list inventory with every property, type, description, required field, enum/default declaration, and additionalProperties rule.
+description: Complete Planr 1.10.0-alpha.2 tools/list inventory with every property, type, description, required field, enum/default declaration, and additionalProperties rule.
 ---
 
 <Callout type="info" title="Generated runtime contract">
@@ -1086,6 +1086,30 @@ Preview or apply explicit plan-scoped migration from legacy verification claims 
 }
 ```
 
+## `planr_evidence_rebind`
+
+Preview or apply an immutable versioned capability and obligation rebind
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "apply": {
+      "description": "Apply the rebind; omit or false for preview",
+      "type": "boolean"
+    },
+    "input": {
+      "description": "planr.evidence.rebind.v1 payload with plan_id, manifest_id, obligations[], and preview_digest for apply",
+      "type": "object"
+    }
+  },
+  "required": [
+    "input"
+  ],
+  "type": "object"
+}
+```
+
 ## `planr_evidence_classifications`
 
 Show canonical Evidence gap reasons and legacy/operator aliases
@@ -1289,6 +1313,31 @@ Evaluate Evidence coverage for an obligation, criterion, item, or plan
 ## `planr_evidence_explain`
 
 Explain Evidence coverage with policy, attempts, receipts, and repository snapshot context
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "description": "Scope id",
+      "type": "string"
+    },
+    "scope": {
+      "description": "obligation, criterion, item, or plan",
+      "type": "string"
+    }
+  },
+  "required": [
+    "scope",
+    "id"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_evidence_readiness`
+
+Check active Evidence obligations, payload schemas, registered capabilities, and runtime availability before goal work
 
 ```json
 {

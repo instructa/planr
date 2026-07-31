@@ -33,13 +33,16 @@ Record the receipt path, digest, source revision, selected profile/gates, and co
 
 Put build/serve commands in `--cmd` and test runs in `--tests` — both are recorded as evidence. When the pick packet carries a `routing` block, also report the registry profile you actually ran on: add `--profile <profile-id>` to `done`/`log add`, or export `PLANR_PROFILE` once per session. It is part of the evidence — a mismatch with the declared route is advisory (never blocks the close) and surfaces in `planr trace item` so silent host overrides get caught. Include the decisive output line in `--summary` (e.g. "12 tests passed", "GET /videos returned 3 entries"): reviewers see your recorded command strings, not your terminal, so the summary must carry what you observed, not just what you ran. Single-quote `--files` values that contain `$` (route files like `watch.$videoId.tsx`), or the shell expands them before planr sees them. `done --review` writes the completion log, requests the review, and moves the item to `in_review` (you keep ownership; it is waiting on the gate, not abandoned) — the response names the target's new status and the plan-scoped reviewer pick command; add `--next` to pick the following item in the same call. Without `--review` it closes the item directly (only for items that need no review gate). Running `done` on a ready item you never picked adopts it: the lease is written retroactively under your worker id so the review always has a maker. The response reports what your settlement `unlocked`, echoes the item's post condition, and hints when downstream work depends on an item closed without command/test evidence.
 
-Live verification (browser flow, executed binary, real requests) gets its own log kind so `plan audit` can find it:
+Binding verification (browser flow, executed binary, real requests) must produce a trusted Evidence receipt and coverage verdict:
 
 ```bash
-planr log add --item <item-id> --kind verification --summary "verified <flow>: <observed outcome>" --cmd "<exact command>"
+planr evidence readiness --scope criterion --id <criterion-id>
+planr evidence run --input <run-file>
+planr evidence coverage --scope criterion --id <criterion-id>
+planr evidence explain --scope criterion --id <criterion-id>
 ```
 
-The `--cmd` value must be copy-paste replayable: a real shell command (or a small script you committed), never a prose transcript like "start server; curl /; check stats". Reviewers validate the exact-source receipt and selectively replay cheap, missing, failing, or explicitly high-risk evidence; the command must still be runnable when that risk decision calls for replay.
+The configured method must be copy-paste replayable: a real shell command, host capture, or committed verifier, never prose such as "start server; curl /; check stats". Reviewers validate the exact-source receipt and selectively replay cheap, missing, failing, or explicitly high-risk evidence. `planr log add` remains useful for narrative handoffs, but a free-form `kind=verification` claim has no binding closure authority.
 
 Log persistent evidence, not transient noise: a failure you immediately fixed belongs in the final log's narrative, not as a standalone failure log. Only record a failure separately when it blocks the item.
 

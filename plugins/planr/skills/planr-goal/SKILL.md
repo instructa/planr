@@ -36,10 +36,11 @@ When the repository provides a versioned verification policy and source-bound re
 
 ## Durable Contract
 
-Store one contract per plan:
+For plans with binding Evidence, require the repository to define the observation obligations and capability policy before execution, then run readiness. Store one contract per plan:
 
 ```bash
-planr context add "GOAL CONTRACT <plan-id>: DONE when every in-scope item is closed with log evidence, all reviews are complete, approvals are clear, and a live verification log proves <goal oracle>. Iteration budget: 10." --tag goal-contract
+planr evidence readiness --scope plan --id <plan-id>
+planr context add "GOAL CONTRACT <plan-id>: DONE when every in-scope item is closed with implementation evidence, all reviews are complete, approvals are clear, and canonical Evidence coverage proves <goal oracle>. Iteration budget: 10." --tag goal-contract
 ```
 
 Never weaken it mid-run. Workers use `planr pick --plan <plan-id>`; termination uses `planr plan audit <plan-id> --json`. Reviews are required only where they add signal; evidence-backed setup work may close directly. Where deployment is in scope, the contract must retain human deployment approval and a bounded live oracle against the deployed result.

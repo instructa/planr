@@ -1,6 +1,6 @@
 ---
 title: Generated CLI Reference
-description: Complete compiled Planr 1.10.0-alpha.1 command and option help, checked against the repository binary.
+description: Complete compiled Planr 1.10.0-alpha.2 command and option help, checked against the repository binary.
 ---
 
 <Callout type="info" title="Generated executable contract">
@@ -31,7 +31,7 @@ Commands:
   done      Log evidence and finish the step in one command: completion log, then review request (--review) or close, optionally pick the next item
   review
   eval      Evaluate stored run evidence: suite check, run, show, compare, gate, invalidate, and rescore through the shared eval services
-  evidence  Manage trusted Evidence policy, obligations, migrations, classifications, capabilities, runs, imports, attempts, receipts, coverage, and explanations
+  evidence  Manage trusted Evidence policy, obligations, readiness, migrations, versioned rebinds, capabilities, runs, receipts, coverage, and explanations
   context
   note
   search
@@ -1097,7 +1097,7 @@ Options:
       --no-color            Disable color in human output
       --cmd <CMD>
       --tests <TESTS>
-      --kind <KIND>         Log kind: completion (default), progress, or verification (live-verify evidence; `plan audit` checks for it) [default: completion]
+      --kind <KIND>         Log kind: completion (default), progress, or verification. Verification logs are narrative claims; only frozen pre-Evidence plans use them for compatibility. Binding Evidence requires trusted receipts [default: completion]
       --profile <PROFILE>
       --route-audit <PATH>
   -h, --help                Print help
@@ -1501,7 +1501,7 @@ Options:
 ### `planr evidence`
 
 ```text
-Manage trusted Evidence policy, obligations, migrations, classifications, capabilities, runs, imports, attempts, receipts, coverage, and explanations
+Manage trusted Evidence policy, obligations, readiness, migrations, versioned rebinds, capabilities, runs, receipts, coverage, and explanations
 
 Usage: planr evidence [OPTIONS] <COMMAND>
 
@@ -1516,7 +1516,9 @@ Commands:
   receipts         List or show trusted receipts
   coverage         Evaluate and persist coverage for an Evidence scope
   explain          Explain coverage, candidates, and durable records for an Evidence scope
+  readiness        Check that active obligations have compatible schemas and available capabilities before goal work
   migrate          Preview or apply explicit pre-Evidence plan migration into binding Evidence obligations
+  rebind           Preview or apply an immutable versioned capability/obligation rebind
   classifications  Show canonical Evidence gap classifications and legacy/operator aliases
   help             Print this message or the help of the given subcommand(s)
 
@@ -1791,12 +1793,44 @@ Options:
   -h, --help           Print help
 ```
 
+#### `planr evidence readiness`
+
+```text
+Check that active obligations have compatible schemas and available capabilities before goal work
+
+Usage: planr evidence readiness [OPTIONS] --scope <SCOPE> --id <ID>
+
+Options:
+      --db <DB>        Path to Planr SQLite database
+      --scope <SCOPE>  [possible values: obligation, criterion, item, plan]
+      --id <ID>
+      --json           Emit JSON output
+      --no-color       Disable color in human output
+  -h, --help           Print help
+```
+
 #### `planr evidence migrate`
 
 ```text
 Preview or apply explicit pre-Evidence plan migration into binding Evidence obligations
 
 Usage: planr evidence migrate [OPTIONS] --input <INPUT>
+
+Options:
+      --db <DB>        Path to Planr SQLite database
+      --input <INPUT>  JSON file containing a planr.evidence.migration.v1 payload
+      --apply          Apply the migration. Omit for dry-run preview
+      --json           Emit JSON output
+      --no-color       Disable color in human output
+  -h, --help           Print help
+```
+
+#### `planr evidence rebind`
+
+```text
+Preview or apply an immutable versioned capability/obligation rebind
+
+Usage: planr evidence rebind [OPTIONS] --input <INPUT>
 
 Options:
       --db <DB>        Path to Planr SQLite database
@@ -1971,13 +2005,14 @@ Usage: planr stop [OPTIONS] [COMMAND]
 Commands:
   activate    Activate Stop enforcement for a plan in this explicit session/thread
   deactivate  Cancel/deactivate Stop enforcement for a plan in this explicit session/thread
+  resume      Explicitly resume bounded Stop enforcement after a terminal unchanged gap
   help        Print this message or the help of the given subcommand(s)
 
 Options:
       --db <DB>       Path to Planr SQLite database
       --json          Emit JSON output
-      --input <PATH>  Read the host hook JSON envelope from a file instead of stdin
       --no-color      Disable color in human output
+      --input <PATH>  Read the host hook JSON envelope from a file instead of stdin
   -h, --help          Print help
 ```
 
@@ -2003,6 +2038,22 @@ Options:
 Cancel/deactivate Stop enforcement for a plan in this explicit session/thread
 
 Usage: planr stop deactivate [OPTIONS]
+
+Options:
+      --db <DB>            Path to Planr SQLite database
+      --plan <PLAN>
+      --json               Emit JSON output
+      --session <SESSION>
+      --no-color           Disable color in human output
+  -h, --help               Print help
+```
+
+#### `planr stop resume`
+
+```text
+Explicitly resume bounded Stop enforcement after a terminal unchanged gap
+
+Usage: planr stop resume [OPTIONS] --plan <PLAN>
 
 Options:
       --db <DB>            Path to Planr SQLite database

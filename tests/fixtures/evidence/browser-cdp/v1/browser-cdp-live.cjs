@@ -8,7 +8,7 @@
 
 const targetUrl = process.argv[2];
 const port = Number(process.argv[3]);
-const schemaRef = "schema://planr.structured_observation_results.v1";
+const schemaRef = (type) => `schema://${type}`;
 const html = `<!doctype html><html><head><title>Planr CDP Proof</title></head><body>
 <h1 id="status">Ready</h1>
 <button id="go">Go</button>
@@ -153,7 +153,7 @@ async function main() {
       returnByValue: true
     });
     const visible = await send("Runtime.evaluate", {
-      expression: `({visible: document.querySelector("#status")?.textContent === "Ready", text: document.querySelector("#status")?.textContent || "", schema_ref: "${schemaRef}"})`,
+      expression: `({visible: document.querySelector("#status")?.textContent === "Ready", text: document.querySelector("#status")?.textContent || "", schema_ref: "${schemaRef("com.example.browser.rendered_visibility")}"})`,
       returnByValue: true
     });
     const rect = await send("Runtime.evaluate", {
@@ -166,7 +166,7 @@ async function main() {
     await send("Input.dispatchMouseEvent", {type: "mouseReleased", x, y, button: "left", clickCount: 1});
     await new Promise((resolve) => setTimeout(resolve, 500));
     const afterClick = await send("Runtime.evaluate", {
-      expression: `({clicked: localStorage.getItem("clicked") === "done", path: location.pathname, api_status: Number(document.querySelector("#network").textContent), schema_ref: "${schemaRef}"})`,
+      expression: `({clicked: localStorage.getItem("clicked") === "done", path: location.pathname, api_status: Number(document.querySelector("#network").textContent), schema_ref: "${schemaRef("com.example.browser.user_interaction")}"})`,
       returnByValue: true
     });
     const finalLocation = await send("Runtime.evaluate", {
@@ -176,7 +176,7 @@ async function main() {
     await send("Page.reload", {ignoreCache: true});
     await new Promise((resolve) => setTimeout(resolve, 500));
     const afterReload = await send("Runtime.evaluate", {
-      expression: `({persisted: localStorage.getItem("clicked") === "done" && document.querySelector("#result").textContent === "done", schema_ref: "${schemaRef}"})`,
+      expression: `({persisted: localStorage.getItem("clicked") === "done" && document.querySelector("#result").textContent === "done", schema_ref: "${schemaRef("com.example.browser.reload_storage")}"})`,
       returnByValue: true
     });
     const api = network.find((entry) => entry.url.endsWith("/api/ping"));
@@ -220,10 +220,10 @@ async function main() {
       fixture_disclosure: fixtureDisclosure,
       observations: [
         {requirement_id: "obs-pob-browser-cdp-visible", type: "com.example.browser.rendered_visibility", actual: {...visible.result.value, observed_target: observedTarget, runtime_identity: runtimeIdentity}},
-        {requirement_id: "obs-pob-browser-cdp-interaction", type: "com.example.browser.user_interaction", actual: {schema_ref: schemaRef, clicked: afterClick.result.value.clicked, observed_target: observedTarget, runtime_identity: runtimeIdentity}},
-        {requirement_id: "obs-pob-browser-cdp-navigation", type: "com.example.browser.navigation", actual: {schema_ref: schemaRef, path: afterClick.result.value.path, observed_target: observedTarget, runtime_identity: runtimeIdentity}},
-        {requirement_id: "obs-pob-browser-cdp-network", type: "com.example.browser.network", actual: {schema_ref: schemaRef, api_status: api ? api.status : null, responses: network, observed_target: observedTarget, runtime_identity: runtimeIdentity}},
-        {requirement_id: "obs-pob-browser-cdp-console", type: "com.example.browser.console", actual: {schema_ref: schemaRef, error_count: consoleErrors.length, errors: consoleErrors, observed_target: observedTarget, runtime_identity: runtimeIdentity}},
+        {requirement_id: "obs-pob-browser-cdp-interaction", type: "com.example.browser.user_interaction", actual: {schema_ref: schemaRef("com.example.browser.user_interaction"), clicked: afterClick.result.value.clicked, observed_target: observedTarget, runtime_identity: runtimeIdentity}},
+        {requirement_id: "obs-pob-browser-cdp-navigation", type: "com.example.browser.navigation", actual: {schema_ref: schemaRef("com.example.browser.navigation"), path: afterClick.result.value.path, observed_target: observedTarget, runtime_identity: runtimeIdentity}},
+        {requirement_id: "obs-pob-browser-cdp-network", type: "com.example.browser.network", actual: {schema_ref: schemaRef("com.example.browser.network"), api_status: api ? api.status : null, responses: network, observed_target: observedTarget, runtime_identity: runtimeIdentity}},
+        {requirement_id: "obs-pob-browser-cdp-console", type: "com.example.browser.console", actual: {schema_ref: schemaRef("com.example.browser.console"), error_count: consoleErrors.length, errors: consoleErrors, observed_target: observedTarget, runtime_identity: runtimeIdentity}},
         {requirement_id: "obs-pob-browser-cdp-reload", type: "com.example.browser.reload_storage", actual: {...afterReload.result.value, observed_target: observedTarget, runtime_identity: runtimeIdentity}}
       ]
     };

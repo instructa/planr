@@ -41,15 +41,16 @@ Detect a running dev server before anything else and use it. Never start a secon
 
 Exercise the flow the item changed — not the homepage. Interact, assert on rendered output, capture a screenshot when the tier supports it.
 
-Then log evidence on the item:
+Use the repository's configured web capability to create trusted Evidence, then evaluate coverage:
 
 ```bash
-planr log add --item <item-id> --kind verification \
-  --summary "live verification (<tier>): <what was exercised and observed>" \
-  --cmd "<exact replayable command>"
+planr evidence readiness --scope criterion --id <criterion-id>
+planr evidence run --input <run-file-for-the-configured-web-method>
+planr evidence coverage --scope criterion --id <criterion-id>
+planr evidence explain --scope criterion --id <criterion-id>
 ```
 
-`--kind verification` marks the log as live-verify evidence; `planr plan audit` checks for it when a goal contract exists.
+The observation contract decides what must be proved. Native Browser, CDP, Playwright, Computer Use, and HTTP probes are configurable methods, not a universal ranking. HTTP can fully prove an HTTP criterion but cannot satisfy rendered interaction, persistence, accessibility, console, or visual observations it never captured.
 
 Attach screenshots or traces as artifacts on the item:
 
@@ -58,7 +59,7 @@ planr artifact add "verify-web screenshot" --item <item-id> --path <screenshot-p
 planr artifact add "verify-web recording" --item <item-id> --path <recording.mp4> --kind video
 ```
 
-The replay command is mandatory. The reviewer validates the evidence and reruns it only when it is cheap, missing, failing, or explicitly high-risk; a verification that cannot be replayed when needed is not evidence. A successful bounded live smoke joins the existing coherent review boundary and does not automatically trigger another full build or reviewer replay.
+The replay contract and trusted method identity are mandatory. The reviewer validates the receipt and reruns it only when it is cheap, missing, failing, or explicitly high-risk; a verification that cannot be replayed when needed is not evidence. A successful bounded live smoke joins the existing coherent review boundary and does not automatically trigger another full build or reviewer replay.
 
 For a deployment oracle, require an approved deployment decision before the deploy begins. After deployment, keep the live check bounded to the changed routes, content, or interaction and record the deployed source/receipt identity in the summary.
 
