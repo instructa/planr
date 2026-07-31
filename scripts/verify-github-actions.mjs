@@ -160,9 +160,10 @@ const routerStart = ciWorkflow.indexOf("\n  router:\n");
 const routerEnd = ciWorkflow.indexOf("\n  docs:\n", routerStart);
 const routerJob = ciWorkflow.slice(routerStart, routerEnd);
 assert.doesNotMatch(routerJob, /^\s+if:/mu, "verification router must always run");
-for (const output of ["profile", "policy_version", "policy_digest", "changed_files_digest", "live_browser", "docs", "quality", "release", "linux_portability"]) {
+for (const output of ["profile", "policy_version", "policy_digest", "changed_files_digest", "docs", "quality", "release", "linux_portability"]) {
   assert.match(routerJob, new RegExp(`^      ${output}: \\$\\{\\{ steps\\.route\\.outputs\\.${output} \\}\\}$`, "mu"), `verification router must export ${output}`);
 }
+assert.doesNotMatch(routerJob, /live_browser/u, "verification router must not export a browser-selected CI output");
 assert.match(routerJob, /node scripts\/ci-router\.mjs route/u, "verification router must use the repository-owned deterministic helper");
 assert.match(routerJob, /name: verification-selection/u, "verification routing evidence must cross jobs only as an explicit artifact");
 assert.match(routerJob, /docs=false\\nquality=false\\nrelease=false\\nlinux_portability=true/u, "manual CI dispatch must select only native Linux evidence");
@@ -193,6 +194,7 @@ const summaryJob = ciWorkflow.slice(summaryStart);
 assert.match(summaryJob, /name: CI Summary/u, "PR CI summary check name must remain stable");
 assert.match(summaryJob, /if: always\(\)/u, "PR CI summary must run after failures and skips");
 assert.match(summaryJob, /node scripts\/ci-router\.mjs summary/u, "PR CI summary must use the fail-closed result verifier");
+assert.doesNotMatch(summaryJob, /PLANR_LIVE_BROWSER|live_browser/u, "PR CI summary must not record browser-selected CI evidence");
 for (const result of ["needs.docs.result", "needs.quality.result", "needs.release-contracts.result", "needs.linux-portability-checksums.result"]) {
   assert.ok(summaryJob.includes(result), `PR CI summary must inspect ${result}`);
 }

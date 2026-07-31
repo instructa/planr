@@ -47,7 +47,7 @@ assert.equal(receipt.policy.digest, POLICY_DIGEST);
 assert.equal(calls.filter((call) => call.join(" ").includes("@planr/docs build")).length, 1, "docs build runs exactly once");
 assert.equal(calls.filter((call) => call.join(" ").includes("cargo install")).length, 0, "docs work never runs release-profile cargo install");
 assert.equal(calls.filter((call) => call.join(" ").includes("security:check")).length, 0, "docs work never runs local security tooling");
-assert.equal(receipt.selection.liveVerification.browser, true, "interactive docs receipts retain the live-browser decision");
+assert.equal(receipt.selection.liveVerification.browser, false, "interactive docs receipts remain Chrome-free in CI");
 assert.equal(new Set(calls.map(JSON.stringify)).size, calls.length, "runner de-duplicates exact commands");
 assert.deepEqual(verifyReceipt(receipt, { selection: docsSelection, repoRoot: root }).verdict, "pass");
 const receiptPath = ".planr/receipts/verification-receipt.json";

@@ -28,6 +28,7 @@ const planrBin = process.env.PLANR_BIN
   ? path.resolve(process.cwd(), process.env.PLANR_BIN)
   : path.join(repositoryRoot, 'target', 'debug', 'planr');
 const checkOnly = process.argv.includes('--check');
+const liveMode = process.argv.includes('--live');
 
 await access(planrBin, constants.X_OK);
 
@@ -404,6 +405,22 @@ async function closeServers() {
 }
 
 try {
+  if (checkOnly && !liveMode) {
+    const current = await readFile(outputPath, 'utf8');
+    const fixture = JSON.parse(current);
+    assert.equal(fixture.schema_version, 'planr.evidence_docs_examples.v1');
+    assert.equal(fixture.generated_by, 'apps/docs/scripts/generate-evidence-examples.mjs');
+    assert.equal(fixture.evidence_schema_digest, evidenceSchemaDigest);
+    assert.equal(fixture.host_matrix_digest, hostMatrixDigest);
+    assert.equal(Array.isArray(fixture.cases), true);
+    assert.equal(fixture.cases.length, 7);
+    console.log(`evidence_docs_examples_check=passed cases=${fixture.cases.length} host_matrix=${hostMatrixDigest}`);
+    process.exit(0);
+  }
+  if (!liveMode) {
+    throw new Error('Evidence docs example generation launches the local Chrome/CDP proof; rerun with --live.');
+  }
+
   const chromePath = await findChrome();
   const apiPort = await startFixtureServer();
   const api = await disposableWorkspace('api-only');

@@ -22,7 +22,6 @@ jobs:
       policy_version: ${{ steps.route.outputs.policy_version }}
       policy_digest: ${{ steps.route.outputs.policy_digest }}
       changed_files_digest: ${{ steps.route.outputs.changed_files_digest }}
-      live_browser: ${{ steps.route.outputs.live_browser }}
       docs: ${{ steps.route.outputs.docs }}
       quality: ${{ steps.route.outputs.quality }}
       release: ${{ steps.route.outputs.release }}
@@ -311,10 +310,9 @@ jobs:
           PLANR_POLICY_VERSION: ${{ needs.router.outputs.policy_version }}
           PLANR_POLICY_DIGEST: ${{ needs.router.outputs.policy_digest }}
           PLANR_CHANGED_FILES_DIGEST: ${{ needs.router.outputs.changed_files_digest }}
-          PLANR_LIVE_BROWSER: ${{ needs.router.outputs.live_browser }}
         run: |
-          printf 'profile=%s\npolicy_version=%s\npolicy_digest=%s\nchanged_files_digest=%s\nlive_browser=%s\n' \
-            "$PLANR_PROFILE" "$PLANR_POLICY_VERSION" "$PLANR_POLICY_DIGEST" "$PLANR_CHANGED_FILES_DIGEST" "$PLANR_LIVE_BROWSER" >> "$GITHUB_STEP_SUMMARY"
+          printf 'profile=%s\npolicy_version=%s\npolicy_digest=%s\nchanged_files_digest=%s\n' \
+            "$PLANR_PROFILE" "$PLANR_POLICY_VERSION" "$PLANR_POLICY_DIGEST" "$PLANR_CHANGED_FILES_DIGEST" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Write exact-SHA promotion receipt
         if: github.event_name != 'workflow_dispatch'

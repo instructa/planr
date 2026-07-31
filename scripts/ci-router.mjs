@@ -22,7 +22,6 @@ export function routeSelection(selection) {
     policy_version: requiredOutput(selection.policyVersion, "policy version"),
     policy_digest: requiredOutput(selection.policyDigest, "policy digest"),
     changed_files_digest: requiredOutput(selection.changedFilesDigest, "changed-files digest"),
-    live_browser: String(selection.liveVerification?.browser === true),
   };
   for (const [job, gates] of Object.entries(CI_JOB_GATES)) {
     outputs[job] = String(gates.some((gate) => selection.selectedGates.includes(gate)));

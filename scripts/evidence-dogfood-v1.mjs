@@ -41,21 +41,7 @@ await mkdir(inputsRoot, { recursive: true });
 
 const rawCommands = [
   {
-    label: 'ac001_ac003_browser_cdp_and_curl_boundary',
-    command: 'cargo',
-    args: [
-      'test',
-      '--test',
-      'e2e',
-      'evidence_browser_cdp_receipt_covers_rendered_flow_and_curl_remains_http_only',
-      '--',
-      '--exact',
-      '--nocapture',
-    ],
-    covers: ['AC-001', 'AC-003'],
-  },
-  {
-    label: 'ac002_ac004_ac006_ac007_ac008_api_queue_stale_retry_missing',
+    label: 'ac001_ac002_ac003_ac004_ac006_ac007_ac008_api_queue_stale_retry_missing_browser_gaps',
     command: 'cargo',
     args: [
       'test',
@@ -66,7 +52,7 @@ const rawCommands = [
       '--exact',
       '--nocapture',
     ],
-    covers: ['AC-002', 'AC-004', 'AC-006', 'AC-007', 'AC-008'],
+    covers: ['AC-001', 'AC-002', 'AC-003', 'AC-004', 'AC-006', 'AC-007', 'AC-008'],
   },
   {
     label: 'ac005_ac009_public_surface_trust_boundary',

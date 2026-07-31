@@ -82,8 +82,7 @@ export const POLICY_RULES = deepFreeze([
     description: "Interactive documentation application code",
     profile: "docs",
     sensitive: false,
-    liveBrowser: true,
-    detail: "Interactive documentation behavior changed; request one focused live browser oracle outside automatic CI.",
+    detail: "Interactive documentation behavior changed; automatic CI remains browser-free.",
     matchers: [
       { source: "^apps/docs/(?:app|components)/.*[.](?:js|jsx|mjs|ts|tsx)$", flags: "u" },
     ],
@@ -184,7 +183,6 @@ export function classifyChanges(input, { baseRevision = null, headRevision = nul
   const escalatedToFull = escalationReasons.length > 0;
   const profile = escalatedToFull ? "full" : selectProfile(pathMatches);
   const selectedGates = profile === "full" ? [...FULL_GATES] : gatesForMatches(pathMatches);
-  const liveBrowserPaths = pathMatches.filter((match) => match.liveBrowser).map((match) => match.path);
   const reasons = selectedGates.map((gate) => {
     const owners = pathMatches.filter((match) => profile === "full" || PROFILES[match.profile]?.includes(gate));
     return {
@@ -210,11 +208,9 @@ export function classifyChanges(input, { baseRevision = null, headRevision = nul
     matchedPathClasses: matchedClasses,
     selectedGates,
     liveVerification: {
-      browser: liveBrowserPaths.length > 0,
-      paths: [...new Set(liveBrowserPaths)].sort(),
-      detail: liveBrowserPaths.length > 0
-        ? "Run one focused live browser oracle for the changed interaction; automatic CI remains browser-free."
-        : "No browser oracle selected for text, Markdown, link, image, or non-interactive changes.",
+      browser: false,
+      paths: [],
+      detail: "Automatic CI is Chrome-free; run `pnpm docs:evidence-examples:generate` locally for the opt-in Chrome/CDP proof.",
     },
     reasons,
     changes: normalized.changes,
