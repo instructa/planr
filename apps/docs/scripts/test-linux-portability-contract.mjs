@@ -11,7 +11,7 @@ const docsRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repositoryRoot = path.dirname(path.dirname(docsRoot));
 const contract = JSON.parse(await readFile(path.join(repositoryRoot, 'docs', 'contracts', 'LINUX_RELEASE_PORTABILITY.json'), 'utf8'));
 const packageManifest = JSON.parse(await readFile(path.join(repositoryRoot, 'package.json'), 'utf8'));
-const [candidateMajor, candidateMinor, candidatePatch] = packageManifest.version.split('.').map(Number);
+const [candidateMajor, candidateMinor, candidatePatch] = packageManifest.version.split('-')[0].split('.').map(Number);
 const nextCandidatePatch = `${candidateMajor}.${candidateMinor}.${candidatePatch + 1}`;
 const documents = {
   README: await readFile(path.join(repositoryRoot, 'README.md'), 'utf8'),
