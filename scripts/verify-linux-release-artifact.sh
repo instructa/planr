@@ -56,7 +56,7 @@ do
     exit 1
   fi
 done
-unexpected_members="$(printf '%s\n' "$actual_members" | grep -Ev '^(LICENSE.md|README.md|SHA256SUMS|planr|scripts/host-capability-experiment\.mjs|scripts/planr-host-capability-validator|scripts/host-capability-runtime/v1/schemas/host-capability-(observed-raw|expected-manifest|provenance)\.schema\.json)' || true)"
+unexpected_members="$(printf '%s\n' "$actual_members" | grep -Ev '^(LICENSE.md|README.md|SHA256SUMS|planr|scripts/|scripts/host-capability-experiment\.mjs|scripts/planr-host-capability-validator|scripts/host-capability-runtime/|scripts/host-capability-runtime/v1/|scripts/host-capability-runtime/v1/schemas/|scripts/host-capability-runtime/v1/schemas/host-capability-(observed-raw|expected-manifest|provenance)\.schema\.json)$' || true)"
 if [ -n "$unexpected_members" ]; then
   echo "release tarball contains unexpected paths:" >&2
   printf '%s\n' "$unexpected_members" >&2
