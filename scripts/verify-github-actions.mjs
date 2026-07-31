@@ -126,9 +126,9 @@ assert.match(linuxBuilderDockerfile, /apk --no-network --repositories-file \/dev
 assert.ok(linuxVerifyScript.includes(`alpine:3.20.8@${runtimeImageDigest}`), "Linux runtime image must use the reviewed immutable older-runtime digest");
 assert.match(linuxBuildScript, /uname -m\):\$target:\$cargo_target/u, "Linux build must bind target selection to the native runner architecture");
 assert.match(linuxVerifyScript, /uname -m\):\$target:\$cargo_target/u, "Linux verification must bind target selection to the native runner architecture");
-assert.match(linuxVerifyScript, /readelf -l "\$binary" \| grep -q 'INTERP'/u, "Linux verification must reject a dynamic program interpreter");
-assert.match(linuxVerifyScript, /readelf -d "\$binary" \| grep -q '\(NEEDED\)'/u, "Linux verification must reject shared-library dependencies");
-assert.match(linuxVerifyScript, /strings "\$binary" \| grep -Eq 'GLIBC_\[0-9\]'/u, "Linux verification must reject glibc symbol requirements");
+assert.match(linuxVerifyScript, /readelf -l "\$executable" \| grep -q 'INTERP'/u, "Linux verification must reject a dynamic program interpreter");
+assert.match(linuxVerifyScript, /readelf -d "\$executable" \| grep -q '\(NEEDED\)'/u, "Linux verification must reject shared-library dependencies");
+assert.match(linuxVerifyScript, /strings "\$executable" \| grep -Eq 'GLIBC_\[0-9\]'/u, "Linux verification must reject glibc symbol requirements");
 assert.match(linuxVerifyScript, /sha256sum -c SHA256SUMS/u, "Linux verification must check embedded artifact checksums");
 assert.match(linuxVerifyScript, /--network none/u, "older-runtime lifecycle verification must not use the network");
 assert.match(
@@ -137,7 +137,17 @@ assert.match(
   "Linux verification must execute the fresh public lifecycle",
 );
 assert.match(linuxVerifyScript, /cmp "\$binary" "\$npm_fixture\/npm\/native\/\$target\/planr"/u, "npm fixture must contain the exact extracted artifact bytes");
+assert.match(
+  linuxVerifyScript,
+  /cmp "\$validator" "\$npm_fixture\/npm\/native\/\$target\/planr-host-capability-validator"/u,
+  "npm fixture must contain the exact extracted validator bytes",
+);
 assert.match(linuxVerifyScript, /node npm\/bin\/planr\.js --version/u, "Linux verification must execute the npm wrapper over bundled bytes");
+assert.ok(releaseWorkflow.includes("npm/native/$target/planr-host-capability-validator"), "npm publish must bundle validator binaries per target");
+assert.ok(
+  releaseWorkflow.includes("./npm/native/linux-x86_64/planr-host-capability-validator --identity"),
+  "npm publish must smoke-test the bundled validator",
+);
 for (const command of ["project init", "plan new", "plan split", "map build", "pick", "done", "export"]) {
   assert.ok(publicLifecycleScript.includes(command), `public lifecycle must exercise ${command}`);
 }
@@ -150,9 +160,10 @@ const routerStart = ciWorkflow.indexOf("\n  router:\n");
 const routerEnd = ciWorkflow.indexOf("\n  docs:\n", routerStart);
 const routerJob = ciWorkflow.slice(routerStart, routerEnd);
 assert.doesNotMatch(routerJob, /^\s+if:/mu, "verification router must always run");
-for (const output of ["profile", "policy_version", "policy_digest", "changed_files_digest", "live_browser", "docs", "quality", "release", "linux_portability"]) {
+for (const output of ["profile", "policy_version", "policy_digest", "changed_files_digest", "docs", "quality", "release", "linux_portability"]) {
   assert.match(routerJob, new RegExp(`^      ${output}: \\$\\{\\{ steps\\.route\\.outputs\\.${output} \\}\\}$`, "mu"), `verification router must export ${output}`);
 }
+assert.doesNotMatch(routerJob, /live_browser/u, "verification router must not export a browser-selected CI output");
 assert.match(routerJob, /node scripts\/ci-router\.mjs route/u, "verification router must use the repository-owned deterministic helper");
 assert.match(routerJob, /name: verification-selection/u, "verification routing evidence must cross jobs only as an explicit artifact");
 assert.match(routerJob, /docs=false\\nquality=false\\nrelease=false\\nlinux_portability=true/u, "manual CI dispatch must select only native Linux evidence");
@@ -183,6 +194,7 @@ const summaryJob = ciWorkflow.slice(summaryStart);
 assert.match(summaryJob, /name: CI Summary/u, "PR CI summary check name must remain stable");
 assert.match(summaryJob, /if: always\(\)/u, "PR CI summary must run after failures and skips");
 assert.match(summaryJob, /node scripts\/ci-router\.mjs summary/u, "PR CI summary must use the fail-closed result verifier");
+assert.doesNotMatch(summaryJob, /PLANR_LIVE_BROWSER|live_browser/u, "PR CI summary must not record browser-selected CI evidence");
 for (const result of ["needs.docs.result", "needs.quality.result", "needs.release-contracts.result", "needs.linux-portability-checksums.result"]) {
   assert.ok(summaryJob.includes(result), `PR CI summary must inspect ${result}`);
 }

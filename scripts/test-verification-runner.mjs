@@ -12,6 +12,7 @@ import {
   selectVerificationGates,
   verifyLinuxTargetReceipt,
   verifyReceipt,
+  worktreeChanges,
 } from "./verification-runner.mjs";
 
 const root = mkdtempSync(path.join(tmpdir(), "planr-verification-runner-"));
@@ -46,7 +47,7 @@ assert.equal(receipt.policy.digest, POLICY_DIGEST);
 assert.equal(calls.filter((call) => call.join(" ").includes("@planr/docs build")).length, 1, "docs build runs exactly once");
 assert.equal(calls.filter((call) => call.join(" ").includes("cargo install")).length, 0, "docs work never runs release-profile cargo install");
 assert.equal(calls.filter((call) => call.join(" ").includes("security:check")).length, 0, "docs work never runs local security tooling");
-assert.equal(receipt.selection.liveVerification.browser, true, "interactive docs receipts retain the live-browser decision");
+assert.equal(receipt.selection.liveVerification.browser, false, "interactive docs receipts remain Chrome-free in CI");
 assert.equal(new Set(calls.map(JSON.stringify)).size, calls.length, "runner de-duplicates exact commands");
 assert.deepEqual(verifyReceipt(receipt, { selection: docsSelection, repoRoot: root }).verdict, "pass");
 const receiptPath = ".planr/receipts/verification-receipt.json";
@@ -122,6 +123,44 @@ assert.throws(() => verifyReceipt(missingArtifact, { selection: docsSelection, r
 
 writeFileSync(path.join(root, "apps/docs/components/card.tsx"), "export const Card = () => 'altered';\n");
 assert.throws(() => verifyReceipt(receipt, { selection: docsSelection, repoRoot: root }), /source worktree must be clean/);
+const worktreeSelection = classifyChanges([{ status: "M", path: "apps/docs/components/card.tsx" }], {
+  baseRevision: "HEAD",
+  headRevision: "worktree",
+});
+const worktreeReceipt = runVerification({
+  selection: worktreeSelection,
+  repoRoot: root,
+  execute: () => ({ status: 0 }),
+});
+assert.equal(worktreeReceipt.verdict, "pass", "selected worktree changes can produce a source-bound receipt");
+assert.deepEqual(
+  verifyReceipt(worktreeReceipt, { selection: worktreeSelection, repoRoot: root }).verdict,
+  "pass",
+  "worktree receipts verify against the same selected dirty source",
+);
+writeFileSync(path.join(root, "apps/docs/components/new-card.tsx"), "export const NewCard = () => null;\n");
+const detectedWorktreeChanges = worktreeChanges(root, "HEAD");
+assert.ok(
+  detectedWorktreeChanges.some((change) => change.status === "A" && change.path === "apps/docs/components/new-card.tsx"),
+  "worktree selection includes untracked source files",
+);
+const worktreeWithUntrackedSelection = classifyChanges(detectedWorktreeChanges, {
+  baseRevision: "HEAD",
+  headRevision: "worktree",
+});
+assert.equal(
+  runVerification({ selection: worktreeWithUntrackedSelection, repoRoot: root, execute: () => ({ status: 0 }) }).verdict,
+  "pass",
+  "selected untracked worktree changes can produce a source-bound receipt",
+);
+rmSync(path.join(root, "apps/docs/components/new-card.tsx"));
+writeFileSync(path.join(root, "README.md"), "# Also dirty\n");
+assert.throws(
+  () => runVerification({ selection: worktreeSelection, repoRoot: root, execute: () => ({ status: 0 }) }),
+  /source worktree must be clean/,
+  "worktree receipts still reject unrelated dirty inputs",
+);
+writeFileSync(path.join(root, "README.md"), "# Fixture\n");
 writeFileSync(path.join(root, "apps/docs/components/card.tsx"), "export const Card = () => null;\n");
 writeFileSync(path.join(root, "apps/docs/out/index.html"), "<h1>Altered</h1>\n");
 assert.throws(() => verifyReceipt(receipt, { selection: docsSelection, repoRoot: root }), /artifact changed/);

@@ -1,17 +1,25 @@
 use assert_cmd::Command;
+use planr::codex_compat::{
+    CODEX_0145_HOOK_EVENTS, CODEX_0145_PERMISSION_MODES, validate_codex_0145_stop_input,
+    validate_codex_0145_stop_output,
+};
 use predicates::prelude::*;
 use rusqlite::Connection;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command as StdCommand;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::tempdir;
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 fn planr() -> Command {
     let mut cmd = Command::cargo_bin("planr").expect("planr binary");
@@ -35,6 +43,97 @@ fn planr() -> Command {
 
 fn single_json_document(bytes: &[u8]) -> Value {
     serde_json::from_slice(bytes).expect("stdout must be exactly one JSON document")
+}
+
+fn codex_stop_envelope(dir: &Path, session: &str, stop_hook_active: bool) -> String {
+    json!({
+        "session_id": session,
+        "transcript_path": dir.join("codex-transcript.jsonl").to_string_lossy(),
+        "cwd": dir.to_string_lossy(),
+        "hook_event_name": "Stop",
+        "model": "gpt-5.6-sol",
+        "permission_mode": "plan",
+        "turn_id": "turn-1",
+        "stop_hook_active": stop_hook_active,
+        "last_assistant_message": "done"
+    })
+    .to_string()
+}
+
+fn assert_codex_stop_input_schema(value: &Value) {
+    validate_codex_0145_stop_input(value).unwrap_or_else(|err| panic!("{err}: {value}"));
+}
+
+fn assert_codex_stop_output_schema(value: &Value, expect_block: bool) {
+    validate_codex_0145_stop_output(value, expect_block)
+        .unwrap_or_else(|err| panic!("{err}: {value}"));
+}
+
+fn assert_codex_hooks_config_schema(value: &Value) {
+    let object = value.as_object().expect("Codex hooks config object");
+    let hooks = object
+        .get("hooks")
+        .and_then(Value::as_object)
+        .expect("Codex hooks object");
+    for key in hooks.keys() {
+        assert!(
+            CODEX_0145_HOOK_EVENTS.contains(&key.as_str()),
+            "unsupported Codex hook event in active config: {key}"
+        );
+    }
+    for (event, entries) in hooks {
+        let entries = entries
+            .as_array()
+            .unwrap_or_else(|| panic!("{event} entries must be array: {value}"));
+        for entry in entries {
+            let hooks = entry["hooks"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{event} entry hooks must be array: {entry}"));
+            for hook in hooks {
+                assert_eq!(hook["type"], "command", "{hook}");
+                assert!(hook["command"].as_str().is_some_and(|s| !s.is_empty()));
+            }
+        }
+    }
+}
+
+fn assert_unsupported_codex_sidecar_contains(value: &Value, event: &str, command: &str) {
+    assert!(
+        value[event]
+            .as_array()
+            .unwrap_or_else(|| panic!("{event} sidecar value must be an array: {value}"))
+            .iter()
+            .any(|entry| entry
+                .pointer("/hooks/0/command")
+                .and_then(Value::as_str)
+                .is_some_and(|text| text.contains(command))),
+        "{event} sidecar missing {command}: {value}"
+    );
+}
+
+fn assert_codex_0145_stop_schema_fixture(dir: &Path) {
+    for mode in CODEX_0145_PERMISSION_MODES {
+        let mut envelope: Value =
+            serde_json::from_str(&codex_stop_envelope(dir, &format!("session-{mode}"), false))
+                .unwrap();
+        envelope["permission_mode"] = json!(mode);
+        assert_codex_stop_input_schema(&envelope);
+    }
+    let mut invalid: Value =
+        serde_json::from_str(&codex_stop_envelope(dir, "session-invalid", false)).unwrap();
+    invalid["permission_mode"] = json!("workspace-write");
+    assert!(
+        validate_codex_0145_stop_input(&invalid).is_err(),
+        "workspace-write is not a Codex 0.145 permission mode"
+    );
+    assert!(CODEX_0145_HOOK_EVENTS.contains(&"PermissionRequest"));
+    assert!(CODEX_0145_HOOK_EVENTS.contains(&"PostCompact"));
+    assert!(CODEX_0145_HOOK_EVENTS.contains(&"SessionEnd"));
+    assert!(CODEX_0145_HOOK_EVENTS.contains(&"SubagentStart"));
+    assert!(
+        !CODEX_0145_HOOK_EVENTS.contains(&"Notification"),
+        "Notification is not supported by Codex 0.145 hooks"
+    );
 }
 
 fn assert_eval_envelope(value: &Value, command: &str, ok: bool) {
@@ -94,25 +193,6 @@ fn verified_eval_route_observation(
     })
 }
 
-fn canonical_json_value(value: &Value) -> Value {
-    match value {
-        Value::Array(values) => Value::Array(values.iter().map(canonical_json_value).collect()),
-        Value::Object(object) => {
-            let mut entries = object
-                .iter()
-                .map(|(key, value)| (key.clone(), canonical_json_value(value)))
-                .collect::<Vec<_>>();
-            entries.sort_by(|left, right| left.0.cmp(&right.0));
-            let mut sorted = serde_json::Map::new();
-            for (key, value) in entries {
-                sorted.insert(key, value);
-            }
-            Value::Object(sorted)
-        }
-        scalar => scalar.clone(),
-    }
-}
-
 fn replace_json_string(value: &Value, from: &str, to: &str) -> Value {
     match value {
         Value::Array(values) => Value::Array(
@@ -135,11 +215,108 @@ fn replace_json_string(value: &Value, from: &str, to: &str) -> Value {
 fn with_canonical_digest(mut value: Value) -> Value {
     if let Some(object) = value.as_object_mut() {
         object.remove("digest");
+        sort_object_array_by_string_field(object, "fixtures", "id");
+        sort_scorers_by_id_version(object);
+        sort_object_array_by_string_field(object, "cases", "case_id");
+        if let Some(cases) = object.get_mut("cases").and_then(Value::as_array_mut) {
+            for case in cases {
+                let Some(case_object) = case.as_object_mut() else {
+                    continue;
+                };
+                sort_string_array_field(case_object, "fixture_ids");
+                sort_string_array_field(case_object, "scorer_ids");
+                sort_string_array_field(case_object, "measures");
+            }
+        }
     }
-    let bytes = serde_json::to_vec(&canonical_json_value(&value)).unwrap();
+    let bytes = serde_jcs::to_vec(&value).unwrap();
     let digest = format!("sha256:{:x}", Sha256::digest(&bytes));
     value["digest"] = json!(digest);
     value
+}
+
+fn with_authored_order_and_canonical_digest(mut value: Value) -> Value {
+    let digest = with_canonical_digest(value.clone())["digest"].clone();
+    value["digest"] = digest;
+    value
+}
+
+fn sort_scorers_by_id_version(object: &mut serde_json::Map<String, Value>) {
+    if let Some(values) = object.get_mut("scorers").and_then(Value::as_array_mut) {
+        values.sort_by(|left, right| {
+            scorer_id_version_key(left)
+                .as_str()
+                .cmp(scorer_id_version_key(right).as_str())
+        });
+    }
+}
+
+fn scorer_id_version_key(value: &Value) -> String {
+    let id = value.get("id").and_then(Value::as_str).unwrap_or_default();
+    let version = value
+        .get("version")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    format!("{id}@{version}")
+}
+
+fn sort_object_array_by_string_field(
+    object: &mut serde_json::Map<String, Value>,
+    array_field: &str,
+    key_field: &str,
+) {
+    if let Some(values) = object.get_mut(array_field).and_then(Value::as_array_mut) {
+        values.sort_by(|left, right| {
+            let left_key = left
+                .get(key_field)
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let right_key = right
+                .get(key_field)
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            left_key.cmp(right_key)
+        });
+    }
+}
+
+fn sort_string_array_field(object: &mut serde_json::Map<String, Value>, field: &str) {
+    if let Some(values) = object.get_mut(field).and_then(Value::as_array_mut) {
+        values.sort_by(|left, right| {
+            let left = left.as_str().unwrap_or_default();
+            let right = right.as_str().unwrap_or_default();
+            left.cmp(right)
+        });
+    }
+}
+
+fn with_legacy_eval_digest(mut value: Value) -> Value {
+    if let Some(object) = value.as_object_mut() {
+        object.remove("digest");
+    }
+    let bytes = serde_json::to_vec(&legacy_sorted_json_value(&value)).unwrap();
+    let digest = format!("sha256:{:x}", Sha256::digest(&bytes));
+    value["digest"] = json!(digest);
+    value
+}
+
+fn legacy_sorted_json_value(value: &Value) -> Value {
+    match value {
+        Value::Array(values) => Value::Array(values.iter().map(legacy_sorted_json_value).collect()),
+        Value::Object(object) => {
+            let mut entries = object
+                .iter()
+                .map(|(key, value)| (key.clone(), legacy_sorted_json_value(value)))
+                .collect::<Vec<_>>();
+            entries.sort_by(|left, right| left.0.cmp(&right.0));
+            let mut sorted = serde_json::Map::new();
+            for (key, value) in entries {
+                sorted.insert(key, value);
+            }
+            Value::Object(sorted)
+        }
+        scalar => scalar.clone(),
+    }
 }
 
 fn sha256_prefixed(bytes: &[u8]) -> String {
@@ -155,10 +332,7869 @@ fn mcp_text_value(response: &Value) -> Value {
     .expect("MCP text content must be JSON")
 }
 
+fn mcp_tool_response_with_env(
+    dir: &Path,
+    db: &Path,
+    id: u64,
+    name: &str,
+    arguments: Value,
+    env: &[(&str, &str)],
+) -> Value {
+    let input = format!(
+        "{}\n",
+        json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/call",
+            "params": {"name": name, "arguments": arguments}
+        })
+    );
+    let mut command = planr();
+    command.current_dir(dir);
+    command.args(["--db", db.to_str().unwrap(), "mcp"]);
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    let output = command
+        .write_stdin(input)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    serde_json::from_slice(&output).unwrap()
+}
+
+fn mcp_tool_response(dir: &Path, db: &Path, id: u64, name: &str, arguments: Value) -> Value {
+    mcp_tool_response_with_env(dir, db, id, name, arguments, &[])
+}
+
+fn mcp_tool(dir: &Path, db: &Path, id: u64, name: &str, arguments: Value) -> Value {
+    let response = mcp_tool_response(dir, db, id, name, arguments);
+    mcp_text_value(&response)
+}
+
+fn assert_evidence_envelope(value: &Value, command: &str, ok: bool) {
+    assert_eq!(value["schema"], "planr.evidence.command.v1");
+    assert_eq!(value["command"], command);
+    assert_eq!(value["ok"], ok, "{value}");
+    assert!(value["exit"]["code"].is_i64());
+    if ok {
+        assert!(value.get("object").is_some());
+    } else {
+        assert!(value["error"]["message"].is_string());
+    }
+}
+
+fn assert_evidence_error(value: &Value, command: &str, code: &str, message: &str) {
+    assert_evidence_envelope(value, command, false);
+    assert_eq!(value["error"]["code"], code, "{value}");
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains(message),
+        "{value}"
+    );
+}
+
+fn assert_mcp_evidence_error(response: &Value, command: &str, code: &str, message: &str) -> Value {
+    assert_eq!(response["result"]["isError"], true, "{response}");
+    let envelope = mcp_text_value(response);
+    assert_evidence_error(&envelope, command, code, message);
+    envelope
+}
+
+fn assert_http_evidence_error(
+    response: &str,
+    status: &str,
+    command: &str,
+    code: &str,
+    message: &str,
+) -> Value {
+    assert!(
+        response.starts_with(&format!("HTTP/1.1 {status}")),
+        "{response}"
+    );
+    let envelope = http_json(response);
+    assert_evidence_error(&envelope, command, code, message);
+    envelope
+}
+
+fn evidence_obligation_count_like(db: &Path, id_pattern: &str) -> i64 {
+    let conn = Connection::open(db).unwrap();
+    conn.query_row(
+        "SELECT COUNT(*) FROM proof_obligations WHERE id LIKE ?1",
+        [id_pattern],
+        |row| row.get(0),
+    )
+    .unwrap()
+}
+
+fn evidence_attempt_receipt_counts(db: &Path, obligation_id: &str) -> (i64, i64) {
+    let conn = Connection::open(db).unwrap();
+    let attempts = conn
+        .query_row(
+            "SELECT COUNT(*) FROM evidence_attempts WHERE obligation_id = ?1",
+            [obligation_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let receipts = conn
+        .query_row(
+            "SELECT COUNT(*) FROM evidence_receipts WHERE obligation_id = ?1",
+            [obligation_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    (attempts, receipts)
+}
+
+fn evidence_observe_snapshot(db: &Path, item_id: &str) -> Value {
+    let conn = Connection::open(db).unwrap();
+    let item_ids = {
+        let mut ids = vec![item_id.to_string()];
+        let mut stmt = conn
+            .prepare(
+                "SELECT from_item FROM links WHERE to_item = ?1 AND kind = 'reviews' ORDER BY from_item",
+            )
+            .unwrap();
+        let rows = stmt
+            .query_map([item_id], |row| row.get::<_, String>(0))
+            .unwrap();
+        for row in rows {
+            ids.push(row.unwrap());
+        }
+        ids
+    };
+    let quoted_ids = item_ids
+        .iter()
+        .map(|id| format!("'{}'", id.replace('\'', "''")))
+        .collect::<Vec<_>>()
+        .join(",");
+    let item_rows = query_snapshot_rows(
+        &conn,
+        &format!(
+            "SELECT id, project_id, parent_item_id, title, description, status, work_type,
+                    priority, worker_id, plan_path, pick_token, picked_at, last_heartbeat_at,
+                    progress_percent, progress_note, paused_at, timeout_seconds, max_retries,
+                    retry_count, retry_backoff, retry_delay_ms, pre_condition, post_condition,
+                    approval_status, approval_requested_at, approved_by, approval_comment,
+                    started_at, completed_at, result, error, metadata, created_at, updated_at
+             FROM items WHERE id IN ({quoted_ids}) ORDER BY id"
+        ),
+        |row| {
+            Ok(json!({
+                "id": row.get::<_, String>(0)?,
+                "project_id": row.get::<_, String>(1)?,
+                "parent_item_id": row.get::<_, Option<String>>(2)?,
+                "title": row.get::<_, String>(3)?,
+                "description": row.get::<_, String>(4)?,
+                "status": row.get::<_, String>(5)?,
+                "work_type": row.get::<_, String>(6)?,
+                "priority": row.get::<_, i64>(7)?,
+                "worker_id": row.get::<_, Option<String>>(8)?,
+                "plan_path": row.get::<_, Option<String>>(9)?,
+                "pick_token": row.get::<_, Option<String>>(10)?,
+                "picked_at": row.get::<_, Option<String>>(11)?,
+                "last_heartbeat_at": row.get::<_, Option<String>>(12)?,
+                "progress_percent": row.get::<_, Option<i64>>(13)?,
+                "progress_note": row.get::<_, Option<String>>(14)?,
+                "paused_at": row.get::<_, Option<String>>(15)?,
+                "timeout_seconds": row.get::<_, Option<i64>>(16)?,
+                "max_retries": row.get::<_, i64>(17)?,
+                "retry_count": row.get::<_, i64>(18)?,
+                "retry_backoff": row.get::<_, String>(19)?,
+                "retry_delay_ms": row.get::<_, i64>(20)?,
+                "pre_condition": row.get::<_, Option<String>>(21)?,
+                "post_condition": row.get::<_, Option<String>>(22)?,
+                "approval_status": row.get::<_, Option<String>>(23)?,
+                "approval_requested_at": row.get::<_, Option<String>>(24)?,
+                "approved_by": row.get::<_, Option<String>>(25)?,
+                "approval_comment": row.get::<_, Option<String>>(26)?,
+                "started_at": row.get::<_, Option<String>>(27)?,
+                "completed_at": row.get::<_, Option<String>>(28)?,
+                "result": row.get::<_, Option<String>>(29)?,
+                "error": row.get::<_, Option<String>>(30)?,
+                "metadata": row.get::<_, Option<String>>(31)?,
+                "created_at": row.get::<_, String>(32)?,
+                "updated_at": row.get::<_, String>(33)?,
+            }))
+        },
+    );
+    let review_links = query_snapshot_rows(
+        &conn,
+        &format!(
+            "SELECT id, from_item, to_item, kind, condition, metadata FROM links
+             WHERE (from_item IN ({quoted_ids}) OR to_item IN ({quoted_ids}))
+               AND kind IN ('reviews','blocks')
+             ORDER BY id"
+        ),
+        |row| {
+            Ok(json!({
+                "id": row.get::<_, i64>(0)?,
+                "from_item": row.get::<_, String>(1)?,
+                "to_item": row.get::<_, String>(2)?,
+                "kind": row.get::<_, String>(3)?,
+                "condition": row.get::<_, String>(4)?,
+                "metadata": row.get::<_, Option<String>>(5)?,
+            }))
+        },
+    );
+    let logs = query_snapshot_rows(
+        &conn,
+        &format!(
+            "SELECT id, project_id, item_id, run_id, kind, summary, files, commands,
+                    tests, review_findings, blocked_or_unverified, created_at
+             FROM logs WHERE item_id IN ({quoted_ids}) ORDER BY id"
+        ),
+        |row| {
+            Ok(json!({
+                "id": row.get::<_, String>(0)?,
+                "project_id": row.get::<_, String>(1)?,
+                "item_id": row.get::<_, String>(2)?,
+                "run_id": row.get::<_, Option<String>>(3)?,
+                "kind": row.get::<_, String>(4)?,
+                "summary": row.get::<_, String>(5)?,
+                "files": row.get::<_, Option<String>>(6)?,
+                "commands": row.get::<_, Option<String>>(7)?,
+                "tests": row.get::<_, Option<String>>(8)?,
+                "review_findings": row.get::<_, Option<String>>(9)?,
+                "blocked_or_unverified": row.get::<_, Option<String>>(10)?,
+                "created_at": row.get::<_, String>(11)?,
+            }))
+        },
+    );
+    let artifacts = query_snapshot_rows(
+        &conn,
+        &format!(
+            "SELECT id, project_id, item_id, name, kind, path, content, mime_type,
+                    size_bytes, metadata, created_at
+             FROM artifacts WHERE item_id IN ({quoted_ids}) ORDER BY id"
+        ),
+        |row| {
+            let content = row.get::<_, Option<String>>(6)?;
+            Ok(json!({
+                "id": row.get::<_, String>(0)?,
+                "project_id": row.get::<_, String>(1)?,
+                "item_id": row.get::<_, Option<String>>(2)?,
+                "name": row.get::<_, String>(3)?,
+                "kind": row.get::<_, Option<String>>(4)?,
+                "path": row.get::<_, Option<String>>(5)?,
+                "content": content,
+                "content_digest": content.as_deref().map(sha256_text),
+                "mime_type": row.get::<_, Option<String>>(7)?,
+                "size_bytes": row.get::<_, Option<i64>>(8)?,
+                "metadata": row.get::<_, Option<String>>(9)?,
+                "created_at": row.get::<_, String>(10)?,
+            }))
+        },
+    );
+    let contexts = query_snapshot_rows(
+        &conn,
+        &format!(
+            "SELECT id, project_id, item_id, worker_id, kind, content, tags, created_at
+             FROM contexts WHERE item_id IN ({quoted_ids}) ORDER BY id"
+        ),
+        |row| {
+            Ok(json!({
+                "id": row.get::<_, String>(0)?,
+                "project_id": row.get::<_, String>(1)?,
+                "item_id": row.get::<_, Option<String>>(2)?,
+                "worker_id": row.get::<_, Option<String>>(3)?,
+                "kind": row.get::<_, String>(4)?,
+                "content": row.get::<_, String>(5)?,
+                "tags": row.get::<_, Option<String>>(6)?,
+                "created_at": row.get::<_, String>(7)?,
+            }))
+        },
+    );
+    let events = query_snapshot_rows(
+        &conn,
+        &format!(
+            "SELECT id, project_id, item_id, worker_id, event_type, payload, timestamp
+             FROM events
+             WHERE item_id IN ({quoted_ids})
+                OR event_type LIKE 'approval_%'
+                OR event_type LIKE 'review_%'
+                OR event_type IN ('item_closed','done')
+             ORDER BY id"
+        ),
+        |row| {
+            Ok(json!({
+                "id": row.get::<_, i64>(0)?,
+                "project_id": row.get::<_, Option<String>>(1)?,
+                "item_id": row.get::<_, Option<String>>(2)?,
+                "worker_id": row.get::<_, Option<String>>(3)?,
+                "event_type": row.get::<_, String>(4)?,
+                "payload": row.get::<_, Option<String>>(5)?,
+                "timestamp": row.get::<_, String>(6)?,
+            }))
+        },
+    );
+    json!({
+        "item_ids": item_ids,
+        "items": item_rows,
+        "review_and_block_links": review_links,
+        "logs": logs,
+        "artifacts": artifacts,
+        "contexts": contexts,
+        "events": events,
+        "excluded_non_authority_tables": [
+            "proof_obligations",
+            "verification_capability_manifests",
+            "verification_capability_instances",
+            "evidence_attempts",
+            "evidence_receipts",
+            "evidence_coverage_history",
+            "evidence_validated_imports"
+        ],
+    })
+}
+
+fn query_snapshot_rows<F>(conn: &Connection, sql: &str, mut row_fn: F) -> Vec<Value>
+where
+    F: FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<Value>,
+{
+    let mut stmt = conn.prepare(sql).unwrap();
+    stmt.query_map([], |row| row_fn(row))
+        .unwrap()
+        .map(|row| row.unwrap())
+        .collect()
+}
+
+fn sha256_json(value: &Value) -> String {
+    format!(
+        "sha256:{:x}",
+        Sha256::digest(serde_jcs::to_vec(value).unwrap())
+    )
+}
+
+fn sha256_text(value: &str) -> String {
+    format!("sha256:{:x}", Sha256::digest(value.as_bytes()))
+}
+
+fn sha256_json_without_field(value: &Value, field: &str) -> String {
+    let mut digest_value = value.clone();
+    digest_value.as_object_mut().unwrap().remove(field);
+    sha256_json(&digest_value)
+}
+
+fn process_adapter_digest(execution: &Value, file_arguments: Vec<Value>) -> String {
+    sha256_json(&json!({
+        "schema_version": "planr.process_adapter.binding.v1",
+        "execution_contract": execution,
+        "file_arguments": file_arguments,
+    }))
+}
+
+fn evidence_runner_manifest() -> (Value, Value, String) {
+    let schema = json!({
+        "type": "object",
+        "required": ["status"],
+        "properties": {"status": {"const": "ok"}},
+        "additionalProperties": false
+    });
+    let payload_schema = json!({
+        "type": "com.example.health.status",
+        "schema_ref": "schema://com.example.health.status",
+        "schema_digest": sha256_json(&schema),
+    });
+    let execution = json!({
+        "kind": "process",
+        "executable": "sh",
+        "args": ["-c", "if [ -n \"${PLANR_FIXTURE_GAP_REASONS:-}\" ]; then printf '{\"planr_adapter_gap_reasons\":%s}\\n' \"$PLANR_FIXTURE_GAP_REASONS\" >&2; exit 2; fi; if [ -n \"${PLANR_FIXTURE_BOUNDARY:-}\" ]; then printf '{\"planr_adapter_boundary\":\"%s\"}\\n' \"$PLANR_FIXTURE_BOUNDARY\" >&2; exit 2; fi; if [ -n \"${PLANR_FIXTURE_EXIT:-}\" ]; then exit \"$PLANR_FIXTURE_EXIT\"; fi; printf '{\"status\":\"ok\"}'"],
+        "working_directory": ".",
+        "timeout_ms": 5000,
+        "stdout_limit_bytes": 4096,
+        "stderr_limit_bytes": 1024,
+        "payload_schema": payload_schema,
+    });
+    let adapter_digest = process_adapter_digest(&execution, vec![]);
+    let manifest = json!({
+        "id": "verifier-generic-adapter",
+        "schema_version": "evidence.contract.v1",
+        "version": "1.0.0",
+        "adapter_kind": "artifact_import",
+        "adapter_digest": adapter_digest,
+        "supported_surfaces": ["local-process"],
+        "supported_observations": [payload_schema],
+        "supported_interactions": ["process", "import"],
+        "supported_artifacts": ["stdout", "planr.runner_result.v1"],
+        "runtime_targets": [{"kind": "process", "id": "runtime-local"}],
+        "provenance_path": "planr_observed_execution",
+        "permissions": {"network": "none", "filesystem": "read_workspace"},
+        "costs": {},
+        "determinism": "deterministic",
+        "repeatability": "repeatable",
+        "independence": "repository-owned adapter manifest outside Planr core",
+        "blind_spots": ["fixture covers public evidence flow"],
+        "availability_probe": {
+            "kind": "process",
+            "execution": execution,
+        },
+    });
+    let manifest_digest = sha256_json(&manifest);
+    (schema, manifest, manifest_digest)
+}
+
+fn write_evidence_policy_fixture(root: &Path) {
+    let evidence_dir = root.join(".planr/evidence");
+    fs::create_dir_all(evidence_dir.join("schemas")).unwrap();
+    fs::create_dir_all(evidence_dir.join("adapters")).unwrap();
+    let (schema, manifest, manifest_digest) = evidence_runner_manifest();
+    fs::write(
+        evidence_dir
+            .join("schemas")
+            .join("com.example.health.status.schema.json"),
+        serde_json::to_vec_pretty(&schema).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        evidence_dir.join("adapters").join("runner.manifest.json"),
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    let payload_schema = manifest["supported_observations"][0].clone();
+    let execution = manifest["availability_probe"]["execution"].clone();
+    let import_payload_schema = json!({
+        "type": "planr.runner.result",
+        "schema_ref": "schema://planr.runner.result",
+        "schema_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    });
+    let import_execution = json!({
+        "kind": "process",
+        "executable": "true",
+        "args": [],
+        "working_directory": ".",
+        "timeout_ms": 5000,
+        "stdout_limit_bytes": 1,
+        "stderr_limit_bytes": 1,
+        "payload_schema": import_payload_schema.clone(),
+    });
+    let import_manifest = json!({
+        "id": "verifier-runner-import",
+        "schema_version": "evidence.contract.v1",
+        "version": "1.0.0",
+        "adapter_kind": "artifact_import",
+        "adapter_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "supported_surfaces": ["local-process"],
+        "supported_observations": [import_payload_schema],
+        "supported_interactions": ["import"],
+        "supported_artifacts": ["planr.runner_result.v1"],
+        "runtime_targets": [{"kind": "process", "id": "runtime-import"}],
+        "provenance_path": "validated_artifact_import",
+        "permissions": {"network": "none", "filesystem": "read_workspace"},
+        "costs": {},
+        "determinism": "deterministic",
+        "repeatability": "repeatable",
+        "independence": "repository-owned import verifier manifest",
+        "blind_spots": ["fixture covers runner import binding"],
+        "availability_probe": {
+            "kind": "process",
+            "execution": import_execution,
+        },
+    });
+    let import_manifest_digest = sha256_json(&import_manifest);
+    fs::write(
+        evidence_dir
+            .join("adapters")
+            .join("runner-import.manifest.json"),
+        serde_json::to_vec_pretty(&import_manifest).unwrap(),
+    )
+    .unwrap();
+    let mut policy = json!({
+        "id": "epolicy-e2e-public-v1",
+        "schema_version": "evidence.contract.v1",
+        "policy_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "defaults": {
+            "preset_id": "health",
+            "binding": true,
+            "assurance_level": "standard",
+        },
+        "named_presets": [{
+            "id": "health",
+            "schema_version": "evidence.contract.v1",
+            "namespace": "com.example.health",
+            "observations": [{
+                "id": "health",
+                "type": "com.example.health.status",
+                "subject": "public evidence health",
+                "expected": {"status": "ok"},
+                "target": {"kind": "process", "uri": "local://health"},
+                "environment": {"kind": "local", "id": "placeholder", "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"},
+                "runtime_target": {"kind": "process", "id": "runtime-local"},
+            }],
+        }],
+        "observation_schema_registrations": [{
+            "type": "com.example.health.status",
+            "schema_ref": "schema://com.example.health.status",
+            "schema_digest": sha256_json(&schema),
+            "owning_namespace": "com.example.health",
+        }],
+        "adapter_registrations": [
+            {
+                "manifest_id": "verifier-generic-adapter",
+                "manifest_path": ".planr/evidence/adapters/runner.manifest.json",
+                "manifest_digest": manifest_digest,
+                "observation_types": ["com.example.health.status"],
+                "payload_schemas": [payload_schema],
+                "provenance_path": "planr_observed_execution",
+                "execution_contract": execution,
+            },
+            {
+                "manifest_id": "verifier-runner-import",
+                "manifest_path": ".planr/evidence/adapters/runner-import.manifest.json",
+                "manifest_digest": import_manifest_digest,
+                "observation_types": ["planr.runner.result"],
+                "payload_schemas": [import_manifest["supported_observations"][0].clone()],
+                "provenance_path": "validated_artifact_import",
+                "execution_contract": import_manifest["availability_probe"]["execution"].clone(),
+            },
+        ],
+        "extension_namespaces": ["com.example.health"],
+        "trust_policy": {
+            "accepted_provenance": ["planr_observed_execution", "validated_artifact_import"],
+            "min_receipt_status": "trusted",
+            "allow_user_attestation": false,
+        },
+        "freshness_policy": {
+            "max_age_seconds": 3600,
+            "invalidate_on": ["source_change", "target_change", "policy_change"],
+        },
+        "fixture_policy": {
+            "fixtures_allowed": false,
+            "mocks_allowed": false,
+            "disclosure_required": true,
+        },
+        "completion_policy": {
+            "require_satisfied_or_waived": true,
+            "allow_inconclusive_completion": false,
+            "require_review_evidence": true,
+        },
+        "layering_policy": {
+            "mode": "monotonic_strengthening",
+            "weakening_requires_waiver": true,
+            "layers": [{
+                "scope": {"kind": "plan", "id": "pln-evidence-public"},
+                "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            }],
+        },
+    });
+    policy["policy_digest"] = json!(sha256_json_without_field(&policy, "policy_digest"));
+    fs::write(
+        root.join(".planr/evidence.yaml"),
+        serde_yaml::to_string(&policy).unwrap(),
+    )
+    .unwrap();
+}
+
+fn rewrite_evidence_policy_fixture(root: &Path, update: impl FnOnce(&mut Value)) {
+    let path = root.join(".planr/evidence.yaml");
+    let text = fs::read_to_string(&path).unwrap();
+    let mut policy: Value = serde_yaml::from_str(&text).unwrap();
+    update(&mut policy);
+    policy["policy_digest"] = json!(sha256_json_without_field(&policy, "policy_digest"));
+    fs::write(path, serde_yaml::to_string(&policy).unwrap()).unwrap();
+}
+
+fn rewrite_evidence_runner_manifest(root: &Path, update: impl FnOnce(&mut Value)) -> String {
+    let path = root.join(".planr/evidence/adapters/runner.manifest.json");
+    let mut manifest: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    update(&mut manifest);
+    let digest = sha256_json(&manifest);
+    fs::write(path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+    digest
+}
+
+fn init_git_repo(root: &Path) {
+    for args in [
+        vec!["init"],
+        vec!["config", "user.email", "planr-test@example.invalid"],
+        vec!["config", "user.name", "Planr Test"],
+        vec!["add", "."],
+        vec!["commit", "-m", "initial evidence fixture"],
+    ] {
+        let output = StdCommand::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git failed: {output:?}");
+    }
+}
+
+fn git_stdout(root: &Path, args: &[&str]) -> String {
+    let output = StdCommand::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "git failed: {output:?}");
+    String::from_utf8_lossy(&output.stdout)
+        .trim_end()
+        .to_string()
+}
+
+fn evidence_source_binding(root: &Path) -> Value {
+    let untracked = git_stdout(root, &["ls-files", "--others", "--exclude-standard"])
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(|relative| {
+            json!({
+                "path": relative,
+                "digest": sha256_prefixed(&fs::read(root.join(relative)).unwrap()),
+            })
+        })
+        .collect::<Vec<_>>();
+    let revision = git_stdout(root, &["rev-parse", "--verify", "HEAD"]);
+    let head_tree = git_stdout(root, &["rev-parse", "HEAD^{tree}"]);
+    let index = git_stdout(root, &["ls-files", "-s"]);
+    let status = git_stdout(root, &["status", "--porcelain=v1"]);
+    let diff = git_stdout(root, &["diff", "--binary", "HEAD"]);
+    let diff_cached = git_stdout(root, &["diff", "--cached", "--binary"]);
+    json!({
+        "revision": revision,
+        "tree_digest": sha256_json(&json!({
+            "revision": revision,
+            "head_tree": head_tree,
+            "index": index,
+            "status": status,
+            "diff": diff,
+            "diff_cached": diff_cached,
+            "untracked": untracked,
+        })),
+        "dirty": !status.trim().is_empty(),
+    })
+}
+
+fn evidence_obligation(id: &str, policy_digest: &str, environment: Value) -> Value {
+    evidence_obligation_for(
+        id,
+        policy_digest,
+        "com.example.health.status",
+        "public evidence health",
+        json!({"status": "ok"}),
+        json!({"kind": "process", "uri": "local://health"}),
+        environment,
+        json!({"kind": "process", "id": "runtime-local"}),
+        json!([
+            "source_change",
+            "target_change",
+            "policy_change",
+            "adapter_schema_change"
+        ]),
+        "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evidence_obligation_for(
+    id: &str,
+    policy_digest: &str,
+    observation_type: &str,
+    subject: &str,
+    expected: Value,
+    target: Value,
+    environment: Value,
+    runtime_target: Value,
+    invalidate_on: Value,
+    config_digest: &str,
+) -> Value {
+    json!({
+        "id": id,
+        "schema_version": "evidence.contract.v1",
+        "criterion_id": format!("crit-{id}"),
+        "plan_id": "pln-evidence-public",
+        "title": format!("Evidence obligation {id}"),
+        "binding": true,
+        "observations": [{
+            "id": format!("obs-{id}"),
+            "type": observation_type,
+            "subject": subject,
+            "expected": expected,
+            "target": target,
+            "environment": environment,
+            "runtime_target": runtime_target,
+        }],
+        "fixture_policy": {"fixtures_allowed": false, "mocks_allowed": false, "disclosure_required": true},
+        "freshness_policy": {"invalidate_on": invalidate_on},
+        "assurance_policy": {},
+        "policy_digest": policy_digest,
+        "config_digest": config_digest,
+        "created_at": "2026-07-29T00:00:00Z",
+    })
+}
+
+fn host_capture_run_environment(manifest_id: &str) -> Value {
+    let kind = "planr-host-capture-run";
+    let id = format!("env-{manifest_id}");
+    json!({
+        "kind": kind,
+        "id": id,
+        "digest": sha256_json(&json!({"kind": kind, "id": id})),
+    })
+}
+
+fn current_utc_second() -> String {
+    OffsetDateTime::now_utc()
+        .replace_nanosecond(0)
+        .unwrap()
+        .format(&Rfc3339)
+        .unwrap()
+}
+
+fn write_fresh_host_capture_envelope(root: &Path, mutate: impl FnOnce(&mut Value)) {
+    write_fresh_host_capture_envelope_with_producer(root, "planr-codex-host-capture", mutate);
+}
+
+fn write_fresh_host_capture_envelope_with_producer(
+    root: &Path,
+    producer_name: &str,
+    mutate: impl FnOnce(&mut Value),
+) {
+    let fixture_root =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/evidence/host-capabilities/v1");
+    fs::create_dir_all(root.join("artifacts/chrome-browser-client")).unwrap();
+    fs::copy(
+        fixture_root.join("artifacts/chrome-browser-client/cdp-result.json"),
+        root.join("artifacts/chrome-browser-client/cdp-result.json"),
+    )
+    .unwrap();
+    let mut raw: Value = serde_json::from_slice(
+        &fs::read(fixture_root.join("observed/exp-chrome-browser-client.json")).unwrap(),
+    )
+    .unwrap();
+    let now = current_utc_second();
+    raw.as_object_mut().unwrap().remove("provenance_ref");
+    raw["started_at"] = json!(now);
+    raw["ended_at"] = json!(now);
+    raw["host_identity"]["version"] = json!("Chrome/126.0.0.0");
+    raw["result"]["missing_fields"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|field| field != "host_version");
+    mutate(&mut raw);
+    let envelope = json!({
+        "schema_version": "planr.host_capability_external_capture_envelope.v1",
+        "producer": {
+            "name": producer_name,
+            "version": "1.0.0",
+            "captured_at": now,
+        },
+        "suite_id": "codex-host-capability-phase1",
+        "captures": [raw],
+    });
+    fs::write(
+        root.join("external-capture-envelope.json"),
+        serde_json::to_vec_pretty(&envelope).unwrap(),
+    )
+    .unwrap();
+}
+
+fn write_registered_host_capture_run_helper(
+    root: &Path,
+    source_capture_root: &Path,
+    manifest_id: &str,
+    observation_type: &str,
+    include_cdp_artifact_support: bool,
+) -> String {
+    write_registered_host_capture_run_helper_with_disclosure(
+        root,
+        source_capture_root,
+        manifest_id,
+        observation_type,
+        include_cdp_artifact_support,
+        HostCaptureDisclosureMode::Valid,
+    )
+}
+
+#[derive(Debug, Clone, Copy)]
+enum HostCaptureDisclosureMode {
+    Valid,
+    Missing,
+    False,
+}
+
+fn write_registered_host_capture_run_helper_with_disclosure(
+    root: &Path,
+    source_capture_root: &Path,
+    manifest_id: &str,
+    observation_type: &str,
+    include_cdp_artifact_support: bool,
+    disclosure_mode: HostCaptureDisclosureMode,
+) -> String {
+    let helper_dir = root.join(".planr/evidence/helpers");
+    fs::create_dir_all(&helper_dir).unwrap();
+    let helper_path = helper_dir.join(format!("{manifest_id}.sh"));
+    let helper_rel = format!(".planr/evidence/helpers/{manifest_id}.sh");
+    let envelope_digest = sha256_prefixed(
+        fs::read(source_capture_root.join("external-capture-envelope.json"))
+            .unwrap()
+            .as_slice(),
+    );
+    let disclosure_script = match disclosure_mode {
+        HostCaptureDisclosureMode::Valid => format!(
+            "/bin/cat > \"$PLANR_HOST_CAPTURE_OUT_DIR/producer-disclosure.json\" <<'PLANR_DISCLOSURE'\n{}\nPLANR_DISCLOSURE\n",
+            serde_json::to_string_pretty(&json!({
+                "schema_version": "planr.evidence.host_capture.producer_disclosure.v1",
+                "producer_manifest_id": manifest_id,
+                "fixtures_used": true,
+                "mocks_used": false,
+                "fixture_refs": [{
+                    "kind": "host-capture-envelope",
+                    "path": "external-capture-envelope.json",
+                    "digest": envelope_digest,
+                }],
+                "mock_refs": [],
+            }))
+            .unwrap()
+        ),
+        HostCaptureDisclosureMode::Missing => String::new(),
+        HostCaptureDisclosureMode::False => format!(
+            "/bin/cat > \"$PLANR_HOST_CAPTURE_OUT_DIR/producer-disclosure.json\" <<'PLANR_DISCLOSURE'\n{}\nPLANR_DISCLOSURE\n",
+            serde_json::to_string_pretty(&json!({
+                "schema_version": "planr.evidence.host_capture.producer_disclosure.v1",
+                "producer_manifest_id": manifest_id,
+                "fixtures_used": false,
+                "mocks_used": false,
+                "fixture_refs": [],
+                "mock_refs": [],
+            }))
+            .unwrap()
+        ),
+    };
+    let script = format!(
+        "#!/bin/sh\nset -eu\nif [ -z \"${{PLANR_HOST_CAPTURE_OUT_DIR:-}}\" ]; then echo missing PLANR_HOST_CAPTURE_OUT_DIR >&2; exit 2; fi\n/bin/mkdir -p \"$PLANR_HOST_CAPTURE_OUT_DIR\"\n/bin/cp -R '{}/.' \"$PLANR_HOST_CAPTURE_OUT_DIR\"\n{}",
+        source_capture_root.display(),
+        disclosure_script
+    );
+    fs::write(&helper_path, script).unwrap();
+    #[cfg(unix)]
+    {
+        let mut permissions = fs::metadata(&helper_path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&helper_path, permissions).unwrap();
+    }
+    let payload_schema = json!({
+        "type": observation_type,
+        "schema_ref": format!("schema://{observation_type}"),
+        "schema_digest": "sha256:abababababababababababababababababababababababababababababababab",
+    });
+    let execution = json!({
+        "kind": "process",
+        "executable": "sh",
+        "args": [helper_rel],
+        "working_directory": ".",
+        "timeout_ms": 30000,
+        "stdout_limit_bytes": 1048576,
+        "stderr_limit_bytes": 1048576,
+        "payload_schema": payload_schema,
+    });
+    let adapter_digest = host_capture_run_adapter_digest(root, &execution, &helper_rel);
+    let mut supported_artifacts = vec![json!("host-capture-envelope")];
+    if include_cdp_artifact_support {
+        supported_artifacts.push(json!("cdp-json-result"));
+    }
+    supported_artifacts.push(json!("host-capture-fixture-copy"));
+    let manifest = json!({
+        "id": manifest_id,
+        "schema_version": "evidence.contract.v1",
+        "version": "1.0.0",
+        "adapter_kind": "process",
+        "adapter_digest": adapter_digest,
+        "supported_surfaces": ["host-capture-run"],
+        "supported_observations": [execution["payload_schema"].clone()],
+        "supported_interactions": ["process"],
+        "supported_artifacts": supported_artifacts,
+        "runtime_targets": [{"kind": "process", "id": "runtime-host-capture-run"}],
+        "provenance_path": "planr_observed_execution",
+        "permissions": {"network": "none", "filesystem": "read_workspace"},
+        "costs": {},
+        "determinism": "deterministic",
+        "repeatability": "repeatable",
+        "independence": "policy-registered host capture helper",
+        "blind_spots": ["helper is process-observed and cannot claim host-native browser authority"],
+        "availability_probe": {"kind": "process", "execution": execution},
+    });
+    let manifest_path = format!(".planr/evidence/adapters/{manifest_id}.manifest.json");
+    fs::write(
+        root.join(&manifest_path),
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    let manifest_digest = sha256_json(&manifest);
+    let owning_namespace = observation_type
+        .rsplit_once('.')
+        .map(|(namespace, _)| namespace)
+        .unwrap_or(observation_type);
+    rewrite_evidence_policy_fixture(root, |policy| {
+        let schema_exists = policy["observation_schema_registrations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|registration| registration["type"].as_str() == Some(observation_type));
+        if !schema_exists {
+            policy["observation_schema_registrations"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({
+                    "type": observation_type,
+                    "schema_ref": format!("schema://{observation_type}"),
+                    "schema_digest": "sha256:abababababababababababababababababababababababababababababababab",
+                    "owning_namespace": owning_namespace,
+                }));
+        }
+        let namespace_exists = policy["extension_namespaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|namespace| namespace.as_str() == Some(owning_namespace));
+        if !namespace_exists {
+            policy["extension_namespaces"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!(owning_namespace));
+        }
+        policy["adapter_registrations"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "manifest_id": manifest_id,
+                "manifest_path": manifest_path,
+                "manifest_digest": manifest_digest,
+                "observation_types": [observation_type],
+                "payload_schemas": [manifest["supported_observations"][0].clone()],
+                "provenance_path": "planr_observed_execution",
+                "execution_contract": manifest["availability_probe"]["execution"].clone(),
+            }));
+    });
+    manifest_id.to_string()
+}
+
+fn host_capture_run_adapter_digest(
+    root: &Path,
+    execution: &Value,
+    helper_argument: &str,
+) -> String {
+    sha256_json(&json!({
+        "schema_version": "planr.host_capture_run.adapter_binding.v1",
+        "execution_contract": execution,
+        "helper": host_capture_run_helper_identity(root, execution, helper_argument),
+    }))
+}
+
+fn host_capture_run_helper_identity(
+    root: &Path,
+    execution: &Value,
+    helper_argument: &str,
+) -> Value {
+    let cwd = execution["working_directory"]
+        .as_str()
+        .map(|working_directory| root.join(working_directory))
+        .unwrap_or_else(|| root.to_path_buf())
+        .canonicalize()
+        .unwrap();
+    let helper_path = cwd.join(helper_argument).canonicalize().unwrap();
+    let relative = helper_path.strip_prefix(&cwd).unwrap().to_string_lossy();
+    json!({
+        "argument_index": 0,
+        "argument": helper_argument,
+        "resolved_relative_to": "command_cwd",
+        "cwd": cwd.to_string_lossy(),
+        "path": helper_path.to_string_lossy(),
+        "cwd_relative_path": relative,
+        "path_digest": sha256_prefixed(helper_path.to_string_lossy().as_bytes()),
+        "content_digest": sha256_prefixed(fs::read(&helper_path).unwrap().as_slice()),
+    })
+}
+
+fn write_host_capture_run_manifest_registration(
+    root: &Path,
+    manifest_id: &str,
+    observation_type: &str,
+    execution: Value,
+    adapter_digest: String,
+    include_cdp_artifact_support: bool,
+) -> String {
+    let mut supported_artifacts = vec![json!("host-capture-envelope")];
+    if include_cdp_artifact_support {
+        supported_artifacts.push(json!("cdp-json-result"));
+    }
+    supported_artifacts.push(json!("host-capture-fixture-copy"));
+    let manifest = json!({
+        "id": manifest_id,
+        "schema_version": "evidence.contract.v1",
+        "version": "1.0.0",
+        "adapter_kind": "process",
+        "adapter_digest": adapter_digest,
+        "supported_surfaces": ["host-capture-run"],
+        "supported_observations": [execution["payload_schema"].clone()],
+        "supported_interactions": ["process"],
+        "supported_artifacts": supported_artifacts,
+        "runtime_targets": [{"kind": "process", "id": "runtime-host-capture-run"}],
+        "provenance_path": "planr_observed_execution",
+        "permissions": {"network": "none", "filesystem": "read_workspace"},
+        "costs": {},
+        "determinism": "deterministic",
+        "repeatability": "repeatable",
+        "independence": "policy-registered host capture helper",
+        "blind_spots": ["helper is process-observed and cannot claim host-native browser authority"],
+        "availability_probe": {"kind": "process", "execution": execution},
+    });
+    let manifest_path = format!(".planr/evidence/adapters/{manifest_id}.manifest.json");
+    fs::write(
+        root.join(&manifest_path),
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    let manifest_digest = sha256_json(&manifest);
+    let owning_namespace = observation_type
+        .rsplit_once('.')
+        .map(|(namespace, _)| namespace)
+        .unwrap_or(observation_type);
+    rewrite_evidence_policy_fixture(root, |policy| {
+        let schema_exists = policy["observation_schema_registrations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|registration| registration["type"].as_str() == Some(observation_type));
+        if !schema_exists {
+            policy["observation_schema_registrations"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({
+                    "type": observation_type,
+                    "schema_ref": format!("schema://{observation_type}"),
+                    "schema_digest": "sha256:abababababababababababababababababababababababababababababababab",
+                    "owning_namespace": owning_namespace,
+                }));
+        }
+        let namespace_exists = policy["extension_namespaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|namespace| namespace.as_str() == Some(owning_namespace));
+        if !namespace_exists {
+            policy["extension_namespaces"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!(owning_namespace));
+        }
+        policy["adapter_registrations"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "manifest_id": manifest_id,
+                "manifest_path": manifest_path,
+                "manifest_digest": manifest_digest,
+                "observation_types": [observation_type],
+                "payload_schemas": [manifest["supported_observations"][0].clone()],
+                "provenance_path": "planr_observed_execution",
+                "execution_contract": manifest["availability_probe"]["execution"].clone(),
+            }));
+    });
+    manifest_id.to_string()
+}
+
+fn write_queue_extension_fixture(root: &Path) {
+    let schema = json!({
+        "schema_version": "evidence.contract.v1",
+        "type": "com.example.queue.depth.v2",
+        "schema_ref": "schema://com.example.queue.depth.v2",
+        "json_schema": {
+            "type": "object",
+            "required": ["status"],
+            "additionalProperties": false,
+            "properties": {"status": {"const": "drained"}}
+        }
+    });
+    fs::write(
+        root.join(".planr/evidence/schemas/com.example.queue.depth.v2.schema.json"),
+        serde_json::to_vec_pretty(&schema).unwrap(),
+    )
+    .unwrap();
+    let payload_schema = json!({
+        "type": "com.example.queue.depth.v2",
+        "schema_ref": "schema://com.example.queue.depth.v2",
+        "schema_digest": sha256_json(&schema),
+    });
+    let execution = json!({
+        "kind": "process",
+        "executable": "sh",
+        "args": ["-c", "printf '{\"status\":\"drained\"}'"],
+        "working_directory": ".",
+        "timeout_ms": 5000,
+        "stdout_limit_bytes": 1024,
+        "stderr_limit_bytes": 1024,
+        "payload_schema": payload_schema,
+    });
+    let adapter_digest = process_adapter_digest(&execution, vec![]);
+    let manifest = json!({
+        "id": "verifier-queue-depth-v2",
+        "schema_version": "evidence.contract.v1",
+        "version": "2.1.0",
+        "adapter_kind": "artifact_import",
+        "adapter_digest": adapter_digest,
+        "supported_surfaces": ["local-process"],
+        "supported_observations": [execution["payload_schema"].clone()],
+        "supported_interactions": ["process"],
+        "supported_artifacts": ["stdout", "planr.generic_adapter_predicate.v1"],
+        "runtime_targets": [{"kind": "process", "id": "runtime-queue-v2"}],
+        "provenance_path": "planr_observed_execution",
+        "permissions": {"network": "none", "filesystem": "read_workspace"},
+        "costs": {},
+        "determinism": "deterministic",
+        "repeatability": "repeatable",
+        "independence": "repository-defined queue extension adapter",
+        "blind_spots": ["fixture adapter exits successfully without external queue"],
+        "availability_probe": {"kind": "process", "execution": execution},
+    });
+    fs::write(
+        root.join(".planr/evidence/adapters/queue-depth.manifest.json"),
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    let manifest_digest = sha256_json(&manifest);
+    rewrite_evidence_policy_fixture(root, |policy| {
+        policy["observation_schema_registrations"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "type": "com.example.queue.depth.v2",
+                "schema_ref": "schema://com.example.queue.depth.v2",
+                "schema_digest": sha256_json(&schema),
+                "owning_namespace": "com.example.queue",
+            }));
+        policy["adapter_registrations"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "manifest_id": "verifier-queue-depth-v2",
+                "manifest_path": ".planr/evidence/adapters/queue-depth.manifest.json",
+                "manifest_digest": manifest_digest,
+                "observation_types": ["com.example.queue.depth.v2"],
+                "payload_schemas": [manifest["supported_observations"][0].clone()],
+                "provenance_path": "planr_observed_execution",
+                "execution_contract": manifest["availability_probe"]["execution"].clone(),
+            }));
+        policy["extension_namespaces"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("com.example.queue"));
+    });
+}
+
+fn write_http_curl_extension_fixture(root: &Path, port: u16) {
+    let schema = json!({
+        "schema_version": "evidence.contract.v1",
+        "type": "com.example.http.status",
+        "schema_ref": "schema://com.example.http.status",
+        "json_schema": {
+            "type": "object",
+            "required": ["status"],
+            "additionalProperties": false,
+            "properties": {"status": {"const": "ok"}}
+        }
+    });
+    fs::write(
+        root.join(".planr/evidence/schemas/com.example.http.status.schema.json"),
+        serde_json::to_vec_pretty(&schema).unwrap(),
+    )
+    .unwrap();
+    let payload_schema = json!({
+        "type": "com.example.http.status",
+        "schema_ref": "schema://com.example.http.status",
+        "schema_digest": sha256_json(&schema),
+    });
+    let execution = json!({
+        "kind": "process",
+        "executable": "curl",
+        "args": ["-fsS", format!("http://127.0.0.1:{port}/health")],
+        "working_directory": ".",
+        "timeout_ms": 5000,
+        "stdout_limit_bytes": 4096,
+        "stderr_limit_bytes": 4096,
+        "payload_schema": payload_schema,
+    });
+    let adapter_digest = process_adapter_digest(&execution, vec![]);
+    let manifest = json!({
+        "id": "verifier-http-curl-v1",
+        "schema_version": "evidence.contract.v1",
+        "version": "1.0.0",
+        "adapter_kind": "process",
+        "adapter_digest": adapter_digest,
+        "supported_surfaces": ["local-process"],
+        "supported_observations": [execution["payload_schema"].clone()],
+        "supported_interactions": ["process"],
+        "supported_artifacts": ["stdout", "planr.generic_adapter_predicate.v1"],
+        "runtime_targets": [{"kind": "process", "id": "runtime-http-curl"}],
+        "provenance_path": "planr_observed_execution",
+        "permissions": {"network": "loopback", "filesystem": "read_workspace"},
+        "costs": {},
+        "determinism": "deterministic",
+        "repeatability": "repeatable",
+        "independence": "repository-defined curl HTTP adapter",
+        "blind_spots": ["fixture HTTP server returns static health body"],
+        "availability_probe": {"kind": "process", "execution": execution},
+    });
+    fs::write(
+        root.join(".planr/evidence/adapters/http-curl.manifest.json"),
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    let manifest_digest = sha256_json(&manifest);
+    rewrite_evidence_policy_fixture(root, |policy| {
+        policy["observation_schema_registrations"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "type": "com.example.http.status",
+                "schema_ref": "schema://com.example.http.status",
+                "schema_digest": sha256_json(&schema),
+                "owning_namespace": "com.example.http",
+            }));
+        policy["adapter_registrations"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "manifest_id": "verifier-http-curl-v1",
+                "manifest_path": ".planr/evidence/adapters/http-curl.manifest.json",
+                "manifest_digest": manifest_digest,
+                "observation_types": ["com.example.http.status"],
+                "payload_schemas": [manifest["supported_observations"][0].clone()],
+                "provenance_path": "planr_observed_execution",
+                "execution_contract": manifest["availability_probe"]["execution"].clone(),
+            }));
+        policy["extension_namespaces"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("com.example.http"));
+    });
+}
+
+#[test]
+fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_mcp() {
+    let dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db = db_dir.path().join("planr.sqlite");
+    write_evidence_policy_fixture(dir.path());
+    init_evidence_project(dir.path(), &db, "Evidence Host Capture Import");
+    init_git_repo(dir.path());
+
+    let policy_output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "evidence", "policy"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let policy = single_json_document(&policy_output);
+    let host_environment = host_capture_run_environment("verifier-host-capture-run");
+    let mut obligation = evidence_obligation_for(
+        "pob-host-capture",
+        policy["object"]["digest"].as_str().unwrap(),
+        "com.example.host.chrome_capture",
+        "Example Domain Chrome capture",
+        json!({
+            "final_status": "available",
+            "url": "https://example.com/",
+            "title": "Example Domain",
+            "bodyVisible": true,
+        }),
+        json!({"kind": "url", "uri": "https://example.com/"}),
+        host_environment.clone(),
+        json!({"kind": "codex-host-surface", "id": "env-exp-chrome-browser-client", "surface": "chrome-browser-client"}),
+        json!(["target_change", "policy_change", "adapter_schema_change"]),
+        "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+    );
+    obligation["fixture_policy"]["fixtures_allowed"] = json!(true);
+    let obligation_path = dir.path().join("host-obligation.json");
+    fs::write(
+        &obligation_path,
+        serde_json::to_vec_pretty(&obligation).unwrap(),
+    )
+    .unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "evidence",
+            "obligation",
+            "add",
+            "--input",
+            obligation_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let self_authored_root = tempdir().unwrap();
+    write_fresh_host_capture_envelope_with_producer(
+        self_authored_root.path(),
+        "e2e-fresh-host-capture",
+        |_| {},
+    );
+    let self_authored_path = dir.path().join("host-import-self-authored.json");
+    fs::write(
+        &self_authored_path,
+        serde_json::to_vec_pretty(&json!({
+            "schema_version": "planr.evidence.host_capture.import.v1",
+            "obligation_id": "pob-host-capture",
+            "import_root": self_authored_root.path().to_str().unwrap(),
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "evidence",
+            "host-capture",
+            "import",
+            "--input",
+            self_authored_path.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("not enabled"));
+
+    let import_root = tempdir().unwrap();
+    write_fresh_host_capture_envelope(import_root.path(), |_| {});
+    let import_input = json!({
+        "schema_version": "planr.evidence.host_capture.import.v1",
+        "obligation_id": "pob-host-capture",
+        "import_root": import_root.path().to_str().unwrap(),
+    });
+    let import_path = dir.path().join("host-import.json");
+    fs::write(
+        &import_path,
+        serde_json::to_vec_pretty(&import_input).unwrap(),
+    )
+    .unwrap();
+    let cli_import = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "host-capture",
+                "import",
+                "--input",
+                import_path.to_str().unwrap(),
+            ])
+            .assert()
+            .failure()
+            .get_output()
+            .stdout,
+    );
+    assert_evidence_error(
+        &cli_import,
+        "evidence.host_capture.import",
+        "bad_request",
+        "not enabled",
+    );
+
+    let conn = Connection::open(&db).unwrap();
+    let host_instances: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM verification_capability_instances WHERE id = 'host-exp-chrome-browser-client'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let host_receipts: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM evidence_receipts WHERE receipt_json LIKE '%verified_host_event%'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        host_instances, 0,
+        "spoofed external host capture must not register a live capability instance"
+    );
+    assert_eq!(
+        host_receipts, 0,
+        "spoofed external host capture must not emit a trusted host receipt"
+    );
+
+    let adversarial_helper = tempdir().unwrap();
+    let adversarial_helper_path = adversarial_helper.path().join("fake-host-capture.sh");
+    fs::write(
+        &adversarial_helper_path,
+        "#!/bin/sh\n/bin/echo caller authored helper\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        let mut permissions = fs::metadata(&adversarial_helper_path)
+            .unwrap()
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&adversarial_helper_path, permissions).unwrap();
+    }
+    let adversarial_helper_digest =
+        sha256_prefixed(fs::read(&adversarial_helper_path).unwrap().as_slice());
+    let adversarial_path = dir.path().join("host-run-adversarial-helper.json");
+    fs::write(
+        &adversarial_path,
+        serde_json::to_vec_pretty(&json!({
+            "schema_version": "planr.evidence.host_capture.run.v1",
+            "obligation_id": "pob-host-capture",
+            "helper_path": adversarial_helper_path.to_str().unwrap(),
+            "helper_digest": adversarial_helper_digest,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "evidence",
+            "host-capture",
+            "run",
+            "--input",
+            adversarial_path.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("unknown fields"));
+    let caller_disclosure_path = dir.path().join("host-run-caller-disclosure.json");
+    fs::write(
+        &caller_disclosure_path,
+        serde_json::to_vec_pretty(&json!({
+            "schema_version": "planr.evidence.host_capture.run.v1",
+            "obligation_id": "pob-host-capture",
+            "manifest_id": "verifier-host-capture-run",
+            "fixture_disclosure": {
+                "fixtures_used": false,
+                "mocks_used": false,
+            },
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "evidence",
+            "host-capture",
+            "run",
+            "--input",
+            caller_disclosure_path.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("unknown fields"));
+
+    let mismatched_manifest_id = write_registered_host_capture_run_helper(
+        dir.path(),
+        import_root.path(),
+        "verifier-host-capture-run-wrong-schema",
+        "com.example.host.other_surface",
+        true,
+    );
+    let mismatch_path = dir.path().join("host-run-wrong-schema.json");
+    fs::write(
+        &mismatch_path,
+        serde_json::to_vec_pretty(&json!({
+            "schema_version": "planr.evidence.host_capture.run.v1",
+            "obligation_id": "pob-host-capture",
+            "manifest_id": mismatched_manifest_id,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "evidence",
+            "host-capture",
+            "run",
+            "--input",
+            mismatch_path.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains(
+            "does not support observation type com.example.host.chrome_capture",
+        ));
+    let conn = Connection::open(&db).unwrap();
+    let partial_host_instances: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM verification_capability_instances WHERE id = 'host-exp-chrome-browser-client'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let partial_attempts: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM evidence_attempts WHERE obligation_id = 'pob-host-capture'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let partial_receipts: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM evidence_receipts WHERE obligation_id = 'pob-host-capture'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(partial_host_instances, 0);
+    assert_eq!(partial_attempts, 0);
+    assert_eq!(partial_receipts, 0);
+
+    let no_cdp_manifest_id = write_registered_host_capture_run_helper(
+        dir.path(),
+        import_root.path(),
+        "verifier-host-capture-run-no-cdp",
+        "com.example.host.chrome_capture",
+        false,
+    );
+    let no_cdp_path = dir.path().join("host-run-no-cdp.json");
+    fs::write(
+        &no_cdp_path,
+        serde_json::to_vec_pretty(&json!({
+            "schema_version": "planr.evidence.host_capture.run.v1",
+            "obligation_id": "pob-host-capture",
+            "manifest_id": no_cdp_manifest_id,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "evidence",
+            "host-capture",
+            "run",
+            "--input",
+            no_cdp_path.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains(
+            "does not support cdp-json-result artifacts",
+        ));
+
+    for (manifest_id, mode, message) in [
+        (
+            "verifier-host-capture-run-missing-disclosure",
+            HostCaptureDisclosureMode::Missing,
+            "did not produce producer-disclosure.json",
+        ),
+        (
+            "verifier-host-capture-run-false-disclosure",
+            HostCaptureDisclosureMode::False,
+            "declares fixture-copy production but disclosed fixtures_used=false",
+        ),
+    ] {
+        let manifest_id = write_registered_host_capture_run_helper_with_disclosure(
+            dir.path(),
+            import_root.path(),
+            manifest_id,
+            "com.example.host.chrome_capture",
+            true,
+            mode,
+        );
+        let path = dir.path().join(format!("{manifest_id}.json"));
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&json!({
+                "schema_version": "planr.evidence.host_capture.run.v1",
+                "obligation_id": "pob-host-capture",
+                "manifest_id": manifest_id,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "host-capture",
+                "run",
+                "--input",
+                path.to_str().unwrap(),
+            ])
+            .assert()
+            .failure()
+            .stdout(predicate::str::contains(message));
+    }
+
+    let drift_manifest_id = write_registered_host_capture_run_helper(
+        dir.path(),
+        import_root.path(),
+        "verifier-host-capture-run-drift",
+        "com.example.host.chrome_capture",
+        true,
+    );
+    let drift_helper = dir
+        .path()
+        .join(format!(".planr/evidence/helpers/{drift_manifest_id}.sh"));
+    fs::write(
+        &drift_helper,
+        format!(
+            "{}\n/bin/echo drifted-helper >&2\n",
+            String::from_utf8(fs::read(&drift_helper).unwrap()).unwrap()
+        ),
+    )
+    .unwrap();
+    let drift_path = dir.path().join("host-run-drift.json");
+    fs::write(
+        &drift_path,
+        serde_json::to_vec_pretty(&json!({
+            "schema_version": "planr.evidence.host_capture.run.v1",
+            "obligation_id": "pob-host-capture",
+            "manifest_id": drift_manifest_id,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "evidence",
+            "host-capture",
+            "run",
+            "--input",
+            drift_path.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("adapter_digest drift"));
+    let conn = Connection::open(&db).unwrap();
+    let failed_producer_instances: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM verification_capability_instances WHERE manifest_id LIKE 'verifier-host-capture-run%'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let failed_attempts: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM evidence_attempts WHERE obligation_id = 'pob-host-capture'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let failed_receipts: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM evidence_receipts WHERE obligation_id = 'pob-host-capture'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(failed_producer_instances, 0);
+    assert_eq!(failed_attempts, 0);
+    assert_eq!(failed_receipts, 0);
+
+    let fault_manifest_id = write_registered_host_capture_run_helper(
+        dir.path(),
+        import_root.path(),
+        "verifier-host-capture-run-atomic-fault",
+        "com.example.host.chrome_capture",
+        true,
+    );
+    let mut fault_obligation = evidence_obligation_for(
+        "pob-host-capture-atomic-fault",
+        policy["object"]["digest"].as_str().unwrap(),
+        "com.example.host.chrome_capture",
+        "Example Domain Chrome capture atomic failure",
+        json!({
+            "final_status": "available",
+            "url": "https://example.com/",
+            "title": "Example Domain",
+            "bodyVisible": true,
+        }),
+        json!({"kind": "url", "uri": "https://example.com/"}),
+        host_capture_run_environment(&fault_manifest_id),
+        json!({"kind": "process", "id": "runtime-host-capture-run", "surface": "host-capture-run"}),
+        json!(["target_change", "policy_change", "adapter_schema_change"]),
+        "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+    );
+    fault_obligation["fixture_policy"]["fixtures_allowed"] = json!(true);
+    let fault_obligation_path = dir.path().join("host-obligation-atomic-fault.json");
+    fs::write(
+        &fault_obligation_path,
+        serde_json::to_vec_pretty(&fault_obligation).unwrap(),
+    )
+    .unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "evidence",
+            "obligation",
+            "add",
+            "--input",
+            fault_obligation_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let fault_path = dir.path().join("host-run-atomic-fault.json");
+    fs::write(
+        &fault_path,
+        serde_json::to_vec_pretty(&json!({
+            "schema_version": "planr.evidence.host_capture.run.v1",
+            "obligation_id": "pob-host-capture-atomic-fault",
+            "manifest_id": fault_manifest_id,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    planr()
+        .current_dir(dir.path())
+        .env("PLANR_TEST_HOST_CAPTURE_FAIL_AFTER_CAPABILITY_STORE", "1")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "evidence",
+            "host-capture",
+            "run",
+            "--input",
+            fault_path.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains(
+            "test fault after host capture capability store",
+        ));
+    let conn = Connection::open(&db).unwrap();
+    let fault_instances: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM verification_capability_instances WHERE manifest_id = 'verifier-host-capture-run-atomic-fault'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let fault_attempts: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM evidence_attempts WHERE obligation_id = 'pob-host-capture-atomic-fault'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let fault_receipts: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM evidence_receipts WHERE obligation_id = 'pob-host-capture-atomic-fault'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(fault_instances, 0);
+    assert_eq!(fault_attempts, 0);
+    assert_eq!(fault_receipts, 0);
+
+    let manifest_id = write_registered_host_capture_run_helper(
+        dir.path(),
+        import_root.path(),
+        "verifier-host-capture-run",
+        "com.example.host.chrome_capture",
+        true,
+    );
+    for obligation_id in ["pob-host-capture-http", "pob-host-capture-mcp"] {
+        let mut obligation = evidence_obligation_for(
+            obligation_id,
+            policy["object"]["digest"].as_str().unwrap(),
+            "com.example.host.chrome_capture",
+            "Example Domain Chrome capture",
+            json!({
+                "final_status": "available",
+                "url": "https://example.com/",
+                "title": "Example Domain",
+                "bodyVisible": true,
+            }),
+            json!({"kind": "url", "uri": "https://example.com/"}),
+            host_environment.clone(),
+            json!({"kind": "process", "id": "runtime-host-capture-run", "surface": "host-capture-run"}),
+            json!(["target_change", "policy_change", "adapter_schema_change"]),
+            "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+        );
+        obligation["fixture_policy"]["fixtures_allowed"] = json!(true);
+        let path = dir.path().join(format!("{obligation_id}.json"));
+        fs::write(&path, serde_json::to_vec_pretty(&obligation).unwrap()).unwrap();
+        planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "obligation",
+                "add",
+                "--input",
+                path.to_str().unwrap(),
+            ])
+            .assert()
+            .success();
+    }
+    let run_path = dir.path().join("host-run.json");
+    fs::write(
+        &run_path,
+        serde_json::to_vec_pretty(&json!({
+            "schema_version": "planr.evidence.host_capture.run.v1",
+            "obligation_id": "pob-host-capture",
+            "manifest_id": manifest_id,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let run_output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "evidence",
+            "host-capture",
+            "run",
+            "--input",
+            run_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let run_result = single_json_document(&run_output);
+    assert_evidence_envelope(&run_result, "evidence.host_capture.run", true);
+    assert_eq!(run_result["object"]["verdict"], "trusted");
+    assert_eq!(
+        run_result["object"]["receipt"]["provenance"]["source"],
+        "planr_observed_execution"
+    );
+    assert_eq!(
+        run_result["object"]["receipt"]["fixture_disclosure"]["fixtures_used"],
+        true
+    );
+    assert!(
+        run_result["object"]["receipt"]["fixture_disclosure"]["fixture_refs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reference| reference
+                .as_str()
+                .unwrap()
+                .starts_with("host-capture-envelope:external-capture-envelope.json@sha256:")),
+        "{run_result}"
+    );
+    assert_eq!(
+        run_result["object"]["receipt"]["vantage_point"]["kind"],
+        "host_capture_run"
+    );
+    assert_eq!(
+        run_result["object"]["receipt"]["vantage_point"]["identity"],
+        "planr/verifier-host-capture-run"
+    );
+    assert_eq!(
+        run_result["object"]["attempt"]["resolved_command"]["manifest_id"],
+        "verifier-host-capture-run"
+    );
+    assert!(
+        run_result["object"]["attempt"]["capability_instance_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("host-capture-run-verifier-host-capture-run-")
+    );
+    assert_eq!(
+        run_result["object"]["attempt"]["raw_result"]["planr_observed_execution"]["manifest_id"],
+        "verifier-host-capture-run"
+    );
+    let conn = Connection::open(&db).unwrap();
+    let persisted_host_instances: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM verification_capability_instances WHERE id = 'host-exp-chrome-browser-client'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let persisted_producer_instances: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM verification_capability_instances WHERE manifest_id = 'verifier-host-capture-run'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let verified_host_receipts: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM evidence_receipts WHERE receipt_json LIKE '%verified_host_event%'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let planr_observed_receipts: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM evidence_receipts WHERE receipt_json LIKE '%planr_observed_execution%'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(persisted_host_instances, 0);
+    assert_eq!(persisted_producer_instances, 1);
+    assert_eq!(verified_host_receipts, 0);
+    assert_eq!(planr_observed_receipts, 1);
+
+    let cwd_manifest_id = "cwd-bound-host-capture";
+    let cwd_helper_dir = dir.path().join("subdir");
+    fs::create_dir_all(&cwd_helper_dir).unwrap();
+    fs::write(
+        dir.path().join("helper.sh"),
+        "#!/bin/sh\necho root helper must not be hashed or executed >&2\nexit 99\n",
+    )
+    .unwrap();
+    let cwd_envelope_digest = sha256_prefixed(
+        fs::read(import_root.path().join("external-capture-envelope.json"))
+            .unwrap()
+            .as_slice(),
+    );
+    let cwd_disclosure = serde_json::to_string_pretty(&json!({
+        "schema_version": "planr.evidence.host_capture.producer_disclosure.v1",
+        "producer_manifest_id": cwd_manifest_id,
+        "fixtures_used": true,
+        "mocks_used": false,
+        "fixture_refs": [{
+            "kind": "host-capture-envelope",
+            "path": "external-capture-envelope.json",
+            "digest": cwd_envelope_digest,
+        }],
+        "mock_refs": [],
+    }))
+    .unwrap();
+    fs::write(
+        cwd_helper_dir.join("helper.sh"),
+        format!(
+            "#!/bin/sh\nset -eu\nif [ -z \"${{PLANR_HOST_CAPTURE_OUT_DIR:-}}\" ]; then echo missing PLANR_HOST_CAPTURE_OUT_DIR >&2; exit 2; fi\n/bin/mkdir -p \"$PLANR_HOST_CAPTURE_OUT_DIR\"\n/bin/cp -R '{}/.' \"$PLANR_HOST_CAPTURE_OUT_DIR\"\n/bin/cat > \"$PLANR_HOST_CAPTURE_OUT_DIR/producer-disclosure.json\" <<'PLANR_DISCLOSURE'\n{}\nPLANR_DISCLOSURE\n",
+            import_root.path().display(),
+            cwd_disclosure
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        let mut root_permissions = fs::metadata(dir.path().join("helper.sh"))
+            .unwrap()
+            .permissions();
+        root_permissions.set_mode(0o755);
+        fs::set_permissions(dir.path().join("helper.sh"), root_permissions).unwrap();
+        let mut cwd_permissions = fs::metadata(cwd_helper_dir.join("helper.sh"))
+            .unwrap()
+            .permissions();
+        cwd_permissions.set_mode(0o755);
+        fs::set_permissions(cwd_helper_dir.join("helper.sh"), cwd_permissions).unwrap();
+    }
+    let cwd_payload_schema = json!({
+        "type": "com.example.host.chrome_capture",
+        "schema_ref": "schema://com.example.host.chrome_capture",
+        "schema_digest": "sha256:abababababababababababababababababababababababababababababababab",
+    });
+    let cwd_execution = json!({
+        "kind": "process",
+        "executable": "sh",
+        "args": ["helper.sh"],
+        "working_directory": "subdir",
+        "timeout_ms": 30000,
+        "stdout_limit_bytes": 1048576,
+        "stderr_limit_bytes": 1048576,
+        "payload_schema": cwd_payload_schema,
+    });
+    write_host_capture_run_manifest_registration(
+        dir.path(),
+        cwd_manifest_id,
+        "com.example.host.chrome_capture",
+        cwd_execution.clone(),
+        host_capture_run_adapter_digest(dir.path(), &cwd_execution, "helper.sh"),
+        true,
+    );
+    let mut cwd_obligation = evidence_obligation_for(
+        "pob-host-capture-cwd",
+        policy["object"]["digest"].as_str().unwrap(),
+        "com.example.host.chrome_capture",
+        "Example Domain Chrome capture cwd helper",
+        json!({
+            "final_status": "available",
+            "url": "https://example.com/",
+            "title": "Example Domain",
+            "bodyVisible": true,
+        }),
+        json!({"kind": "url", "uri": "https://example.com/"}),
+        host_capture_run_environment(cwd_manifest_id),
+        json!({"kind": "process", "id": "runtime-host-capture-run", "surface": "host-capture-run"}),
+        json!(["target_change", "policy_change", "adapter_schema_change"]),
+        "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+    );
+    cwd_obligation["fixture_policy"]["fixtures_allowed"] = json!(true);
+    let cwd_obligation_path = dir.path().join("host-obligation-cwd.json");
+    fs::write(
+        &cwd_obligation_path,
+        serde_json::to_vec_pretty(&cwd_obligation).unwrap(),
+    )
+    .unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "evidence",
+            "obligation",
+            "add",
+            "--input",
+            cwd_obligation_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let cwd_run_path = dir.path().join("host-run-cwd.json");
+    fs::write(
+        &cwd_run_path,
+        serde_json::to_vec_pretty(&json!({
+            "schema_version": "planr.evidence.host_capture.run.v1",
+            "obligation_id": "pob-host-capture-cwd",
+            "manifest_id": cwd_manifest_id,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let cwd_run_output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "evidence",
+            "host-capture",
+            "run",
+            "--input",
+            cwd_run_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let cwd_run = single_json_document(&cwd_run_output);
+    assert_evidence_envelope(&cwd_run, "evidence.host_capture.run", true);
+    assert_eq!(
+        cwd_run["object"]["attempt"]["raw_result"]["planr_observed_execution"]["adapter_binding"]["binding"]
+            ["helper"]["argument"],
+        "helper.sh"
+    );
+    assert!(
+        cwd_run["object"]["attempt"]["raw_result"]["planr_observed_execution"]["adapter_binding"]
+            ["binding"]["helper"]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("/subdir/helper.sh"),
+        "{cwd_run}"
+    );
+
+    for (manifest_id, obligation_id, helper_arg, expected_message) in [
+        (
+            "cwd-bound-host-capture-traversal",
+            "pob-host-capture-traversal",
+            "../helper.sh",
+            "must stay within the resolved command cwd",
+        ),
+        (
+            "cwd-bound-host-capture-symlink",
+            "pob-host-capture-symlink",
+            "link-helper.sh",
+            "escapes the resolved command cwd",
+        ),
+    ] {
+        #[cfg(unix)]
+        if helper_arg == "link-helper.sh" {
+            let outside = dir.path().join("outside-helper.sh");
+            fs::write(&outside, "#!/bin/sh\nexit 99\n").unwrap();
+            std::os::unix::fs::symlink("../outside-helper.sh", cwd_helper_dir.join(helper_arg))
+                .unwrap();
+        }
+        #[cfg(not(unix))]
+        if helper_arg == "link-helper.sh" {
+            continue;
+        }
+        let bad_execution = json!({
+            "kind": "process",
+            "executable": "sh",
+            "args": [helper_arg],
+            "working_directory": "subdir",
+            "timeout_ms": 30000,
+            "stdout_limit_bytes": 1048576,
+            "stderr_limit_bytes": 1048576,
+            "payload_schema": {
+                "type": "com.example.host.chrome_capture",
+                "schema_ref": "schema://com.example.host.chrome_capture",
+                "schema_digest": "sha256:abababababababababababababababababababababababababababababababab",
+            },
+        });
+        write_host_capture_run_manifest_registration(
+            dir.path(),
+            manifest_id,
+            "com.example.host.chrome_capture",
+            bad_execution,
+            "sha256:1212121212121212121212121212121212121212121212121212121212121212".to_string(),
+            true,
+        );
+        let mut bad_obligation = evidence_obligation_for(
+            obligation_id,
+            policy["object"]["digest"].as_str().unwrap(),
+            "com.example.host.chrome_capture",
+            "Example Domain Chrome capture rejected helper",
+            json!({
+                "final_status": "available",
+                "url": "https://example.com/",
+                "title": "Example Domain",
+                "bodyVisible": true,
+            }),
+            json!({"kind": "url", "uri": "https://example.com/"}),
+            host_capture_run_environment(manifest_id),
+            json!({"kind": "process", "id": "runtime-host-capture-run", "surface": "host-capture-run"}),
+            json!(["target_change", "policy_change", "adapter_schema_change"]),
+            "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+        );
+        bad_obligation["fixture_policy"]["fixtures_allowed"] = json!(true);
+        let bad_obligation_path = dir.path().join(format!("{obligation_id}.json"));
+        fs::write(
+            &bad_obligation_path,
+            serde_json::to_vec_pretty(&bad_obligation).unwrap(),
+        )
+        .unwrap();
+        planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "obligation",
+                "add",
+                "--input",
+                bad_obligation_path.to_str().unwrap(),
+            ])
+            .assert()
+            .success();
+        let bad_run_path = dir.path().join(format!("{manifest_id}.json"));
+        fs::write(
+            &bad_run_path,
+            serde_json::to_vec_pretty(&json!({
+                "schema_version": "planr.evidence.host_capture.run.v1",
+                "obligation_id": obligation_id,
+                "manifest_id": manifest_id,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "host-capture",
+                "run",
+                "--input",
+                bad_run_path.to_str().unwrap(),
+            ])
+            .assert()
+            .failure()
+            .stdout(predicate::str::contains(expected_message));
+        let conn = Connection::open(&db).unwrap();
+        let bad_instances: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM verification_capability_instances WHERE manifest_id = ?1",
+                [manifest_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let bad_attempts: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM evidence_attempts WHERE obligation_id = ?1",
+                [obligation_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let bad_receipts: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM evidence_receipts WHERE obligation_id = ?1",
+                [obligation_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(bad_instances, 0);
+        assert_eq!(bad_attempts, 0);
+        assert_eq!(bad_receipts, 0);
+    }
+
+    let port = free_port();
+    let bin = assert_cmd::cargo::cargo_bin("planr");
+    let mut server = StdCommand::new(&bin)
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "serve",
+            "--port",
+            &port.to_string(),
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    wait_for_http_server(port);
+    let http_run = http_json(&http_request(
+        port,
+        "POST",
+        "/v1/evidence/host-capture/run",
+        &json!({
+            "input": {
+                "schema_version": "planr.evidence.host_capture.run.v1",
+                "obligation_id": "pob-host-capture-http",
+                "manifest_id": manifest_id,
+            }
+        })
+        .to_string(),
+    ));
+    assert_evidence_envelope(&http_run, "evidence.host_capture.run", true);
+    assert_eq!(http_run["object"]["verdict"], "trusted");
+    assert_eq!(
+        http_run["object"]["receipt"]["provenance"]["source"],
+        "planr_observed_execution"
+    );
+    assert_eq!(
+        http_run["object"]["receipt"]["vantage_point"]["identity"],
+        "planr/verifier-host-capture-run"
+    );
+    assert_eq!(
+        http_run["object"]["attempt"]["resolved_command"]["manifest_id"],
+        "verifier-host-capture-run"
+    );
+    assert!(
+        http_run["object"]["attempt"]["capability_instance_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("host-capture-run-verifier-host-capture-run-")
+    );
+    let mcp_run_response = mcp_tool_response(
+        dir.path(),
+        &db,
+        78,
+        "planr_evidence_host_capture_run",
+        json!({"input": {
+            "schema_version": "planr.evidence.host_capture.run.v1",
+            "obligation_id": "pob-host-capture-mcp",
+            "manifest_id": manifest_id,
+        }}),
+    );
+    assert_ne!(
+        mcp_run_response["result"]["isError"], true,
+        "{mcp_run_response}"
+    );
+    let mcp_run = mcp_text_value(&mcp_run_response);
+    assert_evidence_envelope(&mcp_run, "evidence.host_capture.run", true);
+    assert_eq!(mcp_run["object"]["verdict"], "trusted");
+    assert_eq!(
+        mcp_run["object"]["receipt"]["provenance"]["source"],
+        "planr_observed_execution"
+    );
+    assert_eq!(
+        mcp_run["object"]["receipt"]["vantage_point"]["identity"],
+        "planr/verifier-host-capture-run"
+    );
+    assert_eq!(
+        mcp_run["object"]["attempt"]["resolved_command"]["manifest_id"],
+        "verifier-host-capture-run"
+    );
+    assert!(
+        mcp_run["object"]["attempt"]["capability_instance_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("host-capture-run-verifier-host-capture-run-")
+    );
+    let http_import = http_json(&http_request(
+        port,
+        "POST",
+        "/v1/evidence/host-capture/import",
+        &import_input.to_string(),
+    ));
+    assert_evidence_error(
+        &http_import,
+        "evidence.host_capture.import",
+        "bad_request",
+        "not enabled",
+    );
+    let mcp_response = mcp_tool_response(
+        dir.path(),
+        &db,
+        77,
+        "planr_evidence_host_capture_import",
+        json!({"input": import_input}),
+    );
+    assert_mcp_evidence_error(
+        &mcp_response,
+        "evidence.host_capture.import",
+        "bad_request",
+        "not enabled",
+    );
+    let _ = server.kill();
+    let _ = server.wait();
+
+    let bad_env = json!({
+        "schema_version": "planr.evidence.host_capture.import.v1",
+        "obligation_id": "pob-host-capture",
+        "import_root": import_root.path().to_str().unwrap(),
+        "environment": {"kind": "local", "id": "wrong", "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"},
+    });
+    let bad_env_path = dir.path().join("host-import-bad-env.json");
+    fs::write(&bad_env_path, serde_json::to_vec_pretty(&bad_env).unwrap()).unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "evidence",
+            "host-capture",
+            "import",
+            "--input",
+            bad_env_path.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("not enabled"));
+
+    let stale_root = tempdir().unwrap();
+    write_fresh_host_capture_envelope(stale_root.path(), |raw| {
+        raw["started_at"] = json!("2020-01-01T00:00:00Z");
+        raw["ended_at"] = json!("2020-01-01T00:00:00Z");
+    });
+    let stale_path = dir.path().join("host-import-stale.json");
+    fs::write(
+        &stale_path,
+        serde_json::to_vec_pretty(&json!({
+            "schema_version": "planr.evidence.host_capture.import.v1",
+            "obligation_id": "pob-host-capture",
+            "import_root": stale_root.path().to_str().unwrap(),
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "evidence",
+            "host-capture",
+            "import",
+            "--input",
+            stale_path.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("stale"));
+
+    let unavailable_root = tempdir().unwrap();
+    write_fresh_host_capture_envelope(unavailable_root.path(), |raw| {
+        raw["result"]["final_status"] = json!("unavailable");
+        raw["events"][1]["payload"]["final_status"] = json!("unavailable");
+    });
+    let unavailable_path = dir.path().join("host-import-unavailable.json");
+    fs::write(
+        &unavailable_path,
+        serde_json::to_vec_pretty(&json!({
+            "schema_version": "planr.evidence.host_capture.import.v1",
+            "obligation_id": "pob-host-capture",
+            "import_root": unavailable_root.path().to_str().unwrap(),
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "evidence",
+            "host-capture",
+            "import",
+            "--input",
+            unavailable_path.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("not enabled"));
+
+    let unknown_payload_root = tempdir().unwrap();
+    write_fresh_host_capture_envelope(unknown_payload_root.path(), |raw| {
+        raw["payload_version"] = json!("host-capability-raw/2.0.0");
+    });
+    let unknown_payload_path = dir.path().join("host-import-unknown-payload.json");
+    fs::write(
+        &unknown_payload_path,
+        serde_json::to_vec_pretty(&json!({
+            "schema_version": "planr.evidence.host_capture.import.v1",
+            "obligation_id": "pob-host-capture",
+            "import_root": unknown_payload_root.path().to_str().unwrap(),
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "evidence",
+            "host-capture",
+            "import",
+            "--input",
+            unknown_payload_path.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("unsupported major version"));
+}
+
+fn start_static_http_server(port: u16) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while Instant::now() < deadline {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let mut buffer = [0_u8; 1024];
+                    let _ = stream.read(&mut buffer);
+                    let body = r#"{"status":"ok"}"#;
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = stream.write_all(response.as_bytes());
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(_) => break,
+            }
+        }
+    })
+}
+
+fn add_evidence_obligation_value(dir: &Path, db: &Path, id: &str, obligation: &Value) -> Value {
+    let path = dir.join(format!("{id}.obligation.json"));
+    fs::write(&path, serde_json::to_vec_pretty(obligation).unwrap()).unwrap();
+    single_json_document(
+        &planr()
+            .current_dir(dir)
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "obligation",
+                "add",
+                "--input",
+                path.to_str().unwrap(),
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn insert_evidence_waiver(
+    root: &Path,
+    db: &Path,
+    waiver_id: &str,
+    approval_item_id: &str,
+    obligation_id: &str,
+    observation_id: &str,
+    criterion_id: &str,
+    target: Value,
+    expires_at: &str,
+) -> String {
+    let conn = Connection::open(db).unwrap();
+    conn.create_scalar_function(
+        "planr_evidence_waiver_contract_is_valid",
+        9,
+        rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC,
+        |_ctx| Ok(1_i64),
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE items SET approval_status = 'approved', approved_by = 'qa' WHERE id = ?1",
+        [approval_item_id],
+    )
+    .unwrap();
+    let waiver = json!({
+        "id": waiver_id,
+        "schema_version": "evidence.contract.v1",
+        "scope": {
+            "kind": "criterion",
+            "id": criterion_id,
+            "criterion_id": criterion_id,
+        },
+        "observation_ids": [observation_id],
+        "source": evidence_source_binding(root),
+        "target": target,
+        "reason": "accepted alternate proof for audit regression",
+        "created_by": "qa",
+        "created_at": "2026-07-29T00:00:00Z",
+        "expires_at": expires_at,
+        "approval_ref": approval_item_id,
+        "audit_trail": [{
+            "event": "approved",
+            "by": "qa",
+            "at": "2026-07-29T00:00:00Z"
+        }],
+    });
+    let digest = sha256_json(&waiver);
+    conn.execute(
+        "INSERT INTO evidence_waivers(
+           id, project_id, approval_item_id, obligation_id, observation_id,
+           scope_kind, scope_id, waiver_digest, reason, expires_at, created_by,
+           waiver_json, created_at
+         )
+         SELECT ?1, project_id, ?2, ?3, ?4, 'criterion', ?5, ?6, ?7, ?8, 'qa', ?9, ?10
+         FROM proof_obligations WHERE id = ?3",
+        rusqlite::params![
+            waiver_id,
+            approval_item_id,
+            obligation_id,
+            observation_id,
+            criterion_id,
+            digest,
+            "accepted alternate proof for audit regression",
+            expires_at,
+            waiver.to_string(),
+            "2026-07-29T00:00:00Z"
+        ],
+    )
+    .unwrap();
+    digest
+}
+
+fn run_evidence_value(
+    dir: &Path,
+    db: &Path,
+    obligation_id: &str,
+    capability_instance_id: &str,
+    target: Value,
+) -> Value {
+    run_evidence_value_with_code(dir, db, obligation_id, capability_instance_id, target, 0)
+}
+
+fn run_evidence_value_with_code(
+    dir: &Path,
+    db: &Path,
+    obligation_id: &str,
+    capability_instance_id: &str,
+    target: Value,
+    expected_code: i32,
+) -> Value {
+    run_evidence_value_with_env_code(
+        dir,
+        db,
+        obligation_id,
+        capability_instance_id,
+        target,
+        None,
+        expected_code,
+    )
+}
+
+fn run_evidence_value_with_env_code(
+    dir: &Path,
+    db: &Path,
+    obligation_id: &str,
+    capability_instance_id: &str,
+    target: Value,
+    env: Option<Value>,
+    expected_code: i32,
+) -> Value {
+    run_evidence_value_with_env_fixture_code(
+        dir,
+        db,
+        obligation_id,
+        capability_instance_id,
+        target,
+        env,
+        None,
+        expected_code,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_evidence_value_with_env_fixture_code(
+    dir: &Path,
+    db: &Path,
+    obligation_id: &str,
+    capability_instance_id: &str,
+    target: Value,
+    env: Option<Value>,
+    fixture_disclosure: Option<Value>,
+    expected_code: i32,
+) -> Value {
+    let path = dir.join(format!("{obligation_id}.run.json"));
+    let mut input = json!({
+        "obligation_id": obligation_id,
+        "capability_instance_id": capability_instance_id,
+        "target": target,
+    });
+    if let Some(env) = env {
+        input["env"] = env;
+    }
+    if let Some(fixture_disclosure) = fixture_disclosure {
+        input["fixture_disclosure"] = fixture_disclosure;
+    }
+    fs::write(&path, serde_json::to_vec_pretty(&input).unwrap()).unwrap();
+    single_json_document(
+        &planr()
+            .current_dir(dir)
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "run",
+                "--input",
+                path.to_str().unwrap(),
+            ])
+            .assert()
+            .code(expected_code)
+            .get_output()
+            .stdout,
+    )
+}
+
+fn assert_unavailable_run_identity(
+    run: &Value,
+    expected_instance: &Value,
+    expected_obligation_id: &str,
+) -> (String, String) {
+    assert_evidence_envelope(run, "evidence.run", true);
+    assert_eq!(run["object"]["verdict"], "unavailable");
+    let attempt = &run["object"]["attempt"];
+    let receipt = &run["object"]["receipt"];
+    let capability = &receipt["capability"];
+    let expected_capability = &expected_instance["capability"];
+
+    assert_eq!(attempt["status"], "unavailable");
+    assert_eq!(attempt["obligation_id"], expected_obligation_id);
+    assert_eq!(
+        attempt["criterion_id"],
+        format!("crit-{expected_obligation_id}")
+    );
+    assert_eq!(attempt["capability_instance_id"], expected_instance["id"]);
+    assert_eq!(attempt["exit"]["error"], "unavailable");
+    assert_eq!(attempt["raw_result"]["kind"], "process_error");
+    assert_eq!(attempt["raw_result"]["exit"]["error"], "unavailable");
+    assert_eq!(
+        attempt["resolved_command"]["resolution"]["status"],
+        "unavailable"
+    );
+    assert_eq!(
+        attempt["resolved_command"]["command"][0],
+        "planr-definitely-missing-adapter"
+    );
+    assert!(
+        attempt["raw_result"]["error_reason"]
+            .as_str()
+            .unwrap()
+            .contains("was not found in captured PATH")
+    );
+
+    assert_eq!(receipt["receipt_status"], "trusted");
+    assert_eq!(receipt["obligation_id"], expected_obligation_id);
+    assert_eq!(
+        receipt["criterion_id"],
+        format!("crit-{expected_obligation_id}")
+    );
+    assert_eq!(receipt["provenance"]["source"], "planr_observed_execution");
+    assert_eq!(receipt["provenance"]["assigned_by"], "planr");
+    assert_eq!(receipt["provenance"]["execution_id"], attempt["id"]);
+    assert_eq!(receipt["attempt_ids"], json!([attempt["id"].clone()]));
+    assert_eq!(receipt["observations"][0]["outcome"], "unavailable");
+    assert_eq!(receipt["proof_gaps"], json!(["missing_capability"]));
+    assert_eq!(capability["manifest_id"], expected_instance["manifest_id"]);
+    assert_eq!(
+        capability["manifest_digest"],
+        expected_instance["manifest_digest"]
+    );
+    assert_eq!(capability["instance_id"], expected_instance["id"]);
+    assert!(
+        capability["instance_digest"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:")
+    );
+    assert_eq!(
+        expected_capability["probe_result"]["probe_execution_id"],
+        expected_instance["probe_execution_id"]
+    );
+    assert_eq!(expected_capability["probe_result"]["outcome"], "passed");
+    assert_eq!(expected_capability["availability"]["status"], "available");
+
+    (
+        attempt["id"].as_str().unwrap().to_string(),
+        receipt["id"].as_str().unwrap().to_string(),
+    )
+}
+
+fn assert_blocked_missing_capability_coverage(
+    coverage: &Value,
+    expected_coverage_id: Option<&str>,
+    expected_obligation_id: &str,
+    expected_receipt_ids: &[String],
+) -> String {
+    assert_evidence_envelope(coverage, "evidence.coverage", true);
+    assert_eq!(coverage["object"]["status"], "blocked");
+    assert_eq!(coverage["object"]["verdict"], "blocked");
+    let verdict = &coverage["object"]["coverage"];
+    assert_eq!(verdict["status"], "blocked");
+    assert_eq!(verdict["scope"]["kind"], "criterion");
+    assert_eq!(
+        verdict["scope"]["id"],
+        format!("crit-{expected_obligation_id}")
+    );
+    assert_eq!(
+        verdict["scope"]["criterion_id"],
+        format!("crit-{expected_obligation_id}")
+    );
+    if let Some(expected_coverage_id) = expected_coverage_id {
+        assert_eq!(coverage["object"]["coverage_id"], expected_coverage_id);
+        assert_eq!(verdict["id"], expected_coverage_id);
+    }
+    let observation = &verdict["observation_coverage"][0];
+    assert_eq!(
+        observation["requirement_id"],
+        format!("obs-{expected_obligation_id}")
+    );
+    assert_eq!(observation["status"], "blocked");
+    assert_eq!(observation["gap_reason"], "missing_capability");
+    let attempted = observation["attempted_receipt_ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    for expected_receipt_id in expected_receipt_ids {
+        assert!(
+            attempted.contains(expected_receipt_id),
+            "coverage did not include attempted receipt {expected_receipt_id}: {coverage}"
+        );
+    }
+    coverage["object"]["coverage_id"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+fn superseding_obligation(mut base: Value, id: &str, supersedes: &str) -> Value {
+    base["id"] = json!(id);
+    base["title"] = json!(format!("Evidence obligation {id}"));
+    base["supersedes"] = json!(supersedes);
+    base
+}
+
+fn register_receipt_binding_validator_for_test(conn: &Connection) {
+    conn.create_scalar_function(
+        "planr_evidence_receipt_binding_is_valid",
+        2,
+        rusqlite::functions::FunctionFlags::SQLITE_UTF8
+            | rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC,
+        |ctx| {
+            let trusted_binding_json: String = ctx.get(0)?;
+            let receipt_json: String = ctx.get(1)?;
+            let trusted_binding: Value = serde_json::from_str(&trusted_binding_json)
+                .map_err(|err| rusqlite::Error::UserFunctionError(Box::new(err)))?;
+            let receipt: Value = serde_json::from_str(&receipt_json)
+                .map_err(|err| rusqlite::Error::UserFunctionError(Box::new(err)))?;
+            Ok(
+                if planr::evidence::trusted_receipt_binding_matches_receipt(
+                    trusted_binding,
+                    receipt,
+                )
+                .is_ok()
+                {
+                    1i64
+                } else {
+                    0i64
+                },
+            )
+        },
+    )
+    .unwrap();
+}
+
+fn evidence_row_count(db: &Path, table: &str) -> i64 {
+    assert!(
+        matches!(
+            table,
+            "evidence_attempts" | "evidence_receipts" | "evidence_validated_imports"
+        ),
+        "unexpected evidence table {table}"
+    );
+    Connection::open(db)
+        .unwrap()
+        .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+            row.get(0)
+        })
+        .unwrap()
+}
+
+fn assert_persisted_coverage_verdict(db: &Path, coverage: &Value) {
+    let conn = Connection::open(db).unwrap();
+    let persisted: String = conn
+        .query_row(
+            "SELECT verdict_json FROM coverage_verdicts WHERE id = ?1",
+            [coverage["object"]["coverage_id"].as_str().unwrap()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let persisted: Value = serde_json::from_str(&persisted).unwrap();
+    assert_eq!(persisted, coverage["object"]["coverage"]);
+}
+
+fn assert_json_string_set(actual: &Value, expected: &[&str]) {
+    let mut actual = actual
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    let mut expected = expected
+        .iter()
+        .map(|value| value.to_string())
+        .collect::<Vec<_>>();
+    actual.sort();
+    expected.sort();
+    assert_eq!(actual, expected);
+}
+
+fn generic_import_artifact_set_digest(artifacts: &[Value], artifact_bytes: &[&[u8]]) -> String {
+    sha256_json(&Value::Array(
+        artifacts
+            .iter()
+            .zip(artifact_bytes)
+            .map(|(artifact, bytes)| {
+                json!({
+                    "id": artifact["id"],
+                    "kind": artifact["kind"],
+                    "declared_digest": artifact["digest"],
+                    "content_digest": sha256_prefixed(bytes),
+                })
+            })
+            .collect(),
+    ))
+}
+
+fn generic_import_predicate_digest(predicate: &Value) -> String {
+    sha256_json(&json!({
+        "kind": predicate["kind"],
+        "version": predicate["version"],
+        "type": predicate["type"],
+        "outcome": predicate["outcome"],
+        "predicate": predicate["predicate"],
+        "actual": predicate["actual"],
+    }))
+}
+
+fn write_generic_import_validator_fixture(root: &Path) -> String {
+    let payload_schema = json!({
+        "type": "planr.import.validator.generic_predicate",
+        "schema_ref": "schema://planr.import.validator.generic_predicate",
+        "schema_digest": "sha256:abababababababababababababababababababababababababababababababab",
+    });
+    let execution = json!({
+        "kind": "process",
+        "executable": "sh",
+        "args": ["-c", "printf '%s' \"$PLANR_GENERIC_VALIDATOR_RESULT\""],
+        "working_directory": ".",
+        "timeout_ms": 5000,
+        "stdout_limit_bytes": 4096,
+        "stderr_limit_bytes": 1024,
+        "payload_schema": payload_schema,
+    });
+    let adapter_digest = process_adapter_digest(&execution, vec![]);
+    let manifest = json!({
+        "id": "verifier-generic-import-validator",
+        "schema_version": "evidence.contract.v1",
+        "version": "1.0.0",
+        "adapter_kind": "artifact_import",
+        "adapter_digest": adapter_digest,
+        "supported_surfaces": ["local-process"],
+        "supported_observations": [execution["payload_schema"].clone()],
+        "supported_interactions": ["process", "import"],
+        "supported_artifacts": ["stdout", "planr.generic_adapter_predicate.v1"],
+        "runtime_targets": [{"kind": "process", "id": "runtime-local"}],
+        "provenance_path": "validated_artifact_import",
+        "permissions": {"network": "none", "filesystem": "read_workspace"},
+        "costs": {},
+        "determinism": "deterministic",
+        "repeatability": "repeatable",
+        "independence": "repository-owned generic import validator",
+        "blind_spots": ["fixture validates generic import trust boundary only"],
+        "availability_probe": {"kind": "process", "execution": execution},
+    });
+    let manifest_digest = sha256_json(&manifest);
+    fs::write(
+        root.join(".planr/evidence/adapters/generic-import-validator.manifest.json"),
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    rewrite_evidence_policy_fixture(root, |policy| {
+        policy["adapter_registrations"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "manifest_id": "verifier-generic-import-validator",
+                "manifest_path": ".planr/evidence/adapters/generic-import-validator.manifest.json",
+                "manifest_digest": manifest_digest,
+                "observation_types": ["planr.import.validator.generic_predicate"],
+                "payload_schemas": [manifest["supported_observations"][0].clone()],
+                "provenance_path": "validated_artifact_import",
+                "execution_contract": manifest["availability_probe"]["execution"].clone(),
+            }));
+    });
+    adapter_digest
+}
+
+fn doctor_evidence(dir: &Path, db: &Path) -> Value {
+    let output = planr()
+        .current_dir(dir)
+        .args(["--db", db.to_str().unwrap(), "--json", "doctor"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    single_json_document(&output)["evidence"].clone()
+}
+
+fn add_evidence_obligation(dir: &Path, db: &Path, id: &str, policy_digest: &str) {
+    add_evidence_obligation_with_environment(
+        dir,
+        db,
+        id,
+        policy_digest,
+        json!({"kind": "local", "id": "placeholder", "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"}),
+    );
+}
+
+fn add_evidence_obligation_with_environment(
+    dir: &Path,
+    db: &Path,
+    id: &str,
+    policy_digest: &str,
+    environment: Value,
+) {
+    let obligation = evidence_obligation_for(
+        id,
+        policy_digest,
+        "com.example.health.status",
+        "public evidence health",
+        json!({"status": "ok"}),
+        json!({"kind": "process", "uri": "local://health"}),
+        environment,
+        json!({"kind": "process", "id": "runtime-local"}),
+        json!(["target_change", "policy_change", "adapter_schema_change"]),
+        "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+    );
+    let path = dir.join(format!("{id}.obligation.json"));
+    fs::write(&path, serde_json::to_vec_pretty(&obligation).unwrap()).unwrap();
+    planr()
+        .current_dir(dir)
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "evidence",
+            "obligation",
+            "add",
+            "--input",
+            path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+}
+
+fn capability_instance_environment(db: &Path, instance_id: &str) -> Value {
+    let conn = Connection::open(db).unwrap();
+    let snapshot: String = conn
+        .query_row(
+            "SELECT capability_snapshot_json FROM verification_capability_instances WHERE id = ?1",
+            [instance_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    serde_json::from_str::<Value>(&snapshot).unwrap()["environment"].clone()
+}
+
+fn run_evidence_manifest(dir: &Path, db: &Path, obligation_id: &str) -> Value {
+    let path = dir.join(format!("{obligation_id}.run.json"));
+    fs::write(
+        &path,
+        serde_json::to_vec_pretty(&json!({
+            "obligation_id": obligation_id,
+            "manifest_id": "verifier-generic-adapter",
+            "target": {"kind": "process", "uri": "local://health"}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    single_json_document(
+        &planr()
+            .current_dir(dir)
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "run",
+                "--input",
+                path.to_str().unwrap(),
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    )
+}
+
+fn seed_capability_instance_variant(
+    source_db: &Path,
+    target_db: &Path,
+    instance_id: &str,
+    runtime_target_json: Option<&str>,
+    valid_until: Option<&str>,
+) {
+    seed_capability_instance_with_options(
+        source_db,
+        target_db,
+        instance_id,
+        SeedCapabilityInstanceOptions {
+            runtime_target_json,
+            valid_until,
+            environment: None,
+            snapshot_manifest_id: None,
+        },
+    );
+}
+
+#[derive(Clone)]
+struct SeedCapabilityInstanceOptions<'a> {
+    runtime_target_json: Option<&'a str>,
+    valid_until: Option<&'a str>,
+    environment: Option<Value>,
+    snapshot_manifest_id: Option<&'a str>,
+}
+
+fn seed_capability_instance_with_options(
+    source_db: &Path,
+    target_db: &Path,
+    instance_id: &str,
+    options: SeedCapabilityInstanceOptions<'_>,
+) {
+    struct SeedCapabilityInstance {
+        manifest_id: String,
+        manifest_version: String,
+        manifest_digest: String,
+        availability_status: String,
+        runtime_target_json: String,
+        host_fingerprint_json: String,
+        capability_snapshot_json: String,
+        probe_result_json: String,
+    }
+
+    let source = Connection::open(source_db).unwrap();
+    let target = Connection::open(target_db).unwrap();
+    let manifest: (String, String, String, String, String, String, Option<String>, String) = source
+        .query_row(
+            "SELECT id, version, adapter_kind, adapter_digest, manifest_digest, manifest_json, source_path, created_at
+             FROM verification_capability_manifests WHERE id = 'verifier-generic-adapter'",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                ))
+            },
+        )
+        .unwrap();
+    target
+        .execute(
+            "INSERT INTO verification_capability_manifests(
+              id, version, adapter_kind, adapter_digest, manifest_digest, manifest_json, source_path, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            rusqlite::params![
+                manifest.0, manifest.1, manifest.2, manifest.3, manifest.4, manifest.5,
+                manifest.6, manifest.7
+            ],
+        )
+        .unwrap();
+    let instance: SeedCapabilityInstance = source
+        .query_row(
+            "SELECT manifest_id, manifest_version, manifest_digest,
+                    availability_status, runtime_target_json, host_fingerprint_json,
+                    capability_snapshot_json, probe_result_json
+             FROM verification_capability_instances
+             WHERE manifest_id = 'verifier-generic-adapter'
+             ORDER BY created_at DESC, id DESC LIMIT 1",
+            [],
+            |row| {
+                Ok(SeedCapabilityInstance {
+                    manifest_id: row.get(0)?,
+                    manifest_version: row.get(1)?,
+                    manifest_digest: row.get(2)?,
+                    availability_status: row.get(3)?,
+                    runtime_target_json: row.get(4)?,
+                    host_fingerprint_json: row.get(5)?,
+                    capability_snapshot_json: row.get(6)?,
+                    probe_result_json: row.get(7)?,
+                })
+            },
+        )
+        .unwrap();
+    let probe_execution_id = format!("probe-{instance_id}");
+    let mut snapshot: Value = serde_json::from_str(&instance.capability_snapshot_json).unwrap();
+    snapshot["id"] = json!(instance_id);
+    if let Some(manifest_id) = options.snapshot_manifest_id {
+        snapshot["manifest_id"] = json!(manifest_id);
+    }
+    if let Some(environment) = options.environment.as_ref() {
+        snapshot["environment"] = environment.clone();
+    }
+    snapshot["probe_result"]["probe_execution_id"] = json!(probe_execution_id);
+    let mut probe_result: Value = serde_json::from_str(&instance.probe_result_json).unwrap();
+    probe_result["probe_execution_id"] = json!(probe_execution_id);
+    let mut host_fingerprint: Value =
+        serde_json::from_str(&instance.host_fingerprint_json).unwrap();
+    if let Some(environment) = options.environment.as_ref() {
+        host_fingerprint["environment"] = environment.clone();
+    }
+    target
+        .execute(
+            "INSERT INTO verification_capability_instances(
+              id, manifest_id, manifest_version, manifest_digest, probe_execution_id,
+              availability_status, runtime_target_json, host_fingerprint_json,
+              capability_snapshot_json, probe_result_json, created_at, valid_until
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, datetime('now'), ?11)",
+            rusqlite::params![
+                instance_id,
+                instance.manifest_id,
+                instance.manifest_version,
+                instance.manifest_digest,
+                probe_execution_id,
+                instance.availability_status,
+                options
+                    .runtime_target_json
+                    .unwrap_or(&instance.runtime_target_json),
+                host_fingerprint.to_string(),
+                snapshot.to_string(),
+                probe_result.to_string(),
+                options.valid_until,
+            ],
+        )
+        .unwrap();
+}
+
+fn init_evidence_project(dir: &Path, db: &Path, name: &str) {
+    planr()
+        .current_dir(dir)
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "project",
+            "init",
+            name,
+        ])
+        .assert()
+        .success();
+    let conn = rusqlite::Connection::open(db).unwrap();
+    let project_id: String = conn
+        .query_row(
+            "SELECT id FROM projects ORDER BY created_at DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    conn.execute(
+        "INSERT OR IGNORE INTO plans(
+          id, project_id, stage, path, title, slug, parse_status, content_hash, created_at, updated_at
+        ) VALUES (
+          'pln-evidence-public', ?1, 'build', ?2, 'Evidence Public Fixture', 'evidence-public-fixture', 'ok', 'fixture-hash', datetime('now'), datetime('now')
+        )",
+        rusqlite::params![
+            project_id,
+            dir.join(".planr/plans/build/evidence-public-fixture.plan.md")
+                .to_string_lossy()
+                .to_string()
+        ],
+    )
+    .unwrap();
+}
+
+#[test]
+fn evidence_doctor_reports_degraded_states_and_matches_run_resolution() {
+    let missing_dir = tempdir().unwrap();
+    let missing_db_dir = tempdir().unwrap();
+    let missing_db = missing_db_dir.path().join("planr.sqlite");
+    init_evidence_project(missing_dir.path(), &missing_db, "Missing Evidence Policy");
+    let missing = doctor_evidence(missing_dir.path(), &missing_db);
+    assert_eq!(missing["status"], "warning");
+    assert_eq!(missing["policy"]["state"], "missing_policy");
+
+    let malformed_dir = tempdir().unwrap();
+    let malformed_db_dir = tempdir().unwrap();
+    let malformed_db = malformed_db_dir.path().join("planr.sqlite");
+    fs::create_dir_all(malformed_dir.path().join(".planr")).unwrap();
+    fs::write(
+        malformed_dir.path().join(".planr/evidence.yaml"),
+        "schema_version: evidence.contract.v1\npolicy_digest: definitely-not-a-digest\n",
+    )
+    .unwrap();
+    init_evidence_project(
+        malformed_dir.path(),
+        &malformed_db,
+        "Malformed Evidence Policy",
+    );
+    let malformed = doctor_evidence(malformed_dir.path(), &malformed_db);
+    assert_eq!(malformed["status"], "warning");
+    assert_eq!(malformed["policy"]["state"], "malformed_policy");
+    assert!(
+        malformed["policy"]["diagnostics"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("evidence policy invalid")
+    );
+
+    let no_adapters_dir = tempdir().unwrap();
+    let no_adapters_db_dir = tempdir().unwrap();
+    let no_adapters_db = no_adapters_db_dir.path().join("planr.sqlite");
+    write_evidence_policy_fixture(no_adapters_dir.path());
+    rewrite_evidence_policy_fixture(no_adapters_dir.path(), |policy| {
+        policy["adapter_registrations"] = json!([]);
+    });
+    init_evidence_project(
+        no_adapters_dir.path(),
+        &no_adapters_db,
+        "No Evidence Adapters",
+    );
+    let no_adapters = doctor_evidence(no_adapters_dir.path(), &no_adapters_db);
+    assert_eq!(no_adapters["status"], "warning");
+    assert_eq!(no_adapters["policy"]["state"], "no_adapters");
+    assert_eq!(
+        no_adapters["policy"]["registry"]["registered_capabilities"],
+        0
+    );
+
+    let unavailable_dir = tempdir().unwrap();
+    let unavailable_db_dir = tempdir().unwrap();
+    let unavailable_db = unavailable_db_dir.path().join("planr.sqlite");
+    write_evidence_policy_fixture(unavailable_dir.path());
+    let unavailable_digest = rewrite_evidence_runner_manifest(unavailable_dir.path(), |manifest| {
+        manifest["availability_probe"]["execution"]["executable"] =
+            json!("definitely-not-a-planr-probe");
+    });
+    rewrite_evidence_policy_fixture(unavailable_dir.path(), |policy| {
+        policy["adapter_registrations"][0]["manifest_digest"] = json!(unavailable_digest);
+        policy["adapter_registrations"][0]["execution_contract"]["executable"] =
+            json!("definitely-not-a-planr-probe");
+    });
+    init_evidence_project(
+        unavailable_dir.path(),
+        &unavailable_db,
+        "Unavailable Evidence Adapter",
+    );
+    let unavailable = doctor_evidence(unavailable_dir.path(), &unavailable_db);
+    assert_eq!(unavailable["status"], "warning");
+    assert_eq!(unavailable["policy"]["state"], "unavailable");
+    assert_eq!(
+        unavailable["policy"]["registry"]["probes"][0]["availability_status"],
+        "unavailable"
+    );
+    add_evidence_obligation(
+        unavailable_dir.path(),
+        &unavailable_db,
+        "pob-unavailable",
+        unavailable["policy"]["digest"].as_str().unwrap(),
+    );
+    let unavailable_run_path = unavailable_dir.path().join("pob-unavailable.run.json");
+    fs::write(
+        &unavailable_run_path,
+        serde_json::to_vec_pretty(&json!({
+            "obligation_id": "pob-unavailable",
+            "manifest_id": "verifier-generic-adapter",
+            "target": {"kind": "process", "uri": "local://health"}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let unavailable_run = single_json_document(
+        &planr()
+            .current_dir(unavailable_dir.path())
+            .args([
+                "--db",
+                unavailable_db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "run",
+                "--input",
+                unavailable_run_path.to_str().unwrap(),
+            ])
+            .assert()
+            .failure()
+            .code(1)
+            .get_output()
+            .stdout,
+    );
+    assert_evidence_envelope(&unavailable_run, "evidence.run", false);
+    assert!(
+        unavailable_run["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("capability instance is not available")
+    );
+
+    let degraded_dir = tempdir().unwrap();
+    let degraded_db_dir = tempdir().unwrap();
+    let degraded_db = degraded_db_dir.path().join("planr.sqlite");
+    write_evidence_policy_fixture(degraded_dir.path());
+    let degraded_digest = rewrite_evidence_runner_manifest(degraded_dir.path(), |manifest| {
+        manifest["availability_probe"]["execution"]["args"] = json!(["-c", "exit 2"]);
+    });
+    rewrite_evidence_policy_fixture(degraded_dir.path(), |policy| {
+        policy["adapter_registrations"][0]["manifest_digest"] = json!(degraded_digest);
+        policy["adapter_registrations"][0]["execution_contract"]["args"] = json!(["-c", "exit 2"]);
+    });
+    init_evidence_project(
+        degraded_dir.path(),
+        &degraded_db,
+        "Degraded Evidence Adapter",
+    );
+    let degraded = doctor_evidence(degraded_dir.path(), &degraded_db);
+    assert_eq!(degraded["status"], "warning");
+    assert_eq!(degraded["policy"]["state"], "degraded");
+    assert_eq!(
+        degraded["policy"]["registry"]["probes"][0]["availability_status"],
+        "probe_failed"
+    );
+
+    let seed_dir = tempdir().unwrap();
+    let seed_db_dir = tempdir().unwrap();
+    let seed_db = seed_db_dir.path().join("planr.sqlite");
+    write_evidence_policy_fixture(seed_dir.path());
+    init_evidence_project(seed_dir.path(), &seed_db, "Seed Evidence Adapter");
+    let first = doctor_evidence(seed_dir.path(), &seed_db);
+    assert_eq!(first["status"], "ok");
+    assert_eq!(first["policy"]["state"], "ready");
+    let first_instance = first["policy"]["registry"]["probes"][0]["instance_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let expired_dir = tempdir().unwrap();
+    let expired_db_dir = tempdir().unwrap();
+    let expired_db = expired_db_dir.path().join("planr.sqlite");
+    write_evidence_policy_fixture(expired_dir.path());
+    init_git_repo(expired_dir.path());
+    init_evidence_project(expired_dir.path(), &expired_db, "Expired Evidence Adapter");
+    seed_capability_instance_variant(
+        &seed_db,
+        &expired_db,
+        "vcap-seeded-expired",
+        None,
+        Some("2020-01-01T00:00:00Z"),
+    );
+    let expired_recovery = doctor_evidence(expired_dir.path(), &expired_db);
+    assert_eq!(expired_recovery["status"], "warning");
+    assert_eq!(expired_recovery["policy"]["state"], "recovered");
+    assert_eq!(
+        expired_recovery["policy"]["registry"]["probes"][0]["resolution"],
+        "reprobed_expired"
+    );
+    let expired_instance = expired_recovery["policy"]["registry"]["probes"][0]["instance_id"]
+        .as_str()
+        .unwrap();
+    assert_ne!(expired_instance, first_instance);
+    add_evidence_obligation_with_environment(
+        expired_dir.path(),
+        &expired_db,
+        "pob-recovered-expired",
+        first["policy"]["digest"].as_str().unwrap(),
+        capability_instance_environment(&expired_db, expired_instance),
+    );
+    let expired_run =
+        run_evidence_manifest(expired_dir.path(), &expired_db, "pob-recovered-expired");
+    assert_evidence_envelope(&expired_run, "evidence.run", true);
+    assert_eq!(
+        expired_run["object"]["attempt"]["capability_instance_id"],
+        expired_instance
+    );
+
+    let mismatch_dir = tempdir().unwrap();
+    let mismatch_db_dir = tempdir().unwrap();
+    let mismatch_db = mismatch_db_dir.path().join("planr.sqlite");
+    write_evidence_policy_fixture(mismatch_dir.path());
+    init_git_repo(mismatch_dir.path());
+    init_evidence_project(
+        mismatch_dir.path(),
+        &mismatch_db,
+        "Mismatch Evidence Adapter",
+    );
+    seed_capability_instance_variant(
+        &seed_db,
+        &mismatch_db,
+        "vcap-seeded-mismatch",
+        Some("[{\"kind\":\"process\",\"id\":\"runtime-other\"}]"),
+        None,
+    );
+    let mismatch_recovery = doctor_evidence(mismatch_dir.path(), &mismatch_db);
+    assert_eq!(mismatch_recovery["status"], "warning");
+    assert_eq!(mismatch_recovery["policy"]["state"], "recovered");
+    assert_eq!(
+        mismatch_recovery["policy"]["registry"]["probes"][0]["resolution"],
+        "reprobed_runtime_mismatch"
+    );
+    let mismatch_instance = mismatch_recovery["policy"]["registry"]["probes"][0]["instance_id"]
+        .as_str()
+        .unwrap();
+    assert_ne!(mismatch_instance, first_instance);
+    add_evidence_obligation_with_environment(
+        mismatch_dir.path(),
+        &mismatch_db,
+        "pob-recovered-mismatch",
+        first["policy"]["digest"].as_str().unwrap(),
+        capability_instance_environment(&mismatch_db, mismatch_instance),
+    );
+    let mismatch_run =
+        run_evidence_manifest(mismatch_dir.path(), &mismatch_db, "pob-recovered-mismatch");
+    assert_evidence_envelope(&mismatch_run, "evidence.run", true);
+    assert_eq!(
+        mismatch_run["object"]["attempt"]["capability_instance_id"],
+        mismatch_instance
+    );
+
+    let environment_dir = tempdir().unwrap();
+    let environment_db_dir = tempdir().unwrap();
+    let environment_db = environment_db_dir.path().join("planr.sqlite");
+    write_evidence_policy_fixture(environment_dir.path());
+    init_git_repo(environment_dir.path());
+    init_evidence_project(
+        environment_dir.path(),
+        &environment_db,
+        "Environment Mismatch Evidence Adapter",
+    );
+    seed_capability_instance_with_options(
+        &seed_db,
+        &environment_db,
+        "vcap-seeded-environment-mismatch",
+        SeedCapabilityInstanceOptions {
+            runtime_target_json: None,
+            valid_until: None,
+            environment: Some(json!({
+                "kind": "local",
+                "id": "planr-local",
+                "digest": "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+            })),
+            snapshot_manifest_id: None,
+        },
+    );
+    let environment_recovery = doctor_evidence(environment_dir.path(), &environment_db);
+    assert_eq!(environment_recovery["status"], "warning");
+    assert_eq!(environment_recovery["policy"]["state"], "recovered");
+    assert_eq!(
+        environment_recovery["policy"]["registry"]["probes"][0]["resolution"],
+        "reprobed_environment_mismatch"
+    );
+    let environment_instance =
+        environment_recovery["policy"]["registry"]["probes"][0]["instance_id"]
+            .as_str()
+            .unwrap();
+    add_evidence_obligation_with_environment(
+        environment_dir.path(),
+        &environment_db,
+        "pob-recovered-environment",
+        first["policy"]["digest"].as_str().unwrap(),
+        capability_instance_environment(&environment_db, environment_instance),
+    );
+    let environment_run = run_evidence_manifest(
+        environment_dir.path(),
+        &environment_db,
+        "pob-recovered-environment",
+    );
+    assert_evidence_envelope(&environment_run, "evidence.run", true);
+    assert_eq!(
+        environment_run["object"]["attempt"]["capability_instance_id"],
+        environment_instance
+    );
+
+    let registration_dir = tempdir().unwrap();
+    let registration_db_dir = tempdir().unwrap();
+    let registration_db = registration_db_dir.path().join("planr.sqlite");
+    write_evidence_policy_fixture(registration_dir.path());
+    init_git_repo(registration_dir.path());
+    init_evidence_project(
+        registration_dir.path(),
+        &registration_db,
+        "Registration Mismatch Evidence Adapter",
+    );
+    seed_capability_instance_with_options(
+        &seed_db,
+        &registration_db,
+        "vcap-seeded-registration-mismatch",
+        SeedCapabilityInstanceOptions {
+            runtime_target_json: None,
+            valid_until: None,
+            environment: None,
+            snapshot_manifest_id: Some("verifier-generic-adapter-shadow"),
+        },
+    );
+    let registration_doctor = doctor_evidence(registration_dir.path(), &registration_db);
+    assert_eq!(registration_doctor["status"], "warning");
+    assert_eq!(registration_doctor["policy"]["state"], "recovered");
+    assert_eq!(
+        registration_doctor["policy"]["registry"]["probes"][0]["resolution"],
+        "reprobed_registration_mismatch"
+    );
+    let registration_instance =
+        registration_doctor["policy"]["registry"]["probes"][0]["instance_id"]
+            .as_str()
+            .unwrap();
+    add_evidence_obligation_with_environment(
+        registration_dir.path(),
+        &registration_db,
+        "pob-registration-mismatch",
+        first["policy"]["digest"].as_str().unwrap(),
+        capability_instance_environment(&registration_db, "vcap-seeded-registration-mismatch"),
+    );
+    let stale_registration_run_path = registration_dir
+        .path()
+        .join("pob-registration-mismatch-stale.run.json");
+    fs::write(
+        &stale_registration_run_path,
+        serde_json::to_vec_pretty(&json!({
+            "obligation_id": "pob-registration-mismatch",
+            "capability_instance_id": "vcap-seeded-registration-mismatch",
+            "target": {"kind": "process", "uri": "local://health"}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let stale_registration_run = single_json_document(
+        &planr()
+            .current_dir(registration_dir.path())
+            .args([
+                "--db",
+                registration_db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "run",
+                "--input",
+                stale_registration_run_path.to_str().unwrap(),
+            ])
+            .assert()
+            .failure()
+            .code(1)
+            .get_output()
+            .stdout,
+    );
+    assert_evidence_envelope(&stale_registration_run, "evidence.run", false);
+    assert!(
+        {
+            let message = stale_registration_run["error"]["message"].as_str().unwrap();
+            message.contains("capability instance does not match registered adapter")
+                || message.contains("does not match persisted registration")
+                || message.contains("manifest")
+        },
+        "unexpected registration mismatch run error: {stale_registration_run}"
+    );
+    add_evidence_obligation_with_environment(
+        registration_dir.path(),
+        &registration_db,
+        "pob-registration-recovered",
+        first["policy"]["digest"].as_str().unwrap(),
+        capability_instance_environment(&registration_db, registration_instance),
+    );
+    let registration_run = run_evidence_manifest(
+        registration_dir.path(),
+        &registration_db,
+        "pob-registration-recovered",
+    );
+    assert_evidence_envelope(&registration_run, "evidence.run", true);
+    assert_eq!(
+        registration_run["object"]["attempt"]["capability_instance_id"],
+        registration_instance
+    );
+}
+
+#[test]
+fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
+    let dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db = db_dir.path().join("planr.sqlite");
+    write_evidence_policy_fixture(dir.path());
+    let generic_import_validator_digest = write_generic_import_validator_fixture(dir.path());
+    init_evidence_project(dir.path(), &db, "Evidence Public Surfaces");
+    init_git_repo(dir.path());
+    let observed_item_id = create_test_item(
+        dir.path(),
+        &db,
+        "Observe-only target",
+        "evidence must not close this",
+    );
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "review",
+            "request",
+            &observed_item_id,
+        ])
+        .assert()
+        .success();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "approval",
+            "request",
+            &observed_item_id,
+            "--reason",
+            "prove evidence commands are observe-only",
+        ])
+        .assert()
+        .success();
+    let review_id = {
+        let conn = Connection::open(&db).unwrap();
+        conn.query_row(
+            "SELECT from_item FROM links WHERE to_item = ?1 AND kind = 'reviews' ORDER BY from_item LIMIT 1",
+            [&observed_item_id],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap()
+    };
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "log",
+            "add",
+            "--item",
+            &observed_item_id,
+            "--summary",
+            "observe-only baseline completion log",
+            "--files",
+            "src/app/evidence.rs",
+            "--cmd",
+            "true",
+            "--tests",
+            "true",
+        ])
+        .assert()
+        .success();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "review",
+            "artifact",
+            &review_id,
+        ])
+        .assert()
+        .success();
+    let adversarial_baseline = evidence_observe_snapshot(&db, &observed_item_id);
+    let conn = Connection::open(&db).unwrap();
+    register_receipt_binding_validator_for_test(&conn);
+    let baseline_log_blocked: Option<String> = conn
+        .query_row(
+            "SELECT blocked_or_unverified FROM logs WHERE item_id = ?1 ORDER BY id LIMIT 1",
+            [&observed_item_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    conn.execute(
+        "UPDATE logs SET blocked_or_unverified = 'adversarial blocked mutation' WHERE item_id = ?1",
+        [&observed_item_id],
+    )
+    .unwrap();
+    assert_ne!(
+        evidence_observe_snapshot(&db, &observed_item_id),
+        adversarial_baseline,
+        "observe snapshot must detect in-place log blocked_or_unverified mutation"
+    );
+    conn.execute(
+        "UPDATE logs SET blocked_or_unverified = ?1 WHERE item_id = ?2",
+        rusqlite::params![baseline_log_blocked, observed_item_id],
+    )
+    .unwrap();
+    assert_eq!(
+        evidence_observe_snapshot(&db, &observed_item_id),
+        adversarial_baseline
+    );
+
+    let (artifact_id, baseline_artifact_content): (String, Option<String>) = conn
+        .query_row(
+            "SELECT id, content FROM artifacts WHERE item_id = ?1 AND kind = 'review' ORDER BY id LIMIT 1",
+            [&review_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    conn.execute(
+        "UPDATE artifacts SET content = 'adversarial artifact content mutation' WHERE id = ?1",
+        [&artifact_id],
+    )
+    .unwrap();
+    assert_ne!(
+        evidence_observe_snapshot(&db, &observed_item_id),
+        adversarial_baseline,
+        "observe snapshot must detect in-place review artifact content mutation"
+    );
+    conn.execute(
+        "UPDATE artifacts SET content = ?1 WHERE id = ?2",
+        rusqlite::params![baseline_artifact_content, artifact_id],
+    )
+    .unwrap();
+    assert_eq!(
+        evidence_observe_snapshot(&db, &observed_item_id),
+        adversarial_baseline
+    );
+
+    let observe_before = evidence_observe_snapshot(&db, &observed_item_id);
+    let close_preview_before = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "map",
+                "preview",
+                "--close",
+                &observed_item_id,
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+
+    let policy_output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "evidence", "policy"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let policy = single_json_document(&policy_output);
+    assert_evidence_envelope(&policy, "evidence.policy", true);
+    assert_eq!(policy["object"]["status"], "valid");
+    assert_eq!(policy["object"]["registry"]["registered_capabilities"], 3);
+
+    let capabilities_output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "evidence",
+            "capability",
+            "list",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let capabilities = single_json_document(&capabilities_output);
+    assert_evidence_envelope(&capabilities, "evidence.capability.list", true);
+    let _instance = capabilities["object"]["instances"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|instance| {
+            instance["availability_status"] == "available"
+                && instance["manifest_id"] == "verifier-generic-adapter"
+        })
+        .expect("available capability instance");
+    let recovered_capabilities_output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "evidence",
+            "capability",
+            "list",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let recovered_capabilities = single_json_document(&recovered_capabilities_output);
+    assert!(
+        !recovered_capabilities["object"]["instances"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|instance| instance["id"] == "host-exp-chrome-browser-client"),
+        "capability list must not promote embedded Phase-1 host fixtures to live instances"
+    );
+    assert!(
+        !recovered_capabilities["object"]["manifests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|manifest| manifest["id"] == "host-chrome-browser-client-manifest"),
+        "capability list must not promote embedded Phase-1 host fixtures to live manifests"
+    );
+    let host_show = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "evidence",
+            "capability",
+            "show",
+            "host-exp-chrome-browser-client",
+        ])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    assert_evidence_error(
+        &single_json_document(&host_show),
+        "evidence.capability.show",
+        "not_found",
+        "not found",
+    );
+    let host_manifest = recovered_capabilities["object"]["manifests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|manifest| manifest["id"] == "host-chrome-browser-client-manifest");
+    assert!(host_manifest.is_none());
+    let host_fixture_receipts: i64 = Connection::open(&db)
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM evidence_receipts WHERE id = 'receipt-host-exp-chrome-browser-client'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        host_fixture_receipts, 0,
+        "Phase-1 host fixture contract vector must not be persisted as live Evidence"
+    );
+    let recovery_probe = recovered_capabilities["object"]["registry"]["probes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|probe| probe["manifest_id"] == "verifier-generic-adapter")
+        .unwrap();
+    assert_eq!(recovery_probe["availability_status"], "available");
+    assert_eq!(recovery_probe["reused"], true);
+    let instance = recovered_capabilities["object"]["instances"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|instance| instance["id"] == recovery_probe["instance_id"])
+        .expect("recovered capability instance");
+    let instance_id = instance["id"].as_str().unwrap().to_string();
+    let environment = instance["capability"]["environment"].clone();
+    let validator_probe = recovered_capabilities["object"]["registry"]["probes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|probe| probe["manifest_id"] == "verifier-generic-import-validator")
+        .unwrap();
+    assert_eq!(validator_probe["availability_status"], "available");
+    let validator_instance = recovered_capabilities["object"]["instances"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|instance| instance["id"] == validator_probe["instance_id"])
+        .expect("generic import validator capability instance");
+    let validator_instance_id = validator_instance["id"].as_str().unwrap().to_string();
+
+    let obligation = evidence_obligation_for(
+        "pob-public-run",
+        policy["object"]["digest"].as_str().unwrap(),
+        "com.example.health.status",
+        "public evidence health",
+        json!({"status": "ok"}),
+        json!({"kind": "process", "uri": "local://health"}),
+        environment,
+        json!({"kind": "process", "id": "runtime-local"}),
+        json!(["target_change", "policy_change", "adapter_schema_change"]),
+        "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+    );
+    let obligation_path = dir.path().join("proof-obligation.json");
+    fs::write(
+        &obligation_path,
+        serde_json::to_vec_pretty(&obligation).unwrap(),
+    )
+    .unwrap();
+
+    let cli_add_output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "evidence",
+            "obligation",
+            "add",
+            "--input",
+            obligation_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let cli_add = single_json_document(&cli_add_output);
+    assert_evidence_envelope(&cli_add, "evidence.obligation.add", true);
+    assert_eq!(cli_add["object"]["obligation"]["id"], "pob-public-run");
+    let project_id = cli_add["object"]["obligation"]["project_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let cli_show_output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "evidence",
+            "obligation",
+            "show",
+            "pob-public-run",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let cli_show = single_json_document(&cli_show_output);
+    assert_evidence_envelope(&cli_show, "evidence.obligation.show", true);
+
+    let mcp_input = format!(
+        "{}\n",
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "planr_evidence_obligation_show",
+                "arguments": {"id": "pob-public-run"}
+            }
+        })
+    );
+    let mcp_output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "mcp"])
+        .write_stdin(mcp_input)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let mcp_response: Value = serde_json::from_slice(&mcp_output).unwrap();
+    let mcp_show = mcp_text_value(&mcp_response);
+    assert_eq!(mcp_show, cli_show);
+
+    let run_input_path = dir.path().join("evidence-run.json");
+    fs::write(
+        &run_input_path,
+        serde_json::to_vec_pretty(&json!({
+            "obligation_id": "pob-public-run",
+            "capability_instance_id": instance_id,
+            "target": {"kind": "process", "uri": "local://health"},
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let run_output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "evidence",
+            "run",
+            "--input",
+            run_input_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let run = single_json_document(&run_output);
+    assert_evidence_envelope(&run, "evidence.run", true);
+    assert_eq!(run["object"]["verdict"], "passed");
+    let attempt_id = run["object"]["attempt"]["id"].as_str().unwrap();
+    let receipt_id = run["object"]["receipt"]["id"].as_str().unwrap();
+
+    let mcp_run = mcp_tool(
+        dir.path(),
+        &db,
+        20,
+        "planr_evidence_run",
+        json!({
+            "input": {
+                "obligation_id": "pob-public-run",
+                "capability_instance_id": instance_id,
+                "target": {"kind": "process", "uri": "local://health"}
+            }
+        }),
+    );
+    assert_evidence_envelope(&mcp_run, "evidence.run", true);
+    assert_eq!(mcp_run["object"]["verdict"], "passed");
+    let mcp_attempt_id = mcp_run["object"]["attempt"]["id"].as_str().unwrap();
+    let mcp_receipt_id = mcp_run["object"]["receipt"]["id"].as_str().unwrap();
+
+    let attempts_output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "evidence",
+            "attempts",
+            "--obligation",
+            "pob-public-run",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let attempts = single_json_document(&attempts_output);
+    assert_evidence_envelope(&attempts, "evidence.attempts", true);
+    assert_eq!(attempts["object"]["attempts"][0]["id"], attempt_id);
+
+    let receipts_output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "evidence",
+            "receipts",
+            "--obligation",
+            "pob-public-run",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let receipts = single_json_document(&receipts_output);
+    assert_evidence_envelope(&receipts, "evidence.receipts", true);
+    assert_eq!(receipts["object"]["receipts"][0]["id"], receipt_id);
+
+    let runner_artifact = json!({
+        "command": ["cargo", "test"],
+        "exit_code": 0,
+        "status": "passed",
+        "stdout_digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "duration_ms": 12,
+    });
+    let runner_bytes = serde_jcs::to_vec(&runner_artifact).unwrap();
+    fs::write(dir.path().join("runner.json"), &runner_bytes).unwrap();
+    let import_input = json!({
+        "id": "import-runner-public",
+        "schema_version": "planr.evidence.import.v1",
+        "source_kind": "artifact_import",
+        "submitted_at": "2026-07-29T00:00:00Z",
+        "format": "planr.runner_result.v1",
+        "verifier_identity": {
+            "kind": "adapter",
+            "id": "verifier-runner-import",
+            "name": "verifier-runner-import",
+            "version": "1.0.0",
+            "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        },
+        "runner_result": {
+            "kind": "planr_runner_result",
+            "version": "1.0.0",
+            "command": ["cargo", "test"],
+            "exit_code": 0,
+            "status": "passed",
+            "stdout_digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "stderr_digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "duration_ms": 12,
+        },
+        "artifact_refs": [{
+            "id": "artifact-runner",
+            "kind": "runner-json",
+            "digest": sha256_prefixed(&runner_bytes),
+            "uri": "file://runner.json",
+        }],
+        "producer_metadata": {"client": "fixture-importer"},
+    });
+    let import_path = dir.path().join("import-runner.json");
+    fs::write(
+        &import_path,
+        serde_json::to_vec_pretty(&import_input).unwrap(),
+    )
+    .unwrap();
+    let import_output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "evidence",
+            "import",
+            "--input",
+            import_path.to_str().unwrap(),
+            "--artifact-root",
+            dir.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let import = single_json_document(&import_output);
+    assert_evidence_envelope(&import, "evidence.import", true);
+    assert_eq!(import["object"]["verdict"], "valid");
+
+    let mut mcp_import_input = import_input.clone();
+    mcp_import_input["id"] = json!("import-runner-mcp");
+    let mcp_import = mcp_tool(
+        dir.path(),
+        &db,
+        21,
+        "planr_evidence_import",
+        json!({"artifact_root": dir.path().to_str().unwrap(), "input": mcp_import_input}),
+    );
+    assert_evidence_envelope(&mcp_import, "evidence.import", true);
+    assert_eq!(mcp_import["object"]["verdict"], "valid");
+
+    let mcp_attempts = mcp_tool(
+        dir.path(),
+        &db,
+        22,
+        "planr_evidence_attempts",
+        json!({"obligation": "pob-public-run"}),
+    );
+    assert_evidence_envelope(&mcp_attempts, "evidence.attempts", true);
+    assert!(
+        mcp_attempts["object"]["attempts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|attempt| attempt["id"] == attempt_id)
+    );
+
+    let mcp_receipts = mcp_tool(
+        dir.path(),
+        &db,
+        23,
+        "planr_evidence_receipts",
+        json!({"obligation": "pob-public-run"}),
+    );
+    assert_evidence_envelope(&mcp_receipts, "evidence.receipts", true);
+    assert!(
+        mcp_receipts["object"]["receipts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|receipt| receipt["id"] == receipt_id)
+    );
+
+    let port = free_port();
+    let bin = assert_cmd::cargo::cargo_bin("planr");
+    let mut server = StdCommand::new(&bin)
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "serve",
+            "--port",
+            &port.to_string(),
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    wait_for_http_server(port);
+    let http_show = http_json(&http_request(
+        port,
+        "GET",
+        "/v1/evidence/obligations/pob-public-run",
+        "",
+    ));
+    assert_eq!(http_show, cli_show);
+
+    let http_capabilities = http_json(&http_request(port, "GET", "/v1/evidence/capabilities", ""));
+    assert_evidence_envelope(&http_capabilities, "evidence.capability.list", true);
+    assert_eq!(
+        http_capabilities["object"]["registry"]["registered_capabilities"],
+        recovered_capabilities["object"]["registry"]["registered_capabilities"]
+    );
+    assert!(
+        http_capabilities["object"]["instances"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|instance| instance["id"] != "host-exp-chrome-browser-client"),
+        "{http_capabilities}"
+    );
+    let mcp_capabilities = mcp_tool(
+        dir.path(),
+        &db,
+        44,
+        "planr_evidence_capability_list",
+        json!({}),
+    );
+    assert_evidence_envelope(&mcp_capabilities, "evidence.capability.list", true);
+    assert!(
+        mcp_capabilities["object"]["instances"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|instance| instance["id"] != "host-exp-chrome-browser-client"),
+        "{mcp_capabilities}"
+    );
+
+    let http_run = http_json(&http_request(
+        port,
+        "POST",
+        "/v1/evidence/run",
+        &json!({
+            "obligation_id": "pob-public-run",
+            "capability_instance_id": instance_id,
+            "target": {"kind": "process", "uri": "local://health"}
+        })
+        .to_string(),
+    ));
+    assert_evidence_envelope(&http_run, "evidence.run", true);
+    assert_eq!(http_run["object"]["verdict"], "passed");
+    let http_attempt_id = http_run["object"]["attempt"]["id"].as_str().unwrap();
+    let http_receipt_id = http_run["object"]["receipt"]["id"].as_str().unwrap();
+
+    let rejected_run_trust_fields = [
+        "attempt",
+        "receipt",
+        "receipt_json",
+        "trusted_binding_json",
+        "trusted_receipt",
+        "receipt_status",
+        "provenance",
+    ];
+    for (index, field) in rejected_run_trust_fields.iter().enumerate() {
+        let forged_value = match *field {
+            "receipt_status" => json!("trusted"),
+            "provenance" => json!({"source": "agent_supplied"}),
+            _ => json!({"id": format!("forged-{field}")}),
+        };
+        let mut forged_run_input = json!({
+            "obligation_id": "pob-public-run",
+            "capability_instance_id": instance_id,
+            "target": {"kind": "process", "uri": "local://health"},
+        });
+        forged_run_input[*field] = forged_value;
+        let before_counts = evidence_attempt_receipt_counts(&db, "pob-public-run");
+
+        let cli_forged_path = dir.path().join(format!("evidence-run-forged-{field}.json"));
+        fs::write(
+            &cli_forged_path,
+            serde_json::to_vec_pretty(&forged_run_input).unwrap(),
+        )
+        .unwrap();
+        let cli_forged = single_json_document(
+            &planr()
+                .current_dir(dir.path())
+                .args([
+                    "--db",
+                    db.to_str().unwrap(),
+                    "--json",
+                    "evidence",
+                    "run",
+                    "--input",
+                    cli_forged_path.to_str().unwrap(),
+                ])
+                .assert()
+                .failure()
+                .get_output()
+                .stdout,
+        );
+        assert_evidence_error(
+            &cli_forged,
+            "evidence.run",
+            "bad_request",
+            &format!("trusted receipt field: {field}"),
+        );
+        assert_eq!(
+            evidence_attempt_receipt_counts(&db, "pob-public-run"),
+            before_counts,
+            "CLI forged run field {field} must not persist attempts or receipts"
+        );
+
+        let mcp_forged = mcp_tool_response(
+            dir.path(),
+            &db,
+            100 + index as u64,
+            "planr_evidence_run",
+            json!({"input": forged_run_input.clone()}),
+        );
+        assert_mcp_evidence_error(
+            &mcp_forged,
+            "evidence.run",
+            "bad_request",
+            &format!("trusted receipt field: {field}"),
+        );
+        assert_eq!(
+            evidence_attempt_receipt_counts(&db, "pob-public-run"),
+            before_counts,
+            "MCP forged run field {field} must not persist attempts or receipts"
+        );
+
+        let http_forged = http_request(
+            port,
+            "POST",
+            "/v1/evidence/run",
+            &forged_run_input.to_string(),
+        );
+        assert_http_evidence_error(
+            &http_forged,
+            "400 Bad Request",
+            "evidence.run",
+            "bad_request",
+            &format!("trusted receipt field: {field}"),
+        );
+        assert_eq!(
+            evidence_attempt_receipt_counts(&db, "pob-public-run"),
+            before_counts,
+            "HTTP forged run field {field} must not persist attempts or receipts"
+        );
+    }
+
+    let mut http_import_input = import_input.clone();
+    http_import_input["id"] = json!("import-runner-http");
+    let http_import = http_json(&http_request(
+        port,
+        "POST",
+        "/v1/evidence/import",
+        &json!({"artifact_root": dir.path().to_str().unwrap(), "input": http_import_input})
+            .to_string(),
+    ));
+    assert_evidence_envelope(&http_import, "evidence.import", true);
+    assert_eq!(http_import["object"]["verdict"], "valid");
+
+    let http_attempts = http_json(&http_request(
+        port,
+        "GET",
+        "/v1/evidence/attempts?obligation=pob-public-run",
+        "",
+    ));
+    assert_evidence_envelope(&http_attempts, "evidence.attempts", true);
+    let http_attempt_ids = http_attempts["object"]["attempts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|attempt| attempt["id"].as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    for expected in [attempt_id, mcp_attempt_id, http_attempt_id] {
+        assert!(http_attempt_ids.contains(&expected.to_string()));
+    }
+
+    let http_receipts = http_json(&http_request(
+        port,
+        "GET",
+        "/v1/evidence/receipts?obligation=pob-public-run",
+        "",
+    ));
+    assert_evidence_envelope(&http_receipts, "evidence.receipts", true);
+    let http_receipt_ids = http_receipts["object"]["receipts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|receipt| receipt["id"].as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    for expected in [receipt_id, mcp_receipt_id, http_receipt_id] {
+        assert!(http_receipt_ids.contains(&expected.to_string()));
+    }
+
+    let coverage_output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "evidence",
+            "coverage",
+            "--scope",
+            "obligation",
+            "--id",
+            "pob-public-run",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let coverage = single_json_document(&coverage_output);
+    assert_evidence_envelope(&coverage, "evidence.coverage", true);
+    assert_eq!(coverage["object"]["verdict"], "satisfied");
+    assert_eq!(coverage["exit"]["code"], 0);
+
+    let mcp_coverage = mcp_tool(
+        dir.path(),
+        &db,
+        24,
+        "planr_evidence_coverage",
+        json!({"scope": "obligation", "id": "pob-public-run"}),
+    );
+    assert_evidence_envelope(&mcp_coverage, "evidence.coverage", true);
+    assert_eq!(
+        mcp_coverage["object"]["verdict"],
+        coverage["object"]["verdict"]
+    );
+    assert_eq!(
+        mcp_coverage["object"]["coverage"]["observation_coverage"][0]["status"],
+        coverage["object"]["coverage"]["observation_coverage"][0]["status"]
+    );
+
+    let http_coverage = http_json(&http_request(
+        port,
+        "POST",
+        "/v1/evidence/coverage",
+        r#"{"scope":"obligation","id":"pob-public-run"}"#,
+    ));
+    assert_evidence_envelope(&http_coverage, "evidence.coverage", true);
+    assert_eq!(
+        http_coverage["object"]["verdict"],
+        coverage["object"]["verdict"]
+    );
+
+    let http_explain = http_json(&http_request(
+        port,
+        "POST",
+        "/v1/evidence/explain",
+        r#"{"scope":"plan","id":"pln-evidence-public"}"#,
+    ));
+    assert_evidence_envelope(&http_explain, "evidence.explain", true);
+    assert_eq!(http_explain["object"]["verdict"], "satisfied");
+    assert_eq!(
+        http_explain["object"]["explain"]["obligation_ids"],
+        json!(["pob-public-run"])
+    );
+    let mcp_explain = mcp_tool(
+        dir.path(),
+        &db,
+        25,
+        "planr_evidence_explain",
+        json!({"scope": "plan", "id": "pln-evidence-public"}),
+    );
+    assert_evidence_envelope(&mcp_explain, "evidence.explain", true);
+    assert_eq!(
+        mcp_explain["object"]["verdict"],
+        http_explain["object"]["verdict"]
+    );
+    assert_eq!(
+        mcp_explain["object"]["explain"]["obligation_ids"],
+        http_explain["object"]["explain"]["obligation_ids"]
+    );
+
+    let mcp_bad_scope_input = format!(
+        "{}\n",
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "planr_evidence_coverage",
+                "arguments": {"scope": "workspace", "id": "pob-public-run"}
+            }
+        })
+    );
+    let mcp_bad_scope_output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "mcp"])
+        .write_stdin(mcp_bad_scope_input)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let mcp_bad_scope_response: Value = serde_json::from_slice(&mcp_bad_scope_output).unwrap();
+    assert_eq!(mcp_bad_scope_response["result"]["isError"], true);
+    let mcp_bad_scope = mcp_text_value(&mcp_bad_scope_response);
+    assert_evidence_envelope(&mcp_bad_scope, "evidence.coverage", false);
+
+    let http_bad_scope = http_json(&http_request(
+        port,
+        "POST",
+        "/v1/evidence/coverage",
+        r#"{"scope":"workspace","id":"pob-public-run"}"#,
+    ));
+    assert_evidence_envelope(&http_bad_scope, "evidence.coverage", false);
+
+    let forged_run_path = dir.path().join("forged-run.json");
+    fs::write(
+        &forged_run_path,
+        serde_json::to_vec_pretty(&json!({
+            "obligation_id": "pob-public-run",
+            "capability_instance_id": instance_id,
+            "receipt_json": {"id": "forged"},
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let attempts_before_forged_run = evidence_row_count(&db, "evidence_attempts");
+    let receipts_before_forged_run = evidence_row_count(&db, "evidence_receipts");
+    let forged_run = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "evidence",
+            "run",
+            "--input",
+            forged_run_path.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let forged_run = single_json_document(&forged_run);
+    assert_evidence_envelope(&forged_run, "evidence.run", false);
+    assert!(
+        forged_run["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("cannot construct trusted receipt field")
+    );
+    assert_eq!(
+        evidence_row_count(&db, "evidence_attempts"),
+        attempts_before_forged_run,
+        "forged run input must not persist an attempt"
+    );
+    assert_eq!(
+        evidence_row_count(&db, "evidence_receipts"),
+        receipts_before_forged_run,
+        "forged run input must not persist a receipt"
+    );
+
+    let import_error = http_json(&http_request(
+        port,
+        "POST",
+        "/v1/evidence/import",
+        r#"{"artifact_root":".","input":{"receipt_json":{}}}"#,
+    ));
+    assert_evidence_envelope(&import_error, "evidence.import", false);
+    assert!(
+        import_error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("cannot construct trusted receipt field")
+    );
+
+    let generic_artifact_bytes = br#"{"status":"ok"}"#;
+    fs::write(
+        dir.path().join("generic-health.json"),
+        generic_artifact_bytes,
+    )
+    .unwrap();
+    let generic_artifact_refs = vec![json!({
+        "id": "artifact-generic-health",
+        "kind": "stdout-json",
+        "digest": sha256_prefixed(generic_artifact_bytes),
+        "uri": "file://generic-health.json",
+    })];
+    let generic_artifact_set_digest =
+        generic_import_artifact_set_digest(&generic_artifact_refs, &[generic_artifact_bytes]);
+    let mut generic_predicate = json!({
+        "kind": "generic_versioned_adapter_predicate",
+        "version": "1.0.0",
+        "type": "planr.import.validator.generic_predicate",
+        "outcome": "passed",
+        "predicate": {"status": "ok"},
+        "actual": {"status": "ok"},
+        "attestation": {
+            "kind": "planr_import_validator_attestation",
+            "version": "1.0.0",
+            "artifact_set_digest": generic_artifact_set_digest,
+            "predicate_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "verifier_digest": generic_import_validator_digest.clone(),
+            "verifier_instance_digest": sha256_json(&validator_instance["capability"]),
+            "probe_execution_id": validator_instance["probe_execution_id"],
+            "probe_result_digest": sha256_json(&validator_instance["capability"]["probe_result"]),
+            "validator_attempt_id": "pending-validator-attempt",
+            "validator_receipt_id": "pending-validator-receipt",
+            "validator_receipt_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        }
+    });
+    let generic_predicate_digest = generic_import_predicate_digest(&generic_predicate);
+    generic_predicate["attestation"]["predicate_digest"] = json!(generic_predicate_digest);
+    let validator_result = json!({
+        "kind": "planr.import.validator.generic_predicate.result",
+        "version": "1.0.0",
+        "verdict": "passed",
+        "artifact_set_digest": generic_artifact_set_digest,
+        "predicate_digest": generic_predicate_digest,
+        "verifier_digest": generic_import_validator_digest.clone(),
+        "verifier_instance_digest": sha256_json(&validator_instance["capability"]),
+    });
+    let mut validator_obligation = evidence_obligation_for(
+        "pob-generic-import-validator",
+        policy["object"]["digest"].as_str().unwrap(),
+        "planr.import.validator.generic_predicate",
+        "validated-artifact-import",
+        validator_result.clone(),
+        json!({"kind": "process", "uri": "local://generic-validator"}),
+        validator_instance["capability"]["environment"].clone(),
+        json!({"kind": "process", "id": "runtime-local"}),
+        json!([]),
+        "sha256:6767676767676767676767676767676767676767676767676767676767676767",
+    );
+    validator_obligation["plan_id"] = json!("pln-evidence-validator");
+    validator_obligation["fixture_policy"]["disclosure_required"] = json!(false);
+    conn.execute(
+        "INSERT INTO plans(id, project_id, stage, path, title, slug, parse_status, content_hash, created_at, updated_at)
+         VALUES ('pln-evidence-validator', ?1, 'build', '/tmp/current/evidence-validator.plan.md',
+                 'Evidence Validator Fixture', 'evidence-validator-fixture', 'ok',
+                 'validator-fixture-hash', datetime('now'), datetime('now'))",
+        [&project_id],
+    )
+    .unwrap();
+    add_evidence_obligation_value(
+        dir.path(),
+        &db,
+        "pob-generic-import-validator",
+        &validator_obligation,
+    );
+    let validator_run = mcp_tool(
+        dir.path(),
+        &db,
+        30,
+        "planr_evidence_run",
+        json!({"input": {
+            "obligation_id": "pob-generic-import-validator",
+            "capability_instance_id": validator_instance_id,
+            "target": {"kind": "process", "uri": "local://generic-validator"},
+            "env": {"PLANR_GENERIC_VALIDATOR_RESULT": validator_result.to_string()}
+        }}),
+    );
+    assert_evidence_envelope(&validator_run, "evidence.run", true);
+    assert_eq!(validator_run["object"]["verdict"], "passed");
+    generic_predicate["attestation"]["validator_attempt_id"] =
+        validator_run["object"]["attempt"]["id"].clone();
+    generic_predicate["attestation"]["validator_receipt_id"] =
+        validator_run["object"]["receipt"]["id"].clone();
+    generic_predicate["attestation"]["validator_receipt_digest"] =
+        validator_run["object"]["receipt"]["receipt_digest"].clone();
+    let valid_generic_import = json!({
+        "id": "import-valid-generic-attestation",
+        "schema_version": "planr.evidence.import.v1",
+        "source_kind": "artifact_import",
+        "submitted_at": "2026-07-29T00:00:00Z",
+        "format": "planr.generic_adapter_predicate.v1",
+        "verifier_identity": {
+            "kind": "adapter",
+            "id": "verifier-generic-import-validator",
+            "name": "verifier-generic-import-validator",
+            "version": "1.0.0",
+            "digest": generic_import_validator_digest,
+        },
+        "adapter_predicate": generic_predicate,
+        "artifact_refs": generic_artifact_refs,
+        "producer_metadata": {"client": "forged-generic-importer"},
+    });
+    let valid_generic = mcp_tool(
+        dir.path(),
+        &db,
+        31,
+        "planr_evidence_import",
+        json!({"artifact_root": dir.path().to_str().unwrap(), "input": valid_generic_import}),
+    );
+    assert_evidence_envelope(&valid_generic, "evidence.import", true);
+    assert_eq!(valid_generic["object"]["verdict"], "valid");
+
+    let mut generic_case_id = 32;
+    let mut assert_forged_generic =
+        |label: &str, expected_message: &str, mutate: fn(&mut Value)| {
+            let imports_before = evidence_row_count(&db, "evidence_validated_imports");
+            let attempts_before = evidence_row_count(&db, "evidence_attempts");
+            let receipts_before = evidence_row_count(&db, "evidence_receipts");
+            let mut forged = valid_generic_import.clone();
+            forged["id"] = json!(format!("import-forged-generic-{label}"));
+            mutate(&mut forged);
+            let result = mcp_tool(
+                dir.path(),
+                &db,
+                generic_case_id,
+                "planr_evidence_import",
+                json!({"artifact_root": dir.path().to_str().unwrap(), "input": forged}),
+            );
+            generic_case_id += 1;
+            assert_evidence_envelope(&result, "evidence.import", false);
+            assert_eq!(result["error"]["message"], expected_message, "{result}");
+            assert_eq!(
+                evidence_row_count(&db, "evidence_validated_imports"),
+                imports_before,
+                "forged generic import {label} must not persist a validated import"
+            );
+            assert_eq!(
+                evidence_row_count(&db, "evidence_attempts"),
+                attempts_before,
+                "forged generic import {label} must not persist an attempt"
+            );
+            assert_eq!(
+                evidence_row_count(&db, "evidence_receipts"),
+                receipts_before,
+                "forged generic import {label} must not persist a receipt"
+            );
+        };
+    assert_forged_generic(
+        "artifact-set",
+        "trusted receipt has invalid Planr-assigned binding adapter_predicate.attestation",
+        |import| {
+            import["adapter_predicate"]["attestation"]["artifact_set_digest"] =
+                json!("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        },
+    );
+    assert_forged_generic(
+        "predicate-body",
+        "trusted receipt has invalid Planr-assigned binding adapter_predicate.attestation",
+        |import| {
+            import["adapter_predicate"]["actual"]["status"] = json!("mutated");
+        },
+    );
+    assert_forged_generic(
+        "predicate-digest",
+        "trusted receipt has invalid Planr-assigned binding adapter_predicate.attestation",
+        |import| {
+            import["adapter_predicate"]["attestation"]["predicate_digest"] =
+                json!("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        },
+    );
+    assert_forged_generic(
+        "verifier-digest",
+        "trusted receipt has invalid Planr-assigned binding adapter_predicate.attestation",
+        |import| {
+            import["adapter_predicate"]["attestation"]["verifier_digest"] =
+                json!("sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc");
+        },
+    );
+    assert_forged_generic(
+        "verifier-instance",
+        "trusted receipt has invalid Planr-assigned binding adapter_predicate.attestation",
+        |import| {
+            import["adapter_predicate"]["attestation"]["verifier_instance_digest"] =
+                json!("sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd");
+        },
+    );
+    assert_forged_generic(
+        "probe-result",
+        "trusted receipt has invalid Planr-assigned binding adapter_predicate.attestation",
+        |import| {
+            import["adapter_predicate"]["attestation"]["probe_result_digest"] =
+                json!("sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+        },
+    );
+    assert_forged_generic(
+        "validator-attempt",
+        "trusted receipt is missing Planr-assigned binding adapter_predicate.trusted_validator_observation",
+        |import| {
+            import["adapter_predicate"]["attestation"]["validator_attempt_id"] =
+                json!("eatt-forged-validator");
+        },
+    );
+    assert_forged_generic(
+        "validator-receipt",
+        "trusted receipt is missing Planr-assigned binding adapter_predicate.trusted_validator_observation",
+        |import| {
+            import["adapter_predicate"]["attestation"]["validator_receipt_id"] =
+                json!("erec-forged-validator");
+        },
+    );
+    assert_forged_generic(
+        "validator-receipt-digest",
+        "trusted receipt has invalid Planr-assigned binding adapter_predicate.trusted_validator_observation",
+        |import| {
+            import["adapter_predicate"]["attestation"]["validator_receipt_digest"] =
+                json!("sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+        },
+    );
+
+    let doctor_output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "doctor"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let doctor = single_json_document(&doctor_output);
+    assert_eq!(doctor["evidence"]["status"], "ok");
+    assert_eq!(doctor["evidence"]["observe_only"], true);
+    let conn = Connection::open(&db).unwrap();
+    conn.create_scalar_function(
+        "planr_evidence_receipt_binding_is_valid",
+        2,
+        rusqlite::functions::FunctionFlags::SQLITE_UTF8
+            | rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC,
+        |ctx| {
+            let trusted_binding_json: String = ctx.get(0)?;
+            let receipt_json: String = ctx.get(1)?;
+            let trusted_binding: Value = serde_json::from_str(&trusted_binding_json)
+                .map_err(|err| rusqlite::Error::UserFunctionError(Box::new(err)))?;
+            let receipt: Value = serde_json::from_str(&receipt_json)
+                .map_err(|err| rusqlite::Error::UserFunctionError(Box::new(err)))?;
+            Ok(
+                if planr::evidence::trusted_receipt_binding_matches_receipt(
+                    trusted_binding,
+                    receipt,
+                )
+                .is_ok()
+                {
+                    1i64
+                } else {
+                    0i64
+                },
+            )
+        },
+    )
+    .unwrap();
+    conn.create_scalar_function(
+        "planr_evidence_artifact_path_is_contained",
+        3,
+        rusqlite::functions::FunctionFlags::SQLITE_UTF8
+            | rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC,
+        |ctx| {
+            let root_path: String = ctx.get(0)?;
+            let root_kind: String = ctx.get(1)?;
+            let path: String = ctx.get(2)?;
+            let root = match root_kind.as_str() {
+                "project" => std::path::PathBuf::from(&root_path),
+                "planr" => std::path::PathBuf::from(&root_path).join(".planr"),
+                "artifact_store" => std::path::PathBuf::from(&root_path).join(".planr/artifacts"),
+                _ => return Ok(0_i64),
+            };
+            let relative = std::path::Path::new(&path);
+            if !relative.is_relative()
+                || relative.components().any(|component| {
+                    matches!(
+                        component,
+                        std::path::Component::ParentDir
+                            | std::path::Component::RootDir
+                            | std::path::Component::Prefix(_)
+                    )
+                })
+            {
+                return Ok(0_i64);
+            }
+            let Ok(root) = root.canonicalize() else {
+                return Ok(0_i64);
+            };
+            let Ok(candidate) = root.join(relative).canonicalize() else {
+                return Ok(0_i64);
+            };
+            Ok(if candidate.starts_with(root) {
+                1_i64
+            } else {
+                0_i64
+            })
+        },
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO projects(id, name, root_path, status, created_at, updated_at)
+         VALUES ('p-other', 'Other', '.', 'active', datetime('now'), datetime('now'))",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO plans(id, project_id, stage, path, title, slug, parse_status, content_hash, created_at, updated_at)
+         VALUES ('pln-other-evidence-public', 'p-other', 'build', '/tmp/other/evidence-public-fixture.plan.md', 'Other Evidence Public', 'other-evidence-public', 'ok', 'other-fixture-hash', datetime('now'), datetime('now'))",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO proof_obligations(
+          id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
+          binding, observation_requirements_json, fixture_policy_json, freshness_policy_json,
+          assurance_policy_json, policy_digest, config_digest, created_at
+        ) VALUES (
+          'pob-other-project', 'p-other', 'pln-other-evidence-public', NULL,
+          'crit-other', 1, 'Other project', 1, ?1, ?2, '{}', '{}', ?3, ?4, datetime('now')
+        )",
+        rusqlite::params![
+            serde_json::to_string(&obligation["observations"]).unwrap(),
+            serde_json::to_string(&obligation["fixture_policy"]).unwrap(),
+            obligation["policy_digest"].as_str().unwrap(),
+            obligation["config_digest"].as_str().unwrap(),
+        ],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO evidence_attempts(
+          id, project_id, obligation_id, capability_instance_id, attempt_status,
+          execution_contract_digest, resolved_command_json, environment_digest,
+          started_at, completed_at, exit_code, output_bounds_json, attempt_json, created_at
+        ) VALUES (
+          'attempt-other-project', 'p-other', 'pob-other-project', ?1, 'passed',
+          ?2, '{}', ?3, datetime('now'), datetime('now'), 0, '{}', ?4, datetime('now')
+        )",
+        rusqlite::params![
+            instance_id,
+            obligation["policy_digest"].as_str().unwrap(),
+            obligation["config_digest"].as_str().unwrap(),
+            json!({
+                "id": "attempt-other-project",
+                "status": "passed",
+                "exit": {"exit_code": 0, "signal": null, "error": null}
+            })
+            .to_string(),
+        ],
+    )
+    .unwrap();
+    let (foreign_trusted_binding_json, foreign_receipt_json): (String, String) = conn
+        .query_row(
+            "SELECT trusted_binding_json, receipt_json FROM evidence_receipts WHERE id = ?1",
+            [receipt_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    conn.execute(
+        "INSERT INTO evidence_receipts(
+          id, project_id, obligation_id, attempt_id, receipt_status, receipt_digest,
+          trusted_binding_json, observations_json, provenance_json, receipt_json, created_at
+        ) VALUES (
+          'receipt-other-project', 'p-other', 'pob-other-project', 'attempt-other-project',
+          'trusted', 'sha256:3333333333333333333333333333333333333333333333333333333333333333',
+          ?1, '[]', '{}', ?2, datetime('now')
+        )",
+        rusqlite::params![foreign_trusted_binding_json, foreign_receipt_json],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO plans(id, project_id, stage, path, title, slug, parse_status, content_hash, created_at, updated_at)
+         VALUES ('pln-other', ?1, 'build', '/tmp/current/other.plan.md', 'Other Current Plan', 'other-current-plan', 'ok', 'other-current-hash', datetime('now'), datetime('now'))",
+        [&project_id],
+    )
+    .unwrap();
+    for (id, plan, criterion, binding, supersedes) in [
+        (
+            "pob-advisory",
+            "pln-evidence-public",
+            "crit-advisory",
+            0,
+            None,
+        ),
+        (
+            "pob-superseded",
+            "pln-evidence-public",
+            "crit-superseded",
+            1,
+            None,
+        ),
+        (
+            "pob-superseding-other-plan",
+            "pln-other",
+            "crit-superseding",
+            1,
+            Some("pob-superseded"),
+        ),
+    ] {
+        conn.execute(
+            "INSERT INTO proof_obligations(
+              id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
+              binding, observation_requirements_json, fixture_policy_json, freshness_policy_json,
+              assurance_policy_json, policy_digest, config_digest, supersedes_obligation_id, created_at
+            ) VALUES (
+              ?1, ?2, ?3, NULL, ?4, 1, ?1, ?5, ?6, ?7, '{}', '{}', ?8, ?9, ?10, datetime('now')
+            )",
+            rusqlite::params![
+                id,
+                project_id,
+                plan,
+                criterion,
+                binding,
+                serde_json::to_string(&obligation["observations"]).unwrap(),
+                serde_json::to_string(&obligation["fixture_policy"]).unwrap(),
+                obligation["policy_digest"].as_str().unwrap(),
+                obligation["config_digest"].as_str().unwrap(),
+                supersedes,
+            ],
+        )
+        .unwrap();
+    }
+    let public_observation_requirements =
+        serde_json::to_string(&obligation["observations"]).unwrap();
+    let public_fixture_policy = serde_json::to_string(&obligation["fixture_policy"]).unwrap();
+    let public_freshness_policy = serde_json::to_string(&json!({"invalidate_on": []})).unwrap();
+    let source_freshness_policy =
+        serde_json::to_string(&json!({"invalidate_on": ["source_change"]})).unwrap();
+    let config_freshness_policy =
+        serde_json::to_string(&json!({"invalidate_on": ["configuration_change"]})).unwrap();
+    let evidence_plan_path = dir
+        .path()
+        .join(".planr/plans/build/evidence-public-fixture.plan.md")
+        .to_string_lossy()
+        .to_string();
+    conn.execute(
+        "INSERT INTO items(
+          id, project_id, title, description, status, work_type, plan_path, created_at, updated_at
+        ) VALUES (
+          'item-wrong-binding-contained', ?1, 'Wrong binding contained item',
+          'contained fixture item for Evidence binding matrix', 'pending', 'test', ?2,
+          datetime('now'), datetime('now')
+        )",
+        rusqlite::params![project_id, evidence_plan_path],
+    )
+    .unwrap();
+    let insert_binding_obligation = |id: &str,
+                                     plan: &str,
+                                     item: Option<&str>,
+                                     criterion: &str,
+                                     version: i64,
+                                     config_digest: &str,
+                                     source_digest: Option<&str>,
+                                     freshness_policy: &str,
+                                     supersedes: Option<&str>| {
+        conn.execute(
+            "INSERT INTO proof_obligations(
+              id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
+              binding, observation_requirements_json, fixture_policy_json, freshness_policy_json,
+              assurance_policy_json, policy_digest, config_digest, source_digest,
+              supersedes_obligation_id, created_at
+            ) VALUES (
+              ?1, ?2, ?3, ?4, ?5, ?6, ?1, 1, ?7, ?8, ?9, '{}', ?10, ?11, ?12, ?13, datetime('now')
+            )",
+            rusqlite::params![
+                id,
+                project_id,
+                plan,
+                item,
+                criterion,
+                version,
+                public_observation_requirements,
+                public_fixture_policy,
+                freshness_policy,
+                obligation["policy_digest"].as_str().unwrap(),
+                config_digest,
+                source_digest,
+                supersedes,
+            ],
+        )
+        .unwrap();
+    };
+    let mut binding_mcp_id = 60;
+    let mut run_binding_obligation = |obligation_id: &str| -> (String, String) {
+        let run = mcp_tool(
+            dir.path(),
+            &db,
+            binding_mcp_id,
+            "planr_evidence_run",
+            json!({"input": {
+                "obligation_id": obligation_id,
+                "capability_instance_id": instance_id,
+                "target": {"kind": "process", "uri": "local://health"}
+            }}),
+        );
+        binding_mcp_id += 1;
+        assert_evidence_envelope(&run, "evidence.run", true);
+        assert_eq!(run["object"]["verdict"], "passed", "{run}");
+        (
+            run["object"]["attempt"]["id"].as_str().unwrap().to_string(),
+            run["object"]["receipt"]["id"].as_str().unwrap().to_string(),
+        )
+    };
+
+    insert_binding_obligation(
+        "pob-binding-positive",
+        "pln-evidence-public",
+        None,
+        "crit-binding-positive",
+        1,
+        obligation["config_digest"].as_str().unwrap(),
+        Option::<&str>::None,
+        &public_freshness_policy,
+        Option::<&str>::None,
+    );
+    let (_, positive_receipt_id) = run_binding_obligation("pob-binding-positive");
+    let positive_coverage = http_json(&http_request(
+        port,
+        "POST",
+        "/v1/evidence/coverage",
+        r#"{"scope":"criterion","id":"crit-binding-positive"}"#,
+    ));
+    assert_evidence_envelope(&positive_coverage, "evidence.coverage", true);
+    assert_eq!(positive_coverage["object"]["verdict"], "satisfied");
+    assert_eq!(
+        positive_coverage["object"]["coverage"]["observation_coverage"][0]["covering_receipt_ids"],
+        json!([positive_receipt_id])
+    );
+    assert_persisted_coverage_verdict(&db, &positive_coverage);
+
+    let binding_cases = [
+        (
+            "plan",
+            "pob-binding-plan-base",
+            "pob-binding-plan-current",
+            "pln-other",
+            "pln-evidence-public",
+            None,
+            None,
+            "crit-binding-plan",
+            1,
+            1,
+            obligation["config_digest"].as_str().unwrap(),
+            obligation["config_digest"].as_str().unwrap(),
+            Option::<&str>::None,
+            Option::<&str>::None,
+            &public_freshness_policy,
+            "target_mismatch",
+            &["target_mismatch"][..],
+        ),
+        (
+            "item",
+            "pob-binding-item-base",
+            "pob-binding-item-current",
+            "pln-evidence-public",
+            "pln-evidence-public",
+            None,
+            Some("item-wrong-binding-contained"),
+            "crit-binding-item",
+            1,
+            1,
+            obligation["config_digest"].as_str().unwrap(),
+            obligation["config_digest"].as_str().unwrap(),
+            Option::<&str>::None,
+            Option::<&str>::None,
+            &public_freshness_policy,
+            "target_mismatch",
+            &["target_mismatch"][..],
+        ),
+        (
+            "criterion",
+            "pob-binding-criterion-base",
+            "pob-binding-criterion-current",
+            "pln-evidence-public",
+            "pln-evidence-public",
+            None,
+            None,
+            "crit-binding-criterion-base",
+            1,
+            1,
+            obligation["config_digest"].as_str().unwrap(),
+            obligation["config_digest"].as_str().unwrap(),
+            Option::<&str>::None,
+            Option::<&str>::None,
+            &public_freshness_policy,
+            "target_mismatch",
+            &["target_mismatch"][..],
+        ),
+        (
+            "source",
+            "pob-binding-source-base",
+            "pob-binding-source-current",
+            "pln-evidence-public",
+            "pln-evidence-public",
+            None,
+            None,
+            "crit-binding-source",
+            1,
+            1,
+            obligation["config_digest"].as_str().unwrap(),
+            obligation["config_digest"].as_str().unwrap(),
+            Some("sha256:1212121212121212121212121212121212121212121212121212121212121212"),
+            Some("sha256:3434343434343434343434343434343434343434343434343434343434343434"),
+            &source_freshness_policy,
+            "stale_source",
+            &["stale_configuration", "stale_source"][..],
+        ),
+        (
+            "config",
+            "pob-binding-config-base",
+            "pob-binding-config-current",
+            "pln-evidence-public",
+            "pln-evidence-public",
+            None,
+            None,
+            "crit-binding-config",
+            1,
+            1,
+            obligation["config_digest"].as_str().unwrap(),
+            "sha256:5656565656565656565656565656565656565656565656565656565656565656",
+            Option::<&str>::None,
+            Option::<&str>::None,
+            &config_freshness_policy,
+            "stale_configuration",
+            &["stale_configuration"][..],
+        ),
+        (
+            "version",
+            "pob-binding-version-base",
+            "pob-binding-version-current",
+            "pln-evidence-public",
+            "pln-evidence-public",
+            None,
+            None,
+            "crit-binding-version",
+            1,
+            2,
+            obligation["config_digest"].as_str().unwrap(),
+            obligation["config_digest"].as_str().unwrap(),
+            Option::<&str>::None,
+            Option::<&str>::None,
+            &public_freshness_policy,
+            "stale_configuration",
+            &["stale_configuration"][..],
+        ),
+    ];
+    for (
+        label,
+        base_id,
+        current_id,
+        base_plan,
+        current_plan,
+        base_item,
+        current_item,
+        criterion,
+        base_version,
+        current_version,
+        base_config,
+        current_config,
+        base_source,
+        current_source,
+        freshness_policy,
+        expected_gap,
+        expected_gaps,
+    ) in binding_cases
+    {
+        insert_binding_obligation(
+            base_id,
+            base_plan,
+            base_item,
+            criterion,
+            base_version,
+            base_config,
+            base_source,
+            freshness_policy,
+            Option::<&str>::None,
+        );
+        let (_, candidate_receipt_id) = run_binding_obligation(base_id);
+        let current_criterion = if label == "criterion" {
+            "crit-binding-criterion-current"
+        } else {
+            criterion
+        };
+        insert_binding_obligation(
+            current_id,
+            current_plan,
+            current_item,
+            current_criterion,
+            current_version,
+            current_config,
+            current_source,
+            freshness_policy,
+            Some(base_id),
+        );
+        let coverage = http_json(&http_request(
+            port,
+            "POST",
+            "/v1/evidence/coverage",
+            &json!({"scope": "criterion", "id": current_criterion}).to_string(),
+        ));
+        assert_evidence_envelope(&coverage, "evidence.coverage", true);
+        assert_ne!(
+            coverage["object"]["verdict"], "satisfied",
+            "{label}: {coverage}"
+        );
+        assert_eq!(
+            coverage["object"]["coverage"]["observation_coverage"][0]["gap_reason"], expected_gap,
+            "{label}: {coverage}"
+        );
+        assert_json_string_set(
+            &coverage["object"]["coverage"]["observation_coverage"][0]["gap_reasons"],
+            expected_gaps,
+        );
+        assert_eq!(
+            coverage["object"]["coverage"]["observation_coverage"][0]["attempted_receipt_ids"],
+            json!([candidate_receipt_id]),
+            "{label}: {coverage}"
+        );
+        assert!(
+            coverage["object"]["receipt_digests"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            "{label}: {coverage}"
+        );
+        assert_persisted_coverage_verdict(&db, &coverage);
+    }
+
+    let insert_populated_artifact_receipt = |case_label: &str,
+                                             attempt_id: &str,
+                                             base_receipt_id: &str,
+                                             populated_receipt_id: &str,
+                                             attempt_artifact_id: &str,
+                                             receipt_artifact_id: &str,
+                                             attempt_kind: &str,
+                                             receipt_kind: &str,
+                                             attempt_path: &str,
+                                             receipt_uri: &str,
+                                             attempt_root_kind: &str,
+                                             receipt_root_kind: &str,
+                                             receipt_digest_override: Option<&str>|
+     -> String {
+        let artifact_bytes = format!("artifact-binding-{case_label}\n");
+        let attempt_digest = sha256_prefixed(artifact_bytes.as_bytes());
+        let attempt_root = match attempt_root_kind {
+            "project" => dir.path().to_path_buf(),
+            "planr" => dir.path().join(".planr"),
+            "artifact_store" => dir.path().join(".planr/artifacts"),
+            root_kind => panic!("unsupported artifact root in fixture: {root_kind}"),
+        };
+        std::fs::create_dir_all(&attempt_root).unwrap();
+        if let Some(parent) = attempt_root.join(attempt_path).parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        let attempt_file = attempt_root.join(attempt_path);
+        std::fs::write(&attempt_file, artifact_bytes.as_bytes()).unwrap();
+        if let Some(receipt_path) = receipt_uri.strip_prefix("file://") {
+            let receipt_root = match receipt_root_kind {
+                "project" => dir.path().to_path_buf(),
+                "planr" => dir.path().join(".planr"),
+                "artifact_store" => dir.path().join(".planr/artifacts"),
+                root_kind => panic!("unsupported artifact root in fixture: {root_kind}"),
+            };
+            if let Some(parent) = receipt_root.join(receipt_path).parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(receipt_root.join(receipt_path), artifact_bytes.as_bytes()).unwrap();
+        }
+        let receipt_artifact_digest = receipt_digest_override.unwrap_or(attempt_digest.as_str());
+        conn.execute(
+            "INSERT INTO artifacts(
+              id, project_id, item_id, name, kind, path, content, mime_type, size_bytes, created_at
+            ) VALUES (
+              ?1, ?2, NULL, ?3, ?4, ?5, '{}', 'application/json', ?6, datetime('now')
+            )",
+            rusqlite::params![
+                attempt_artifact_id,
+                project_id,
+                format!("Artifact binding {case_label}"),
+                attempt_kind,
+                attempt_path,
+                artifact_bytes.len() as i64,
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO evidence_attempt_artifacts(
+              id, attempt_id, artifact_id, logical_name, path, digest, root_kind, created_at
+            ) VALUES (
+              ?1, ?2, ?3, 'stdout', ?4, ?5, ?6, datetime('now')
+            )",
+            rusqlite::params![
+                format!("artifact-binding-{case_label}"),
+                attempt_id,
+                attempt_artifact_id,
+                attempt_path,
+                attempt_digest,
+                attempt_root_kind,
+            ],
+        )
+        .unwrap();
+        let stored_attempt_artifact: (String, String, String) = conn
+            .query_row(
+                "SELECT path, digest, root_kind FROM evidence_attempt_artifacts WHERE id = ?1",
+                [format!("artifact-binding-{case_label}")],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            stored_attempt_artifact,
+            (
+                attempt_path.to_string(),
+                attempt_digest.clone(),
+                attempt_root_kind.to_string()
+            )
+        );
+        let (trusted_binding_json, receipt_json): (String, String) = conn
+            .query_row(
+                "SELECT trusted_binding_json, receipt_json FROM evidence_receipts WHERE id = ?1",
+                [base_receipt_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let mut receipt: Value = serde_json::from_str(&receipt_json).unwrap();
+        receipt["id"] = json!(populated_receipt_id);
+        receipt["artifacts"] = json!([{
+            "id": receipt_artifact_id,
+            "kind": receipt_kind,
+            "digest": receipt_artifact_digest,
+            "uri": receipt_uri,
+            "root_kind": receipt_root_kind,
+        }]);
+        receipt["raw_result"] = json!({
+            "kind": "artifact",
+            "digest": receipt_artifact_digest,
+            "artifact_id": receipt_artifact_id,
+        });
+        let trusted_receipt_digest = sha256_json_without_field(&receipt, "receipt_digest");
+        receipt["receipt_digest"] = json!(trusted_receipt_digest);
+        conn.execute(
+            "INSERT INTO evidence_receipts(
+              id, project_id, obligation_id, attempt_id, receipt_status, receipt_digest,
+              trusted_binding_json, observations_json, provenance_json, receipt_json, created_at
+            ) VALUES (?1, ?2, ?3, ?4, 'trusted', ?5, ?6, ?7, ?8, ?9, datetime('now'))",
+            rusqlite::params![
+                populated_receipt_id,
+                project_id,
+                receipt["obligation_id"].as_str().unwrap(),
+                attempt_id,
+                trusted_receipt_digest,
+                trusted_binding_json,
+                receipt["observations"].to_string(),
+                receipt["provenance"].to_string(),
+                receipt.to_string(),
+            ],
+        )
+        .unwrap();
+        trusted_receipt_digest
+    };
+
+    insert_binding_obligation(
+        "pob-binding-artifact-positive",
+        "pln-evidence-public",
+        None,
+        "crit-binding-artifact-positive",
+        1,
+        obligation["config_digest"].as_str().unwrap(),
+        Option::<&str>::None,
+        &public_freshness_policy,
+        Option::<&str>::None,
+    );
+    let (artifact_positive_attempt_id, artifact_positive_base_receipt_id) =
+        run_binding_obligation("pob-binding-artifact-positive");
+    let artifact_positive_receipt_digest = insert_populated_artifact_receipt(
+        "positive",
+        &artifact_positive_attempt_id,
+        &artifact_positive_base_receipt_id,
+        "receipt-binding-artifact-positive-populated",
+        "artifact-binding-positive",
+        "artifact-binding-positive",
+        "stdout",
+        "stdout",
+        "artifact-positive.json",
+        "file://artifact-positive.json",
+        "project",
+        "project",
+        None,
+    );
+    let artifact_positive_coverage = http_json(&http_request(
+        port,
+        "POST",
+        "/v1/evidence/coverage",
+        r#"{"scope":"criterion","id":"crit-binding-artifact-positive"}"#,
+    ));
+    assert_evidence_envelope(&artifact_positive_coverage, "evidence.coverage", true);
+    assert_eq!(artifact_positive_coverage["object"]["verdict"], "satisfied");
+    assert_json_string_set(
+        &artifact_positive_coverage["object"]["coverage"]["observation_coverage"][0]["covering_receipt_ids"],
+        &["receipt-binding-artifact-positive-populated"],
+    );
+    assert_json_string_set(
+        &artifact_positive_coverage["object"]["receipt_digests"],
+        &[artifact_positive_receipt_digest.as_str()],
+    );
+    assert_persisted_coverage_verdict(&db, &artifact_positive_coverage);
+
+    for (
+        label,
+        attempt_artifact_id,
+        receipt_artifact_id,
+        attempt_kind,
+        receipt_kind,
+        attempt_path,
+        receipt_uri,
+        attempt_root_kind,
+        receipt_root_kind,
+        receipt_digest_override,
+    ) in [
+        (
+            "digest",
+            "artifact-binding-digest",
+            "artifact-binding-digest",
+            "stdout",
+            "stdout",
+            "artifact-digest.json",
+            "file://artifact-digest.json",
+            "project",
+            "project",
+            Some("sha256:3434343434343434343434343434343434343434343434343434343434343434"),
+        ),
+        (
+            "path",
+            "artifact-binding-path",
+            "artifact-binding-path",
+            "stdout",
+            "stdout",
+            "artifact-path-attempt.json",
+            "file://artifact-path-receipt.json",
+            "project",
+            "project",
+            None,
+        ),
+        (
+            "root",
+            "artifact-binding-root",
+            "artifact-binding-root",
+            "stdout",
+            "stdout",
+            "artifact-root.json",
+            "file://artifact-root.json",
+            "planr",
+            "project",
+            None,
+        ),
+        (
+            "id",
+            "artifact-binding-id-attempt",
+            "artifact-binding-id-receipt",
+            "stdout",
+            "stdout",
+            "artifact-id.json",
+            "file://artifact-id.json",
+            "project",
+            "project",
+            None,
+        ),
+        (
+            "kind",
+            "artifact-binding-kind",
+            "artifact-binding-kind",
+            "stderr",
+            "stdout",
+            "artifact-kind.json",
+            "file://artifact-kind.json",
+            "project",
+            "project",
+            None,
+        ),
+    ] {
+        let obligation_id = format!("pob-binding-artifact-{label}");
+        let criterion_id = format!("crit-binding-artifact-{label}");
+        insert_binding_obligation(
+            &obligation_id,
+            "pln-evidence-public",
+            None,
+            &criterion_id,
+            1,
+            obligation["config_digest"].as_str().unwrap(),
+            Option::<&str>::None,
+            &public_freshness_policy,
+            Option::<&str>::None,
+        );
+        let (artifact_attempt_id, base_receipt_id) = run_binding_obligation(&obligation_id);
+        let populated_receipt_id = format!("receipt-binding-artifact-{label}-populated");
+        insert_populated_artifact_receipt(
+            label,
+            &artifact_attempt_id,
+            &base_receipt_id,
+            &populated_receipt_id,
+            attempt_artifact_id,
+            receipt_artifact_id,
+            attempt_kind,
+            receipt_kind,
+            attempt_path,
+            receipt_uri,
+            attempt_root_kind,
+            receipt_root_kind,
+            receipt_digest_override,
+        );
+        let artifact_coverage = http_json(&http_request(
+            port,
+            "POST",
+            "/v1/evidence/coverage",
+            &json!({"scope": "criterion", "id": criterion_id}).to_string(),
+        ));
+        assert_evidence_envelope(&artifact_coverage, "evidence.coverage", true);
+        assert_eq!(
+            artifact_coverage["object"]["coverage"]["observation_coverage"][0]["gap_reason"],
+            "stale_source",
+            "{label}: {artifact_coverage}"
+        );
+        assert_json_string_set(
+            &artifact_coverage["object"]["coverage"]["observation_coverage"][0]["gap_reasons"],
+            &["stale_source"],
+        );
+        assert_json_string_set(
+            &artifact_coverage["object"]["coverage"]["observation_coverage"][0]["attempted_receipt_ids"],
+            &[base_receipt_id.as_str(), populated_receipt_id.as_str()],
+        );
+        assert!(
+            artifact_coverage["object"]["receipt_digests"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            "{label}: {artifact_coverage}"
+        );
+        assert_persisted_coverage_verdict(&db, &artifact_coverage);
+    }
+
+    insert_binding_obligation(
+        "pob-binding-project-current",
+        "pln-evidence-public",
+        None,
+        "crit-binding-project",
+        1,
+        obligation["config_digest"].as_str().unwrap(),
+        Option::<&str>::None,
+        &public_freshness_policy,
+        Option::<&str>::None,
+    );
+    let project_coverage = http_json(&http_request(
+        port,
+        "POST",
+        "/v1/evidence/coverage",
+        r#"{"scope":"criterion","id":"crit-binding-project"}"#,
+    ));
+    assert_evidence_envelope(&project_coverage, "evidence.coverage", true);
+    assert_eq!(project_coverage["object"]["verdict"], "unsatisfied");
+    assert_eq!(
+        project_coverage["object"]["coverage"]["observation_coverage"][0]["gap_reason"],
+        "missing_observation"
+    );
+    assert!(
+        project_coverage["object"]["coverage"]["observation_coverage"][0]
+            .get("attempted_receipt_ids")
+            .is_none()
+    );
+    assert!(
+        !http_json(&http_request(port, "GET", "/v1/evidence/receipts", ""))["object"]["receipts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|receipt| receipt["id"] == "receipt-other-project")
+    );
+    assert_persisted_coverage_verdict(&db, &project_coverage);
+
+    let isolated_explain = http_json(&http_request(
+        port,
+        "POST",
+        "/v1/evidence/explain",
+        r#"{"scope":"plan","id":"pln-evidence-public"}"#,
+    ));
+    assert_eq!(
+        isolated_explain["object"]["explain"]["obligation_ids"],
+        json!([
+            "pob-binding-artifact-digest",
+            "pob-binding-artifact-id",
+            "pob-binding-artifact-kind",
+            "pob-binding-artifact-path",
+            "pob-binding-artifact-positive",
+            "pob-binding-artifact-root",
+            "pob-binding-config-current",
+            "pob-binding-criterion-current",
+            "pob-binding-plan-current",
+            "pob-binding-positive",
+            "pob-binding-project-current",
+            "pob-binding-source-current",
+            "pob-binding-version-current",
+            "pob-public-run",
+            "pob-binding-item-current"
+        ])
+    );
+
+    let cli_all_attempts = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "attempts",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    assert!(
+        !cli_all_attempts["object"]["attempts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|attempt| attempt["id"] == "attempt-other-project")
+    );
+    let cli_foreign_attempt = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "attempts",
+                "--id",
+                "attempt-other-project",
+            ])
+            .assert()
+            .failure()
+            .code(1)
+            .get_output()
+            .stdout,
+    );
+    assert_evidence_envelope(&cli_foreign_attempt, "evidence.attempts", false);
+
+    let cli_all_receipts = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "receipts",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    assert!(
+        !cli_all_receipts["object"]["receipts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|receipt| receipt["id"] == "receipt-other-project")
+    );
+    let cli_foreign_receipt = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "receipts",
+                "--id",
+                "receipt-other-project",
+            ])
+            .assert()
+            .failure()
+            .code(1)
+            .get_output()
+            .stdout,
+    );
+    assert_evidence_envelope(&cli_foreign_receipt, "evidence.receipts", false);
+
+    let mcp_all_attempts = mcp_tool(dir.path(), &db, 26, "planr_evidence_attempts", json!({}));
+    assert!(
+        !mcp_all_attempts["object"]["attempts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|attempt| attempt["id"] == "attempt-other-project")
+    );
+    let mcp_foreign_attempt = mcp_tool(
+        dir.path(),
+        &db,
+        27,
+        "planr_evidence_attempts",
+        json!({"id": "attempt-other-project"}),
+    );
+    assert_evidence_envelope(&mcp_foreign_attempt, "evidence.attempts", false);
+
+    let mcp_all_receipts = mcp_tool(dir.path(), &db, 28, "planr_evidence_receipts", json!({}));
+    assert!(
+        !mcp_all_receipts["object"]["receipts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|receipt| receipt["id"] == "receipt-other-project")
+    );
+    let mcp_foreign_receipt = mcp_tool(
+        dir.path(),
+        &db,
+        29,
+        "planr_evidence_receipts",
+        json!({"id": "receipt-other-project"}),
+    );
+    assert_evidence_envelope(&mcp_foreign_receipt, "evidence.receipts", false);
+
+    let http_all_attempts = http_json(&http_request(port, "GET", "/v1/evidence/attempts", ""));
+    assert!(
+        !http_all_attempts["object"]["attempts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|attempt| attempt["id"] == "attempt-other-project")
+    );
+    let http_foreign_attempt = http_json(&http_request(
+        port,
+        "GET",
+        "/v1/evidence/attempts/attempt-other-project",
+        "",
+    ));
+    assert_evidence_envelope(&http_foreign_attempt, "evidence.attempts", false);
+
+    let http_all_receipts = http_json(&http_request(port, "GET", "/v1/evidence/receipts", ""));
+    assert!(
+        !http_all_receipts["object"]["receipts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|receipt| receipt["id"] == "receipt-other-project")
+    );
+    let http_foreign_receipt = http_json(&http_request(
+        port,
+        "GET",
+        "/v1/evidence/receipts/receipt-other-project",
+        "",
+    ));
+    assert_evidence_envelope(&http_foreign_receipt, "evidence.receipts", false);
+
+    let observe_after = evidence_observe_snapshot(&db, &observed_item_id);
+    let close_preview_after = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "map",
+                "preview",
+                "--close",
+                &observed_item_id,
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    assert_eq!(observe_after, observe_before);
+    assert_eq!(close_preview_after, close_preview_before);
+
+    let _ = server.kill();
+    let _ = server.wait();
+}
+
+#[test]
+fn evidence_process_adapter_semantic_mismatch_does_not_satisfy_coverage() {
+    let dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db = db_dir.path().join("planr.sqlite");
+    write_evidence_policy_fixture(dir.path());
+    init_evidence_project(dir.path(), &db, "Evidence Semantic Mismatch");
+    init_git_repo(dir.path());
+
+    let policy = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args(["--db", db.to_str().unwrap(), "--json", "evidence", "policy"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    let policy_digest = policy["object"]["digest"].as_str().unwrap();
+    let capabilities = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "capability",
+                "list",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    let instance = capabilities["object"]["instances"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|instance| {
+            instance["manifest_id"] == "verifier-generic-adapter"
+                && instance["availability_status"] == "available"
+        })
+        .expect("generic adapter instance");
+    let instance_id = instance["id"].as_str().unwrap();
+    let environment = instance["capability"]["environment"].clone();
+    let obligation = evidence_obligation_for(
+        "pob-semantic-mismatch",
+        policy_digest,
+        "com.example.health.status",
+        "semantic mismatch health",
+        json!({"status": "missing"}),
+        json!({"kind": "process", "uri": "local://health"}),
+        environment,
+        json!({"kind": "process", "id": "runtime-local"}),
+        json!(["target_change", "policy_change", "adapter_schema_change"]),
+        "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+    );
+    let obligation_path = dir.path().join("semantic-mismatch-obligation.json");
+    fs::write(
+        &obligation_path,
+        serde_json::to_vec_pretty(&obligation).unwrap(),
+    )
+    .unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "evidence",
+            "obligation",
+            "add",
+            "--input",
+            obligation_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let run_input = json!({
+        "obligation_id": "pob-semantic-mismatch",
+        "capability_instance_id": instance_id,
+        "target": {"kind": "process", "uri": "local://health"},
+    });
+    let run_path = dir.path().join("semantic-mismatch-run.json");
+    fs::write(&run_path, serde_json::to_vec_pretty(&run_input).unwrap()).unwrap();
+    let run = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "run",
+                "--input",
+                run_path.to_str().unwrap(),
+            ])
+            .assert()
+            .code(2)
+            .get_output()
+            .stdout,
+    );
+    assert_evidence_envelope(&run, "evidence.run", true);
+    assert_eq!(run["object"]["verdict"], "failed");
+    assert_eq!(run["object"]["attempt"]["status"], "failed");
+    assert_eq!(
+        run["object"]["attempt"]["raw_result"]["ordinary_observation_error"],
+        json!(
+            "ordinary process actual does not satisfy expected predicate for obs-pob-semantic-mismatch"
+        )
+    );
+    assert_eq!(
+        run["object"]["attempt"]["raw_result"]["planr_adapter_gap_reasons"],
+        json!(["target_mismatch"])
+    );
+    let semantic_actual: Value = serde_json::from_str(
+        run["object"]["receipt"]["observations"][0]["actual"]["stdout_excerpt"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(semantic_actual, json!({"status": "ok"}));
+    assert_eq!(
+        run["object"]["receipt"]["observations"][0]["predicate"],
+        json!({"status": "missing"})
+    );
+    assert_eq!(
+        run["object"]["receipt"]["observations"][0]["outcome"],
+        "failed"
+    );
+    assert_eq!(
+        run["object"]["receipt"]["proof_gaps"],
+        json!(["target_mismatch"])
+    );
+
+    let coverage = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "coverage",
+                "--scope",
+                "obligation",
+                "--id",
+                "pob-semantic-mismatch",
+            ])
+            .assert()
+            .code(2)
+            .get_output()
+            .stdout,
+    );
+    assert_evidence_envelope(&coverage, "evidence.coverage", true);
+    assert_eq!(coverage["object"]["verdict"], "unsatisfied");
+    assert_eq!(
+        coverage["object"]["coverage"]["observation_coverage"][0]["gap_reason"],
+        "target_mismatch"
+    );
+    assert!(
+        coverage["object"]["coverage"]["observation_coverage"][0]["covering_receipt_ids"]
+            .as_array()
+            .is_none_or(Vec::is_empty),
+        "{coverage}"
+    );
+}
+
+#[test]
+fn evidence_process_adapter_schema_invalid_stdout_is_verifier_failed() {
+    let dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db = db_dir.path().join("planr.sqlite");
+    write_evidence_policy_fixture(dir.path());
+    let manifest_digest = rewrite_evidence_runner_manifest(dir.path(), |manifest| {
+        manifest["availability_probe"]["execution"]["args"] =
+            json!(["-c", "printf '{\"status\":\"ok\",\"extra\":true}'"]);
+        manifest["adapter_digest"] = json!(process_adapter_digest(
+            &manifest["availability_probe"]["execution"],
+            vec![]
+        ));
+    });
+    rewrite_evidence_policy_fixture(dir.path(), |policy| {
+        policy["adapter_registrations"][0]["manifest_digest"] = json!(manifest_digest);
+        policy["adapter_registrations"][0]["execution_contract"]["args"] =
+            json!(["-c", "printf '{\"status\":\"ok\",\"extra\":true}'"]);
+    });
+    init_evidence_project(dir.path(), &db, "Evidence Schema Invalid Stdout");
+    init_git_repo(dir.path());
+
+    let policy = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args(["--db", db.to_str().unwrap(), "--json", "evidence", "policy"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    let policy_digest = policy["object"]["digest"].as_str().unwrap();
+    let capabilities = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "capability",
+                "list",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    let instance = capabilities["object"]["instances"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|instance| {
+            instance["manifest_id"] == "verifier-generic-adapter"
+                && instance["availability_status"] == "available"
+        })
+        .expect("generic adapter instance");
+    let instance_id = instance["id"].as_str().unwrap();
+    let environment = instance["capability"]["environment"].clone();
+    let obligation = evidence_obligation_for(
+        "pob-schema-invalid-stdout",
+        policy_digest,
+        "com.example.health.status",
+        "schema invalid health",
+        json!({"status": "ok"}),
+        json!({"kind": "process", "uri": "local://health"}),
+        environment,
+        json!({"kind": "process", "id": "runtime-local"}),
+        json!(["target_change", "policy_change", "adapter_schema_change"]),
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    );
+    let obligation_path = dir.path().join("schema-invalid-stdout-obligation.json");
+    fs::write(
+        &obligation_path,
+        serde_json::to_vec_pretty(&obligation).unwrap(),
+    )
+    .unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "evidence",
+            "obligation",
+            "add",
+            "--input",
+            obligation_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let run_input = json!({
+        "obligation_id": "pob-schema-invalid-stdout",
+        "capability_instance_id": instance_id,
+        "target": {"kind": "process", "uri": "local://health"},
+    });
+    let run_path = dir.path().join("schema-invalid-stdout-run.json");
+    fs::write(&run_path, serde_json::to_vec_pretty(&run_input).unwrap()).unwrap();
+    let run = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "run",
+                "--input",
+                run_path.to_str().unwrap(),
+            ])
+            .assert()
+            .code(1)
+            .get_output()
+            .stdout,
+    );
+    assert_evidence_envelope(&run, "evidence.run", true);
+    assert_eq!(run["object"]["verdict"], "verifier_failed");
+    assert_eq!(run["object"]["attempt"]["status"], "failed");
+    assert_eq!(
+        run["object"]["attempt"]["raw_result"]["planr_adapter_gap_reasons"],
+        json!(["verifier_failed"])
+    );
+    assert!(
+        run["object"]["attempt"]["raw_result"]["ordinary_observation_error"]
+            .as_str()
+            .unwrap()
+            .contains("does not match payload schema"),
+        "{run}"
+    );
+    let schema_invalid_actual: Value = serde_json::from_str(
+        run["object"]["receipt"]["observations"][0]["actual"]["stdout_excerpt"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        schema_invalid_actual,
+        json!({"status": "ok", "extra": true})
+    );
+    assert_eq!(
+        run["object"]["receipt"]["observations"][0]["outcome"],
+        "failed"
+    );
+    assert_eq!(
+        run["object"]["receipt"]["proof_gaps"],
+        json!(["verifier_failed"])
+    );
+
+    let coverage = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "coverage",
+                "--scope",
+                "obligation",
+                "--id",
+                "pob-schema-invalid-stdout",
+            ])
+            .assert()
+            .code(2)
+            .get_output()
+            .stdout,
+    );
+    assert_evidence_envelope(&coverage, "evidence.coverage", true);
+    assert_eq!(coverage["object"]["verdict"], "unsatisfied");
+    assert_eq!(
+        coverage["object"]["coverage"]["observation_coverage"][0]["gap_reason"],
+        "verifier_failed"
+    );
+    assert!(
+        coverage["object"]["coverage"]["observation_coverage"][0]["covering_receipt_ids"]
+            .as_array()
+            .is_none_or(Vec::is_empty),
+        "{coverage}"
+    );
+}
+
+#[test]
+fn evidence_e2e_scenarios_cover_api_queue_stale_retry_unavailable_and_browser_gaps() {
+    let dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db = db_dir.path().join("planr.sqlite");
+    let curl_port = free_port();
+    let _curl_server = start_static_http_server(curl_port);
+    wait_for_http_server(curl_port);
+    write_evidence_policy_fixture(dir.path());
+    write_queue_extension_fixture(dir.path());
+    write_http_curl_extension_fixture(dir.path(), curl_port);
+    init_evidence_project(dir.path(), &db, "Evidence Scenario Surfaces");
+    init_git_repo(dir.path());
+    let policy = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args(["--db", db.to_str().unwrap(), "--json", "evidence", "policy"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    assert_eq!(policy["object"]["status"], "valid");
+    assert_eq!(policy["object"]["registry"]["registered_capabilities"], 4);
+    let policy_digest = policy["object"]["digest"].as_str().unwrap();
+    let capabilities = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "capability",
+                "list",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    let queue_instance = capabilities["object"]["instances"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|instance| {
+            instance["manifest_id"] == "verifier-queue-depth-v2"
+                && instance["availability_status"] == "available"
+        })
+        .expect("repository queue extension instance");
+    let queue_instance_id = queue_instance["id"].as_str().unwrap().to_string();
+    let queue_environment = queue_instance["capability"]["environment"].clone();
+    let generic_instance = capabilities["object"]["instances"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|instance| {
+            instance["manifest_id"] == "verifier-generic-adapter"
+                && instance["availability_status"] == "available"
+        })
+        .expect("repository generic extension instance");
+    let generic_instance_id = generic_instance["id"].as_str().unwrap().to_string();
+    let generic_environment = generic_instance["capability"]["environment"].clone();
+    let http_instance = capabilities["object"]["instances"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|instance| {
+            instance["manifest_id"] == "verifier-http-curl-v1"
+                && instance["availability_status"] == "available"
+        })
+        .expect("repository HTTP curl extension instance");
+    let http_instance_id = http_instance["id"].as_str().unwrap().to_string();
+    let http_environment = http_instance["capability"]["environment"].clone();
+
+    let port = free_port();
+    let bin = assert_cmd::cargo::cargo_bin("planr");
+    let mut server = StdCommand::new(&bin)
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "serve",
+            "--port",
+            &port.to_string(),
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    wait_for_http_server(port);
+
+    let api_obligation = evidence_obligation(
+        "pob-api-create-readback",
+        policy_digest,
+        queue_environment.clone(),
+    );
+    let http_add = http_json(&http_request(
+        port,
+        "POST",
+        "/v1/evidence/obligations",
+        &api_obligation.to_string(),
+    ));
+    assert_evidence_envelope(&http_add, "evidence.obligation.add", true);
+    let http_readback = http_json(&http_request(
+        port,
+        "GET",
+        "/v1/evidence/obligations/pob-api-create-readback",
+        "",
+    ));
+    assert_evidence_envelope(&http_readback, "evidence.obligation.show", true);
+    assert_eq!(
+        http_readback["object"]["obligation"]["id"],
+        "pob-api-create-readback"
+    );
+    assert_eq!(
+        http_readback["object"]["obligation"],
+        http_add["object"]["obligation"]
+    );
+    let _ = server.kill();
+    let _ = server.wait();
+    let durable_readback = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "obligation",
+                "show",
+                "pob-api-create-readback",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    assert_eq!(durable_readback, http_readback);
+    let other_dir = tempdir().unwrap();
+    planr()
+        .current_dir(other_dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "project",
+            "init",
+            "Evidence Other Project",
+        ])
+        .assert()
+        .success();
+    let isolated_readback = single_json_document(
+        &planr()
+            .current_dir(other_dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "obligation",
+                "show",
+                "pob-api-create-readback",
+            ])
+            .assert()
+            .failure()
+            .code(1)
+            .get_output()
+            .stdout,
+    );
+    assert_evidence_envelope(&isolated_readback, "evidence.obligation.show", false);
+    let port = free_port();
+    let mut server = StdCommand::new(&bin)
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "serve",
+            "--port",
+            &port.to_string(),
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    wait_for_http_server(port);
+
+    let queue_obligation = evidence_obligation_for(
+        "pob-queue-extension",
+        policy_digest,
+        "com.example.queue.depth.v2",
+        "repository queue extension v2",
+        json!({"status": "drained"}),
+        json!({"kind": "process", "uri": "local://queue/depth", "digest": "sha256:1212121212121212121212121212121212121212121212121212121212121212"}),
+        queue_environment.clone(),
+        json!({"kind": "process", "id": "runtime-queue-v2"}),
+        json!([
+            "source_change",
+            "target_change",
+            "policy_change",
+            "adapter_schema_change",
+            "configuration_change"
+        ]),
+        "sha256:2323232323232323232323232323232323232323232323232323232323232323",
+    );
+    let queue_path = dir.path().join("queue-obligation.json");
+    fs::write(
+        &queue_path,
+        serde_json::to_vec_pretty(&queue_obligation).unwrap(),
+    )
+    .unwrap();
+    let queue_add = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "obligation",
+                "add",
+                "--input",
+                queue_path.to_str().unwrap(),
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    assert_evidence_envelope(&queue_add, "evidence.obligation.add", true);
+    let queue_run = http_json(&http_request(
+        port,
+        "POST",
+        "/v1/evidence/run",
+        &json!({
+            "obligation_id": "pob-queue-extension",
+            "capability_instance_id": queue_instance_id,
+            "target": {"kind": "process", "uri": "local://queue/depth", "digest": "sha256:1212121212121212121212121212121212121212121212121212121212121212"},
+        })
+        .to_string(),
+    ));
+    assert_evidence_envelope(&queue_run, "evidence.run", true);
+    assert_eq!(queue_run["object"]["verdict"], "passed");
+    let first_attempt = queue_run["object"]["attempt"]["id"].as_str().unwrap();
+    let first_receipt = queue_run["object"]["receipt"]["id"].as_str().unwrap();
+    assert_eq!(
+        queue_run["object"]["receipt"]["vantage_point"]["identity"],
+        "verifier-queue-depth-v2"
+    );
+
+    let retry_run = mcp_tool(
+        dir.path(),
+        &db,
+        101,
+        "planr_evidence_run",
+        json!({
+            "input": {
+                "obligation_id": "pob-queue-extension",
+                "capability_instance_id": queue_instance_id,
+                "target": {"kind": "process", "uri": "local://queue/depth", "digest": "sha256:1212121212121212121212121212121212121212121212121212121212121212"},
+                "retry_of": first_attempt,
+                "attempt_index": 1,
+                "max_attempts": 3
+            }
+        }),
+    );
+    assert_evidence_envelope(&retry_run, "evidence.run", true);
+    assert_eq!(
+        retry_run["object"]["attempt"]["retry_lineage"],
+        json!({
+            "attempt_number": 2,
+            "max_attempts": 3,
+            "previous_attempt_ids": [first_attempt],
+        })
+    );
+    assert_eq!(
+        retry_run["object"]["receipt"]["retry_history"][0]["retry_of"],
+        first_attempt
+    );
+    let retry_attempt_id = retry_run["object"]["attempt"]["id"].as_str().unwrap();
+    let retry_attempts = http_json(&http_request(
+        port,
+        "GET",
+        "/v1/evidence/attempts?obligation=pob-queue-extension",
+        "",
+    ));
+    let retry_attempt_readback = retry_attempts["object"]["attempts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|attempt| attempt["id"] == retry_attempt_id)
+        .expect("retry attempt readback");
+    assert_eq!(
+        retry_attempt_readback["retry_predecessor_attempt_id"],
+        first_attempt
+    );
+
+    let stale_source_base = evidence_obligation_for(
+        "pob-stale-source-base",
+        policy_digest,
+        "com.example.queue.depth.v2",
+        "repository queue extension v2",
+        json!({"status": "drained"}),
+        json!({"kind": "process", "uri": "local://queue/depth", "digest": "sha256:1212121212121212121212121212121212121212121212121212121212121212"}),
+        queue_environment.clone(),
+        json!({"kind": "process", "id": "runtime-queue-v2"}),
+        json!(["source_change"]),
+        "sha256:2323232323232323232323232323232323232323232323232323232323232323",
+    );
+    add_evidence_obligation_value(dir.path(), &db, "pob-stale-source-base", &stale_source_base);
+    let stale_source_base_run = run_evidence_value(
+        dir.path(),
+        &db,
+        "pob-stale-source-base",
+        &queue_instance_id,
+        json!({"kind": "process", "uri": "local://queue/depth", "digest": "sha256:1212121212121212121212121212121212121212121212121212121212121212"}),
+    );
+    assert_evidence_envelope(&stale_source_base_run, "evidence.run", true);
+    fs::write(
+        dir.path().join("source-drift.txt"),
+        "source changed after receipt",
+    )
+    .unwrap();
+    let stale_source_obligation = superseding_obligation(
+        stale_source_base,
+        "pob-stale-source",
+        "pob-stale-source-base",
+    );
+    add_evidence_obligation_value(
+        dir.path(),
+        &db,
+        "pob-stale-source",
+        &stale_source_obligation,
+    );
+    let stale_source = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "coverage",
+                "--scope",
+                "obligation",
+                "--id",
+                "pob-stale-source",
+            ])
+            .assert()
+            .failure()
+            .code(2)
+            .get_output()
+            .stdout,
+    );
+    assert_evidence_envelope(&stale_source, "evidence.coverage", true);
+    assert_eq!(stale_source["object"]["verdict"], "stale");
+    assert_eq!(
+        stale_source["object"]["coverage"]["observation_coverage"][0]["gap_reason"],
+        "stale_source"
+    );
+    let stale_target_base = evidence_obligation_for(
+        "pob-stale-target-base",
+        policy_digest,
+        "com.example.queue.depth.v2",
+        "repository queue extension v2",
+        json!({"status": "drained"}),
+        json!({"kind": "process", "uri": "local://queue/depth", "digest": "sha256:1212121212121212121212121212121212121212121212121212121212121212"}),
+        queue_environment.clone(),
+        json!({"kind": "process", "id": "runtime-queue-v2"}),
+        json!(["target_change"]),
+        "sha256:2323232323232323232323232323232323232323232323232323232323232323",
+    );
+    add_evidence_obligation_value(dir.path(), &db, "pob-stale-target-base", &stale_target_base);
+    let stale_target_base_run = run_evidence_value(
+        dir.path(),
+        &db,
+        "pob-stale-target-base",
+        &queue_instance_id,
+        json!({"kind": "process", "uri": "local://queue/depth", "digest": "sha256:1212121212121212121212121212121212121212121212121212121212121212"}),
+    );
+    assert_evidence_envelope(&stale_target_base_run, "evidence.run", true);
+    let mut stale_target_obligation = superseding_obligation(
+        stale_target_base,
+        "pob-stale-target",
+        "pob-stale-target-base",
+    );
+    stale_target_obligation["observations"][0]["target"]["digest"] =
+        json!("sha256:5656565656565656565656565656565656565656565656565656565656565656");
+    add_evidence_obligation_value(
+        dir.path(),
+        &db,
+        "pob-stale-target",
+        &stale_target_obligation,
+    );
+    let stale_target = mcp_tool(
+        dir.path(),
+        &db,
+        102,
+        "planr_evidence_coverage",
+        json!({"scope": "obligation", "id": "pob-stale-target"}),
+    );
+    assert_evidence_envelope(&stale_target, "evidence.coverage", true);
+    assert_eq!(stale_target["object"]["verdict"], "stale");
+    assert_eq!(
+        stale_target["object"]["coverage"]["observation_coverage"][0]["gap_reason"],
+        "stale_target"
+    );
+    assert_eq!(
+        stale_target["object"]["coverage"]["validation_details"]["target"]["gap_reasons"],
+        json!(["target_mismatch"])
+    );
+    let stale_config_base = evidence_obligation_for(
+        "pob-stale-config-base",
+        policy_digest,
+        "com.example.queue.depth.v2",
+        "repository queue extension v2",
+        json!({"status": "drained"}),
+        json!({"kind": "process", "uri": "local://queue/depth", "digest": "sha256:1212121212121212121212121212121212121212121212121212121212121212"}),
+        queue_environment.clone(),
+        json!({"kind": "process", "id": "runtime-queue-v2"}),
+        json!(["configuration_change"]),
+        "sha256:2323232323232323232323232323232323232323232323232323232323232323",
+    );
+    add_evidence_obligation_value(dir.path(), &db, "pob-stale-config-base", &stale_config_base);
+    let stale_config_base_run = run_evidence_value(
+        dir.path(),
+        &db,
+        "pob-stale-config-base",
+        &queue_instance_id,
+        json!({"kind": "process", "uri": "local://queue/depth", "digest": "sha256:1212121212121212121212121212121212121212121212121212121212121212"}),
+    );
+    assert_evidence_envelope(&stale_config_base_run, "evidence.run", true);
+    let mut stale_config_obligation = superseding_obligation(
+        stale_config_base,
+        "pob-stale-config",
+        "pob-stale-config-base",
+    );
+    stale_config_obligation["config_digest"] =
+        json!("sha256:7878787878787878787878787878787878787878787878787878787878787878");
+    add_evidence_obligation_value(
+        dir.path(),
+        &db,
+        "pob-stale-config",
+        &stale_config_obligation,
+    );
+    let stale_config = http_json(&http_request(
+        port,
+        "POST",
+        "/v1/evidence/coverage",
+        r#"{"scope":"obligation","id":"pob-stale-config"}"#,
+    ));
+    assert_evidence_envelope(&stale_config, "evidence.coverage", true);
+    assert_eq!(stale_config["object"]["verdict"], "stale");
+    assert_eq!(
+        stale_config["object"]["coverage"]["observation_coverage"][0]["gap_reason"],
+        "stale_configuration"
+    );
+
+    let stale_policy_base = evidence_obligation_for(
+        "pob-stale-policy-base",
+        policy_digest,
+        "com.example.health.status",
+        "repository policy mutation",
+        json!({"status": "ok"}),
+        json!({"kind": "process", "uri": "local://health"}),
+        generic_environment.clone(),
+        json!({"kind": "process", "id": "runtime-local"}),
+        json!(["policy_change"]),
+        "sha256:edededededededededededededededededededededededededededededededed",
+    );
+    add_evidence_obligation_value(dir.path(), &db, "pob-stale-policy-base", &stale_policy_base);
+    let stale_policy_base_run = run_evidence_value(
+        dir.path(),
+        &db,
+        "pob-stale-policy-base",
+        &generic_instance_id,
+        json!({"kind": "process", "uri": "local://health"}),
+    );
+    assert_evidence_envelope(&stale_policy_base_run, "evidence.run", true);
+    rewrite_evidence_policy_fixture(dir.path(), |policy| {
+        policy["freshness_policy"]["max_age_seconds"] = json!(7200);
+    });
+    let stale_policy = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "coverage",
+                "--scope",
+                "obligation",
+                "--id",
+                "pob-stale-policy-base",
+            ])
+            .assert()
+            .failure()
+            .code(2)
+            .get_output()
+            .stdout,
+    );
+    assert_evidence_envelope(&stale_policy, "evidence.coverage", true);
+    assert_eq!(stale_policy["object"]["verdict"], "stale");
+    assert_eq!(
+        stale_policy["object"]["coverage"]["observation_coverage"][0]["gap_reason"],
+        "stale_policy"
+    );
+    assert_eq!(
+        stale_policy["object"]["coverage"]["validation_details"]["freshness"]["gap_reasons"],
+        json!(["stale_policy"])
+    );
+
+    let refreshed_policy = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args(["--db", db.to_str().unwrap(), "--json", "evidence", "policy"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    let refreshed_policy_digest = refreshed_policy["object"]["digest"].as_str().unwrap();
+    let stale_adapter_base = evidence_obligation_for(
+        "pob-stale-adapter-base",
+        refreshed_policy_digest,
+        "com.example.health.status",
+        "repository adapter schema mutation",
+        json!({"status": "ok"}),
+        json!({"kind": "process", "uri": "local://health"}),
+        generic_environment.clone(),
+        json!({"kind": "process", "id": "runtime-local"}),
+        json!(["adapter_schema_change"]),
+        "sha256:fafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafa",
+    );
+    add_evidence_obligation_value(
+        dir.path(),
+        &db,
+        "pob-stale-adapter-base",
+        &stale_adapter_base,
+    );
+    let stale_adapter_base_run = run_evidence_value(
+        dir.path(),
+        &db,
+        "pob-stale-adapter-base",
+        &generic_instance_id,
+        json!({"kind": "process", "uri": "local://health"}),
+    );
+    assert_evidence_envelope(&stale_adapter_base_run, "evidence.run", true);
+    let mutated_manifest_digest = rewrite_evidence_runner_manifest(dir.path(), |manifest| {
+        manifest["version"] = json!("1.0.1");
+        manifest["supported_observations"][0]["schema_digest"] =
+            json!("sha256:3434343434343434343434343434343434343434343434343434343434343434");
+        manifest["availability_probe"]["execution"]["payload_schema"]["schema_digest"] =
+            json!("sha256:3434343434343434343434343434343434343434343434343434343434343434");
+    });
+    rewrite_evidence_policy_fixture(dir.path(), |policy| {
+        policy["adapter_registrations"][0]["manifest_digest"] = json!(mutated_manifest_digest);
+        policy["adapter_registrations"][0]["payload_schemas"][0]["schema_digest"] =
+            json!("sha256:3434343434343434343434343434343434343434343434343434343434343434");
+        policy["adapter_registrations"][0]["execution_contract"]["payload_schema"]["schema_digest"] =
+            json!("sha256:3434343434343434343434343434343434343434343434343434343434343434");
+    });
+    single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args(["--db", db.to_str().unwrap(), "--json", "evidence", "policy"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    let stale_adapter = mcp_tool(
+        dir.path(),
+        &db,
+        103,
+        "planr_evidence_coverage",
+        json!({"scope": "obligation", "id": "pob-stale-adapter-base"}),
+    );
+    assert_evidence_envelope(&stale_adapter, "evidence.coverage", true);
+    assert_eq!(stale_adapter["object"]["verdict"], "stale");
+    assert_eq!(
+        stale_adapter["object"]["coverage"]["observation_coverage"][0]["gap_reason"],
+        "stale_adapter_schema"
+    );
+    assert_eq!(
+        stale_adapter["object"]["coverage"]["validation_details"]["freshness"]["gap_reasons"],
+        json!(["stale_adapter_schema"])
+    );
+    assert!(first_receipt.starts_with("erec-"));
+
+    let forged_mcp = mcp_tool(
+        dir.path(),
+        &db,
+        104,
+        "planr_evidence_import",
+        json!({"artifact_root": dir.path().to_str().unwrap(), "input": {"receipt_json": {"provenance": {"assigned_by": "agent"}}}}),
+    );
+    assert_evidence_envelope(&forged_mcp, "evidence.import", false);
+    assert!(
+        forged_mcp["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("cannot construct trusted receipt field")
+    );
+
+    let http_target =
+        json!({"kind": "http", "uri": format!("http://127.0.0.1:{curl_port}/health")});
+    let http_obligation = evidence_obligation_for(
+        "pob-http-curl-base",
+        policy_digest,
+        "com.example.http.status",
+        "curl HTTP health check",
+        json!({"status": "ok"}),
+        http_target.clone(),
+        http_environment.clone(),
+        json!({"kind": "process", "id": "runtime-http-curl"}),
+        json!(["target_change"]),
+        "sha256:9090909090909090909090909090909090909090909090909090909090909090",
+    );
+    add_evidence_obligation_value(dir.path(), &db, "pob-http-curl-base", &http_obligation);
+    let http_run = run_evidence_value(
+        dir.path(),
+        &db,
+        "pob-http-curl-base",
+        &http_instance_id,
+        http_target.clone(),
+    );
+    assert_evidence_envelope(&http_run, "evidence.run", true);
+    let http_coverage = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "coverage",
+                "--scope",
+                "obligation",
+                "--id",
+                "pob-http-curl-base",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    assert_eq!(http_coverage["object"]["verdict"], "satisfied");
+    assert_eq!(
+        http_coverage["object"]["coverage"]["observation_coverage"][0]["status"],
+        "covered"
+    );
+    let mut browser_obligation = superseding_obligation(
+        http_obligation,
+        "pob-browser-curl-legacy",
+        "pob-http-curl-base",
+    );
+    browser_obligation["observations"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id": "obs-rendered-browser-required",
+            "type": "com.example.browser.page.visible",
+            "subject": "rendered browser interaction cannot be replaced by curl",
+            "expected": {"visible": true},
+            "target": {"kind": "browser", "uri": format!("http://127.0.0.1:{curl_port}/health")},
+            "environment": http_environment,
+            "runtime_target": {"kind": "browser", "id": "browser-session"}
+        }));
+    let browser_add = add_evidence_obligation_value(
+        dir.path(),
+        &db,
+        "pob-browser-curl-legacy",
+        &browser_obligation,
+    );
+    assert_evidence_envelope(&browser_add, "evidence.obligation.add", true);
+    let browser_coverage = http_json(&http_request(
+        port,
+        "POST",
+        "/v1/evidence/coverage",
+        r#"{"scope":"obligation","id":"pob-browser-curl-legacy"}"#,
+    ));
+    assert_evidence_envelope(&browser_coverage, "evidence.coverage", true);
+    assert_eq!(browser_coverage["object"]["verdict"], "stale");
+    let browser_observations = browser_coverage["object"]["coverage"]["observation_coverage"]
+        .as_array()
+        .unwrap();
+    assert!(
+        browser_observations
+            .iter()
+            .any(
+                |observation| observation["requirement_id"] == "obs-pob-http-curl-base"
+                    && observation["status"] == "stale"
+                    && observation["gap_reason"] == "stale_configuration"
+            )
+    );
+    let browser_missing = browser_observations
+        .iter()
+        .find(|observation| observation["requirement_id"] == "obs-rendered-browser-required")
+        .expect("browser observation coverage");
+    assert_eq!(browser_missing["gap_reason"], "missing_observation");
+    let browser_run = mcp_tool(
+        dir.path(),
+        &db,
+        105,
+        "planr_evidence_run",
+        json!({
+            "input": {
+                "obligation_id": "pob-browser-curl-legacy",
+                "capability_instance_id": http_instance_id,
+                "target": {"kind": "browser", "uri": "http://127.0.0.1:9/legacy-curl"}
+            }
+        }),
+    );
+    assert_evidence_envelope(&browser_run, "evidence.run", false);
+    assert!(
+        browser_run["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("proof obligation observation type is not supported by capability instance")
+    );
+
+    let _ = server.kill();
+    let _ = server.wait();
+
+    let unavailable_dir = tempdir().unwrap();
+    let unavailable_db = unavailable_dir.path().join(".planr/planr.sqlite");
+    write_evidence_policy_fixture(unavailable_dir.path());
+    rewrite_evidence_policy_fixture(unavailable_dir.path(), |policy| {
+        policy["adapter_registrations"][0]["execution_contract"]["executable"] =
+            json!("planr-definitely-missing-adapter");
+    });
+    init_evidence_project(
+        unavailable_dir.path(),
+        &unavailable_db,
+        "Unavailable Scenario",
+    );
+    init_git_repo(unavailable_dir.path());
+    let unavailable_policy = single_json_document(
+        &planr()
+            .current_dir(unavailable_dir.path())
+            .args([
+                "--db",
+                unavailable_db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "policy",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    assert_eq!(unavailable_policy["object"]["status"], "valid");
+    assert_eq!(
+        unavailable_policy["object"]["registry"]["probes"][0]["availability_status"],
+        "available"
+    );
+    let unavailable_capabilities = mcp_tool(
+        unavailable_dir.path(),
+        &unavailable_db,
+        106,
+        "planr_evidence_capability_list",
+        json!({}),
+    );
+    assert_evidence_envelope(&unavailable_capabilities, "evidence.capability.list", true);
+    let unavailable_probe = &unavailable_capabilities["object"]["registry"]["probes"][0];
+    assert_eq!(unavailable_probe["manifest_id"], "verifier-generic-adapter");
+    assert_eq!(unavailable_probe["availability_status"], "available");
+    let unavailable_instance_id = unavailable_probe["instance_id"].as_str().unwrap();
+    let unavailable_instance = unavailable_capabilities["object"]["instances"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|instance| instance["id"] == unavailable_instance_id)
+        .expect("unavailable run instance");
+    let unavailable_manifest = unavailable_capabilities["object"]["manifests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|manifest| manifest["id"] == "verifier-generic-adapter")
+        .expect("unavailable run manifest");
+    assert_eq!(
+        unavailable_instance["manifest_id"],
+        "verifier-generic-adapter"
+    );
+    let unavailable_manifest_digest = unavailable_instance["manifest_digest"].clone();
+    assert_eq!(
+        unavailable_instance["probe_execution_id"],
+        unavailable_instance["capability"]["probe_result"]["probe_execution_id"]
+    );
+    assert_eq!(
+        unavailable_instance["host_fingerprint"]["execution_contract_source"],
+        "repository_adapter_registration"
+    );
+    assert_ne!(
+        unavailable_manifest["manifest"]["availability_probe"]["execution"]["executable"],
+        "planr-definitely-missing-adapter"
+    );
+    let unavailable_environment = unavailable_instance["capability"]["environment"].clone();
+    let unavailable_obligation = evidence_obligation_for(
+        "pob-unavailable-run",
+        unavailable_policy["object"]["digest"].as_str().unwrap(),
+        "com.example.health.status",
+        "public evidence health",
+        json!({"status": "ok"}),
+        json!({"kind": "process", "uri": "local://health"}),
+        unavailable_environment,
+        json!({"kind": "process", "id": "runtime-local"}),
+        json!([]),
+        "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+    );
+    add_evidence_obligation_value(
+        unavailable_dir.path(),
+        &unavailable_db,
+        "pob-unavailable-run",
+        &unavailable_obligation,
+    );
+    let unavailable_cli_run = run_evidence_value_with_code(
+        unavailable_dir.path(),
+        &unavailable_db,
+        "pob-unavailable-run",
+        unavailable_instance_id,
+        json!({"kind": "process", "uri": "local://health"}),
+        3,
+    );
+    let (unavailable_cli_attempt_id, unavailable_cli_receipt_id) = assert_unavailable_run_identity(
+        &unavailable_cli_run,
+        unavailable_instance,
+        "pob-unavailable-run",
+    );
+    assert_eq!(
+        unavailable_cli_run["object"]["attempt"]["capability_instance_id"],
+        unavailable_instance_id
+    );
+    let unavailable_mcp_run = mcp_tool(
+        unavailable_dir.path(),
+        &unavailable_db,
+        107,
+        "planr_evidence_run",
+        json!({
+            "input": {
+                "obligation_id": "pob-unavailable-run",
+                "capability_instance_id": unavailable_instance_id,
+                "target": {"kind": "process", "uri": "local://health"}
+            }
+        }),
+    );
+    let (unavailable_mcp_attempt_id, unavailable_mcp_receipt_id) = assert_unavailable_run_identity(
+        &unavailable_mcp_run,
+        unavailable_instance,
+        "pob-unavailable-run",
+    );
+    assert_eq!(
+        unavailable_mcp_run["object"]["receipt"]["capability"],
+        unavailable_cli_run["object"]["receipt"]["capability"]
+    );
+    assert_ne!(unavailable_mcp_attempt_id, unavailable_cli_attempt_id);
+    assert_ne!(unavailable_mcp_receipt_id, unavailable_cli_receipt_id);
+    let unavailable_port = free_port();
+    let mut unavailable_server = StdCommand::new(&bin)
+        .current_dir(unavailable_dir.path())
+        .args([
+            "--db",
+            unavailable_db.to_str().unwrap(),
+            "serve",
+            "--port",
+            &unavailable_port.to_string(),
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    wait_for_http_server(unavailable_port);
+    let unavailable_http_capabilities = http_json(&http_request(
+        unavailable_port,
+        "GET",
+        "/v1/evidence/capabilities",
+        "",
+    ));
+    assert_evidence_envelope(
+        &unavailable_http_capabilities,
+        "evidence.capability.list",
+        true,
+    );
+    assert_eq!(
+        unavailable_http_capabilities["object"]["registry"]["probes"][0]["instance_id"],
+        unavailable_probe["instance_id"]
+    );
+    let unavailable_http_instance = unavailable_http_capabilities["object"]["instances"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|instance| instance["id"] == unavailable_instance_id)
+        .expect("HTTP unavailable run instance");
+    assert_eq!(
+        unavailable_http_instance["manifest_digest"],
+        unavailable_manifest_digest
+    );
+    assert_eq!(
+        unavailable_http_instance["capability"],
+        unavailable_instance["capability"]
+    );
+    let unavailable_http_run = http_json(&http_request(
+        unavailable_port,
+        "POST",
+        "/v1/evidence/run",
+        &json!({
+            "obligation_id": "pob-unavailable-run",
+            "capability_instance_id": unavailable_instance_id,
+            "target": {"kind": "process", "uri": "local://health"}
+        })
+        .to_string(),
+    ));
+    let (unavailable_http_attempt_id, unavailable_http_receipt_id) =
+        assert_unavailable_run_identity(
+            &unavailable_http_run,
+            unavailable_instance,
+            "pob-unavailable-run",
+        );
+    assert_eq!(
+        unavailable_http_run["object"]["receipt"]["capability"],
+        unavailable_cli_run["object"]["receipt"]["capability"]
+    );
+    assert_ne!(unavailable_http_attempt_id, unavailable_cli_attempt_id);
+    assert_ne!(unavailable_http_attempt_id, unavailable_mcp_attempt_id);
+    assert_ne!(unavailable_http_receipt_id, unavailable_cli_receipt_id);
+    assert_ne!(unavailable_http_receipt_id, unavailable_mcp_receipt_id);
+
+    let attempted_receipt_ids = vec![
+        unavailable_cli_receipt_id,
+        unavailable_mcp_receipt_id,
+        unavailable_http_receipt_id,
+    ];
+
+    let gap_dir = tempdir().unwrap();
+    let gap_db_dir = tempdir().unwrap();
+    let gap_db = gap_db_dir.path().join("planr.sqlite");
+    write_evidence_policy_fixture(gap_dir.path());
+    init_evidence_project(gap_dir.path(), &gap_db, "Gap Boundary Scenario");
+    init_git_repo(gap_dir.path());
+    let gap_policy = single_json_document(
+        &planr()
+            .current_dir(gap_dir.path())
+            .args([
+                "--db",
+                gap_db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "policy",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    let gap_instance_id = gap_policy["object"]["registry"]["probes"][0]["instance_id"]
+        .as_str()
+        .unwrap();
+    let gap_environment = capability_instance_environment(&gap_db, gap_instance_id);
+    let mut gap_obligation = evidence_obligation_for(
+        "pob-legacy-gap-boundary",
+        gap_policy["object"]["digest"].as_str().unwrap(),
+        "com.example.health.status",
+        "legacy gap boundary health",
+        json!({"status": "ok"}),
+        json!({"kind": "process", "uri": "local://health"}),
+        gap_environment.clone(),
+        json!({"kind": "process", "id": "runtime-local"}),
+        json!([]),
+        "sha256:abababababababababababababababababababababababababababababababab",
+    );
+    gap_obligation["fixture_policy"]["fixtures_allowed"] = json!(true);
+    add_evidence_obligation_value(
+        gap_dir.path(),
+        &gap_db,
+        "pob-legacy-gap-boundary",
+        &gap_obligation,
+    );
+    let legacy_gap_run = run_evidence_value_with_env_fixture_code(
+        gap_dir.path(),
+        &gap_db,
+        "pob-legacy-gap-boundary",
+        gap_instance_id,
+        json!({"kind": "process", "uri": "local://health"}),
+        Some(
+            json!({"PLANR_FIXTURE_GAP_REASONS": "[\"capability_unavailable\",\"legacy_harness_weird\"]"}),
+        ),
+        Some(json!({
+            "fixtures_used": true,
+            "mocks_used": false,
+            "fixture_refs": ["planr-test-fixture:legacy-gap-reasons"],
+        })),
+        2,
+    );
+    let legacy_gap_receipt_id = legacy_gap_run["object"]["receipt"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        legacy_gap_run["object"]["receipt"]["proof_gaps"],
+        json!(["missing_capability", "verifier_failed"])
+    );
+    assert_eq!(
+        legacy_gap_run["object"]["receipt"]["receipt_digest"],
+        sha256_json_without_field(&legacy_gap_run["object"]["receipt"], "receipt_digest")
+    );
+    let legacy_gap_receipt_json: String = {
+        let conn = rusqlite::Connection::open(&gap_db).unwrap();
+        conn.query_row(
+            "SELECT receipt_json FROM evidence_receipts WHERE id = ?1",
+            [&legacy_gap_receipt_id],
+            |row| row.get(0),
+        )
+        .unwrap()
+    };
+    let legacy_gap_stored_receipt: Value = serde_json::from_str(&legacy_gap_receipt_json).unwrap();
+    assert_eq!(
+        legacy_gap_stored_receipt["proof_gaps"],
+        json!(["missing_capability", "verifier_failed"])
+    );
+    assert_eq!(
+        legacy_gap_stored_receipt["receipt_digest"],
+        sha256_json_without_field(&legacy_gap_stored_receipt, "receipt_digest")
+    );
+    let gap_port = free_port();
+    let mut gap_server = StdCommand::new(&bin)
+        .current_dir(gap_dir.path())
+        .args([
+            "--db",
+            gap_db.to_str().unwrap(),
+            "serve",
+            "--port",
+            &gap_port.to_string(),
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    wait_for_http_server(gap_port);
+    let legacy_gap_receipts =
+        http_json(&http_request(gap_port, "GET", "/v1/evidence/receipts", ""));
+    let legacy_gap_receipt = legacy_gap_receipts["object"]["receipts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|receipt| receipt["id"] == legacy_gap_receipt_id)
+        .unwrap();
+    assert_eq!(
+        legacy_gap_receipt["receipt"], legacy_gap_stored_receipt,
+        "{legacy_gap_receipts}"
+    );
+    let legacy_gap_coverage = single_json_document(
+        &planr()
+            .current_dir(gap_dir.path())
+            .args([
+                "--db",
+                gap_db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "coverage",
+                "--scope",
+                "obligation",
+                "--id",
+                "pob-legacy-gap-boundary",
+            ])
+            .assert()
+            .failure()
+            .code(3)
+            .get_output()
+            .stdout,
+    );
+    assert_eq!(
+        legacy_gap_coverage["object"]["coverage"]["observation_coverage"][0]["gap_reasons"],
+        json!(["missing_capability", "verifier_failed"])
+    );
+    assert_ne!(
+        legacy_gap_coverage["object"]["coverage"]["observation_coverage"][0]["gap_reasons"][1],
+        "product_failed"
+    );
+
+    let mut flaky_obligation = evidence_obligation_for(
+        "pob-inconclusive-retry",
+        gap_policy["object"]["digest"].as_str().unwrap(),
+        "com.example.health.status",
+        "inconclusive retry health",
+        json!({"status": "ok"}),
+        json!({"kind": "process", "uri": "local://health"}),
+        gap_environment.clone(),
+        json!({"kind": "process", "id": "runtime-local"}),
+        json!([]),
+        "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    );
+    flaky_obligation["fixture_policy"]["fixtures_allowed"] = json!(true);
+    add_evidence_obligation_value(
+        gap_dir.path(),
+        &gap_db,
+        "pob-inconclusive-retry",
+        &flaky_obligation,
+    );
+    let flaky_fixture = json!({
+        "fixtures_used": true,
+        "mocks_used": false,
+        "fixture_refs": ["planr-test-fixture:inconclusive-retry"],
+    });
+    let flaky_env = json!({"PLANR_FIXTURE_GAP_REASONS": "[\"inconclusive_result\"]"});
+    let flaky_first = mcp_tool(
+        gap_dir.path(),
+        &gap_db,
+        109,
+        "planr_evidence_run",
+        json!({"input": {
+            "obligation_id": "pob-inconclusive-retry",
+            "capability_instance_id": gap_instance_id,
+            "target": {"kind": "process", "uri": "local://health"},
+            "env": flaky_env,
+            "fixture_disclosure": flaky_fixture,
+            "attempt_index": 0,
+            "max_attempts": 2
+        }}),
+    );
+    assert_evidence_envelope(&flaky_first, "evidence.run", true);
+    assert_eq!(flaky_first["object"]["verdict"], "failed");
+    assert_eq!(
+        flaky_first["object"]["receipt"]["proof_gaps"],
+        json!(["inconclusive_result"])
+    );
+    let flaky_first_attempt = flaky_first["object"]["attempt"]["id"].as_str().unwrap();
+    let flaky_first_receipt = flaky_first["object"]["receipt"]["id"].as_str().unwrap();
+    let flaky_second = mcp_tool(
+        gap_dir.path(),
+        &gap_db,
+        110,
+        "planr_evidence_run",
+        json!({"input": {
+            "obligation_id": "pob-inconclusive-retry",
+            "capability_instance_id": gap_instance_id,
+            "target": {"kind": "process", "uri": "local://health"},
+            "env": flaky_env,
+            "fixture_disclosure": flaky_fixture,
+            "retry_of": flaky_first_attempt,
+            "attempt_index": 1,
+            "max_attempts": 2
+        }}),
+    );
+    assert_evidence_envelope(&flaky_second, "evidence.run", true);
+    let flaky_second_attempt = flaky_second["object"]["attempt"]["id"].as_str().unwrap();
+    let flaky_second_receipt = flaky_second["object"]["receipt"]["id"].as_str().unwrap();
+    assert_eq!(
+        flaky_second["object"]["attempt"]["retry_lineage"],
+        json!({
+            "attempt_number": 2,
+            "max_attempts": 2,
+            "previous_attempt_ids": [flaky_first_attempt],
+        })
+    );
+    assert_eq!(
+        flaky_second["object"]["receipt"]["retry_history"],
+        json!([{
+            "retry_of": flaky_first_attempt,
+            "status": "failed",
+            "attempt_number": 2,
+            "max_attempts": 2,
+            "previous_attempt_ids": [flaky_first_attempt],
+        }])
+    );
+    let attempts_before_exhausted = evidence_row_count(&gap_db, "evidence_attempts");
+    let receipts_before_exhausted = evidence_row_count(&gap_db, "evidence_receipts");
+    let flaky_exhausted = mcp_tool(
+        gap_dir.path(),
+        &gap_db,
+        111,
+        "planr_evidence_run",
+        json!({"input": {
+            "obligation_id": "pob-inconclusive-retry",
+            "capability_instance_id": gap_instance_id,
+            "target": {"kind": "process", "uri": "local://health"},
+            "env": flaky_env,
+            "fixture_disclosure": flaky_fixture,
+            "retry_of": flaky_second_attempt,
+            "attempt_index": 2,
+            "max_attempts": 2
+        }}),
+    );
+    assert_evidence_envelope(&flaky_exhausted, "evidence.run", false);
+    assert!(
+        flaky_exhausted["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("retry max_attempts exhausted before launch"),
+        "{flaky_exhausted}"
+    );
+    assert_eq!(
+        evidence_row_count(&gap_db, "evidence_attempts"),
+        attempts_before_exhausted
+    );
+    assert_eq!(
+        evidence_row_count(&gap_db, "evidence_receipts"),
+        receipts_before_exhausted
+    );
+    let flaky_coverage = single_json_document(
+        &planr()
+            .current_dir(gap_dir.path())
+            .args([
+                "--db",
+                gap_db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "coverage",
+                "--scope",
+                "obligation",
+                "--id",
+                "pob-inconclusive-retry",
+            ])
+            .assert()
+            .failure()
+            .code(2)
+            .get_output()
+            .stdout,
+    );
+    assert_eq!(flaky_coverage["object"]["verdict"], "inconclusive");
+    assert_eq!(
+        flaky_coverage["object"]["coverage"]["status"],
+        "inconclusive"
+    );
+    assert_eq!(flaky_coverage["object"]["coverage"]["actionable_now"], true);
+    assert_eq!(
+        flaky_coverage["object"]["coverage"]["suggested_next_action"],
+        "rerun flaky evidence"
+    );
+    assert_eq!(
+        flaky_coverage["object"]["canonical_projection"]["status"],
+        "inconclusive"
+    );
+    assert_eq!(
+        flaky_coverage["object"]["canonical_projection"]["actionable_now"],
+        true
+    );
+    assert_eq!(
+        flaky_coverage["object"]["canonical_projection"]["suggested_next_action"],
+        "rerun flaky evidence"
+    );
+    let flaky_attempted =
+        flaky_coverage["object"]["coverage"]["observation_coverage"][0]["attempted_receipt_ids"]
+            .as_array()
+            .unwrap();
+    assert_eq!(flaky_attempted.len(), 2, "{flaky_coverage}");
+    assert!(
+        flaky_attempted
+            .iter()
+            .any(|value| value.as_str() == Some(flaky_first_receipt))
+    );
+    assert!(
+        flaky_attempted
+            .iter()
+            .any(|value| value.as_str() == Some(flaky_second_receipt))
+    );
+    assert_eq!(
+        flaky_coverage["object"]["coverage"]["observation_coverage"][0]["gap_reason"],
+        "inconclusive_result"
+    );
+    let persisted_flaky_coverage: String = Connection::open(&gap_db)
+        .unwrap()
+        .query_row(
+            "SELECT verdict_json FROM coverage_verdicts WHERE id = ?1",
+            [flaky_coverage["object"]["coverage_id"].as_str().unwrap()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let persisted_flaky_coverage: Value = serde_json::from_str(&persisted_flaky_coverage).unwrap();
+    assert_eq!(
+        persisted_flaky_coverage,
+        flaky_coverage["object"]["coverage"]
+    );
+    let flaky_explain = mcp_tool(
+        gap_dir.path(),
+        &gap_db,
+        112,
+        "planr_evidence_explain",
+        json!({"scope": "obligation", "id": "pob-inconclusive-retry"}),
+    );
+    assert_evidence_envelope(&flaky_explain, "evidence.explain", true);
+    assert_eq!(flaky_explain["object"]["verdict"], "inconclusive");
+    assert_eq!(
+        flaky_explain["object"]["explain"]["coverage"]["canonical_projection"],
+        flaky_coverage["object"]["canonical_projection"]
+    );
+    let flaky_cli_attempts = single_json_document(
+        &planr()
+            .current_dir(gap_dir.path())
+            .args([
+                "--db",
+                gap_db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "attempts",
+                "--obligation",
+                "pob-inconclusive-retry",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    let flaky_cli_attempt_rows = flaky_cli_attempts["object"]["attempts"].as_array().unwrap();
+    assert_eq!(flaky_cli_attempt_rows.len(), 2, "{flaky_cli_attempts}");
+    assert!(
+        flaky_cli_attempt_rows
+            .iter()
+            .any(|attempt| attempt["id"] == flaky_first_attempt)
+    );
+    assert!(
+        flaky_cli_attempt_rows
+            .iter()
+            .any(|attempt| attempt["id"] == flaky_second_attempt)
+    );
+    let flaky_cli_receipts = single_json_document(
+        &planr()
+            .current_dir(gap_dir.path())
+            .args([
+                "--db",
+                gap_db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "receipts",
+                "--obligation",
+                "pob-inconclusive-retry",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    let flaky_cli_receipt_rows = flaky_cli_receipts["object"]["receipts"].as_array().unwrap();
+    assert_eq!(flaky_cli_receipt_rows.len(), 2, "{flaky_cli_receipts}");
+    assert!(
+        flaky_cli_receipt_rows
+            .iter()
+            .any(|receipt| receipt["id"] == flaky_first_receipt)
+    );
+    assert!(
+        flaky_cli_receipt_rows
+            .iter()
+            .any(|receipt| receipt["id"] == flaky_second_receipt)
+    );
+    let flaky_first_attempt_read = mcp_tool(
+        gap_dir.path(),
+        &gap_db,
+        113,
+        "planr_evidence_attempts",
+        json!({"id": flaky_first_attempt}),
+    );
+    let flaky_second_attempt_read = mcp_tool(
+        gap_dir.path(),
+        &gap_db,
+        114,
+        "planr_evidence_attempts",
+        json!({"id": flaky_second_attempt}),
+    );
+    assert_eq!(
+        flaky_first_attempt_read["object"]["attempt"]["id"],
+        flaky_first_attempt
+    );
+    assert_eq!(
+        flaky_first_attempt_read["object"]["attempt"]["attempt"]["retry_lineage"],
+        json!({
+            "attempt_number": 1,
+            "max_attempts": 2,
+            "previous_attempt_ids": [],
+        })
+    );
+    assert_eq!(
+        flaky_second_attempt_read["object"]["attempt"]["attempt"]["retry_lineage"],
+        json!({
+            "attempt_number": 2,
+            "max_attempts": 2,
+            "previous_attempt_ids": [flaky_first_attempt],
+        })
+    );
+    let flaky_http_attempts = http_json(&http_request(
+        gap_port,
+        "GET",
+        "/v1/evidence/attempts?obligation=pob-inconclusive-retry",
+        "",
+    ));
+    assert!(
+        flaky_http_attempts["object"]["attempts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|attempt| attempt["id"] == flaky_first_attempt)
+    );
+    assert!(
+        flaky_http_attempts["object"]["attempts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|attempt| attempt["id"] == flaky_second_attempt)
+    );
+    for (receipt_id, expected_history) in [
+        (
+            flaky_first_receipt,
+            json!([{
+                "status": "failed",
+                "attempt_number": 1,
+                "max_attempts": 2,
+                "previous_attempt_ids": [],
+            }]),
+        ),
+        (
+            flaky_second_receipt,
+            json!([{
+                "retry_of": flaky_first_attempt,
+                "status": "failed",
+                "attempt_number": 2,
+                "max_attempts": 2,
+                "previous_attempt_ids": [flaky_first_attempt],
+            }]),
+        ),
+    ] {
+        let receipt_show = http_json(&http_request(
+            gap_port,
+            "GET",
+            &format!("/v1/evidence/receipts/{receipt_id}"),
+            "",
+        ));
+        assert_evidence_envelope(&receipt_show, "evidence.receipts", true);
+        assert_eq!(receipt_show["object"]["receipt"]["id"], receipt_id);
+        assert_eq!(
+            receipt_show["object"]["receipt"]["receipt"]["proof_gaps"],
+            json!(["inconclusive_result"])
+        );
+        assert_eq!(
+            receipt_show["object"]["receipt"]["receipt"]["retry_history"],
+            expected_history
+        );
+    }
+
+    let mut fixture_base = evidence_obligation_for(
+        "pob-fixture-seeded-base",
+        gap_policy["object"]["digest"].as_str().unwrap(),
+        "com.example.health.status",
+        "fixture seeded health",
+        json!({"status": "ok"}),
+        json!({"kind": "process", "uri": "local://health"}),
+        gap_environment.clone(),
+        json!({"kind": "process", "id": "runtime-local"}),
+        json!([]),
+        "sha256:ababcdcdababcdcdababcdcdababcdcdababcdcdababcdcdababcdcdababcdcd",
+    );
+    fixture_base["fixture_policy"]["fixtures_allowed"] = json!(true);
+    add_evidence_obligation_value(
+        gap_dir.path(),
+        &gap_db,
+        "pob-fixture-seeded-base",
+        &fixture_base,
+    );
+    let fixture_seed = mcp_tool(
+        gap_dir.path(),
+        &gap_db,
+        112,
+        "planr_evidence_run",
+        json!({"input": {
+            "obligation_id": "pob-fixture-seeded-base",
+            "capability_instance_id": gap_instance_id,
+            "target": {"kind": "process", "uri": "local://health"},
+            "fixture_disclosure": {
+                "fixtures_used": true,
+                "mocks_used": false,
+                "fixture_refs": ["planr-test-fixture:seeded-local-health"],
+            }
+        }}),
+    );
+    assert_eq!(
+        fixture_seed["schema"], "planr.evidence.command.v1",
+        "{fixture_seed}"
+    );
+    assert_eq!(fixture_seed["command"], "evidence.run", "{fixture_seed}");
+    assert_eq!(fixture_seed["ok"], true, "{fixture_seed}");
+    let fixture_seed_receipt = fixture_seed["object"]["receipt"]["id"].as_str().unwrap();
+    let mut production_obligation = superseding_obligation(
+        fixture_base,
+        "pob-production-real-source",
+        "pob-fixture-seeded-base",
+    );
+    production_obligation["fixture_policy"]["fixtures_allowed"] = json!(false);
+    add_evidence_obligation_value(
+        gap_dir.path(),
+        &gap_db,
+        "pob-production-real-source",
+        &production_obligation,
+    );
+    let production_coverage = single_json_document(
+        &planr()
+            .current_dir(gap_dir.path())
+            .args([
+                "--db",
+                gap_db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "coverage",
+                "--scope",
+                "obligation",
+                "--id",
+                "pob-production-real-source",
+            ])
+            .assert()
+            .failure()
+            .code(2)
+            .get_output()
+            .stdout,
+    );
+    assert_eq!(production_coverage["object"]["verdict"], "stale");
+    assert_eq!(
+        production_coverage["object"]["coverage"]["observation_coverage"][0]["gap_reason"],
+        "stale_configuration"
+    );
+    assert_eq!(
+        production_coverage["object"]["coverage"]["observation_coverage"][0]["attempted_receipt_ids"],
+        json!([fixture_seed_receipt])
+    );
+    assert!(
+        production_coverage["object"]["receipt_digests"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{production_coverage}"
+    );
+    gap_server.kill().unwrap();
+    gap_server.wait().unwrap();
+
+    let unavailable_cli_coverage = single_json_document(
+        &planr()
+            .current_dir(unavailable_dir.path())
+            .args([
+                "--db",
+                unavailable_db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "coverage",
+                "--scope",
+                "obligation",
+                "--id",
+                "pob-unavailable-run",
+            ])
+            .assert()
+            .failure()
+            .code(3)
+            .get_output()
+            .stdout,
+    );
+    let unavailable_coverage_id = assert_blocked_missing_capability_coverage(
+        &unavailable_cli_coverage,
+        None,
+        "pob-unavailable-run",
+        &attempted_receipt_ids,
+    );
+    assert_eq!(
+        unavailable_cli_coverage["object"]["coverage"]["observation_coverage"][0]["gap_reasons"],
+        json!(["missing_capability"])
+    );
+    let unavailable_mcp_coverage = mcp_tool(
+        unavailable_dir.path(),
+        &unavailable_db,
+        108,
+        "planr_evidence_coverage",
+        json!({"scope": "obligation", "id": "pob-unavailable-run"}),
+    );
+    assert_blocked_missing_capability_coverage(
+        &unavailable_mcp_coverage,
+        Some(&unavailable_coverage_id),
+        "pob-unavailable-run",
+        &attempted_receipt_ids,
+    );
+    let unavailable_coverage = http_json(&http_request(
+        unavailable_port,
+        "POST",
+        "/v1/evidence/coverage",
+        r#"{"scope":"obligation","id":"pob-unavailable-run"}"#,
+    ));
+    assert_blocked_missing_capability_coverage(
+        &unavailable_coverage,
+        Some(&unavailable_coverage_id),
+        "pob-unavailable-run",
+        &attempted_receipt_ids,
+    );
+    let _ = unavailable_server.kill();
+    let _ = unavailable_server.wait();
+}
+
 #[test]
 fn project_plan_map_pick_log_close_flow() {
     let dir = tempdir().unwrap();
-    let db = dir.path().join(".planr/planr.sqlite");
+    let db_dir = tempdir().unwrap();
+    let db = db_dir.path().join("planr.sqlite");
 
     planr()
         .current_dir(dir.path())
@@ -773,6 +8809,111 @@ fn eval_cli_and_mcp_share_one_surface() {
         "sha256:65c096c54bf89c49a151321a84b28d6419aa08930c8a78ac92f0df3641a6b8ed"
     );
 
+    let legacy_fixture = dir.path().join("legacy-fixture.json");
+    let legacy_fixture_bytes = br#"{"legacy":true}"#;
+    fs::write(&legacy_fixture, legacy_fixture_bytes).unwrap();
+    let legacy_fixture_digest = sha256_prefixed(legacy_fixture_bytes);
+    let legacy_runner_manifest = with_legacy_eval_digest(json!({
+        "schema_version": "eval.suite.v1",
+        "suite_id": "legacy-numeric-suite",
+        "suite_version": "v1",
+        "fixtures": [{"id": "legacy-fixture", "path": "legacy-fixture.json", "digest": legacy_fixture_digest}],
+        "scorers": [{"id": "score", "version": "v1", "kind": "test"}],
+        "cases": [{
+            "case_id": "legacy-case",
+            "fixture_id": "legacy-fixture",
+            "fixture_ids": ["legacy-fixture"],
+            "scorer_id": "score",
+            "scorer_ids": ["score@v1"],
+            "subject": {"kind": "binary", "argv": ["/bin/echo", "legacy-ok"]},
+            "assertions": [{"kind": "exit_code", "expected": 0}],
+            "measures": ["duration_ms"],
+            "sampling": {"repetitions": 1, "warmups": 0, "seed": 1, "min_successful_samples": 1},
+            "timeout_ms": 1000,
+            "output_limit_bytes": 4096
+        }],
+        "comparison_policy": {"required_case_coverage": 1.0},
+        "safety": {"allow_shell": false, "max_concurrency": 1, "allow_environment_capture": false}
+    }));
+    let legacy_suite_digest = legacy_runner_manifest["digest"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_ne!(
+        legacy_suite_digest,
+        with_canonical_digest(legacy_runner_manifest.clone())["digest"]
+            .as_str()
+            .unwrap()
+    );
+    let legacy_suite_path = dir.path().join("legacy-suite.json");
+    fs::write(
+        &legacy_suite_path,
+        serde_json::to_vec_pretty(&legacy_runner_manifest).unwrap(),
+    )
+    .unwrap();
+    let legacy_suite_output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "suite-check",
+            "--input",
+            legacy_suite_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let legacy_suite_value = single_json_document(&legacy_suite_output);
+    assert_eval_envelope(&legacy_suite_value, "eval.suite.check", true);
+    assert_eq!(
+        legacy_suite_value["object"]["suite"]["digest"]
+            .as_str()
+            .unwrap(),
+        legacy_suite_digest
+    );
+
+    let legacy_runner_input = json!({
+        "id": "legacy-numeric-runner",
+        "suite_digest": legacy_suite_digest.clone(),
+        "subject": {"kind": "binary", "revision": "legacy-numeric", "argv": ["/bin/echo", "legacy-ok"]},
+        "repo_root": ".",
+        "runner_manifest": legacy_runner_manifest
+    });
+    let legacy_runner_path = dir.path().join("legacy-runner.json");
+    fs::write(
+        &legacy_runner_path,
+        serde_json::to_vec_pretty(&legacy_runner_input).unwrap(),
+    )
+    .unwrap();
+    let legacy_runner_output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "run",
+            "--input",
+            legacy_runner_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let legacy_runner_value = single_json_document(&legacy_runner_output);
+    assert_eval_envelope(&legacy_runner_value, "eval.run", true);
+    assert_eq!(
+        legacy_runner_value["object"]["run"]["suite_digest"]
+            .as_str()
+            .unwrap(),
+        legacy_suite_digest
+    );
+
     let runner_fixture = dir.path().join("fixture.json");
     let runner_fixture_bytes = br#"{"fixture":true}"#;
     fs::write(&runner_fixture, runner_fixture_bytes).unwrap();
@@ -819,6 +8960,196 @@ fn eval_cli_and_mcp_share_one_surface() {
         ])
         .assert()
         .success();
+
+    let canonical_ordering_fixture_a = dir.path().join("canonical-ordering-a.json");
+    let canonical_ordering_fixture_b = dir.path().join("canonical-ordering-b.json");
+    let canonical_ordering_fixture_a_bytes = br#"{"fixture":"a"}"#;
+    let canonical_ordering_fixture_b_bytes = br#"{"fixture":"b"}"#;
+    fs::write(
+        &canonical_ordering_fixture_a,
+        canonical_ordering_fixture_a_bytes,
+    )
+    .unwrap();
+    fs::write(
+        &canonical_ordering_fixture_b,
+        canonical_ordering_fixture_b_bytes,
+    )
+    .unwrap();
+    let canonical_ordering_manifest = with_authored_order_and_canonical_digest(json!({
+        "schema_version": "eval.suite.v1",
+        "suite_id": "canonical-ordering-suite",
+        "suite_version": "v1",
+        "fixtures": [
+            {"id": "a-fixture", "path": "canonical-ordering-a.json", "digest": sha256_prefixed(canonical_ordering_fixture_a_bytes)},
+            {"id": "b-fixture", "path": "canonical-ordering-b.json", "digest": sha256_prefixed(canonical_ordering_fixture_b_bytes)}
+        ],
+        "scorers": [
+            {"id": "a-score", "version": "v1", "kind": "test"},
+            {"id": "b-score", "version": "v1", "kind": "test"}
+        ],
+        "cases": [
+            {
+                "case_id": "a-case",
+                "fixture_id": "a-fixture",
+                "fixture_ids": ["a-fixture", "b-fixture"],
+                "scorer_id": "a-score",
+                "scorer_version": "v1",
+                "scorer_ids": ["a-score@v1", "b-score@v1"],
+                "subject": {"kind": "binary", "argv": ["/bin/echo", "ordered-a"]},
+                "assertions": [{"kind": "exit_code", "expected": 0}],
+                "measures": ["cost_micros", "duration_ms"],
+                "sampling": {"repetitions": 1, "warmups": 0, "seed": 1, "min_successful_samples": 1},
+                "timeout_ms": 1000,
+                "output_limit_bytes": 4096
+            },
+            {
+                "case_id": "b-case",
+                "fixture_id": "b-fixture",
+                "fixture_ids": ["b-fixture", "a-fixture"],
+                "scorer_id": "b-score",
+                "scorer_version": "v1",
+                "scorer_ids": ["b-score@v1", "a-score@v1"],
+                "subject": {"kind": "binary", "argv": ["/bin/echo", "ordered-b"]},
+                "assertions": [{"kind": "exit_code", "expected": 0}],
+                "measures": ["duration_ms", "cost_micros"],
+                "sampling": {"repetitions": 1, "warmups": 0, "seed": 1, "min_successful_samples": 1},
+                "timeout_ms": 1000,
+                "output_limit_bytes": 4096
+            }
+        ],
+        "comparison_policy": {"required_case_coverage": 1.0},
+        "safety": {"allow_shell": false, "max_concurrency": 1, "allow_environment_capture": false}
+    }));
+    let canonical_ordering_reordered_manifest = with_authored_order_and_canonical_digest(json!({
+        "schema_version": "eval.suite.v1",
+        "suite_id": "canonical-ordering-suite",
+        "suite_version": "v1",
+        "fixtures": [
+            {"id": "b-fixture", "path": "canonical-ordering-b.json", "digest": sha256_prefixed(canonical_ordering_fixture_b_bytes)},
+            {"id": "a-fixture", "path": "canonical-ordering-a.json", "digest": sha256_prefixed(canonical_ordering_fixture_a_bytes)}
+        ],
+        "scorers": [
+            {"id": "b-score", "version": "v1", "kind": "test"},
+            {"id": "a-score", "version": "v1", "kind": "test"}
+        ],
+        "cases": [
+            {
+                "case_id": "b-case",
+                "fixture_id": "b-fixture",
+                "fixture_ids": ["a-fixture", "b-fixture"],
+                "scorer_id": "b-score",
+                "scorer_version": "v1",
+                "scorer_ids": ["a-score@v1", "b-score@v1"],
+                "subject": {"kind": "binary", "argv": ["/bin/echo", "ordered-b"]},
+                "assertions": [{"kind": "exit_code", "expected": 0}],
+                "measures": ["cost_micros", "duration_ms"],
+                "sampling": {"repetitions": 1, "warmups": 0, "seed": 1, "min_successful_samples": 1},
+                "timeout_ms": 1000,
+                "output_limit_bytes": 4096
+            },
+            {
+                "case_id": "a-case",
+                "fixture_id": "a-fixture",
+                "fixture_ids": ["b-fixture", "a-fixture"],
+                "scorer_id": "a-score",
+                "scorer_version": "v1",
+                "scorer_ids": ["b-score@v1", "a-score@v1"],
+                "subject": {"kind": "binary", "argv": ["/bin/echo", "ordered-a"]},
+                "assertions": [{"kind": "exit_code", "expected": 0}],
+                "measures": ["duration_ms", "cost_micros"],
+                "sampling": {"repetitions": 1, "warmups": 0, "seed": 1, "min_successful_samples": 1},
+                "timeout_ms": 1000,
+                "output_limit_bytes": 4096
+            }
+        ],
+        "comparison_policy": {"required_case_coverage": 1.0},
+        "safety": {"allow_shell": false, "max_concurrency": 1, "allow_environment_capture": false}
+    }));
+    let canonical_ordering_digest = canonical_ordering_manifest["digest"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        canonical_ordering_reordered_manifest["digest"]
+            .as_str()
+            .unwrap(),
+        canonical_ordering_digest
+    );
+    let canonical_ordering_suite_path = dir.path().join("canonical-ordering-suite.json");
+    fs::write(
+        &canonical_ordering_suite_path,
+        serde_json::to_vec_pretty(&canonical_ordering_manifest).unwrap(),
+    )
+    .unwrap();
+    let canonical_ordering_reordered_suite_path =
+        dir.path().join("canonical-ordering-suite-reordered.json");
+    fs::write(
+        &canonical_ordering_reordered_suite_path,
+        serde_json::to_vec_pretty(&canonical_ordering_reordered_manifest).unwrap(),
+    )
+    .unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "suite-check",
+            "--input",
+            canonical_ordering_suite_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "suite-check",
+            "--input",
+            canonical_ordering_reordered_suite_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let canonical_ordering_runner_input = json!({
+        "id": "canonical-ordering-runner",
+        "suite_digest": canonical_ordering_digest.clone(),
+        "subject": {"kind": "binary", "revision": "canonical-ordering", "argv": ["/bin/echo", "ordered"]},
+        "repo_root": ".",
+        "runner_manifest": canonical_ordering_reordered_manifest
+    });
+    let canonical_ordering_runner_path = dir.path().join("canonical-ordering-runner.json");
+    fs::write(
+        &canonical_ordering_runner_path,
+        serde_json::to_vec_pretty(&canonical_ordering_runner_input).unwrap(),
+    )
+    .unwrap();
+    let canonical_ordering_runner_output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "eval",
+            "run",
+            "--input",
+            canonical_ordering_runner_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let canonical_ordering_runner_value = single_json_document(&canonical_ordering_runner_output);
+    assert_eval_envelope(&canonical_ordering_runner_value, "eval.run", true);
+    assert_eq!(
+        canonical_ordering_runner_value["object"]["run"]["suite_digest"],
+        canonical_ordering_digest
+    );
+
     let mut altered_runner_manifest = runner_manifest.clone();
     altered_runner_manifest["cases"][0]["subject"]["argv"] = json!(["/bin/echo", "mutated"]);
     let altered_runner_input = json!({
@@ -1788,6 +10119,12 @@ fn eval_cli_and_mcp_share_one_surface() {
         .iter()
         .find(|run| run["id"] == "baseline-run")
         .unwrap();
+    let baseline_run_index = package_json["eval_runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|run| run["id"] == "baseline-run")
+        .unwrap();
     assert_eq!(packaged_baseline["cases"].as_array().unwrap().len(), 1);
     let packaged_baseline_attempts = packaged_baseline["cases"][0]["attempts"]
         .as_array()
@@ -1948,7 +10285,7 @@ fn eval_cli_and_mcp_share_one_surface() {
             .stderr(predicate::str::contains(expected_message));
     };
     let mut duplicate_run_package = package_json.clone();
-    let mut conflicting_run = duplicate_run_package["eval_runs"][0].clone();
+    let mut conflicting_run = duplicate_run_package["eval_runs"][baseline_run_index].clone();
     conflicting_run["subject_revision"] = json!("conflicting-duplicate");
     duplicate_run_package["eval_runs"]
         .as_array_mut()
@@ -1961,6 +10298,18 @@ fn eval_cli_and_mcp_share_one_surface() {
     );
     let mut missing_suite_package = package_json.clone();
     missing_suite_package["eval_suite_snapshots"] = json!([]);
+    missing_suite_package["eval_runs"] = json!(
+        package_json["eval_runs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|run| run["suite_digest"] == suite_digest)
+            .cloned()
+            .collect::<Vec<_>>()
+    );
+    missing_suite_package["eval_comparisons"] = json!([]);
+    missing_suite_package["eval_invalidations"] = json!([]);
+    missing_suite_package["eval_evidence_refs"] = json!([]);
     assert_rejected_empty_import(
         "eval-package-missing-suite.json",
         missing_suite_package,
@@ -1998,7 +10347,7 @@ fn eval_cli_and_mcp_share_one_surface() {
         "closure_authority must be false",
     );
     let mut mismatched_attempt_package = package_json.clone();
-    mismatched_attempt_package["eval_runs"][0]["cases"][0]["samples"][0]["repetition_index"] =
+    mismatched_attempt_package["eval_runs"][baseline_run_index]["cases"][0]["samples"][0]["repetition_index"] =
         json!(99);
     assert_rejected_empty_import(
         "eval-package-sample-attempt-mismatch.json",
@@ -2006,7 +10355,7 @@ fn eval_cli_and_mcp_share_one_surface() {
         "identity does not match referenced attempt",
     );
     let mut invalid_confidence_package = package_json.clone();
-    invalid_confidence_package["eval_runs"][0]["cases"][0]["samples"][0]["basis_confidence"] =
+    invalid_confidence_package["eval_runs"][baseline_run_index]["cases"][0]["samples"][0]["basis_confidence"] =
         json!("actual_trusted");
     assert_rejected_preview(
         "eval-package-invalid-basis-confidence-preview.json",
@@ -2019,11 +10368,12 @@ fn eval_cli_and_mcp_share_one_surface() {
         "invalid eval basis confidence: actual_trusted",
     );
     let mut unavailable_value_package = package_json.clone();
-    unavailable_value_package["eval_runs"][0]["cases"][0]["samples"][0]["metering_basis"] =
+    unavailable_value_package["eval_runs"][baseline_run_index]["cases"][0]["samples"][0]["metering_basis"] =
         json!("unavailable");
-    unavailable_value_package["eval_runs"][0]["cases"][0]["samples"][0]["basis_confidence"] =
+    unavailable_value_package["eval_runs"][baseline_run_index]["cases"][0]["samples"][0]["basis_confidence"] =
         json!("unavailable");
-    unavailable_value_package["eval_runs"][0]["cases"][0]["samples"][0]["value"] = json!(42);
+    unavailable_value_package["eval_runs"][baseline_run_index]["cases"][0]["samples"][0]["value"] =
+        json!(42);
     assert_rejected_preview(
         "eval-package-unavailable-numeric-preview.json",
         unavailable_value_package.clone(),
@@ -2035,11 +10385,11 @@ fn eval_cli_and_mcp_share_one_surface() {
         "unavailable eval sample values must be null",
     );
     let mut missing_estimate_package = package_json.clone();
-    missing_estimate_package["eval_runs"][0]["cases"][0]["samples"][0]["metering_basis"] =
+    missing_estimate_package["eval_runs"][baseline_run_index]["cases"][0]["samples"][0]["metering_basis"] =
         json!("estimated");
-    missing_estimate_package["eval_runs"][0]["cases"][0]["samples"][0]["basis_confidence"] =
+    missing_estimate_package["eval_runs"][baseline_run_index]["cases"][0]["samples"][0]["basis_confidence"] =
         json!("estimated");
-    missing_estimate_package["eval_runs"][0]["cases"][0]["samples"][0]
+    missing_estimate_package["eval_runs"][baseline_run_index]["cases"][0]["samples"][0]
         .as_object_mut()
         .unwrap()
         .remove("estimate_provenance");
@@ -2054,11 +10404,11 @@ fn eval_cli_and_mcp_share_one_surface() {
         "estimated eval samples require estimate_provenance",
     );
     let mut malformed_estimate_package = package_json.clone();
-    malformed_estimate_package["eval_runs"][0]["cases"][0]["samples"][0]["metering_basis"] =
+    malformed_estimate_package["eval_runs"][baseline_run_index]["cases"][0]["samples"][0]["metering_basis"] =
         json!("estimated");
-    malformed_estimate_package["eval_runs"][0]["cases"][0]["samples"][0]["basis_confidence"] =
+    malformed_estimate_package["eval_runs"][baseline_run_index]["cases"][0]["samples"][0]["basis_confidence"] =
         json!("estimated");
-    malformed_estimate_package["eval_runs"][0]["cases"][0]["samples"][0]["estimate_provenance"] = json!({
+    malformed_estimate_package["eval_runs"][baseline_run_index]["cases"][0]["samples"][0]["estimate_provenance"] = json!({
         "method": "fixture-rate-card",
         "version": "live-oracle-v1",
         "rate_micros_per_attempt": 42
@@ -2074,7 +10424,7 @@ fn eval_cli_and_mcp_share_one_surface() {
         "estimated eval samples require estimate_provenance.pricing_reference_id",
     );
     let mut invalid_run_status_package = package_json.clone();
-    invalid_run_status_package["eval_runs"][0]["status"] = json!("not-a-status");
+    invalid_run_status_package["eval_runs"][baseline_run_index]["status"] = json!("not-a-status");
     assert_rejected_empty_import(
         "eval-package-invalid-run-status.json",
         invalid_run_status_package,
@@ -5556,23 +13906,186 @@ fn install_writes_host_hooks_by_default_with_additive_merge() {
     assert!(claude["hooks"].get("PreCompact").is_none());
 
     // Codex: hooks file + trust note; --no-hooks skips entirely.
+    fs::create_dir_all(dir.path().join(".codex")).unwrap();
+    assert_codex_0145_stop_schema_fixture(dir.path());
+    fs::write(
+        dir.path().join(".codex/hooks.planr-unsupported.json"),
+        json!({
+            "Notification": [
+                {"hooks": [{"type": "command", "command": "preexisting sidecar notification", "timeout": 1}]}
+            ]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join(".codex/hooks.json"),
+        json!({
+            "hooks": {
+                "Notification": [
+                    {"hooks": [{"type": "command", "command": "foreign codex notification", "timeout": 1}]}
+                ],
+                "UnsupportedObject": {"enabled": true, "command": "foreign codex object"},
+                "UserPromptSubmit": [
+                    {"hooks": [{"type": "command", "command": "foreign codex prompt", "timeout": 1}]}
+                ]
+            },
+            "SessionStart": [
+                {"hooks": [{"type": "command", "command": "foreign codex session", "timeout": 1}]},
+                {"hooks": [{"type": "command", "command": "planr prime 2>/dev/null || true", "timeout": 10}]}
+            ],
+            "PermissionRequest": [
+                {"hooks": [{"type": "command", "command": "foreign codex permission", "timeout": 1}]}
+            ],
+            "PostCompact": [
+                {"hooks": [{"type": "command", "command": "foreign codex compact", "timeout": 1}]}
+            ],
+            "SessionEnd": [
+                {"hooks": [{"type": "command", "command": "foreign codex session-end", "timeout": 1}]}
+            ],
+            "SubagentStart": [
+                {"hooks": [{"type": "command", "command": "foreign codex subagent-start", "timeout": 1}]}
+            ],
+            "Notification": [
+                {"hooks": [{"type": "command", "command": "foreign codex root notification", "timeout": 1}]}
+            ],
+            "CustomEvent": [
+                {"hooks": [{"type": "command", "command": "foreign codex custom", "timeout": 1}]}
+            ]
+        })
+        .to_string(),
+    )
+    .unwrap();
     planr()
         .current_dir(dir.path())
         .args(["--db", &db_arg, "install", "codex", "--no-mcp"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("run /hooks"));
+        .stdout(predicate::str::contains("run /hooks"))
+        .stdout(predicate::str::contains("unsupported Codex hook event"));
     let codex: Value =
         serde_json::from_str(&fs::read_to_string(dir.path().join(".codex/hooks.json")).unwrap())
             .unwrap();
+    assert_codex_hooks_config_schema(&codex);
     assert!(
-        codex["SessionStart"][0]["hooks"][0]["command"]
+        codex["hooks"]["SessionStart"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["hooks"][0]["command"]
+                .as_str()
+                .unwrap()
+                .contains("planr prime"))
+    );
+    assert!(
+        codex["hooks"]["Stop"][0]["hooks"][0]["command"]
             .as_str()
             .unwrap()
-            .contains("planr prime")
+            .contains("planr-codex-stop.sh")
     );
-    // PostCompact ignores stdout for context injection: not wired.
+    assert!(codex.get("SessionStart").is_none());
+    assert!(codex.get("PermissionRequest").is_none());
     assert!(codex.get("PostCompact").is_none());
+    assert!(codex.get("SessionEnd").is_none());
+    assert!(codex.get("SubagentStart").is_none());
+    assert!(codex.get("CustomEvent").is_none());
+    assert!(codex["hooks"].get("Notification").is_none());
+    assert!(codex["hooks"].get("UnsupportedObject").is_none());
+    let nested_session = codex["hooks"]["SessionStart"].as_array().unwrap();
+    assert_eq!(nested_session.len(), 2, "foreign plus planr session hooks");
+    assert!(
+        nested_session
+            .iter()
+            .any(|entry| entry["hooks"][0]["command"]
+                .as_str()
+                .unwrap()
+                .contains("foreign codex session")),
+        "flat foreign Codex entry is migrated"
+    );
+    for (event, command) in [
+        ("PermissionRequest", "foreign codex permission"),
+        ("PostCompact", "foreign codex compact"),
+        ("SessionEnd", "foreign codex session-end"),
+        ("SubagentStart", "foreign codex subagent-start"),
+        ("UserPromptSubmit", "foreign codex prompt"),
+    ] {
+        assert!(
+            codex["hooks"][event]
+                .as_array()
+                .unwrap_or_else(|| panic!("{event} missing from active hooks: {codex}"))
+                .iter()
+                .any(|entry| entry["hooks"][0]["command"]
+                    .as_str()
+                    .unwrap()
+                    .contains(command)),
+            "{event} foreign hook preserved in active Codex hooks"
+        );
+    }
+    assert!(
+        codex["hooks"].get("CustomEvent").is_none(),
+        "unsupported root-level Codex event must not be migrated into active hooks"
+    );
+    let unsupported: Value = serde_json::from_str(
+        &fs::read_to_string(dir.path().join(".codex/hooks.planr-unsupported.json")).unwrap(),
+    )
+    .unwrap();
+    assert_unsupported_codex_sidecar_contains(&unsupported, "CustomEvent", "foreign codex custom");
+    assert_unsupported_codex_sidecar_contains(
+        &unsupported,
+        "Notification",
+        "preexisting sidecar notification",
+    );
+    assert_unsupported_codex_sidecar_contains(
+        &unsupported,
+        "Notification",
+        "foreign codex root notification",
+    );
+    assert_unsupported_codex_sidecar_contains(
+        &unsupported,
+        "Notification",
+        "foreign codex notification",
+    );
+    assert_eq!(unsupported["Notification"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        unsupported["UnsupportedObject"]["command"], "foreign codex object",
+        "unsupported nested non-array Codex event is preserved out-of-band"
+    );
+    let first_codex = fs::read_to_string(dir.path().join(".codex/hooks.json")).unwrap();
+    let first_unsupported =
+        fs::read_to_string(dir.path().join(".codex/hooks.planr-unsupported.json")).unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "install", "codex", "--no-mcp"])
+        .assert()
+        .success();
+    let second_codex = fs::read_to_string(dir.path().join(".codex/hooks.json")).unwrap();
+    let second_unsupported =
+        fs::read_to_string(dir.path().join(".codex/hooks.planr-unsupported.json")).unwrap();
+    assert_eq!(
+        first_codex, second_codex,
+        "codex hook install is idempotent"
+    );
+    assert_eq!(
+        first_unsupported, second_unsupported,
+        "unsupported Codex hook sidecar is idempotent"
+    );
+    let codex_stop = dir.path().join(".codex/hooks/planr-codex-stop.sh");
+    assert!(codex_stop.exists());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert!(
+            fs::metadata(&codex_stop).unwrap().permissions().mode() & 0o111 != 0,
+            "codex stop hook must be executable"
+        );
+    }
+    assert!(
+        codex["hooks"]["PostCompact"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("foreign codex compact"),
+        "foreign supported PostCompact hooks remain active even though planr does not wire one"
+    );
 
     let skipped = tempdir().unwrap();
     let skipped_db = skipped.path().join(".planr/planr.sqlite");
@@ -5633,6 +14146,67 @@ fn install_writes_host_hooks_by_default_with_additive_merge() {
         fs::read_to_string(broken.path().join(".claude/settings.json")).unwrap(),
         "not json {"
     );
+}
+
+#[test]
+fn codex_unsupported_sidecar_must_be_mergeable_before_quarantine() {
+    for (name, sidecar) in [
+        ("malformed", "{not json"),
+        ("non-object", "[{\"Notification\": []}]"),
+    ] {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join(".planr/planr.sqlite");
+        let db_arg = db.to_str().unwrap().to_string();
+        planr()
+            .current_dir(dir.path())
+            .args(["--db", &db_arg, "project", "init", name])
+            .assert()
+            .success();
+        fs::create_dir_all(dir.path().join(".codex")).unwrap();
+        let active = json!({
+            "hooks": {
+                "Notification": [
+                    {"hooks": [{"type": "command", "command": format!("foreign nested {name}"), "timeout": 1}]}
+                ],
+                "SessionStart": [
+                    {"hooks": [{"type": "command", "command": "foreign supported session", "timeout": 1}]}
+                ]
+            },
+            "CustomEvent": [
+                {"hooks": [{"type": "command", "command": format!("foreign root {name}"), "timeout": 1}]}
+            ]
+        })
+        .to_string();
+        fs::write(dir.path().join(".codex/hooks.json"), &active).unwrap();
+        fs::write(
+            dir.path().join(".codex/hooks.planr-unsupported.json"),
+            sidecar,
+        )
+        .unwrap();
+        let sidecar_before =
+            fs::read_to_string(dir.path().join(".codex/hooks.planr-unsupported.json")).unwrap();
+
+        for _ in 0..2 {
+            planr()
+                .current_dir(dir.path())
+                .args(["--db", &db_arg, "install", "codex", "--no-mcp"])
+                .assert()
+                .success()
+                .stdout(predicate::str::contains(
+                    "Codex unsupported hooks skipped to avoid data loss",
+                ));
+            assert_eq!(
+                fs::read_to_string(dir.path().join(".codex/hooks.json")).unwrap(),
+                active,
+                "{name}: active Codex hooks must remain untouched"
+            );
+            assert_eq!(
+                fs::read_to_string(dir.path().join(".codex/hooks.planr-unsupported.json")).unwrap(),
+                sidecar_before,
+                "{name}: malformed sidecar must remain untouched"
+            );
+        }
+    }
 }
 
 #[test]
@@ -5731,6 +14305,2220 @@ fn evidence_guard_reminds_about_unlogged_picks_and_stays_silent_otherwise() {
         .assert()
         .success();
     assert!(run_guard(dir.path(), Some("guard-w1")).trim().is_empty());
+}
+
+#[test]
+fn codex_stop_hook_enforces_active_goal_with_bounded_canonical_gaps() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    let db_arg = db.to_str().unwrap().to_string();
+    write_evidence_policy_fixture(dir.path());
+    init_git_repo(dir.path());
+    init_evidence_project(dir.path(), &db, "Stop Guard");
+    let product = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                &db_arg,
+                "--json",
+                "plan",
+                "new",
+                "Stop Guard Product",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    let product_id = product["plan"]["id"].as_str().unwrap().to_string();
+    let build = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                &db_arg,
+                "--json",
+                "plan",
+                "split",
+                &product_id,
+                "--slice",
+                "Stop Guard Build",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    let plan_id = build["plan"]["id"].as_str().unwrap().to_string();
+    let build_path = build["plan"]["path"].as_str().unwrap().to_string();
+    let text = fs::read_to_string(&build_path).unwrap();
+    let frontmatter_end = text.find("\n---\n").unwrap() + 5;
+    fs::write(
+        &build_path,
+        format!(
+            "{}\n# Build Plan\n\n## Scope Decision\n\nStop guard.\n\n## Verification\n\nEvidence coverage.\n\n## Acceptance Criteria\n\n- Evidence must prove the plan.\n\n## Steps\n\n### Ship\n\nClose implementation.\n",
+            &text[..frontmatter_end]
+        ),
+    )
+    .unwrap();
+    let map = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db", &db_arg, "--json", "map", "build", "--from", &plan_id,
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    let item = map["created"][0]["id"].as_str().unwrap().to_string();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "close", &item, "--summary", "item done"])
+        .assert()
+        .success();
+    Connection::open(&db)
+        .unwrap()
+        .execute_batch(
+            r#"
+INSERT INTO projects(id, name, root_path, created_at, updated_at)
+VALUES ('p-stop-other', 'Other Stop Project', '.', datetime('now'), datetime('now'));
+INSERT INTO plans(id, project_id, stage, path, title, slug, parse_status, content_hash, archived, created_at, updated_at)
+VALUES ('pln-stop-other', 'p-stop-other', 'build', 'other.md', 'Other Stop Plan', 'other-stop-plan', 'ok', 'hash', 0, datetime('now'), datetime('now'));
+"#,
+        )
+        .unwrap();
+    planr()
+        .current_dir(dir.path())
+        .env("CODEX_THREAD_ID", "thread-cross")
+        .args([
+            "--db",
+            &db_arg,
+            "--json",
+            "stop",
+            "activate",
+            "--plan",
+            "pln-stop-other",
+        ])
+        .assert()
+        .failure();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "context",
+            "add",
+            &format!("GOAL CONTRACT {plan_id}: DONE when Evidence coverage passes."),
+            "--tag",
+            "goal-contract",
+        ])
+        .assert()
+        .success();
+    let policy = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args(["--db", &db_arg, "--json", "evidence", "policy"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    let probe = policy["object"]["registry"]["probes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|probe| probe["manifest_id"] == "verifier-generic-adapter")
+        .unwrap();
+    let instance_id = probe["instance_id"].as_str().unwrap();
+    let environment = capability_instance_environment(&db, instance_id);
+    let mut obligation = evidence_obligation_for(
+        "pob-stop-missing",
+        policy["object"]["digest"].as_str().unwrap(),
+        "com.example.browser.page.visible",
+        "stop hook missing browser evidence",
+        json!({"visible": true}),
+        json!({"kind": "browser", "uri": "http://127.0.0.1:9/stop"}),
+        environment,
+        json!({"kind": "browser", "id": "browser-session"}),
+        json!([]),
+        "sha256:abababababababababababababababababababababababababababababababab",
+    );
+    obligation["plan_id"] = json!(plan_id);
+    obligation["item_id"] = Value::Null;
+    obligation["criterion_id"] = json!("crit-stop-missing");
+    add_evidence_obligation_value(dir.path(), &db, "pob-stop-missing", &obligation);
+
+    planr()
+        .current_dir(dir.path())
+        .env("CODEX_THREAD_ID", "thread-stop")
+        .args([
+            "--db", &db_arg, "--json", "stop", "activate", "--plan", &plan_id,
+        ])
+        .assert()
+        .success();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db", &db_arg, "--json", "stop", "activate", "--plan", &plan_id,
+        ])
+        .env_remove("CODEX_THREAD_ID")
+        .assert()
+        .failure();
+
+    let official = |session: &str| -> String { codex_stop_envelope(dir.path(), session, false) };
+    let stop = |payload: &str, db_path: &str| -> Value {
+        if let Ok(value) = serde_json::from_str::<Value>(payload) {
+            assert_codex_stop_input_schema(&value);
+        }
+        let mut cmd = planr();
+        cmd.current_dir(dir.path())
+            .args(["--db", db_path, "--json", "stop"])
+            .write_stdin(payload)
+            .env_remove("PLANR_ITEM_ID")
+            .env_remove("PLANR_WORKER_ID")
+            .env_remove("PLANR_SESSION_ID")
+            .env_remove("CODEX_THREAD_ID");
+        let output = cmd.output().unwrap();
+        assert!(output.status.success(), "stop must fail open");
+        single_json_document(&output.stdout)
+    };
+
+    let no_goal = stop(&official("thread-other"), &db_arg);
+    assert_codex_stop_output_schema(&no_goal, false);
+    assert!(no_goal.as_object().unwrap().is_empty(), "{no_goal}");
+
+    let blocked = stop(&official("thread-stop"), &db_arg);
+    assert_codex_stop_output_schema(&blocked, true);
+    assert_eq!(blocked["decision"], "block", "{blocked}");
+    let reason = blocked["reason"].as_str().unwrap();
+    assert!(reason.contains("active goal plan"), "{blocked}");
+    assert!(reason.contains("actionable gap"), "{blocked}");
+    assert!(reason.contains("crit-stop-missing"), "{blocked}");
+    assert!(reason.contains("missing_observation"), "{blocked}");
+    assert!(
+        reason.contains("collect missing trusted evidence"),
+        "{blocked}"
+    );
+    assert!(reason.len() < 700, "{reason}");
+
+    let same_gap_second = stop(&official("thread-stop"), &db_arg);
+    assert_eq!(same_gap_second["decision"], "block", "{same_gap_second}");
+    let same_gap_exhausted = stop(&official("thread-stop"), &db_arg);
+    assert!(
+        same_gap_exhausted.as_object().unwrap().is_empty(),
+        "{same_gap_exhausted}"
+    );
+
+    let reentrant = stop(
+        &codex_stop_envelope(dir.path(), "thread-stop", true),
+        &db_arg,
+    );
+    assert_codex_stop_output_schema(&reentrant, true);
+    assert_eq!(reentrant["decision"], "block", "{reentrant}");
+    let malformed = stop("{", &db_arg);
+    assert_codex_stop_output_schema(&malformed, false);
+    assert!(malformed.as_object().unwrap().is_empty(), "{malformed}");
+    let bad_parent = dir.path().join("not-a-directory");
+    fs::write(&bad_parent, "file").unwrap();
+    let bad_db = bad_parent.join("planr.sqlite");
+    let bad_db = bad_db.to_str().unwrap().to_string();
+    let db_fail_open = stop(&official("thread-stop"), &bad_db);
+    assert_codex_stop_output_schema(&db_fail_open, false);
+    assert!(
+        db_fail_open.as_object().unwrap().is_empty(),
+        "{db_fail_open}"
+    );
+
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "install", "codex", "--no-mcp"])
+        .assert()
+        .success();
+    let hooks: Value =
+        serde_json::from_str(&fs::read_to_string(dir.path().join(".codex/hooks.json")).unwrap())
+            .unwrap();
+    let command = hooks["hooks"]["Stop"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap();
+    assert_eq!(command, ".codex/hooks/planr-codex-stop.sh");
+    let script = dir.path().join(command);
+    let bin_dir = assert_cmd::cargo::cargo_bin("planr")
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let path_env = format!(
+        "{}:{}",
+        bin_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let tmp_dir = dir.path().join("tmp");
+    fs::create_dir_all(&tmp_dir).unwrap();
+    let run_script = |payload: &str, cwd: &Path, path: &str| -> std::process::Output {
+        let output = StdCommand::new("sh")
+            .arg(&script)
+            .current_dir(cwd)
+            .env("PATH", path)
+            .env("TMPDIR", &tmp_dir)
+            .env_remove("PLANR_WORKER_ID")
+            .env_remove("PLANR_ITEM_ID")
+            .env_remove("PLANR_SESSION_ID")
+            .env_remove("CODEX_THREAD_ID")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                child
+                    .stdin
+                    .as_mut()
+                    .unwrap()
+                    .write_all(payload.as_bytes())?;
+                child.wait_with_output()
+            })
+            .unwrap();
+        let leftovers = fs::read_dir(&tmp_dir).unwrap().count();
+        assert_eq!(leftovers, 0, "mktemp wrapper must clean temporary files");
+        output
+    };
+    let script_output = run_script(&official("thread-stop"), dir.path(), &path_env);
+    assert!(script_output.status.success(), "script must fail open");
+    let script_decision = single_json_document(&script_output.stdout);
+    assert_codex_stop_output_schema(&script_decision, true);
+    assert_eq!(script_decision["decision"], "block", "{script_decision}");
+
+    let script_neutral = run_script(&official("thread-other"), dir.path(), &path_env);
+    assert!(script_neutral.status.success());
+    let script_neutral = single_json_document(&script_neutral.stdout);
+    assert_codex_stop_output_schema(&script_neutral, false);
+
+    let script_malformed = run_script("{", dir.path(), &path_env);
+    assert!(script_malformed.status.success());
+    let script_malformed = single_json_document(&script_malformed.stdout);
+    assert_codex_stop_output_schema(&script_malformed, false);
+
+    let script_bad_dir = tempdir().unwrap();
+    fs::write(script_bad_dir.path().join(".planr"), "file").unwrap();
+    let script_db_failure = run_script(&official("thread-stop"), script_bad_dir.path(), &path_env);
+    assert!(script_db_failure.status.success());
+    let script_db_failure = single_json_document(&script_db_failure.stdout);
+    assert_codex_stop_output_schema(&script_db_failure, false);
+
+    planr()
+        .current_dir(dir.path())
+        .env("CODEX_THREAD_ID", "thread-move")
+        .args([
+            "--db", &db_arg, "--json", "stop", "activate", "--plan", &plan_id,
+        ])
+        .assert()
+        .success();
+    for index in 0..6 {
+        if index > 0 {
+            let mut moved_obligation = obligation.clone();
+            moved_obligation["id"] = json!(format!("pob-stop-moved-{index}"));
+            moved_obligation["criterion_id"] = json!(format!("crit-stop-moved-{index}"));
+            moved_obligation["title"] = json!(format!("stop hook moved browser evidence {index}"));
+            add_evidence_obligation_value(
+                dir.path(),
+                &db,
+                &format!("pob-stop-moved-{index}"),
+                &moved_obligation,
+            );
+        }
+        let moved = stop(&official("thread-move"), &db_arg);
+        assert_eq!(moved["decision"], "block", "iteration {index}: {moved}");
+        assert!(
+            moved["reason"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("total {}/6", index + 1)),
+            "iteration {index}: {moved}"
+        );
+    }
+    let mut exhausted_obligation = obligation.clone();
+    exhausted_obligation["id"] = json!("pob-stop-moved-exhausted");
+    exhausted_obligation["criterion_id"] = json!("crit-stop-moved-exhausted");
+    exhausted_obligation["title"] = json!("stop hook exhausted browser evidence");
+    add_evidence_obligation_value(
+        dir.path(),
+        &db,
+        "pob-stop-moved-exhausted",
+        &exhausted_obligation,
+    );
+    let total_exhausted = stop(&official("thread-move"), &db_arg);
+    assert_codex_stop_output_schema(&total_exhausted, false);
+    assert!(
+        total_exhausted.as_object().unwrap().is_empty(),
+        "{total_exhausted}"
+    );
+
+    let missing_planr = StdCommand::new("sh")
+        .arg(&script)
+        .current_dir(dir.path())
+        .env("PATH", "/usr/bin:/bin")
+        .env("TMPDIR", &tmp_dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            child
+                .stdin
+                .as_mut()
+                .unwrap()
+                .write_all(official("thread-stop").as_bytes())?;
+            child.wait_with_output()
+        })
+        .unwrap();
+    assert!(missing_planr.status.success());
+    assert!(missing_planr.stdout.is_empty());
+    assert_eq!(fs::read_dir(&tmp_dir).unwrap().count(), 0);
+
+    planr()
+        .current_dir(dir.path())
+        .env("CODEX_THREAD_ID", "thread-stop")
+        .args([
+            "--db",
+            &db_arg,
+            "--json",
+            "stop",
+            "deactivate",
+            "--plan",
+            &plan_id,
+        ])
+        .assert()
+        .success();
+    let deactivated = stop(&official("thread-stop"), &db_arg);
+    assert!(deactivated.as_object().unwrap().is_empty(), "{deactivated}");
+}
+
+#[test]
+fn codex_stop_hook_enforces_explicit_active_plan_until_audit_holds() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    let db_arg = db.to_str().unwrap().to_string();
+    write_evidence_policy_fixture(dir.path());
+    init_git_repo(dir.path());
+    init_evidence_project(dir.path(), &db, "Stop Plan");
+
+    let run = |args: &[&str]| -> Value {
+        single_json_document(
+            &planr()
+                .current_dir(dir.path())
+                .args(["--db", &db_arg, "--json"])
+                .args(args)
+                .assert()
+                .success()
+                .get_output()
+                .stdout,
+        )
+    };
+    let product = run(&["plan", "new", "Stop Plan Product"]);
+    let product_id = product["plan"]["id"].as_str().unwrap().to_string();
+    let build = run(&["plan", "split", &product_id, "--slice", "Stop Plan Build"]);
+    let plan_id = build["plan"]["id"].as_str().unwrap().to_string();
+    let build_path = build["plan"]["path"].as_str().unwrap().to_string();
+    let text = fs::read_to_string(&build_path).unwrap();
+    let frontmatter_end = text.find("\n---\n").unwrap() + 5;
+    fs::write(
+        &build_path,
+        format!(
+            "{}\n# Build Plan\n\n## Scope Decision\n\nStop plan enforcement.\n\n## Verification\n\nPlan audit holds.\n\n## Acceptance Criteria\n\n- Both steps are closed.\n\n## Steps\n\n### First\n\nClose first.\n\n### Second\n\nClose second.\n",
+            &text[..frontmatter_end]
+        ),
+    )
+    .unwrap();
+    let map = run(&["map", "build", "--from", &plan_id]);
+    let items = map["created"].as_array().unwrap();
+    assert_eq!(items.len(), 2, "{map}");
+    let first = items[0]["id"].as_str().unwrap().to_string();
+    let second = items[1]["id"].as_str().unwrap().to_string();
+
+    planr()
+        .current_dir(dir.path())
+        .env("CODEX_THREAD_ID", "thread-a")
+        .args([
+            "--db", &db_arg, "--json", "stop", "activate", "--plan", &plan_id,
+        ])
+        .assert()
+        .success();
+
+    let stop = |session: &str| -> Value {
+        let output = planr()
+            .current_dir(dir.path())
+            .args(["--db", &db_arg, "--json", "stop"])
+            .write_stdin(codex_stop_envelope(dir.path(), session, false))
+            .env_remove("CODEX_THREAD_ID")
+            .env_remove("PLANR_SESSION_ID")
+            .env_remove("PLANR_WORKER_ID")
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        single_json_document(&output)
+    };
+
+    let between_items = stop("thread-a");
+    assert_eq!(between_items["decision"], "block", "{between_items}");
+    assert!(
+        between_items["reason"].as_str().unwrap().contains(&plan_id),
+        "{between_items}"
+    );
+    let isolated = stop("thread-b");
+    assert!(isolated.as_object().unwrap().is_empty(), "{isolated}");
+
+    run(&["close", &first, "--summary", "first done"]);
+    let pending_plan_item = stop("thread-a");
+    assert_eq!(
+        pending_plan_item["decision"], "block",
+        "{pending_plan_item}"
+    );
+    assert!(
+        pending_plan_item["reason"]
+            .as_str()
+            .unwrap()
+            .contains(&second),
+        "{pending_plan_item}"
+    );
+
+    planr()
+        .current_dir(dir.path())
+        .env("CODEX_THREAD_ID", "thread-a")
+        .args([
+            "--db",
+            &db_arg,
+            "--json",
+            "stop",
+            "deactivate",
+            "--plan",
+            &plan_id,
+        ])
+        .assert()
+        .success();
+    let deactivated = stop("thread-a");
+    assert!(deactivated.as_object().unwrap().is_empty(), "{deactivated}");
+
+    planr()
+        .current_dir(dir.path())
+        .env("CODEX_THREAD_ID", "thread-a")
+        .args([
+            "--db", &db_arg, "--json", "stop", "activate", "--plan", &plan_id,
+        ])
+        .assert()
+        .success();
+    run(&["close", &second, "--summary", "second done"]);
+    let audit_holds = stop("thread-a");
+    assert!(audit_holds.as_object().unwrap().is_empty(), "{audit_holds}");
+
+    planr()
+        .current_dir(dir.path())
+        .env("CODEX_THREAD_ID", "thread-archived")
+        .args([
+            "--db", &db_arg, "--json", "stop", "activate", "--plan", &plan_id,
+        ])
+        .assert()
+        .success();
+    run(&["plan", "archive", &plan_id]);
+    let archived = stop("thread-archived");
+    assert!(archived.as_object().unwrap().is_empty(), "{archived}");
+}
+
+#[test]
+fn evidence_run_rejects_fixture_env_without_allowed_disclosure() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    let db_arg = db.to_str().unwrap().to_string();
+    write_evidence_policy_fixture(dir.path());
+    init_git_repo(dir.path());
+    init_evidence_project(dir.path(), &db, "Fixture Disclosure Guard");
+    let policy = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args(["--db", &db_arg, "--json", "evidence", "policy"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    let instance_id = policy["object"]["registry"]["probes"][0]["instance_id"]
+        .as_str()
+        .unwrap();
+    let environment = capability_instance_environment(&db, instance_id);
+    let obligation_id = "pob-fixture-guard";
+    let obligation = evidence_obligation_for(
+        obligation_id,
+        policy["object"]["digest"].as_str().unwrap(),
+        "com.example.health.status",
+        "fixture guard health",
+        json!({"status": "ok"}),
+        json!({"kind": "process", "uri": "local://health"}),
+        environment,
+        json!({"kind": "process", "id": "runtime-local"}),
+        json!([]),
+        "sha256:efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+    );
+    add_evidence_obligation_value(dir.path(), &db, obligation_id, &obligation);
+
+    let undisclosed_path = dir.path().join("fixture-undisclosed.run.json");
+    fs::write(
+        &undisclosed_path,
+        serde_json::to_vec_pretty(&json!({
+            "obligation_id": obligation_id,
+            "capability_instance_id": instance_id,
+            "target": {"kind": "process", "uri": "local://health"},
+            "env": {"PLANR_FIXTURE_EXIT": "126"},
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "--json",
+            "evidence",
+            "run",
+            "--input",
+            undisclosed_path.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains(
+            "PLANR_FIXTURE_* env controls require fixture_disclosure.fixtures_used=true",
+        ));
+
+    let disallowed_path = dir.path().join("fixture-disallowed.run.json");
+    fs::write(
+        &disallowed_path,
+        serde_json::to_vec_pretty(&json!({
+            "obligation_id": obligation_id,
+            "capability_instance_id": instance_id,
+            "target": {"kind": "process", "uri": "local://health"},
+            "env": {"PLANR_FIXTURE_EXIT": "126"},
+            "fixture_disclosure": {
+                "fixtures_used": true,
+                "mocks_used": false,
+                "fixture_refs": ["planr-test-fixture:permission-denied-exit-126"]
+            },
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "--json",
+            "evidence",
+            "run",
+            "--input",
+            disallowed_path.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains(
+            "fixture disclosure uses fixtures disallowed by proof obligation policy",
+        ));
+
+    let mock_obligation_id = "pob-mock-guard";
+    let mut mock_obligation = obligation.clone();
+    mock_obligation["id"] = json!(mock_obligation_id);
+    mock_obligation["criterion_id"] = json!("crit-mock-guard");
+    mock_obligation["fixture_policy"]["fixtures_allowed"] = json!(true);
+    mock_obligation["fixture_policy"]["mocks_allowed"] = json!(false);
+    add_evidence_obligation_value(dir.path(), &db, mock_obligation_id, &mock_obligation);
+
+    let mock_disallowed_path = dir.path().join("fixture-mock-disallowed.run.json");
+    fs::write(
+        &mock_disallowed_path,
+        serde_json::to_vec_pretty(&json!({
+            "obligation_id": mock_obligation_id,
+            "capability_instance_id": instance_id,
+            "target": {"kind": "process", "uri": "local://health"},
+            "env": {"PLANR_FIXTURE_EXIT": "126"},
+            "fixture_disclosure": {
+                "fixtures_used": true,
+                "mocks_used": true,
+                "fixture_refs": ["planr-test-fixture:hidden-mock-adapter"]
+            },
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "--json",
+            "evidence",
+            "run",
+            "--input",
+            mock_disallowed_path.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains(
+            "fixture disclosure uses mocks disallowed by proof obligation policy",
+        ));
+}
+
+#[test]
+fn evidence_migration_explicitly_binds_pre_evidence_plans_without_rewriting_claims() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    let db_arg = db.to_str().unwrap().to_string();
+    write_evidence_policy_fixture(dir.path());
+    init_git_repo(dir.path());
+    init_evidence_project(dir.path(), &db, "Evidence Migration");
+    let run = |args: &[&str]| -> Value {
+        single_json_document(
+            &planr()
+                .current_dir(dir.path())
+                .args(["--db", &db_arg, "--json"])
+                .args(args)
+                .assert()
+                .success()
+                .get_output()
+                .stdout,
+        )
+    };
+    let run_human = |args: &[&str]| -> String {
+        String::from_utf8(
+            planr()
+                .current_dir(dir.path())
+                .args(["--db", &db_arg])
+                .args(args)
+                .assert()
+                .success()
+                .get_output()
+                .stdout
+                .clone(),
+        )
+        .unwrap()
+    };
+    let run_failure = |args: &[&str]| -> Value {
+        single_json_document(
+            &planr()
+                .current_dir(dir.path())
+                .args(["--db", &db_arg, "--json"])
+                .args(args)
+                .assert()
+                .failure()
+                .get_output()
+                .stdout,
+        )
+    };
+    let product = run(&["plan", "new", "Migration Product"]);
+    let product_id = product["plan"]["id"].as_str().unwrap();
+    let build = run(&["plan", "split", product_id, "--slice", "Migration Build"]);
+    let plan_id = build["plan"]["id"].as_str().unwrap().to_string();
+    let build_path = build["plan"]["path"].as_str().unwrap().to_string();
+    let text = fs::read_to_string(&build_path).unwrap();
+    let frontmatter_end = text.find("\n---\n").unwrap() + 5;
+    fs::write(
+        &build_path,
+        format!(
+            "{}\n# Build Plan\n\n## Scope Decision\n\nMigration.\n\n## Verification\n\nEvidence coverage.\n\n## Acceptance Criteria\n\n- Binding migration evidence exists.\n\n## Steps\n\n### Ship\n\nDo it.\n",
+            &text[..frontmatter_end]
+        ),
+    )
+    .unwrap();
+    let map = run(&["map", "build", "--from", &plan_id]);
+    let item_id = map["created"][0]["id"].as_str().unwrap().to_string();
+    run(&[
+        "log",
+        "add",
+        "--item",
+        &item_id,
+        "--kind",
+        "verification",
+        "--summary",
+        "legacy browser claim",
+        "--cmd",
+        "printf legacy",
+    ]);
+    let legacy_status = run(&["map", "status"]);
+    let ready_entry = legacy_status["ready"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["item"]["id"] == item_id)
+        .unwrap();
+    assert_eq!(ready_entry["proof"]["status"], "legacy_nonbinding");
+    assert_eq!(
+        ready_entry["proof"]["legacy_claims"][0]["authority"],
+        "claim_only"
+    );
+    assert!(
+        ready_entry["proof"]["next_action"]
+            .as_str()
+            .unwrap()
+            .contains(&plan_id)
+    );
+    let legacy_status_human = run_human(&["map", "status"]);
+    assert!(
+        legacy_status_human.contains("legacy verification logs: claim_only"),
+        "{legacy_status_human}"
+    );
+    assert!(
+        legacy_status_human.contains(&format!(
+            "planr evidence migrate --input <migration-file-for-plan-{plan_id}> --apply"
+        )),
+        "{legacy_status_human}"
+    );
+    run(&["close", &item_id, "--summary", "legacy item done"]);
+    run(&[
+        "context",
+        "add",
+        &format!("GOAL CONTRACT {plan_id}: DONE when live verification logged."),
+        "--tag",
+        "goal-contract",
+    ]);
+    let pre_audit = run(&["plan", "audit", &plan_id]);
+    let pre_clause = pre_audit["clauses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|clause| clause["clause"] == "verification_logged")
+        .unwrap();
+    assert_eq!(pre_audit["holds"], true, "{pre_audit}");
+    assert_eq!(
+        pre_clause["authority"],
+        "legacy_verification_log_compatibility"
+    );
+    assert_eq!(pre_clause["log_authority"], "claim_only");
+    assert_eq!(pre_audit["proof"]["status"], "legacy_nonbinding");
+    assert_eq!(
+        pre_audit["proof"]["legacy_claims"][0]["authority"],
+        "claim_only"
+    );
+    assert!(
+        pre_audit["proof"]["next_action"]
+            .as_str()
+            .unwrap()
+            .contains(&plan_id)
+    );
+    assert!(
+        !pre_audit["proof"]["next_action"]
+            .as_str()
+            .unwrap()
+            .contains("<plan-id>")
+    );
+    let pre_audit_human = run_human(&["plan", "audit", &plan_id]);
+    assert!(
+        pre_audit_human.contains("legacy verification logs: claim_only"),
+        "{pre_audit_human}"
+    );
+    assert!(
+        pre_audit_human.contains(&format!(
+            "planr evidence migrate --input <migration-file-for-plan-{plan_id}> --apply"
+        )),
+        "{pre_audit_human}"
+    );
+    let legacy_trace = run(&["trace", "item", &item_id]);
+    assert_eq!(legacy_trace["proof"]["status"], "legacy_nonbinding");
+    assert_eq!(
+        legacy_trace["proof"]["legacy_diagnostics"][0]["authority"],
+        "claim_only"
+    );
+    assert!(
+        legacy_trace["proof"]["next_action"]
+            .as_str()
+            .unwrap()
+            .contains(&plan_id)
+    );
+    let legacy_trace_human = run_human(&["trace", "item", &item_id]);
+    assert!(
+        legacy_trace_human.contains("claim-only"),
+        "{legacy_trace_human}"
+    );
+    assert!(
+        legacy_trace_human.contains(&format!(
+            "planr evidence migrate --input <migration-file-for-plan-{plan_id}> --apply"
+        )),
+        "{legacy_trace_human}"
+    );
+
+    let policy = run(&["evidence", "policy"]);
+    let environment = capability_instance_environment(
+        &db,
+        policy["object"]["registry"]["probes"][0]["instance_id"]
+            .as_str()
+            .unwrap(),
+    );
+    let mut obligation = evidence_obligation_for(
+        "pob-migration-binding",
+        policy["object"]["digest"].as_str().unwrap(),
+        "com.example.health.status",
+        "migration health",
+        json!({"status": "ok"}),
+        json!({"kind": "process", "uri": "local://health"}),
+        environment,
+        json!({"kind": "process", "id": "runtime-local"}),
+        json!([]),
+        "sha256:abababababababababababababababababababababababababababababababab",
+    );
+    obligation["plan_id"] = json!(plan_id);
+    obligation["item_id"] = Value::Null;
+    obligation["criterion_id"] = json!("crit-migration-binding");
+    let migration = json!({
+        "schema_version": "planr.evidence.migration.v1",
+        "plan_id": plan_id,
+        "obligations": [obligation],
+    });
+    let migration_path = dir.path().join("migration.json");
+    fs::write(
+        &migration_path,
+        serde_json::to_vec_pretty(&migration).unwrap(),
+    )
+    .unwrap();
+
+    let preview = run(&[
+        "evidence",
+        "migrate",
+        "--input",
+        migration_path.to_str().unwrap(),
+    ]);
+    assert_evidence_envelope(&preview, "evidence.migrate", true);
+    assert_eq!(preview["object"]["dry_run"], true);
+    assert_eq!(preview["object"]["summary"]["create"], 1);
+    assert_eq!(
+        preview["object"]["warnings"][0]["code"],
+        "legacy_verification_claims"
+    );
+    let mut missing_schema = migration.clone();
+    missing_schema
+        .as_object_mut()
+        .unwrap()
+        .remove("schema_version");
+    let missing_schema_path = dir.path().join("migration-missing-schema.json");
+    fs::write(
+        &missing_schema_path,
+        serde_json::to_vec_pretty(&missing_schema).unwrap(),
+    )
+    .unwrap();
+    let missing_schema_cli = run_failure(&[
+        "evidence",
+        "migrate",
+        "--input",
+        missing_schema_path.to_str().unwrap(),
+    ]);
+    assert_evidence_error(
+        &missing_schema_cli,
+        "evidence.migrate",
+        "bad_request",
+        "evidence migration input requires schema_version",
+    );
+    let mcp_missing_schema_response = mcp_tool_response(
+        dir.path(),
+        &db,
+        43,
+        "planr_evidence_migrate",
+        json!({"input": missing_schema.clone()}),
+    );
+    assert_mcp_evidence_error(
+        &mcp_missing_schema_response,
+        "evidence.migrate",
+        "bad_request",
+        "evidence migration input requires schema_version",
+    );
+    let mut unknown_field = migration.clone();
+    unknown_field["unexpected"] = json!(true);
+    let unknown_field_path = dir.path().join("migration-unknown-field.json");
+    fs::write(
+        &unknown_field_path,
+        serde_json::to_vec_pretty(&unknown_field).unwrap(),
+    )
+    .unwrap();
+    let unknown_field_cli = run_failure(&[
+        "evidence",
+        "migrate",
+        "--input",
+        unknown_field_path.to_str().unwrap(),
+    ]);
+    assert_evidence_error(
+        &unknown_field_cli,
+        "evidence.migrate",
+        "bad_request",
+        "unknown fields",
+    );
+    let mcp_unknown_field_response = mcp_tool_response(
+        dir.path(),
+        &db,
+        44,
+        "planr_evidence_migrate",
+        json!({"input": unknown_field.clone()}),
+    );
+    assert_mcp_evidence_error(
+        &mcp_unknown_field_response,
+        "evidence.migrate",
+        "bad_request",
+        "unknown fields",
+    );
+    let wrong_apply_type_response = mcp_tool_response(
+        dir.path(),
+        &db,
+        45,
+        "planr_evidence_migrate",
+        json!({"input": migration.clone(), "apply": "true"}),
+    );
+    assert_mcp_evidence_error(
+        &wrong_apply_type_response,
+        "evidence.migrate",
+        "bad_request",
+        "apply must be a boolean",
+    );
+    let mut duplicate = migration.clone();
+    let duplicate_obligation = duplicate["obligations"][0].clone();
+    duplicate["obligations"]
+        .as_array_mut()
+        .unwrap()
+        .push(duplicate_obligation);
+    let duplicate_path = dir.path().join("migration-duplicate.json");
+    fs::write(
+        &duplicate_path,
+        serde_json::to_vec_pretty(&duplicate).unwrap(),
+    )
+    .unwrap();
+    let duplicate_cli = run_failure(&[
+        "evidence",
+        "migrate",
+        "--input",
+        duplicate_path.to_str().unwrap(),
+    ]);
+    assert_evidence_error(
+        &duplicate_cli,
+        "evidence.migrate",
+        "bad_request",
+        "duplicate obligation id: pob-migration-binding",
+    );
+    let mcp_duplicate_response = mcp_tool_response(
+        dir.path(),
+        &db,
+        46,
+        "planr_evidence_migrate",
+        json!({"input": duplicate.clone()}),
+    );
+    assert_mcp_evidence_error(
+        &mcp_duplicate_response,
+        "evidence.migrate",
+        "bad_request",
+        "duplicate obligation id: pob-migration-binding",
+    );
+    let still_legacy = run(&["plan", "audit", &plan_id]);
+    assert_eq!(still_legacy["holds"], true, "{still_legacy}");
+
+    let port = free_port();
+    let bin = assert_cmd::cargo::cargo_bin("planr");
+    let mut server = StdCommand::new(&bin)
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "serve",
+            "--port",
+            &port.to_string(),
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    wait_for_http_server(port);
+    assert_http_evidence_error(
+        &http_request(
+            port,
+            "POST",
+            "/v1/evidence/migrate",
+            &json!({"input": missing_schema.clone()}).to_string(),
+        ),
+        "400 Bad Request",
+        "evidence.migrate",
+        "bad_request",
+        "evidence migration input requires schema_version",
+    );
+    assert_http_evidence_error(
+        &http_request(
+            port,
+            "POST",
+            "/v1/evidence/migrate",
+            &json!({"input": unknown_field.clone()}).to_string(),
+        ),
+        "400 Bad Request",
+        "evidence.migrate",
+        "bad_request",
+        "unknown fields",
+    );
+    assert_http_evidence_error(
+        &http_request(
+            port,
+            "POST",
+            "/v1/evidence/migrate",
+            &json!({"input": migration.clone(), "apply": "true"}).to_string(),
+        ),
+        "400 Bad Request",
+        "evidence.migrate",
+        "bad_request",
+        "apply must be a boolean",
+    );
+    assert_http_evidence_error(
+        &http_request(
+            port,
+            "POST",
+            "/v1/evidence/migrate",
+            &json!({"input": duplicate.clone()}).to_string(),
+        ),
+        "400 Bad Request",
+        "evidence.migrate",
+        "bad_request",
+        "duplicate obligation id: pob-migration-binding",
+    );
+
+    let applied = run(&[
+        "evidence",
+        "migrate",
+        "--input",
+        migration_path.to_str().unwrap(),
+        "--apply",
+    ]);
+    assert_evidence_envelope(&applied, "evidence.migrate", true);
+    assert_eq!(applied["object"]["status"], "applied");
+    assert_eq!(applied["object"]["created"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        applied["object"]["next_action"],
+        format!("run planr evidence coverage --scope plan --id {plan_id}")
+    );
+    let binding_audit = run(&["plan", "audit", &plan_id]);
+    let binding_clause = binding_audit["clauses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|clause| clause["clause"] == "verification_logged")
+        .unwrap();
+    assert_eq!(binding_audit["holds"], false, "{binding_audit}");
+    assert_eq!(binding_clause["authority"], "evidence_coverage");
+    assert_eq!(binding_clause["log_authority"], "claim_only");
+    assert_eq!(
+        binding_clause["criteria"][0]["observations"][0]["gap_reason"],
+        "missing_observation"
+    );
+
+    let reapplied = run(&[
+        "evidence",
+        "migrate",
+        "--input",
+        migration_path.to_str().unwrap(),
+        "--apply",
+    ]);
+    assert_eq!(reapplied["object"]["summary"]["unchanged"], 1);
+    assert!(
+        reapplied["object"]["created"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    let obligations_after_first_apply =
+        run(&["evidence", "obligation", "list", "--plan", &plan_id]);
+    assert!(
+        obligations_after_first_apply["object"]["obligations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|obligation| obligation["id"] == "pob-migration-binding"),
+        "{obligations_after_first_apply}"
+    );
+
+    let persisted_lineage_collision = |id: &str, title: &str| {
+        let mut persisted_obligation = migration["obligations"][0].clone();
+        persisted_obligation["id"] = json!(id);
+        persisted_obligation["title"] = json!(title);
+        json!({
+            "schema_version": "planr.evidence.migration.v1",
+            "plan_id": plan_id,
+            "obligations": [persisted_obligation],
+        })
+    };
+    let assert_persisted_lineage_preview = |preview: &Value, expected_id: &str| {
+        assert_evidence_envelope(preview, "evidence.migrate", true);
+        assert_eq!(preview["object"]["summary"]["create"], 0, "{preview}");
+        assert_eq!(preview["object"]["summary"]["conflict"], 1, "{preview}");
+        assert_eq!(preview["object"]["summary"]["blocked"], 0, "{preview}");
+        assert_eq!(preview["object"]["obligations"][0]["id"], expected_id);
+        assert_eq!(
+            preview["object"]["obligations"][0]["action"], "conflict",
+            "{preview}"
+        );
+        assert_eq!(
+            preview["object"]["obligations"][0]["reason"], "lineage_identity_collision",
+            "{preview}"
+        );
+        assert_eq!(
+            preview["object"]["obligations"][0]["existing_id"], "pob-migration-binding",
+            "{preview}"
+        );
+    };
+    let assert_persisted_lineage_state = |candidate_id: &str| {
+        let obligations = run(&["evidence", "obligation", "list", "--plan", &plan_id]);
+        assert!(
+            obligations["object"]["obligations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|obligation| obligation["id"] == "pob-migration-binding"),
+            "{obligations}"
+        );
+        assert!(
+            !obligations["object"]["obligations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|obligation| obligation["id"] == candidate_id),
+            "{obligations}"
+        );
+    };
+
+    let persisted_cli_collision =
+        persisted_lineage_collision("pob-migration-lineage-cli", "lineage cli");
+    let persisted_cli_collision_path = dir.path().join("migration-persisted-lineage-cli.json");
+    fs::write(
+        &persisted_cli_collision_path,
+        serde_json::to_vec_pretty(&persisted_cli_collision).unwrap(),
+    )
+    .unwrap();
+    let persisted_cli_preview = run(&[
+        "evidence",
+        "migrate",
+        "--input",
+        persisted_cli_collision_path.to_str().unwrap(),
+    ]);
+    assert_persisted_lineage_preview(&persisted_cli_preview, "pob-migration-lineage-cli");
+    let persisted_cli_apply = run_failure(&[
+        "evidence",
+        "migrate",
+        "--input",
+        persisted_cli_collision_path.to_str().unwrap(),
+        "--apply",
+    ]);
+    assert_evidence_error(
+        &persisted_cli_apply,
+        "evidence.migrate",
+        "conflict",
+        "evidence migration has 1 conflict(s)",
+    );
+    assert_persisted_lineage_state("pob-migration-lineage-cli");
+
+    let persisted_mcp_collision =
+        persisted_lineage_collision("pob-migration-lineage-mcp", "lineage mcp");
+    let persisted_mcp_preview = mcp_tool(
+        dir.path(),
+        &db,
+        49,
+        "planr_evidence_migrate",
+        json!({"input": persisted_mcp_collision.clone()}),
+    );
+    assert_persisted_lineage_preview(&persisted_mcp_preview, "pob-migration-lineage-mcp");
+    let persisted_mcp_apply = mcp_tool_response(
+        dir.path(),
+        &db,
+        50,
+        "planr_evidence_migrate",
+        json!({"input": persisted_mcp_collision.clone(), "apply": true}),
+    );
+    assert_mcp_evidence_error(
+        &persisted_mcp_apply,
+        "evidence.migrate",
+        "conflict",
+        "evidence migration has 1 conflict(s)",
+    );
+    assert_persisted_lineage_state("pob-migration-lineage-mcp");
+
+    let persisted_http_collision =
+        persisted_lineage_collision("pob-migration-lineage-http", "lineage http");
+    let persisted_http_preview = http_json(&http_request(
+        port,
+        "POST",
+        "/v1/evidence/migrate",
+        &json!({"input": persisted_http_collision.clone()}).to_string(),
+    ));
+    assert_persisted_lineage_preview(&persisted_http_preview, "pob-migration-lineage-http");
+    assert_http_evidence_error(
+        &http_request(
+            port,
+            "POST",
+            "/v1/evidence/migrate",
+            &json!({"input": persisted_http_collision.clone(), "apply": true}).to_string(),
+        ),
+        "409 Conflict",
+        "evidence.migrate",
+        "conflict",
+        "evidence migration has 1 conflict(s)",
+    );
+    assert_persisted_lineage_state("pob-migration-lineage-http");
+
+    let mut changed_created_at = migration.clone();
+    changed_created_at["obligations"][0]["created_at"] = json!("2026-07-29T01:02:03Z");
+    let changed_created_at_path = dir.path().join("migration-changed-created-at.json");
+    fs::write(
+        &changed_created_at_path,
+        serde_json::to_vec_pretty(&changed_created_at).unwrap(),
+    )
+    .unwrap();
+    let changed_created_at_preview = run(&[
+        "evidence",
+        "migrate",
+        "--input",
+        changed_created_at_path.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        changed_created_at_preview["object"]["obligations"][0]["action"],
+        "conflict"
+    );
+    assert_eq!(
+        changed_created_at_preview["object"]["obligations"][0]["reason"],
+        "changed_payload"
+    );
+
+    let mut mcp_obligation = migration["obligations"][0].clone();
+    mcp_obligation["id"] = json!("pob-migration-mcp-binding");
+    mcp_obligation["criterion_id"] = json!("crit-migration-mcp-binding");
+    mcp_obligation["title"] = json!("migration mcp health");
+    let mcp_migration = json!({
+        "schema_version": "planr.evidence.migration.v1",
+        "plan_id": plan_id,
+        "obligations": [mcp_obligation],
+    });
+    let mcp_preview = mcp_tool(
+        dir.path(),
+        &db,
+        40,
+        "planr_evidence_migrate",
+        json!({"input": mcp_migration.clone()}),
+    );
+    assert_eq!(mcp_preview["object"]["dry_run"], true);
+    assert_eq!(mcp_preview["object"]["summary"]["create"], 1);
+    let mcp_apply = mcp_tool(
+        dir.path(),
+        &db,
+        41,
+        "planr_evidence_migrate",
+        json!({"input": mcp_migration.clone(), "apply": true}),
+    );
+    assert_eq!(mcp_apply["object"]["status"], "applied");
+    assert_eq!(mcp_apply["object"]["created"].as_array().unwrap().len(), 1);
+    let mcp_reapply = mcp_tool(
+        dir.path(),
+        &db,
+        42,
+        "planr_evidence_migrate",
+        json!({"input": mcp_migration.clone(), "apply": true}),
+    );
+    assert_eq!(mcp_reapply["object"]["summary"]["unchanged"], 1);
+    let mut http_obligation = migration["obligations"][0].clone();
+    http_obligation["id"] = json!("pob-migration-http-binding");
+    http_obligation["criterion_id"] = json!("crit-migration-http-binding");
+    http_obligation["title"] = json!("migration http health");
+    let http_migration = json!({
+        "schema_version": "planr.evidence.migration.v1",
+        "plan_id": plan_id,
+        "obligations": [http_obligation],
+    });
+    let http_preview = http_json(&http_request(
+        port,
+        "POST",
+        "/v1/evidence/migrate",
+        &json!({"input": http_migration.clone()}).to_string(),
+    ));
+    assert_eq!(http_preview["object"]["dry_run"], true);
+    assert_eq!(http_preview["object"]["summary"]["create"], 1);
+    let http_apply = http_json(&http_request(
+        port,
+        "POST",
+        "/v1/evidence/migrate",
+        &json!({"input": http_migration.clone(), "apply": true}).to_string(),
+    ));
+    assert_eq!(http_apply["object"]["status"], "applied");
+    assert_eq!(http_apply["object"]["created"].as_array().unwrap().len(), 1);
+    let http_reapply = http_json(&http_request(
+        port,
+        "POST",
+        "/v1/evidence/migrate",
+        &json!({"input": http_migration.clone(), "apply": true}).to_string(),
+    ));
+    assert_eq!(http_reapply["object"]["summary"]["unchanged"], 1);
+    let mut conflict = migration.clone();
+    conflict["obligations"][0]["title"] = json!("Conflicting title");
+    let mut new_obligation = conflict["obligations"][0].clone();
+    new_obligation["id"] = json!("pob-migration-atomic-new");
+    new_obligation["criterion_id"] = json!("crit-migration-atomic-new");
+    conflict["obligations"]
+        .as_array_mut()
+        .unwrap()
+        .push(new_obligation);
+    let conflict_path = dir.path().join("migration-conflict.json");
+    fs::write(
+        &conflict_path,
+        serde_json::to_vec_pretty(&conflict).unwrap(),
+    )
+    .unwrap();
+    let conflict_preview = run(&[
+        "evidence",
+        "migrate",
+        "--input",
+        conflict_path.to_str().unwrap(),
+    ]);
+    assert_eq!(conflict_preview["object"]["summary"]["conflict"], 1);
+    let conflict_cli = run_failure(&[
+        "evidence",
+        "migrate",
+        "--input",
+        conflict_path.to_str().unwrap(),
+        "--apply",
+    ]);
+    assert_evidence_error(
+        &conflict_cli,
+        "evidence.migrate",
+        "conflict",
+        "evidence migration has 1 conflict(s)",
+    );
+    let obligations_after_conflict = run(&["evidence", "obligation", "list", "--plan", &plan_id]);
+    assert!(
+        !obligations_after_conflict["object"]["obligations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|obligation| obligation["id"] == "pob-migration-atomic-new"),
+        "{obligations_after_conflict}"
+    );
+
+    let mut lineage_collision = migration.clone();
+    let mut lineage_first = migration["obligations"][0].clone();
+    lineage_first["id"] = json!("pob-migration-lineage-first");
+    lineage_first["criterion_id"] = json!("crit-migration-lineage");
+    lineage_first["title"] = json!("lineage first");
+    let mut lineage_second = migration["obligations"][0].clone();
+    lineage_second["id"] = json!("pob-migration-lineage-second");
+    lineage_second["criterion_id"] = json!("crit-migration-lineage");
+    lineage_second["title"] = json!("lineage second");
+    lineage_collision["obligations"] = json!([lineage_first, lineage_second]);
+    let lineage_collision_path = dir.path().join("migration-lineage-collision.json");
+    fs::write(
+        &lineage_collision_path,
+        serde_json::to_vec_pretty(&lineage_collision).unwrap(),
+    )
+    .unwrap();
+    let lineage_collision_preview = run(&[
+        "evidence",
+        "migrate",
+        "--input",
+        lineage_collision_path.to_str().unwrap(),
+    ]);
+    assert_eq!(lineage_collision_preview["object"]["summary"]["create"], 0);
+    assert_eq!(
+        lineage_collision_preview["object"]["summary"]["conflict"],
+        1
+    );
+    assert_eq!(lineage_collision_preview["object"]["summary"]["blocked"], 1);
+    assert_eq!(
+        lineage_collision_preview["object"]["obligations"][1]["reason"],
+        "batch_lineage_identity_collision"
+    );
+    let lineage_collision_cli = run_failure(&[
+        "evidence",
+        "migrate",
+        "--input",
+        lineage_collision_path.to_str().unwrap(),
+        "--apply",
+    ]);
+    assert_evidence_error(
+        &lineage_collision_cli,
+        "evidence.migrate",
+        "conflict",
+        "evidence migration has 1 conflict(s)",
+    );
+    let mcp_lineage_collision_response = mcp_tool_response(
+        dir.path(),
+        &db,
+        47,
+        "planr_evidence_migrate",
+        json!({"input": lineage_collision.clone(), "apply": true}),
+    );
+    assert_mcp_evidence_error(
+        &mcp_lineage_collision_response,
+        "evidence.migrate",
+        "conflict",
+        "evidence migration has 1 conflict(s)",
+    );
+    assert_http_evidence_error(
+        &http_request(
+            port,
+            "POST",
+            "/v1/evidence/migrate",
+            &json!({"input": lineage_collision.clone(), "apply": true}).to_string(),
+        ),
+        "409 Conflict",
+        "evidence.migrate",
+        "conflict",
+        "evidence migration has 1 conflict(s)",
+    );
+    let obligations_after_lineage_collision =
+        run(&["evidence", "obligation", "list", "--plan", &plan_id]);
+    assert!(
+        !obligations_after_lineage_collision["object"]["obligations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|obligation| obligation["id"] == "pob-migration-lineage-first"),
+        "{obligations_after_lineage_collision}"
+    );
+
+    let mut rollback = migration.clone();
+    let mut rollback_first = migration["obligations"][0].clone();
+    rollback_first["id"] = json!("pob-migration-rollback-first");
+    rollback_first["criterion_id"] = json!("crit-migration-rollback-first");
+    rollback_first["title"] = json!("rollback first");
+    let mut rollback_second = migration["obligations"][0].clone();
+    rollback_second["id"] = json!("pob-migration-rollback-second");
+    rollback_second["criterion_id"] = json!("crit-migration-rollback-second");
+    rollback_second["title"] = json!("rollback second");
+    rollback["obligations"] = json!([rollback_first, rollback_second]);
+    let rollback_path = dir.path().join("migration-rollback.json");
+    fs::write(
+        &rollback_path,
+        serde_json::to_vec_pretty(&rollback).unwrap(),
+    )
+    .unwrap();
+    let rollback_preview = run(&[
+        "evidence",
+        "migrate",
+        "--input",
+        rollback_path.to_str().unwrap(),
+    ]);
+    assert_eq!(rollback_preview["object"]["summary"]["create"], 2);
+    let rollback_cli = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .env("PLANR_EVIDENCE_MIGRATION_FAIL_AFTER_CREATES", "1")
+            .args([
+                "--db",
+                &db_arg,
+                "--json",
+                "evidence",
+                "migrate",
+                "--input",
+                rollback_path.to_str().unwrap(),
+                "--apply",
+            ])
+            .assert()
+            .failure()
+            .get_output()
+            .stdout,
+    );
+    assert_evidence_error(
+        &rollback_cli,
+        "evidence.migrate",
+        "internal_error",
+        "injected evidence migration failure after 1 create(s)",
+    );
+    assert_eq!(
+        evidence_obligation_count_like(&db, "pob-migration-rollback-%"),
+        0
+    );
+
+    let mut rollback_mcp = migration.clone();
+    rollback_mcp["obligations"] = json!(
+        rollback["obligations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .map(|(index, obligation)| {
+                let mut obligation = obligation.clone();
+                obligation["id"] = json!(format!("pob-migration-rollback-mcp-{index}"));
+                obligation["criterion_id"] = json!(format!("crit-migration-rollback-mcp-{index}"));
+                obligation
+            })
+            .collect::<Vec<_>>()
+    );
+    let mcp_rollback_response = mcp_tool_response_with_env(
+        dir.path(),
+        &db,
+        48,
+        "planr_evidence_migrate",
+        json!({"input": rollback_mcp.clone(), "apply": true}),
+        &[("PLANR_EVIDENCE_MIGRATION_FAIL_AFTER_CREATES", "1")],
+    );
+    assert_mcp_evidence_error(
+        &mcp_rollback_response,
+        "evidence.migrate",
+        "internal_error",
+        "injected evidence migration failure after 1 create(s)",
+    );
+    assert_eq!(
+        evidence_obligation_count_like(&db, "pob-migration-rollback-mcp-%"),
+        0
+    );
+
+    let mut rollback_http = migration.clone();
+    rollback_http["obligations"] = json!(
+        rollback["obligations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .map(|(index, obligation)| {
+                let mut obligation = obligation.clone();
+                obligation["id"] = json!(format!("pob-migration-rollback-http-{index}"));
+                obligation["criterion_id"] = json!(format!("crit-migration-rollback-http-{index}"));
+                obligation
+            })
+            .collect::<Vec<_>>()
+    );
+    let rollback_port = free_port();
+    let mut rollback_server = StdCommand::new(&bin)
+        .current_dir(dir.path())
+        .env("PLANR_EVIDENCE_MIGRATION_FAIL_AFTER_CREATES", "1")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "serve",
+            "--port",
+            &rollback_port.to_string(),
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    wait_for_http_server(rollback_port);
+    assert_http_evidence_error(
+        &http_request(
+            rollback_port,
+            "POST",
+            "/v1/evidence/migrate",
+            &json!({"input": rollback_http.clone(), "apply": true}).to_string(),
+        ),
+        "500 Internal Server Error",
+        "evidence.migrate",
+        "internal_error",
+        "injected evidence migration failure after 1 create(s)",
+    );
+    rollback_server.kill().unwrap();
+    rollback_server.wait().unwrap();
+    assert_eq!(
+        evidence_obligation_count_like(&db, "pob-migration-rollback-http-%"),
+        0
+    );
+    let obligations_after_rollback = run(&["evidence", "obligation", "list", "--plan", &plan_id]);
+    assert!(
+        !obligations_after_rollback["object"]["obligations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|obligation| obligation["id"] == "pob-migration-rollback-first"),
+        "{obligations_after_rollback}"
+    );
+
+    {
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "INSERT INTO projects(id, name, root_path, status, created_at, updated_at)
+             VALUES ('p-foreign-migration', 'Foreign Migration', '.', 'active', datetime('now'), datetime('now'));
+             INSERT INTO plans(id, project_id, stage, path, title, slug, parse_status, content_hash, created_at, updated_at)
+             VALUES ('pln-foreign-migration', 'p-foreign-migration', 'build', '/tmp/foreign-migration.plan.md', 'Foreign Migration', 'foreign-migration', 'ok', 'hash-foreign', datetime('now'), datetime('now'));
+             INSERT INTO items(id, project_id, title, description, status, work_type, plan_path, created_at, updated_at)
+             VALUES ('i-foreign-migration', 'p-foreign-migration', 'Foreign Migration', 'Foreign migration item', 'closed', 'code', '/tmp/foreign-migration.plan.md', datetime('now'), datetime('now'));",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO proof_obligations(
+              id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
+              binding, observation_requirements_json, fixture_policy_json, freshness_policy_json,
+              assurance_policy_json, policy_digest, config_digest, created_at
+            ) VALUES (
+              'pob-global-collision', 'p-foreign-migration', 'pln-foreign-migration', NULL,
+              'crit-global-collision', 1, 'global collision', 1, '[]', '{}', '{}', '{}', ?1, ?2, datetime('now')
+            )",
+            rusqlite::params![
+                policy["object"]["digest"].as_str().unwrap(),
+                "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+            ],
+        )
+        .unwrap();
+    }
+    let mut global_collision = migration.clone();
+    global_collision["obligations"][0]["id"] = json!("pob-global-collision");
+    global_collision["obligations"][0]["criterion_id"] = json!("crit-current-global-collision");
+    let global_collision_path = dir.path().join("migration-global-collision.json");
+    fs::write(
+        &global_collision_path,
+        serde_json::to_vec_pretty(&global_collision).unwrap(),
+    )
+    .unwrap();
+    let global_collision_preview = run(&[
+        "evidence",
+        "migrate",
+        "--input",
+        global_collision_path.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        global_collision_preview["object"]["obligations"][0]["reason"],
+        "global_obligation_id_collision"
+    );
+    let global_collision_cli = run_failure(&[
+        "evidence",
+        "migrate",
+        "--input",
+        global_collision_path.to_str().unwrap(),
+        "--apply",
+    ]);
+    assert_evidence_error(
+        &global_collision_cli,
+        "evidence.migrate",
+        "conflict",
+        "evidence migration has 1 conflict(s)",
+    );
+    let mcp_global_collision_response = mcp_tool_response(
+        dir.path(),
+        &db,
+        49,
+        "planr_evidence_migrate",
+        json!({"input": global_collision.clone(), "apply": true}),
+    );
+    assert_mcp_evidence_error(
+        &mcp_global_collision_response,
+        "evidence.migrate",
+        "conflict",
+        "evidence migration has 1 conflict(s)",
+    );
+    assert_http_evidence_error(
+        &http_request(
+            port,
+            "POST",
+            "/v1/evidence/migrate",
+            &json!({"input": global_collision.clone(), "apply": true}).to_string(),
+        ),
+        "409 Conflict",
+        "evidence.migrate",
+        "conflict",
+        "evidence migration has 1 conflict(s)",
+    );
+    let mut cross_project_item = migration.clone();
+    cross_project_item["obligations"][0]["id"] = json!("pob-cross-project-item");
+    cross_project_item["obligations"][0]["criterion_id"] = json!("crit-cross-project-item");
+    cross_project_item["obligations"][0]["item_id"] = json!("i-foreign-migration");
+    let cross_project_item_path = dir.path().join("migration-cross-project-item.json");
+    fs::write(
+        &cross_project_item_path,
+        serde_json::to_vec_pretty(&cross_project_item).unwrap(),
+    )
+    .unwrap();
+    let cross_project_item_cli = run_failure(&[
+        "evidence",
+        "migrate",
+        "--input",
+        cross_project_item_path.to_str().unwrap(),
+    ]);
+    assert_evidence_error(
+        &cross_project_item_cli,
+        "evidence.migrate",
+        "bad_request",
+        "does not belong to project",
+    );
+    let mcp_cross_project_item_response = mcp_tool_response(
+        dir.path(),
+        &db,
+        50,
+        "planr_evidence_migrate",
+        json!({"input": cross_project_item.clone()}),
+    );
+    assert_mcp_evidence_error(
+        &mcp_cross_project_item_response,
+        "evidence.migrate",
+        "bad_request",
+        "does not belong to project",
+    );
+    assert_http_evidence_error(
+        &http_request(
+            port,
+            "POST",
+            "/v1/evidence/migrate",
+            &json!({"input": cross_project_item.clone()}).to_string(),
+        ),
+        "400 Bad Request",
+        "evidence.migrate",
+        "bad_request",
+        "does not belong to project",
+    );
+
+    let mut concurrent = migration.clone();
+    concurrent["obligations"][0]["id"] = json!("pob-migration-concurrent");
+    concurrent["obligations"][0]["criterion_id"] = json!("crit-migration-concurrent");
+    concurrent["obligations"][0]["title"] = json!("migration concurrent health");
+    let concurrent_path = dir.path().join("migration-concurrent.json");
+    fs::write(
+        &concurrent_path,
+        serde_json::to_vec_pretty(&concurrent).unwrap(),
+    )
+    .unwrap();
+    let concurrent_a = StdCommand::new(&bin)
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "--json",
+            "evidence",
+            "migrate",
+            "--input",
+            concurrent_path.to_str().unwrap(),
+            "--apply",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let concurrent_b = StdCommand::new(&bin)
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "--json",
+            "evidence",
+            "migrate",
+            "--input",
+            concurrent_path.to_str().unwrap(),
+            "--apply",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let concurrent_a_output = concurrent_a.wait_with_output().unwrap();
+    let concurrent_b_output = concurrent_b.wait_with_output().unwrap();
+    assert!(
+        concurrent_a_output.status.success(),
+        "{concurrent_a_output:?}"
+    );
+    assert!(
+        concurrent_b_output.status.success(),
+        "{concurrent_b_output:?}"
+    );
+    let concurrent_a_json = single_json_document(&concurrent_a_output.stdout);
+    let concurrent_b_json = single_json_document(&concurrent_b_output.stdout);
+    assert_evidence_envelope(&concurrent_a_json, "evidence.migrate", true);
+    assert_evidence_envelope(&concurrent_b_json, "evidence.migrate", true);
+    let concurrent_counts = [
+        (
+            concurrent_a_json["object"]["summary"]["create"].as_i64(),
+            concurrent_a_json["object"]["summary"]["unchanged"].as_i64(),
+        ),
+        (
+            concurrent_b_json["object"]["summary"]["create"].as_i64(),
+            concurrent_b_json["object"]["summary"]["unchanged"].as_i64(),
+        ),
+    ];
+    assert!(
+        concurrent_counts.contains(&(Some(1), Some(0))),
+        "{concurrent_counts:?}"
+    );
+    assert!(
+        concurrent_counts.contains(&(Some(0), Some(1))),
+        "{concurrent_counts:?}"
+    );
+    assert_eq!(
+        evidence_obligation_count_like(&db, "pob-migration-concurrent"),
+        1
+    );
+
+    let classifications = run(&["evidence", "classifications"]);
+    assert_evidence_envelope(&classifications, "evidence.classifications", true);
+    let canonical = classifications["object"]["canonical_gap_reasons"]
+        .as_array()
+        .unwrap();
+    for reason in [
+        "product_failed",
+        "verifier_failed",
+        "missing_capability",
+        "permission_denied",
+        "sandbox_blocked",
+        "environment_unavailable",
+        "external_dependency_unavailable",
+        "target_mismatch",
+        "stale_source",
+        "untrusted_provenance",
+    ] {
+        assert!(
+            canonical.iter().any(|value| value.as_str() == Some(reason)),
+            "{reason} missing from canonical classifications: {classifications}"
+        );
+    }
+    assert!(
+        classifications["object"]["legacy_aliases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|alias| alias["alias"] == "capability_unavailable"
+                && alias["canonical"] == "missing_capability")
+    );
+    assert_eq!(
+        classifications["object"]["unknown_legacy_reason"]["canonical"],
+        "verifier_failed"
+    );
+    let host_surfaces = classifications["object"]["host_adapters"]["surfaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|surface| surface["surface"].as_str().unwrap())
+        .collect::<BTreeSet<_>>();
+    for surface in [
+        "terminal",
+        "local-function",
+        "codex-app-server",
+        "codex-exec",
+        "codex-mcp-server",
+        "mcp-browser",
+        "built-in-browser",
+        "chrome-cdp",
+        "codex-hook-events",
+        "computer-use",
+        "claude-code",
+        "cursor-agent",
+        "pi-cli",
+    ] {
+        assert!(
+            host_surfaces.contains(surface),
+            "{surface} missing from host adapter classifications"
+        );
+    }
+    let host_entries = classifications["object"]["host_adapters"]["surfaces"]
+        .as_array()
+        .unwrap();
+    assert!(
+        classifications["object"]["host_adapters"]
+            .get("enabled_surfaces")
+            .is_none()
+            && classifications["object"]["host_adapters"]
+                .get("disabled_surfaces")
+                .is_none(),
+        "host adapter DTO must not expose a second enabled/disabled status vocabulary"
+    );
+    let canonical_host_entry_keys = BTreeSet::from([
+        "artifact_kinds",
+        "availability_status",
+        "blind_spots",
+        "host",
+        "host_version",
+        "observation_types",
+        "permissions",
+        "provenance",
+        "reason",
+        "surface",
+        "trusted_adapter_enabled",
+    ]);
+    for entry in host_entries {
+        let actual_keys = entry
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(actual_keys, canonical_host_entry_keys, "{entry}");
+    }
+    for (host, surface, availability_status) in [
+        ("claude", "claude-code", "unavailable"),
+        ("cursor", "cursor-agent", "unavailable"),
+        ("pi", "pi-cli", "unavailable"),
+    ] {
+        let entry = host_entries
+            .iter()
+            .find(|entry| entry["host"] == host && entry["surface"] == surface)
+            .unwrap_or_else(|| panic!("{host}/{surface} missing from {classifications}"));
+        assert_eq!(entry["trusted_adapter_enabled"], false, "{entry}");
+        assert!(entry.get("status").is_none(), "{entry}");
+        assert_eq!(entry["availability_status"], availability_status, "{entry}");
+        assert_eq!(
+            entry["provenance"]["claim_source"], "mechanical_unavailable_probe",
+            "{entry}"
+        );
+        assert_eq!(
+            entry["provenance"]["observation_mode"], "mechanical_invocation",
+            "{entry}"
+        );
+        assert!(
+            entry["observation_types"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|observation| observation.as_str().unwrap().starts_with("host.")),
+            "{entry}"
+        );
+        assert!(
+            entry["artifact_kinds"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|kind| kind == "invocation-stdout"),
+            "{entry}"
+        );
+        assert!(
+            entry["reason"]
+                .as_str()
+                .unwrap()
+                .contains("non-Codex host capture cannot enable a Codex adapter"),
+            "{entry}"
+        );
+    }
+    let mcp_classifications = mcp_tool(
+        dir.path(),
+        &db,
+        43,
+        "planr_evidence_classifications",
+        json!({}),
+    );
+    assert_eq!(mcp_classifications["object"], classifications["object"]);
+
+    let http_classifications = http_json(&http_request(
+        port,
+        "GET",
+        "/v1/evidence/classifications",
+        "",
+    ));
+    assert_eq!(http_classifications["object"], classifications["object"]);
+    server.kill().unwrap();
+    server.wait().unwrap();
+}
+
+#[test]
+fn codex_stop_hook_bounds_real_non_actionable_coverage_blockers() {
+    struct StopBlockerCase {
+        name: &'static str,
+        gap_reason: &'static str,
+        update_policy: fn(&mut Value),
+        fixture_env: Option<(&'static str, &'static str)>,
+        fixture_ref: Option<&'static str>,
+        expected_run_code: i32,
+    }
+    let cases = [
+        StopBlockerCase {
+            name: "missing",
+            gap_reason: "missing_capability",
+            update_policy: |policy: &mut Value| {
+                policy["adapter_registrations"][0]["execution_contract"]["executable"] =
+                    json!("planr-definitely-missing-adapter");
+            },
+            fixture_env: None,
+            fixture_ref: None,
+            expected_run_code: 3,
+        },
+        StopBlockerCase {
+            name: "permission",
+            gap_reason: "permission_denied",
+            update_policy: |_policy: &mut Value| {},
+            fixture_env: Some(("PLANR_FIXTURE_EXIT", "126")),
+            fixture_ref: Some("planr-test-fixture:permission-denied-exit-126"),
+            expected_run_code: 2,
+        },
+        StopBlockerCase {
+            name: "sandbox",
+            gap_reason: "sandbox_blocked",
+            update_policy: |_policy: &mut Value| {},
+            fixture_env: Some(("PLANR_FIXTURE_BOUNDARY", "sandbox_blocked")),
+            fixture_ref: Some("planr-test-fixture:structured-sandbox-boundary"),
+            expected_run_code: 2,
+        },
+        StopBlockerCase {
+            name: "external-dependency",
+            gap_reason: "external_dependency_unavailable",
+            update_policy: |_policy: &mut Value| {},
+            fixture_env: Some((
+                "PLANR_FIXTURE_GAP_REASONS",
+                "[\"external_dependency_unavailable\"]",
+            )),
+            fixture_ref: Some("planr-test-fixture:external-dependency-outage"),
+            expected_run_code: 2,
+        },
+    ];
+    for case in cases {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join(".planr/planr.sqlite");
+        let db_arg = db.to_str().unwrap().to_string();
+        write_evidence_policy_fixture(dir.path());
+        rewrite_evidence_policy_fixture(dir.path(), case.update_policy);
+        init_git_repo(dir.path());
+        init_evidence_project(
+            dir.path(),
+            &db,
+            &format!("Stop Nonactionable {}", case.name),
+        );
+        let run = |args: &[&str]| -> Value {
+            single_json_document(
+                &planr()
+                    .current_dir(dir.path())
+                    .args(["--db", &db_arg, "--json"])
+                    .args(args)
+                    .assert()
+                    .success()
+                    .get_output()
+                    .stdout,
+            )
+        };
+        let product = run(&["plan", "new", &format!("Stop Nonactionable {}", case.name)]);
+        let product_id = product["plan"]["id"].as_str().unwrap().to_string();
+        let build = run(&[
+            "plan",
+            "split",
+            &product_id,
+            "--slice",
+            "Stop Nonactionable Build",
+        ]);
+        let plan_id = build["plan"]["id"].as_str().unwrap().to_string();
+        let build_path = build["plan"]["path"].as_str().unwrap().to_string();
+        let text = fs::read_to_string(&build_path).unwrap();
+        let frontmatter_end = text.find("\n---\n").unwrap() + 5;
+        fs::write(
+            &build_path,
+            format!(
+                "{}\n# Build Plan\n\n## Scope Decision\n\nStop nonactionable.\n\n## Verification\n\nEvidence coverage.\n\n## Acceptance Criteria\n\n- Capability evidence passes.\n\n## Steps\n\n### Ship\n\nClose implementation.\n",
+                &text[..frontmatter_end]
+            ),
+        )
+        .unwrap();
+        let map = run(&["map", "build", "--from", &plan_id]);
+        let item = map["created"][0]["id"].as_str().unwrap().to_string();
+        run(&["close", &item, "--summary", "item done"]);
+        run(&[
+            "context",
+            "add",
+            &format!("GOAL CONTRACT {plan_id}: DONE when Evidence coverage passes."),
+            "--tag",
+            "goal-contract",
+        ]);
+        let policy = run(&["evidence", "policy"]);
+        let instance_id = policy["object"]["registry"]["probes"][0]["instance_id"]
+            .as_str()
+            .unwrap();
+        let environment = capability_instance_environment(&db, instance_id);
+        let obligation_id = format!("pob-stop-nonactionable-{}", case.name);
+        let criterion_id = format!("crit-stop-nonactionable-{}", case.name);
+        let mut obligation = evidence_obligation_for(
+            &obligation_id,
+            policy["object"]["digest"].as_str().unwrap(),
+            "com.example.health.status",
+            "stop nonactionable health",
+            json!({"status": "ok"}),
+            json!({"kind": "process", "uri": "local://health"}),
+            environment,
+            json!({"kind": "process", "id": "runtime-local"}),
+            json!([]),
+            "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        );
+        obligation["plan_id"] = json!(plan_id);
+        obligation["item_id"] = Value::Null;
+        obligation["criterion_id"] = json!(criterion_id);
+        if case.fixture_ref.is_some() {
+            obligation["fixture_policy"]["fixtures_allowed"] = json!(true);
+        }
+        add_evidence_obligation_value(dir.path(), &db, &obligation_id, &obligation);
+        let fixture_disclosure = case.fixture_ref.map(|fixture_ref| {
+            json!({
+                "fixtures_used": true,
+                "mocks_used": false,
+                "fixture_refs": [fixture_ref],
+            })
+        });
+        let attempt = run_evidence_value_with_env_fixture_code(
+            dir.path(),
+            &db,
+            &obligation_id,
+            instance_id,
+            json!({"kind": "process", "uri": "local://health"}),
+            case.fixture_env.map(|(name, value)| json!({name: value})),
+            fixture_disclosure,
+            case.expected_run_code,
+        );
+        assert_evidence_envelope(&attempt, "evidence.run", true);
+        if let Some(fixture_ref) = case.fixture_ref {
+            let disclosure = &attempt["object"]["receipt"]["fixture_disclosure"];
+            assert_eq!(
+                disclosure["fixtures_used"],
+                true,
+                "{case_name}: {attempt}",
+                case_name = case.name
+            );
+            assert!(
+                disclosure["fixture_refs"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|value| value.as_str() == Some(fixture_ref)),
+                "{}: fixture ref missing from receipt: {attempt}",
+                case.name
+            );
+        } else {
+            assert_eq!(
+                attempt["object"]["receipt"]["fixture_disclosure"]["fixtures_used"], false,
+                "{}: fixture-free case should remain fixture-free: {attempt}",
+                case.name
+            );
+        }
+        let audit = run(&["plan", "audit", &plan_id]);
+        assert_eq!(audit["holds"], false, "{}: {audit}", case.name);
+        let blocker = &audit["proof"]["non_actionable_blockers"][0];
+        assert_eq!(
+            blocker["criterion_id"], criterion_id,
+            "{}: {audit}",
+            case.name
+        );
+        assert_eq!(blocker["reason"], case.gap_reason, "{}: {audit}", case.name);
+        assert_eq!(
+            audit["proof"]["actionable_now"], false,
+            "{}: {audit}",
+            case.name
+        );
+
+        let thread = format!("thread-nonactionable-{}", case.name);
+        planr()
+            .current_dir(dir.path())
+            .env("CODEX_THREAD_ID", &thread)
+            .args([
+                "--db", &db_arg, "--json", "stop", "activate", "--plan", &plan_id,
+            ])
+            .assert()
+            .success();
+        let stop = |session: &str| -> Value {
+            single_json_document(
+                &planr()
+                    .current_dir(dir.path())
+                    .args(["--db", &db_arg, "--json", "stop"])
+                    .write_stdin(codex_stop_envelope(dir.path(), session, false))
+                    .env_remove("CODEX_THREAD_ID")
+                    .assert()
+                    .success()
+                    .get_output()
+                    .stdout,
+            )
+        };
+        let blocked = stop(&thread);
+        assert_codex_stop_output_schema(&blocked, true);
+        assert!(
+            blocked["reason"]
+                .as_str()
+                .unwrap()
+                .contains("non-actionable blocker"),
+            "{}: {blocked}",
+            case.name
+        );
+        assert!(
+            blocked["reason"]
+                .as_str()
+                .unwrap()
+                .contains(case.gap_reason),
+            "{}: {blocked}",
+            case.name
+        );
+        let bounded = stop(&thread);
+        assert_codex_stop_output_schema(&bounded, false);
+    }
 }
 
 #[test]
@@ -12107,6 +22895,18 @@ fn planr_native_skills_are_packaged_and_cli_first() {
         loop_skill.contains("attach route observations when available"),
         "planr-loop must preserve effective route evidence recording"
     );
+    assert!(
+        loop_skill.contains("planr stop activate --plan <plan-id>"),
+        "planr-loop must activate Stop enforcement for the active goal plan"
+    );
+    assert!(
+        loop_skill.contains("CODEX_THREAD_ID"),
+        "planr-loop must bind Codex Stop enforcement to the host thread id"
+    );
+    assert!(
+        loop_skill.contains("planr stop deactivate --plan <plan-id>"),
+        "planr-loop must deactivate Stop enforcement on cancel or handoff"
+    );
     for removed in [
         "dispatch through the routing skill",
         "resolved native `agent_type`",
@@ -13918,7 +24718,6 @@ fn guess_killer_pack_auto_chain_audit_review_mode_unlocked_and_repair_errors() {
             .clone();
         serde_json::from_slice(&output).unwrap()
     };
-
     planr()
         .current_dir(dir.path())
         .args(["--db", &db_arg, "project", "init", "GuessKiller"])
@@ -14162,5 +24961,2864 @@ fn guess_killer_pack_auto_chain_audit_review_mode_unlocked_and_repair_errors() {
     assert_eq!(
         closed_manual["post_condition"], "verify the deploy manually",
         "{closed_manual}"
+    );
+}
+
+#[test]
+fn plan_audit_uses_evidence_coverage_for_binding_criteria_and_logs_are_claims_only() {
+    let dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db = db_dir.path().join("planr.sqlite");
+    let db_arg = db.to_str().unwrap().to_string();
+    write_evidence_policy_fixture(dir.path());
+    init_git_repo(dir.path());
+    init_evidence_project(dir.path(), &db, "Evidence Audit");
+
+    let run = |worker: &str, args: &[&str]| -> Value {
+        let output = planr()
+            .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", worker)
+            .args(["--db", &db_arg, "--json"])
+            .args(args)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice(&output).unwrap()
+    };
+    let run_human = |worker: &str, args: &[&str]| -> String {
+        let output = planr()
+            .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", worker)
+            .args(["--db", &db_arg])
+            .args(args)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        String::from_utf8(output).unwrap()
+    };
+    let clause = |audit: &Value, name: &str| -> Value {
+        audit["clauses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|clause| clause["clause"] == name)
+            .unwrap_or_else(|| panic!("missing clause {name}: {audit}"))
+            .clone()
+    };
+    let create_settled_plan = |name: &str| -> (String, String) {
+        let product = run("prep", &["plan", "new", name]);
+        let product_id = product["plan"]["id"].as_str().unwrap().to_string();
+        let build = run("prep", &["plan", "split", &product_id, "--slice", "Audit"]);
+        let build_id = build["plan"]["id"].as_str().unwrap().to_string();
+        let build_path = build["plan"]["path"].as_str().unwrap().to_string();
+        let text = fs::read_to_string(&build_path).unwrap();
+        let frontmatter_end = text.find("\n---\n").unwrap() + 5;
+        fs::write(
+            &build_path,
+            format!(
+                "{}\n# Build Plan\n\n## Scope Decision\n\nAudit slice.\n\n## Verification\n\nEvidence coverage.\n\n## Acceptance Criteria\n\n- Binding evidence passes.\n\n## Steps\n\n### Ship\n\nDo the work.\n",
+                &text[..frontmatter_end]
+            ),
+        )
+        .unwrap();
+        let map = run("prep", &["map", "build", "--from", &build_id]);
+        let item_id = map["created"][0]["id"].as_str().unwrap().to_string();
+        run("maker", &["close", &item_id, "--summary", "settled"]);
+        run(
+            "prep",
+            &[
+                "context",
+                "add",
+                &format!("GOAL CONTRACT {build_id}: DONE when Evidence coverage passes."),
+                "--tag",
+                "goal-contract",
+            ],
+        );
+        (build_id, item_id)
+    };
+    let create_open_plan = |name: &str| -> (String, String) {
+        let product = run("prep", &["plan", "new", name]);
+        let product_id = product["plan"]["id"].as_str().unwrap().to_string();
+        let build = run("prep", &["plan", "split", &product_id, "--slice", "Audit"]);
+        let build_id = build["plan"]["id"].as_str().unwrap().to_string();
+        let build_path = build["plan"]["path"].as_str().unwrap().to_string();
+        let text = fs::read_to_string(&build_path).unwrap();
+        let frontmatter_end = text.find("\n---\n").unwrap() + 5;
+        fs::write(
+            &build_path,
+            format!(
+                "{}\n# Build Plan\n\n## Scope Decision\n\nAudit slice.\n\n## Verification\n\nEvidence coverage.\n\n## Acceptance Criteria\n\n- Binding evidence passes.\n\n## Steps\n\n### Ship\n\nDo the work.\n",
+                &text[..frontmatter_end]
+            ),
+        )
+        .unwrap();
+        let map = run("prep", &["map", "build", "--from", &build_id]);
+        let item_id = map["created"][0]["id"].as_str().unwrap().to_string();
+        run(
+            "prep",
+            &[
+                "context",
+                "add",
+                &format!("GOAL CONTRACT {build_id}: DONE when Evidence coverage passes."),
+                "--tag",
+                "goal-contract",
+            ],
+        );
+        (build_id, item_id)
+    };
+    let policy = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args(["--db", &db_arg, "--json", "evidence", "policy"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    let probe = policy["object"]["registry"]["probes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|probe| probe["manifest_id"] == "verifier-generic-adapter")
+        .unwrap();
+    let instance_id = probe["instance_id"].as_str().unwrap().to_string();
+    let environment = capability_instance_environment(&db, &instance_id);
+    let policy_digest = policy["object"]["digest"].as_str().unwrap().to_string();
+    let project_id: String = Connection::open(&db)
+        .unwrap()
+        .query_row(
+            "SELECT id FROM projects ORDER BY created_at LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let bind_obligation = |mut obligation: Value, plan_id: &str, criterion_id: &str| -> Value {
+        obligation["plan_id"] = json!(plan_id);
+        obligation["criterion_id"] = json!(criterion_id);
+        obligation
+    };
+    let raw_coverage = |dir: &Path, db: &Path, criterion_id: &str| -> Value {
+        let output = planr()
+            .current_dir(dir)
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "coverage",
+                "--scope",
+                "criterion",
+                "--id",
+                criterion_id,
+            ])
+            .output()
+            .unwrap();
+        assert!(!output.stdout.is_empty(), "coverage stdout must be JSON");
+        single_json_document(&output.stdout)
+    };
+    let assert_persisted_verdict = |db: &Path, coverage: &Value| {
+        let conn = Connection::open(db).unwrap();
+        let persisted: String = conn
+            .query_row(
+                "SELECT verdict_json FROM coverage_verdicts WHERE id = ?1",
+                [coverage["object"]["coverage_id"].as_str().unwrap()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let persisted: Value = serde_json::from_str(&persisted).unwrap();
+        assert_eq!(persisted, coverage["object"]["coverage"]);
+    };
+    let assert_criterion_matches_raw_oracle =
+        |criterion: &Value,
+         coverage: &Value,
+         expected_status: &str,
+         expected_actionable: bool,
+         expected_suggested: &str,
+         expected_next: Value,
+         expected_receipt_refs: Value,
+         expected_attempt_refs: Value,
+         expected_waiver_refs: Value,
+         expected_receipt_digests: Value,
+         expected_waiver_digests: Value,
+         expected_actionable_gaps: Value,
+         expected_non_actionable_blockers: Value| {
+            assert_evidence_envelope(coverage, "evidence.coverage", true);
+            assert_eq!(coverage["object"]["status"], expected_status, "{coverage}");
+            let verdict = &coverage["object"]["coverage"];
+            let raw_scope = &verdict["scope"];
+            let raw_status = &verdict["status"];
+            let expected_pass = matches!(expected_status, "satisfied" | "waived");
+            assert_eq!(coverage["object"]["coverage_id"], verdict["id"]);
+            assert_eq!(criterion["criterion_id"], raw_scope["criterion_id"]);
+            assert_eq!(criterion["coverage_id"], verdict["id"]);
+            assert_eq!(criterion["scope"], *raw_scope);
+            assert_eq!(criterion["status"], *raw_status);
+            assert_eq!(criterion["pass"], expected_pass);
+            assert_eq!(criterion["actionable_now"], verdict["actionable_now"]);
+            assert_eq!(
+                criterion["suggested_next_action"],
+                verdict["suggested_next_action"]
+            );
+            assert_eq!(criterion["observations"], verdict["observation_coverage"]);
+            assert_eq!(criterion["actionable_gaps"], expected_actionable_gaps);
+            assert_eq!(
+                criterion["non_actionable_blockers"],
+                expected_non_actionable_blockers
+            );
+            assert_eq!(criterion["receipt_refs"], expected_receipt_refs);
+            assert_eq!(criterion["attempt_refs"], expected_attempt_refs);
+            assert_eq!(criterion["waiver_refs"], expected_waiver_refs);
+            assert_eq!(criterion["receipt_digests"], expected_receipt_digests);
+            assert_eq!(criterion["waiver_digests"], expected_waiver_digests);
+            assert_eq!(
+                coverage["object"]["receipt_digests"],
+                criterion["receipt_digests"]
+            );
+            assert_eq!(
+                coverage["object"]["waiver_digests"],
+                criterion["waiver_digests"]
+            );
+            assert_eq!(criterion["status"], expected_status);
+            assert_eq!(criterion["actionable_now"], expected_actionable);
+            assert_eq!(criterion["suggested_next_action"], expected_suggested);
+            assert_eq!(criterion["next_action"], expected_next);
+
+            let projection = &coverage["object"]["canonical_projection"];
+            assert_eq!(projection["criterion_id"], criterion["criterion_id"]);
+            assert_eq!(projection["coverage_id"], criterion["coverage_id"]);
+            assert_eq!(projection["scope"], criterion["scope"]);
+            assert_eq!(projection["status"], criterion["status"]);
+            assert_eq!(projection["pass"], criterion["pass"]);
+        };
+    let criterion_from = |proof: &Value, criterion_id: &str| -> Value {
+        proof["criteria"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|criterion| criterion["criterion_id"] == criterion_id)
+            .unwrap_or_else(|| panic!("missing criterion {criterion_id}: {proof}"))
+            .clone()
+    };
+    let assert_proof_criterion_matches_raw_oracle =
+        |proof: &Value,
+         coverage: &Value,
+         criterion_id: &str,
+         expected_status: &str,
+         expected_actionable: bool,
+         expected_suggested: &str,
+         expected_next: Value,
+         expected_receipt_refs: Value,
+         expected_attempt_refs: Value,
+         expected_waiver_refs: Value,
+         expected_receipt_digests: Value,
+         expected_waiver_digests: Value,
+         expected_actionable_gaps: Value,
+         expected_non_actionable_blockers: Value| {
+            let criterion = criterion_from(proof, criterion_id);
+            assert_criterion_matches_raw_oracle(
+                &criterion,
+                coverage,
+                expected_status,
+                expected_actionable,
+                expected_suggested,
+                expected_next,
+                expected_receipt_refs,
+                expected_attempt_refs,
+                expected_waiver_refs,
+                expected_receipt_digests,
+                expected_waiver_digests,
+                expected_actionable_gaps,
+                expected_non_actionable_blockers,
+            );
+        };
+    let expected_gap = |criterion_id: &str,
+                        requirement_id: &str,
+                        status: &str,
+                        reason: &str,
+                        attempt_refs: Value| {
+        json!({
+            "criterion_id": criterion_id,
+            "requirement_id": requirement_id,
+            "status": status,
+            "reason": reason,
+            "receipt_refs": [],
+            "attempt_refs": attempt_refs,
+            "waiver_ref": null,
+        })
+    };
+    let assert_missing_observation_proof =
+        |proof: &Value, coverage: &Value, criterion_id: &str, requirement_id: &str| {
+            assert_proof_criterion_matches_raw_oracle(
+                proof,
+                coverage,
+                criterion_id,
+                "unsatisfied",
+                true,
+                "collect missing trusted evidence",
+                json!("collect missing trusted evidence"),
+                json!([]),
+                json!([]),
+                json!([]),
+                json!([]),
+                json!([]),
+                json!([expected_gap(
+                    criterion_id,
+                    requirement_id,
+                    "missing",
+                    "missing_observation",
+                    json!([])
+                )]),
+                json!([]),
+            );
+        };
+    let assert_stale_proof = |proof: &Value,
+                              coverage: &Value,
+                              criterion_id: &str,
+                              requirement_id: &str,
+                              attempted_receipt_id: &str,
+                              gap_reason: &str| {
+        assert_proof_criterion_matches_raw_oracle(
+            proof,
+            coverage,
+            criterion_id,
+            "stale",
+            true,
+            "refresh stale evidence",
+            json!("refresh stale evidence"),
+            json!([]),
+            json!([attempted_receipt_id]),
+            json!([]),
+            json!([]),
+            json!([]),
+            json!([expected_gap(
+                criterion_id,
+                requirement_id,
+                "stale",
+                gap_reason,
+                json!([attempted_receipt_id])
+            )]),
+            json!([]),
+        );
+    };
+    let assert_missing_capability_proof =
+        |proof: &Value,
+         coverage: &Value,
+         criterion_id: &str,
+         requirement_id: &str,
+         attempted_receipt_id: &str| {
+            assert_proof_criterion_matches_raw_oracle(
+                proof,
+                coverage,
+                criterion_id,
+                "blocked",
+                false,
+                "restore evidence capability",
+                json!("restore evidence capability"),
+                json!([]),
+                json!([attempted_receipt_id]),
+                json!([]),
+                json!([]),
+                json!([]),
+                json!([]),
+                json!([expected_gap(
+                    criterion_id,
+                    requirement_id,
+                    "blocked",
+                    "missing_capability",
+                    json!([attempted_receipt_id])
+                )]),
+            );
+        };
+    let assert_satisfied_proof = |proof: &Value,
+                                  coverage: &Value,
+                                  criterion_id: &str,
+                                  receipt_id: &str,
+                                  receipt_digest: &str| {
+        assert_proof_criterion_matches_raw_oracle(
+            proof,
+            coverage,
+            criterion_id,
+            "satisfied",
+            false,
+            "none",
+            Value::Null,
+            json!([receipt_id]),
+            json!([]),
+            json!([]),
+            json!([receipt_digest]),
+            json!([]),
+            json!([]),
+            json!([]),
+        );
+    };
+    let assert_waived_proof = |proof: &Value,
+                               coverage: &Value,
+                               criterion_id: &str,
+                               waiver_id: &str,
+                               waiver_digest: &str| {
+        assert_proof_criterion_matches_raw_oracle(
+            proof,
+            coverage,
+            criterion_id,
+            "waived",
+            false,
+            "none",
+            Value::Null,
+            json!([]),
+            json!([]),
+            json!([waiver_id]),
+            json!([]),
+            json!([waiver_digest]),
+            json!([]),
+            json!([]),
+        );
+    };
+    let assert_stale_projection_surfaces =
+        |plan_id: &str,
+         item_id: &str,
+         criterion_id: &str,
+         requirement_id: &str,
+         coverage: &Value,
+         attempted_receipt_id: &str,
+         gap_reason: &str| {
+            assert_persisted_verdict(&db, coverage);
+            let audit = run("prep", &["plan", "audit", plan_id]);
+            assert_eq!(audit["holds"], false, "{audit}");
+            let audit_clause = clause(&audit, "verification_logged");
+            assert_eq!(audit_clause["criteria"][0]["criterion_id"], criterion_id);
+            assert_eq!(audit_clause["criteria"][0]["status"], "stale");
+            assert_eq!(
+                audit_clause["criteria"][0]["observations"][0]["gap_reason"], gap_reason,
+                "{audit_clause}"
+            );
+            assert_stale_proof(
+                &audit["proof"],
+                coverage,
+                criterion_id,
+                requirement_id,
+                attempted_receipt_id,
+                gap_reason,
+            );
+
+            let trace = run("prep", &["trace", "item", item_id]);
+            assert_stale_proof(
+                &trace["proof"],
+                coverage,
+                criterion_id,
+                requirement_id,
+                attempted_receipt_id,
+                gap_reason,
+            );
+            let preview = run("prep", &["map", "preview", "--close", item_id]);
+            assert_eq!(preview["can_close"], false, "{preview}");
+            assert_eq!(preview["proof_blocks_close"], true);
+            assert_stale_proof(
+                &preview["proof"],
+                coverage,
+                criterion_id,
+                requirement_id,
+                attempted_receipt_id,
+                gap_reason,
+            );
+            run(
+                "maker",
+                &[
+                    "log",
+                    "add",
+                    "--item",
+                    item_id,
+                    "--kind",
+                    "completion",
+                    "--summary",
+                    "stale implementation complete",
+                ],
+            );
+            let close = planr()
+                .current_dir(dir.path())
+                .env("PLANR_WORKER_ID", "maker")
+                .args([
+                    "--db",
+                    &db_arg,
+                    "--json",
+                    "close",
+                    item_id,
+                    "--summary",
+                    "stale done",
+                ])
+                .assert()
+                .failure()
+                .get_output()
+                .stdout
+                .clone();
+            let close: Value = serde_json::from_slice(&close).unwrap();
+            assert!(
+                close["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("binding Evidence coverage is not proven"),
+                "{close}"
+            );
+            let review = run("maker", &["review", "request", item_id]);
+            let review_id = review["review"]["id"].as_str().unwrap().to_string();
+            let review_trace = run("checker", &["trace", "item", &review_id]);
+            assert_stale_proof(
+                &review_trace["target"]["proof"],
+                coverage,
+                criterion_id,
+                requirement_id,
+                attempted_receipt_id,
+                gap_reason,
+            );
+            let review_evidence = run("checker", &["review", "evidence", item_id]);
+            assert_stale_proof(
+                &review_evidence["evidence"]["proof"],
+                coverage,
+                criterion_id,
+                requirement_id,
+                attempted_receipt_id,
+                gap_reason,
+            );
+            let status = run("prep", &["map", "status"]);
+            let ready = status["ready"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["item"]["id"] == item_id)
+                .unwrap();
+            assert_stale_proof(
+                &ready["proof"],
+                coverage,
+                criterion_id,
+                requirement_id,
+                attempted_receipt_id,
+                gap_reason,
+            );
+            planr()
+                .current_dir(dir.path())
+                .env("CODEX_THREAD_ID", format!("thread-{item_id}"))
+                .args([
+                    "--db", &db_arg, "--json", "stop", "activate", "--plan", plan_id,
+                ])
+                .assert()
+                .success();
+            let stop = single_json_document(
+                &planr()
+                    .current_dir(dir.path())
+                    .args(["--db", &db_arg, "--json", "stop"])
+                    .write_stdin(codex_stop_envelope(
+                        dir.path(),
+                        &format!("thread-{item_id}"),
+                        false,
+                    ))
+                    .env_remove("CODEX_THREAD_ID")
+                    .assert()
+                    .success()
+                    .get_output()
+                    .stdout,
+            );
+            assert_codex_stop_output_schema(&stop, true);
+            assert_eq!(stop["decision"], "block", "{stop}");
+            assert!(
+                stop["reason"].as_str().unwrap().contains(criterion_id),
+                "{stop}"
+            );
+            run("maker", &["pick", "release", item_id, "--force"]);
+            let peek = run("maker", &["pick", "--peek", "--plan", plan_id]);
+            assert_eq!(peek["item"]["id"], item_id);
+            assert_stale_proof(
+                &peek["proof"],
+                coverage,
+                criterion_id,
+                requirement_id,
+                attempted_receipt_id,
+                gap_reason,
+            );
+            let picked = run("maker", &["pick", "--plan", plan_id]);
+            assert_stale_proof(
+                &picked["proof"],
+                coverage,
+                criterion_id,
+                requirement_id,
+                attempted_receipt_id,
+                gap_reason,
+            );
+            {
+                let conn = Connection::open(&db).unwrap();
+                conn.execute(
+                "UPDATE items SET picked_at = datetime('now', '-1 hour'), last_heartbeat_at = datetime('now', '-1 hour') WHERE id = ?1",
+                [item_id],
+            )
+            .unwrap();
+            }
+            let recovery = run("prep", &["recover", "sweep", "--older-than-seconds", "1"]);
+            let recovered = recovery["stale"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["item"]["id"] == item_id)
+                .unwrap();
+            assert_stale_proof(
+                &recovered["proof"],
+                coverage,
+                criterion_id,
+                requirement_id,
+                attempted_receipt_id,
+                gap_reason,
+            );
+        };
+
+    let (workflow_plan, workflow_item) = create_open_plan("Workflow proof propagation audit");
+    let mut workflow_obligation = bind_obligation(
+        evidence_obligation_for(
+            "pob-audit-workflow",
+            &policy_digest,
+            "com.example.browser.page.visible",
+            "workflow proof propagation",
+            json!({"visible": true}),
+            json!({"kind": "browser", "uri": "http://127.0.0.1:9/workflow"}),
+            environment.clone(),
+            json!({"kind": "browser", "id": "browser-session"}),
+            json!([]),
+            "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+        ),
+        &workflow_plan,
+        "crit-audit-workflow",
+    );
+    workflow_obligation["item_id"] = json!(workflow_item.clone());
+    add_evidence_obligation_value(dir.path(), &db, "pob-audit-workflow", &workflow_obligation);
+    let workflow_preview = run("prep", &["map", "preview", "--close", &workflow_item]);
+    assert_eq!(workflow_preview["can_close"], false, "{workflow_preview}");
+    assert_eq!(workflow_preview["proof_blocks_close"], true);
+    assert_eq!(workflow_preview["proof"]["status"], "not_proven");
+    assert_eq!(
+        workflow_preview["proof"]["scope"]["kind"], "item",
+        "{workflow_preview}"
+    );
+    assert_eq!(
+        workflow_preview["proof"]["scope"]["id"], workflow_item,
+        "{workflow_preview}"
+    );
+    assert_eq!(
+        workflow_preview["proof"]["scope"]["binding_ids"],
+        json!(["pob-audit-workflow"]),
+        "{workflow_preview}"
+    );
+    assert!(
+        workflow_preview["proof"]["actionable_gaps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|gap| gap["reason"] == "missing_observation"),
+        "{workflow_preview}"
+    );
+    let workflow_trace = run("prep", &["trace", "item", &workflow_item]);
+    assert_eq!(
+        workflow_trace["proof"]["coverage_status"],
+        Value::Null,
+        "proof DTO should not expose ad hoc status fields: {workflow_trace}"
+    );
+    assert_eq!(workflow_trace["proof"]["status"], "not_proven");
+    assert_eq!(
+        workflow_trace["proof"]["next_action"],
+        "collect missing trusted evidence"
+    );
+    assert_eq!(workflow_trace["proof"]["actionable_now"], true);
+    assert_eq!(
+        workflow_trace["proof"]["criteria"][0]["suggested_next_action"],
+        "collect missing trusted evidence"
+    );
+    let workflow_raw = raw_coverage(dir.path(), &db, "crit-audit-workflow");
+    assert_persisted_verdict(&db, &workflow_raw);
+    for proof in [&workflow_preview["proof"], &workflow_trace["proof"]] {
+        assert_missing_observation_proof(
+            proof,
+            &workflow_raw,
+            "crit-audit-workflow",
+            "obs-pob-audit-workflow",
+        );
+    }
+    let approval = run(
+        "prep",
+        &[
+            "approval",
+            "request",
+            &workflow_item,
+            "--reason",
+            "human signoff cannot replace proof",
+        ],
+    );
+    assert_eq!(approval["proof"]["status"], "not_proven");
+    assert_eq!(approval["proof"], workflow_trace["proof"]);
+    assert_missing_observation_proof(
+        &approval["proof"],
+        &workflow_raw,
+        "crit-audit-workflow",
+        "obs-pob-audit-workflow",
+    );
+    let approved = run(
+        "prep",
+        &[
+            "approval",
+            "approve",
+            &workflow_item,
+            "--by",
+            "qa",
+            "--comment",
+            "approved but still not proof",
+        ],
+    );
+    assert_eq!(approved["approval"]["status"], "approved");
+    assert_eq!(
+        approved["proof"]["completion_language"],
+        "not proven by canonical Evidence coverage"
+    );
+    assert_eq!(approved["proof"], workflow_trace["proof"]);
+    assert_missing_observation_proof(
+        &approved["proof"],
+        &workflow_raw,
+        "crit-audit-workflow",
+        "obs-pob-audit-workflow",
+    );
+    let proof_review = run("maker", &["review", "request", &workflow_item]);
+    let proof_review_id = proof_review["review"]["id"].as_str().unwrap().to_string();
+    let review_trace = run("checker", &["trace", "item", &proof_review_id]);
+    assert_eq!(review_trace["target"]["proof"], workflow_trace["proof"]);
+    assert_missing_observation_proof(
+        &review_trace["target"]["proof"],
+        &workflow_raw,
+        "crit-audit-workflow",
+        "obs-pob-audit-workflow",
+    );
+    let review_evidence = run("checker", &["review", "evidence", &workflow_item]);
+    assert_eq!(
+        review_evidence["evidence"]["proof"],
+        workflow_trace["proof"]
+    );
+    assert_missing_observation_proof(
+        &review_evidence["evidence"]["proof"],
+        &workflow_raw,
+        "crit-audit-workflow",
+        "obs-pob-audit-workflow",
+    );
+    run(
+        "maker",
+        &[
+            "log",
+            "add",
+            "--item",
+            &workflow_item,
+            "--kind",
+            "completion",
+            "--summary",
+            "implementation complete but proof missing",
+        ],
+    );
+    let blocked_review_close = planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "checker")
+        .args([
+            "--db",
+            &db_arg,
+            "--json",
+            "review",
+            "close",
+            &proof_review_id,
+            "--verdict",
+            "complete",
+            "--close-target",
+        ])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let blocked_review_close: Value = serde_json::from_slice(&blocked_review_close).unwrap();
+    assert!(
+        blocked_review_close["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("binding Evidence coverage is not proven"),
+        "{blocked_review_close}"
+    );
+    run("maker", &["pick", "release", &workflow_item, "--force"]);
+    let workflow_status = run("prep", &["map", "status"]);
+    let ready_workflow = workflow_status["ready"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["item"]["id"] == workflow_item)
+        .unwrap();
+    assert_eq!(ready_workflow["item"]["status"], "ready");
+    assert_eq!(ready_workflow["proof"], workflow_trace["proof"]);
+    assert_missing_observation_proof(
+        &ready_workflow["proof"],
+        &workflow_raw,
+        "crit-audit-workflow",
+        "obs-pob-audit-workflow",
+    );
+    let workflow_pick = run("maker", &["pick", "--peek", "--plan", &workflow_plan]);
+    assert_eq!(workflow_pick["item"]["id"], workflow_item);
+    assert_eq!(workflow_pick["proof"], workflow_trace["proof"]);
+    assert_missing_observation_proof(
+        &workflow_pick["proof"],
+        &workflow_raw,
+        "crit-audit-workflow",
+        "obs-pob-audit-workflow",
+    );
+    let workflow_picked = run("maker", &["pick", "--plan", &workflow_plan]);
+    assert_eq!(workflow_picked["proof"], workflow_trace["proof"]);
+    assert_missing_observation_proof(
+        &workflow_picked["proof"],
+        &workflow_raw,
+        "crit-audit-workflow",
+        "obs-pob-audit-workflow",
+    );
+    let workflow_picked_status = run("prep", &["map", "status"]);
+    let picked_workflow = workflow_picked_status["picked"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["item"]["id"] == workflow_item)
+        .unwrap();
+    assert_eq!(picked_workflow["proof"], workflow_trace["proof"]);
+    assert_missing_observation_proof(
+        &picked_workflow["proof"],
+        &workflow_raw,
+        "crit-audit-workflow",
+        "obs-pob-audit-workflow",
+    );
+    {
+        let conn = Connection::open(&db).unwrap();
+        conn.execute(
+            "UPDATE items SET picked_at = datetime('now', '-1 hour'), last_heartbeat_at = datetime('now', '-1 hour') WHERE id = ?1",
+            [&workflow_item],
+        )
+        .unwrap();
+    }
+    let recovery = run("prep", &["recover", "sweep", "--older-than-seconds", "1"]);
+    assert!(
+        recovery["stale"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["item"]["id"] == workflow_item
+                && entry["proof"]["status"] == "not_proven"),
+        "{recovery}"
+    );
+    let recovered_workflow = recovery["stale"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["item"]["id"] == workflow_item)
+        .unwrap();
+    assert_missing_observation_proof(
+        &recovered_workflow["proof"],
+        &workflow_raw,
+        "crit-audit-workflow",
+        "obs-pob-audit-workflow",
+    );
+
+    let planless_item = "i-audit-planless-bound";
+    {
+        let conn = Connection::open(&db).unwrap();
+        let workflow_plan_path: String = conn
+            .query_row(
+                "SELECT path FROM plans WHERE id = ?1",
+                [&workflow_plan],
+                |row| row.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "INSERT INTO items(id, project_id, title, description, status, work_type, priority, plan_path, created_at, updated_at)
+             VALUES (?1, ?2, 'Plan-bound proof', 'Active item binding follows plan containment', 'ready', 'code', 0, ?3, datetime('now'), datetime('now'))",
+            rusqlite::params![planless_item, project_id, workflow_plan_path],
+        )
+        .unwrap();
+    }
+    let mut planless_obligation = bind_obligation(
+        evidence_obligation_for(
+            "pob-audit-planless",
+            &policy_digest,
+            "com.example.browser.page.visible",
+            "planless item still proof gated",
+            json!({"visible": true}),
+            json!({"kind": "browser", "uri": "http://127.0.0.1:9/planless"}),
+            environment.clone(),
+            json!({"kind": "browser", "id": "browser-session"}),
+            json!([]),
+            "sha256:1010101010101010101010101010101010101010101010101010101010101010",
+        ),
+        &workflow_plan,
+        "crit-audit-planless",
+    );
+    planless_obligation["item_id"] = json!(planless_item);
+    add_evidence_obligation_value(dir.path(), &db, "pob-audit-planless", &planless_obligation);
+    let planless_preview = run("prep", &["map", "preview", "--close", planless_item]);
+    assert_eq!(planless_preview["proof"]["active_binding"], true);
+    assert_eq!(planless_preview["proof"]["status"], "not_proven");
+    assert_eq!(planless_preview["proof_blocks_close"], true);
+
+    let broken_item = "i-audit-broken-proof";
+    {
+        let conn = Connection::open(&db).unwrap();
+        let workflow_plan_path: String = conn
+            .query_row(
+                "SELECT path FROM plans WHERE id = ?1",
+                [&workflow_plan],
+                |row| row.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "INSERT INTO items(id, project_id, title, description, status, work_type, priority, plan_path, created_at, updated_at)
+             VALUES (?1, ?2, 'Broken proof', 'Malformed active binding fails closed', 'ready', 'code', 0, ?3, datetime('now'), datetime('now'))",
+            rusqlite::params![broken_item, project_id, workflow_plan_path],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO proof_obligations(
+              id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
+              binding, observation_requirements_json, fixture_policy_json, freshness_policy_json,
+              assurance_policy_json, policy_digest, config_digest, created_at
+            ) VALUES (
+              'pob-audit-broken', ?1, ?2, ?3, 'crit-audit-broken', 1, 'broken proof',
+              1, 'not-json', '{}', '{}', '{}', ?4, ?5, datetime('now')
+            )",
+            rusqlite::params![
+                project_id,
+                workflow_plan,
+                broken_item,
+                policy_digest,
+                "sha256:2020202020202020202020202020202020202020202020202020202020202020",
+            ],
+        )
+        .unwrap();
+    }
+    let broken_preview = run("prep", &["map", "preview", "--close", broken_item]);
+    assert_eq!(
+        broken_preview["proof"]["status"], "error",
+        "{broken_preview}"
+    );
+    assert_eq!(broken_preview["proof"]["active_binding"], true);
+    assert_eq!(broken_preview["proof_blocks_close"], true);
+
+    let (item_multi_plan, item_multi_item) = create_settled_plan("Item multi criteria proof");
+    let mut item_receipt_obligation = bind_obligation(
+        evidence_obligation_for(
+            "pob-audit-item-multi-receipt",
+            &policy_digest,
+            "com.example.health.status",
+            "item multi receipt evidence",
+            json!({"status": "ok"}),
+            json!({"kind": "process", "uri": "local://health"}),
+            environment.clone(),
+            json!({"kind": "process", "id": "runtime-local"}),
+            json!([]),
+            "sha256:3030303030303030303030303030303030303030303030303030303030303030",
+        ),
+        &item_multi_plan,
+        "crit-audit-item-multi-receipt",
+    );
+    let mut item_missing_obligation = bind_obligation(
+        evidence_obligation_for(
+            "pob-audit-item-multi-missing",
+            &policy_digest,
+            "com.example.browser.page.visible",
+            "item multi missing evidence",
+            json!({"visible": true}),
+            json!({"kind": "browser", "uri": "http://127.0.0.1:9/item-missing"}),
+            environment.clone(),
+            json!({"kind": "browser", "id": "browser-session"}),
+            json!([]),
+            "sha256:4040404040404040404040404040404040404040404040404040404040404040",
+        ),
+        &item_multi_plan,
+        "crit-audit-item-multi-missing",
+    );
+    let item_waiver_target = json!({"kind": "process", "uri": "local://item-waived"});
+    let mut item_waived_obligation = bind_obligation(
+        evidence_obligation_for(
+            "pob-audit-item-multi-waived",
+            &policy_digest,
+            "com.example.health.status",
+            "item multi waived evidence",
+            json!({"status": "ok"}),
+            item_waiver_target.clone(),
+            environment.clone(),
+            json!({"kind": "process", "id": "runtime-local"}),
+            json!([]),
+            "sha256:5050505050505050505050505050505050505050505050505050505050505050",
+        ),
+        &item_multi_plan,
+        "crit-audit-item-multi-waived",
+    );
+    item_receipt_obligation["item_id"] = json!(item_multi_item.clone());
+    item_missing_obligation["item_id"] = json!(item_multi_item.clone());
+    item_waived_obligation["item_id"] = json!(item_multi_item.clone());
+    add_evidence_obligation_value(
+        dir.path(),
+        &db,
+        "pob-audit-item-multi-receipt",
+        &item_receipt_obligation,
+    );
+    add_evidence_obligation_value(
+        dir.path(),
+        &db,
+        "pob-audit-item-multi-missing",
+        &item_missing_obligation,
+    );
+    add_evidence_obligation_value(
+        dir.path(),
+        &db,
+        "pob-audit-item-multi-waived",
+        &item_waived_obligation,
+    );
+    let item_multi_run = run_evidence_value(
+        dir.path(),
+        &db,
+        "pob-audit-item-multi-receipt",
+        &instance_id,
+        json!({"kind": "process", "uri": "local://health"}),
+    );
+    let item_waiver_digest = insert_evidence_waiver(
+        dir.path(),
+        &db,
+        "waiver-audit-item-multi-valid",
+        &item_multi_item,
+        "pob-audit-item-multi-waived",
+        "obs-pob-audit-item-multi-waived",
+        "crit-audit-item-multi-waived",
+        item_waiver_target,
+        "2099-01-01T00:00:00Z",
+    );
+    let item_multi_trace = run("prep", &["trace", "item", &item_multi_item]);
+    let item_criteria = item_multi_trace["proof"]["criteria"].as_array().unwrap();
+    assert_eq!(item_criteria.len(), 3, "{item_multi_trace}");
+    let item_receipt = item_criteria
+        .iter()
+        .find(|criterion| criterion["criterion_id"] == "crit-audit-item-multi-receipt")
+        .unwrap();
+    let item_missing = item_criteria
+        .iter()
+        .find(|criterion| criterion["criterion_id"] == "crit-audit-item-multi-missing")
+        .unwrap();
+    let item_waived = item_criteria
+        .iter()
+        .find(|criterion| criterion["criterion_id"] == "crit-audit-item-multi-waived")
+        .unwrap();
+    assert_eq!(item_receipt["status"], "satisfied");
+    assert_eq!(
+        item_receipt["receipt_refs"][0],
+        item_multi_run["object"]["receipt"]["id"]
+    );
+    assert_eq!(item_missing["status"], "unsatisfied");
+    assert_eq!(
+        item_missing["actionable_gaps"][0]["criterion_id"],
+        "crit-audit-item-multi-missing"
+    );
+    assert_eq!(item_waived["status"], "waived");
+    assert_eq!(item_waived["actionable_now"], false);
+    assert_eq!(item_waived["suggested_next_action"], "none");
+    assert_eq!(item_waived["next_action"], Value::Null);
+    assert!(
+        item_waived["actionable_gaps"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "waived observations must never become actionable gaps: {item_waived}"
+    );
+    assert_eq!(
+        item_waived["waiver_refs"][0],
+        "waiver-audit-item-multi-valid"
+    );
+    assert!(
+        item_waived["waiver_digests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|digest| digest.as_str() == Some(item_waiver_digest.as_str())),
+        "{item_waived}"
+    );
+
+    let (proof_pass_plan, proof_pass_item) = create_open_plan("Proof pass none projection");
+    let mut proof_pass_receipt = bind_obligation(
+        evidence_obligation_for(
+            "pob-audit-proof-pass-receipt",
+            &policy_digest,
+            "com.example.health.status",
+            "proof pass receipt evidence",
+            json!({"status": "ok"}),
+            json!({"kind": "process", "uri": "local://health"}),
+            environment.clone(),
+            json!({"kind": "process", "id": "runtime-local"}),
+            json!([]),
+            "sha256:6060606060606060606060606060606060606060606060606060606060606060",
+        ),
+        &proof_pass_plan,
+        "crit-audit-proof-pass-receipt",
+    );
+    let proof_pass_waiver_target = json!({"kind": "process", "uri": "local://proof-pass-waived"});
+    let mut proof_pass_waived = bind_obligation(
+        evidence_obligation_for(
+            "pob-audit-proof-pass-waived",
+            &policy_digest,
+            "com.example.health.status",
+            "proof pass waived evidence",
+            json!({"status": "ok"}),
+            proof_pass_waiver_target.clone(),
+            environment.clone(),
+            json!({"kind": "process", "id": "runtime-local"}),
+            json!([]),
+            "sha256:7070707070707070707070707070707070707070707070707070707070707070",
+        ),
+        &proof_pass_plan,
+        "crit-audit-proof-pass-waived",
+    );
+    proof_pass_receipt["item_id"] = json!(proof_pass_item.clone());
+    proof_pass_waived["item_id"] = json!(proof_pass_item.clone());
+    add_evidence_obligation_value(
+        dir.path(),
+        &db,
+        "pob-audit-proof-pass-receipt",
+        &proof_pass_receipt,
+    );
+    add_evidence_obligation_value(
+        dir.path(),
+        &db,
+        "pob-audit-proof-pass-waived",
+        &proof_pass_waived,
+    );
+    let proof_pass_run = run_evidence_value(
+        dir.path(),
+        &db,
+        "pob-audit-proof-pass-receipt",
+        &instance_id,
+        json!({"kind": "process", "uri": "local://health"}),
+    );
+    let proof_pass_waiver_digest = insert_evidence_waiver(
+        dir.path(),
+        &db,
+        "waiver-audit-proof-pass-valid",
+        &proof_pass_item,
+        "pob-audit-proof-pass-waived",
+        "obs-pob-audit-proof-pass-waived",
+        "crit-audit-proof-pass-waived",
+        proof_pass_waiver_target,
+        "2099-01-01T00:00:00Z",
+    );
+    let proof_pass_trace = run("prep", &["trace", "item", &proof_pass_item]);
+    assert_eq!(proof_pass_trace["proof"]["status"], "proven");
+    assert_eq!(proof_pass_trace["proof"]["actionable_now"], false);
+    assert_eq!(proof_pass_trace["proof"]["suggested_next_action"], "none");
+    assert_eq!(proof_pass_trace["proof"]["next_action"], Value::Null);
+    assert!(
+        proof_pass_trace["proof"]["actionable_gaps"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{proof_pass_trace}"
+    );
+    let proof_pass_receipt_criterion = proof_pass_trace["proof"]["criteria"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|criterion| criterion["criterion_id"] == "crit-audit-proof-pass-receipt")
+        .unwrap();
+    let proof_pass_waived_criterion = proof_pass_trace["proof"]["criteria"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|criterion| criterion["criterion_id"] == "crit-audit-proof-pass-waived")
+        .unwrap();
+    assert_eq!(
+        proof_pass_receipt_criterion["receipt_refs"][0],
+        proof_pass_run["object"]["receipt"]["id"]
+    );
+    assert_eq!(proof_pass_waived_criterion["suggested_next_action"], "none");
+    assert_eq!(proof_pass_waived_criterion["next_action"], Value::Null);
+    assert!(
+        proof_pass_waived_criterion["actionable_gaps"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{proof_pass_waived_criterion}"
+    );
+    assert!(
+        proof_pass_waived_criterion["waiver_digests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|digest| digest.as_str() == Some(proof_pass_waiver_digest.as_str())),
+        "{proof_pass_waived_criterion}"
+    );
+    let proof_pass_receipt_raw = raw_coverage(dir.path(), &db, "crit-audit-proof-pass-receipt");
+    let proof_pass_waived_raw = raw_coverage(dir.path(), &db, "crit-audit-proof-pass-waived");
+    assert_persisted_verdict(&db, &proof_pass_receipt_raw);
+    assert_persisted_verdict(&db, &proof_pass_waived_raw);
+    let proof_pass_receipt_id = proof_pass_run["object"]["receipt"]["id"].as_str().unwrap();
+    let proof_pass_receipt_digest = proof_pass_receipt_raw["object"]["receipt_digests"][0]
+        .as_str()
+        .unwrap();
+    assert_satisfied_proof(
+        &proof_pass_trace["proof"],
+        &proof_pass_receipt_raw,
+        "crit-audit-proof-pass-receipt",
+        proof_pass_receipt_id,
+        proof_pass_receipt_digest,
+    );
+    assert_waived_proof(
+        &proof_pass_trace["proof"],
+        &proof_pass_waived_raw,
+        "crit-audit-proof-pass-waived",
+        "waiver-audit-proof-pass-valid",
+        &proof_pass_waiver_digest,
+    );
+    let assert_proof_pass_pair = |proof: &Value| {
+        assert_satisfied_proof(
+            proof,
+            &proof_pass_receipt_raw,
+            "crit-audit-proof-pass-receipt",
+            proof_pass_receipt_id,
+            proof_pass_receipt_digest,
+        );
+        assert_waived_proof(
+            proof,
+            &proof_pass_waived_raw,
+            "crit-audit-proof-pass-waived",
+            "waiver-audit-proof-pass-valid",
+            &proof_pass_waiver_digest,
+        );
+    };
+    let proof_pass_status = run("prep", &["map", "status"]);
+    let proof_pass_ready = proof_pass_status["ready"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["item"]["id"] == proof_pass_item)
+        .unwrap();
+    assert_eq!(proof_pass_ready["proof"], proof_pass_trace["proof"]);
+    assert_proof_pass_pair(&proof_pass_ready["proof"]);
+    let proof_pass_preview = run("prep", &["map", "preview", "--close", &proof_pass_item]);
+    assert_eq!(proof_pass_preview["proof"], proof_pass_trace["proof"]);
+    assert_eq!(
+        proof_pass_preview["can_close"], true,
+        "{proof_pass_preview}"
+    );
+    assert_satisfied_proof(
+        &proof_pass_preview["proof"],
+        &proof_pass_receipt_raw,
+        "crit-audit-proof-pass-receipt",
+        proof_pass_receipt_id,
+        proof_pass_receipt_digest,
+    );
+    assert_waived_proof(
+        &proof_pass_preview["proof"],
+        &proof_pass_waived_raw,
+        "crit-audit-proof-pass-waived",
+        "waiver-audit-proof-pass-valid",
+        &proof_pass_waiver_digest,
+    );
+    let proof_pass_approval = run(
+        "prep",
+        &[
+            "approval",
+            "request",
+            &proof_pass_item,
+            "--reason",
+            "release proof pass",
+        ],
+    );
+    assert_eq!(proof_pass_approval["proof"], proof_pass_trace["proof"]);
+    assert_proof_pass_pair(&proof_pass_approval["proof"]);
+    let proof_pass_decision = run(
+        "prep",
+        &["approval", "approve", &proof_pass_item, "--by", "qa"],
+    );
+    assert_eq!(proof_pass_decision["proof"], proof_pass_trace["proof"]);
+    assert_proof_pass_pair(&proof_pass_decision["proof"]);
+    let proof_pass_peek = run("maker", &["pick", "--peek", "--plan", &proof_pass_plan]);
+    assert_eq!(proof_pass_peek["item"]["id"], proof_pass_item);
+    assert_eq!(proof_pass_peek["proof"], proof_pass_trace["proof"]);
+    assert_proof_pass_pair(&proof_pass_peek["proof"]);
+    let proof_pass_pick = run("maker", &["pick", "--plan", &proof_pass_plan]);
+    assert_eq!(proof_pass_pick["item"]["id"], proof_pass_item);
+    assert_eq!(proof_pass_pick["proof"], proof_pass_trace["proof"]);
+    assert_proof_pass_pair(&proof_pass_pick["proof"]);
+    let proof_pass_picked_status = run("prep", &["map", "status"]);
+    let proof_pass_picked_entry = proof_pass_picked_status["picked"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["item"]["id"] == proof_pass_item)
+        .unwrap();
+    assert_eq!(proof_pass_picked_entry["proof"], proof_pass_trace["proof"]);
+    assert_proof_pass_pair(&proof_pass_picked_entry["proof"]);
+    {
+        let conn = Connection::open(&db).unwrap();
+        conn.execute(
+            "UPDATE items SET picked_at = datetime('now', '-1 hour'), last_heartbeat_at = datetime('now', '-1 hour') WHERE id = ?1",
+            [&proof_pass_item],
+        )
+        .unwrap();
+    }
+    let proof_pass_recovery = run("prep", &["recover", "sweep", "--older-than-seconds", "1"]);
+    let proof_pass_recovered = proof_pass_recovery["stale"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["item"]["id"] == proof_pass_item)
+        .unwrap();
+    assert_eq!(proof_pass_recovered["proof"], proof_pass_trace["proof"]);
+    assert_proof_pass_pair(&proof_pass_recovered["proof"]);
+    let proof_pass_review = run("maker", &["review", "request", &proof_pass_item]);
+    let proof_pass_review_id = proof_pass_review["review"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let proof_pass_review_trace = run("checker", &["trace", "item", &proof_pass_review_id]);
+    assert_eq!(
+        proof_pass_review_trace["target"]["proof"],
+        proof_pass_trace["proof"]
+    );
+    assert_proof_pass_pair(&proof_pass_review_trace["target"]["proof"]);
+    let proof_pass_review_evidence = run("checker", &["review", "evidence", &proof_pass_item]);
+    assert_eq!(
+        proof_pass_review_evidence["evidence"]["proof"],
+        proof_pass_trace["proof"]
+    );
+    assert_proof_pass_pair(&proof_pass_review_evidence["evidence"]["proof"]);
+    let (proof_close_plan, proof_close_item) = create_open_plan("Proof close none projection");
+    let mut proof_close_receipt = bind_obligation(
+        evidence_obligation_for(
+            "pob-audit-proof-close-receipt",
+            &policy_digest,
+            "com.example.health.status",
+            "proof close receipt evidence",
+            json!({"status": "ok"}),
+            json!({"kind": "process", "uri": "local://health"}),
+            environment.clone(),
+            json!({"kind": "process", "id": "runtime-local"}),
+            json!([]),
+            "sha256:6161616161616161616161616161616161616161616161616161616161616161",
+        ),
+        &proof_close_plan,
+        "crit-audit-proof-close-receipt",
+    );
+    let proof_close_waiver_target = json!({"kind": "process", "uri": "local://proof-close-waived"});
+    let mut proof_close_waived = bind_obligation(
+        evidence_obligation_for(
+            "pob-audit-proof-close-waived",
+            &policy_digest,
+            "com.example.health.status",
+            "proof close waived evidence",
+            json!({"status": "ok"}),
+            proof_close_waiver_target.clone(),
+            environment.clone(),
+            json!({"kind": "process", "id": "runtime-local"}),
+            json!([]),
+            "sha256:7171717171717171717171717171717171717171717171717171717171717171",
+        ),
+        &proof_close_plan,
+        "crit-audit-proof-close-waived",
+    );
+    proof_close_receipt["item_id"] = json!(proof_close_item.clone());
+    proof_close_waived["item_id"] = json!(proof_close_item.clone());
+    add_evidence_obligation_value(
+        dir.path(),
+        &db,
+        "pob-audit-proof-close-receipt",
+        &proof_close_receipt,
+    );
+    add_evidence_obligation_value(
+        dir.path(),
+        &db,
+        "pob-audit-proof-close-waived",
+        &proof_close_waived,
+    );
+    let proof_close_run = run_evidence_value(
+        dir.path(),
+        &db,
+        "pob-audit-proof-close-receipt",
+        &instance_id,
+        json!({"kind": "process", "uri": "local://health"}),
+    );
+    let proof_close_waiver_digest = insert_evidence_waiver(
+        dir.path(),
+        &db,
+        "waiver-audit-proof-close-valid",
+        &proof_close_item,
+        "pob-audit-proof-close-waived",
+        "obs-pob-audit-proof-close-waived",
+        "crit-audit-proof-close-waived",
+        proof_close_waiver_target,
+        "2099-01-01T00:00:00Z",
+    );
+    let proof_close_trace = run("prep", &["trace", "item", &proof_close_item]);
+    assert_eq!(proof_close_trace["proof"]["status"], "proven");
+    let proof_close_receipt_raw = raw_coverage(dir.path(), &db, "crit-audit-proof-close-receipt");
+    let proof_close_waived_raw = raw_coverage(dir.path(), &db, "crit-audit-proof-close-waived");
+    assert_persisted_verdict(&db, &proof_close_receipt_raw);
+    assert_persisted_verdict(&db, &proof_close_waived_raw);
+    let proof_close_receipt_id = proof_close_run["object"]["receipt"]["id"].as_str().unwrap();
+    let proof_close_receipt_digest = proof_close_receipt_raw["object"]["receipt_digests"][0]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        proof_close_receipt_raw["object"]["receipt_digests"][0], proof_close_receipt_digest,
+        "{proof_close_receipt_raw}"
+    );
+    assert!(
+        proof_close_waived_raw["object"]["waiver_digests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|digest| digest.as_str() == Some(proof_close_waiver_digest.as_str())),
+        "{proof_close_waived_raw}"
+    );
+    assert_satisfied_proof(
+        &proof_close_trace["proof"],
+        &proof_close_receipt_raw,
+        "crit-audit-proof-close-receipt",
+        proof_close_receipt_id,
+        proof_close_receipt_digest,
+    );
+    assert_waived_proof(
+        &proof_close_trace["proof"],
+        &proof_close_waived_raw,
+        "crit-audit-proof-close-waived",
+        "waiver-audit-proof-close-valid",
+        &proof_close_waiver_digest,
+    );
+    let proof_close_preview = run("prep", &["map", "preview", "--close", &proof_close_item]);
+    assert_eq!(
+        proof_close_preview["can_close"], true,
+        "{proof_close_preview}"
+    );
+    assert_satisfied_proof(
+        &proof_close_preview["proof"],
+        &proof_close_receipt_raw,
+        "crit-audit-proof-close-receipt",
+        proof_close_receipt_id,
+        proof_close_receipt_digest,
+    );
+    assert_waived_proof(
+        &proof_close_preview["proof"],
+        &proof_close_waived_raw,
+        "crit-audit-proof-close-waived",
+        "waiver-audit-proof-close-valid",
+        &proof_close_waiver_digest,
+    );
+    run(
+        "maker",
+        &[
+            "log",
+            "add",
+            "--item",
+            &proof_close_item,
+            "--kind",
+            "completion",
+            "--summary",
+            "proof close implementation complete",
+        ],
+    );
+    let proof_pass_close = run(
+        "maker",
+        &["close", &proof_close_item, "--summary", "proof close done"],
+    );
+    assert_eq!(
+        proof_pass_close["item"]["status"], "closed",
+        "{proof_pass_close}"
+    );
+    assert_eq!(proof_pass_close["proof"], proof_close_trace["proof"]);
+    assert_satisfied_proof(
+        &proof_pass_close["proof"],
+        &proof_close_receipt_raw,
+        "crit-audit-proof-close-receipt",
+        proof_close_receipt_id,
+        proof_close_receipt_digest,
+    );
+    assert_waived_proof(
+        &proof_pass_close["proof"],
+        &proof_close_waived_raw,
+        "crit-audit-proof-close-waived",
+        "waiver-audit-proof-close-valid",
+        &proof_close_waiver_digest,
+    );
+    let proof_close_closed_trace = run("prep", &["trace", "item", &proof_close_item]);
+    assert_eq!(
+        proof_close_closed_trace["proof"],
+        proof_close_trace["proof"]
+    );
+    assert_satisfied_proof(
+        &proof_close_closed_trace["proof"],
+        &proof_close_receipt_raw,
+        "crit-audit-proof-close-receipt",
+        proof_close_receipt_id,
+        proof_close_receipt_digest,
+    );
+    assert_waived_proof(
+        &proof_close_closed_trace["proof"],
+        &proof_close_waived_raw,
+        "crit-audit-proof-close-waived",
+        "waiver-audit-proof-close-valid",
+        &proof_close_waiver_digest,
+    );
+
+    let (browser_plan, browser_item) = create_settled_plan("Browser evidence audit");
+    let browser_obligation = bind_obligation(
+        evidence_obligation_for(
+            "pob-audit-browser",
+            &policy_digest,
+            "com.example.browser.page.visible",
+            "browser rendering is visible",
+            json!({"visible": true}),
+            json!({"kind": "browser", "uri": "http://127.0.0.1:9/page"}),
+            environment.clone(),
+            json!({"kind": "browser", "id": "browser-session"}),
+            json!([]),
+            "sha256:aaaaaaaabbbbbbbbccccccccddddddddeeeeeeeeffffffff0000000011111111",
+        ),
+        &browser_plan,
+        "crit-audit-browser",
+    );
+    add_evidence_obligation_value(dir.path(), &db, "pob-audit-browser", &browser_obligation);
+    run(
+        "maker",
+        &[
+            "log",
+            "add",
+            "--item",
+            &browser_item,
+            "--kind",
+            "verification",
+            "--summary",
+            "verified page in browser",
+            "--cmd",
+            "curl http://127.0.0.1:9/page",
+        ],
+    );
+    let forged = mcp_tool(
+        dir.path(),
+        &db,
+        201,
+        "planr_evidence_import",
+        json!({"artifact_root": dir.path().to_str().unwrap(), "input": {"receipt_json": {"provenance": {"assigned_by": "agent"}}}}),
+    );
+    assert_evidence_envelope(&forged, "evidence.import", false);
+    let browser_audit = run("prep", &["plan", "audit", &browser_plan]);
+    assert_eq!(browser_audit["holds"], false, "{browser_audit}");
+    let browser_clause = clause(&browser_audit, "verification_logged");
+    assert_eq!(browser_clause["authority"], "evidence_coverage");
+    assert_eq!(browser_clause["log_authority"], "claim_only");
+    assert_eq!(browser_clause["logs"].as_array().unwrap().len(), 1);
+    assert_eq!(browser_clause["pass"], false);
+    assert_eq!(
+        browser_clause["criteria"][0]["criterion_id"],
+        "crit-audit-browser"
+    );
+    assert_eq!(browser_clause["criteria"][0]["status"], "unsatisfied");
+    assert_eq!(
+        browser_clause["criteria"][0]["observations"][0]["gap_reason"],
+        "missing_observation"
+    );
+    let browser_human = run_human("prep", &["plan", "audit", &browser_plan]);
+    assert!(
+        browser_human.contains("claim-only untrusted verification log:"),
+        "{browser_human}"
+    );
+    assert!(browser_human.contains("item="), "{browser_human}");
+    assert!(
+        browser_human.contains("summary=verified page in browser"),
+        "{browser_human}"
+    );
+    assert_eq!(
+        run("prep", &["plan", "audit", &browser_plan])["holds"],
+        false,
+        "claim rendering must not affect binding closure"
+    );
+
+    let (browser_close_plan, browser_close_item) =
+        create_open_plan("Browser curl cannot close binding plan");
+    let mut browser_close_obligation = bind_obligation(
+        evidence_obligation_for(
+            "pob-audit-browser-close",
+            &policy_digest,
+            "com.example.browser.page.visible",
+            "browser-rendered obligation cannot be replaced by curl",
+            json!({"visible": true}),
+            json!({"kind": "browser", "uri": "http://127.0.0.1:9/close-page"}),
+            environment.clone(),
+            json!({"kind": "browser", "id": "browser-session"}),
+            json!([]),
+            "sha256:abababababababababababababababababababababababababababababababab",
+        ),
+        &browser_close_plan,
+        "crit-audit-browser-close",
+    );
+    browser_close_obligation["item_id"] = json!(browser_close_item.clone());
+    add_evidence_obligation_value(
+        dir.path(),
+        &db,
+        "pob-audit-browser-close",
+        &browser_close_obligation,
+    );
+    run(
+        "maker",
+        &[
+            "log",
+            "add",
+            "--item",
+            &browser_close_item,
+            "--kind",
+            "completion",
+            "--summary",
+            "production ready: verified page in browser with curl against local fixture",
+            "--cmd",
+            "curl http://127.0.0.1:9/close-page",
+        ],
+    );
+    let browser_close_preview = run("prep", &["map", "preview", "--close", &browser_close_item]);
+    assert_eq!(
+        browser_close_preview["can_close"], false,
+        "{browser_close_preview}"
+    );
+    assert_eq!(browser_close_preview["proof_blocks_close"], true);
+    assert_eq!(
+        browser_close_preview["proof"]["completion_language"],
+        "not proven by canonical Evidence coverage",
+        "{browser_close_preview}"
+    );
+    assert_eq!(
+        browser_close_preview["proof"]["next_action"], "collect missing trusted evidence",
+        "{browser_close_preview}"
+    );
+    assert!(
+        !browser_close_preview["proof"]["completion_language"]
+            .as_str()
+            .unwrap()
+            .contains("production ready"),
+        "{browser_close_preview}"
+    );
+    let browser_close_raw = raw_coverage(dir.path(), &db, "crit-audit-browser-close");
+    assert_persisted_verdict(&db, &browser_close_raw);
+    assert_missing_observation_proof(
+        &browser_close_preview["proof"],
+        &browser_close_raw,
+        "crit-audit-browser-close",
+        "obs-pob-audit-browser-close",
+    );
+    let browser_close = planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "maker")
+        .args([
+            "--db",
+            &db_arg,
+            "--json",
+            "close",
+            &browser_close_item,
+            "--summary",
+            "production ready after browser check",
+        ])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let browser_close: Value = serde_json::from_slice(&browser_close).unwrap();
+    assert!(
+        browser_close["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("binding Evidence coverage is not proven"),
+        "{browser_close}"
+    );
+    planr()
+        .current_dir(dir.path())
+        .env("CODEX_THREAD_ID", "thread-browser-close")
+        .args([
+            "--db",
+            &db_arg,
+            "--json",
+            "stop",
+            "activate",
+            "--plan",
+            &browser_close_plan,
+        ])
+        .assert()
+        .success();
+    let browser_stop = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args(["--db", &db_arg, "--json", "stop"])
+            .write_stdin(codex_stop_envelope(
+                dir.path(),
+                "thread-browser-close",
+                false,
+            ))
+            .env_remove("CODEX_THREAD_ID")
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    assert_codex_stop_output_schema(&browser_stop, true);
+    assert_eq!(browser_stop["decision"], "block", "{browser_stop}");
+    assert!(
+        browser_stop["reason"]
+            .as_str()
+            .unwrap()
+            .contains("crit-audit-browser-close"),
+        "{browser_stop}"
+    );
+
+    let (legacy_nonbinding_plan, legacy_nonbinding_item) =
+        create_settled_plan("Legacy nonbinding evidence audit");
+    let mut nonbinding_obligation = bind_obligation(
+        evidence_obligation_for(
+            "pob-audit-nonbinding",
+            &policy_digest,
+            "com.example.health.status",
+            "nonbinding diagnostic evidence",
+            json!({"status": "ok"}),
+            json!({"kind": "process", "uri": "local://health"}),
+            environment.clone(),
+            json!({"kind": "process", "id": "runtime-local"}),
+            json!([]),
+            "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        ),
+        &legacy_nonbinding_plan,
+        "crit-audit-nonbinding",
+    );
+    nonbinding_obligation["binding"] = json!(false);
+    add_evidence_obligation_value(
+        dir.path(),
+        &db,
+        "pob-audit-nonbinding",
+        &nonbinding_obligation,
+    );
+    run(
+        "maker",
+        &[
+            "log",
+            "add",
+            "--item",
+            &legacy_nonbinding_item,
+            "--kind",
+            "verification",
+            "--summary",
+            "legacy diagnostic claim",
+            "--cmd",
+            "printf legacy",
+        ],
+    );
+    let nonbinding_audit = run("prep", &["plan", "audit", &legacy_nonbinding_plan]);
+    let nonbinding_clause = clause(&nonbinding_audit, "verification_logged");
+    assert_eq!(nonbinding_audit["holds"], true, "{nonbinding_audit}");
+    assert_eq!(
+        nonbinding_clause["authority"],
+        "legacy_verification_log_compatibility"
+    );
+    assert_eq!(nonbinding_clause["log_authority"], "claim_only");
+    assert!(nonbinding_clause["criteria"].as_array().unwrap().is_empty());
+    let nonbinding_human = run_human("prep", &["plan", "audit", &legacy_nonbinding_plan]);
+    assert!(
+        nonbinding_human.contains("claim-only untrusted verification log:"),
+        "{nonbinding_human}"
+    );
+    assert!(
+        nonbinding_human.contains("summary=legacy diagnostic claim"),
+        "{nonbinding_human}"
+    );
+    assert_eq!(
+        run("prep", &["plan", "audit", &browser_plan])["holds"],
+        false,
+        "nonbinding compatibility must not weaken a separate binding plan"
+    );
+
+    let (api_plan, _) = create_settled_plan("API evidence audit");
+    let api_obligation = bind_obligation(
+        evidence_obligation_for(
+            "pob-audit-api",
+            &policy_digest,
+            "com.example.health.status",
+            "public API evidence",
+            json!({"status": "ok"}),
+            json!({"kind": "process", "uri": "local://health"}),
+            environment.clone(),
+            json!({"kind": "process", "id": "runtime-local"}),
+            json!([]),
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        ),
+        &api_plan,
+        "crit-audit-api",
+    );
+    add_evidence_obligation_value(dir.path(), &db, "pob-audit-api", &api_obligation);
+    let wrong_target_path = dir.path().join("pob-audit-api-wrong.run.json");
+    fs::write(
+        &wrong_target_path,
+        serde_json::to_vec_pretty(&json!({
+            "obligation_id": "pob-audit-api",
+            "capability_instance_id": instance_id,
+            "target": {"kind": "process", "uri": "local://wrong-target"}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let wrong_target = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                &db_arg,
+                "--json",
+                "evidence",
+                "run",
+                "--input",
+                wrong_target_path.to_str().unwrap(),
+            ])
+            .assert()
+            .failure()
+            .get_output()
+            .stdout,
+    );
+    assert_evidence_envelope(&wrong_target, "evidence.run", false);
+    assert_eq!(
+        run("prep", &["plan", "audit", &api_plan])["holds"],
+        false,
+        "wrong-target attempt must not satisfy audit"
+    );
+    let api_run = run_evidence_value(
+        dir.path(),
+        &db,
+        "pob-audit-api",
+        &instance_id,
+        json!({"kind": "process", "uri": "local://health"}),
+    );
+    assert_evidence_envelope(&api_run, "evidence.run", true);
+    let api_audit = run("prep", &["plan", "audit", &api_plan]);
+    assert_eq!(api_audit["holds"], true, "{api_audit}");
+    let api_clause = clause(&api_audit, "verification_logged");
+    assert_eq!(api_clause["authority"], "evidence_coverage");
+    assert_eq!(api_clause["pass"], true);
+    assert_eq!(api_clause["criteria"][0]["status"], "satisfied");
+    assert!(
+        !api_clause["criteria"][0]["receipt_digests"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    let (shared_pass_plan, _) = create_settled_plan("Shared criterion pass plan");
+    let (shared_fail_plan, _) = create_settled_plan("Shared criterion fail plan");
+    let shared_criterion_id = "crit-audit-shared";
+    let shared_pass_obligation = bind_obligation(
+        evidence_obligation_for(
+            "pob-audit-shared-pass",
+            &policy_digest,
+            "com.example.health.status",
+            "shared criterion passing evidence",
+            json!({"status": "ok"}),
+            json!({"kind": "process", "uri": "local://health"}),
+            environment.clone(),
+            json!({"kind": "process", "id": "runtime-local"}),
+            json!([]),
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        ),
+        &shared_pass_plan,
+        shared_criterion_id,
+    );
+    let shared_fail_obligation = bind_obligation(
+        evidence_obligation_for(
+            "pob-audit-shared-fail",
+            &policy_digest,
+            "com.example.browser.page.visible",
+            "shared criterion failing evidence",
+            json!({"visible": true}),
+            json!({"kind": "browser", "uri": "http://127.0.0.1:9/shared"}),
+            environment.clone(),
+            json!({"kind": "browser", "id": "browser-session"}),
+            json!([]),
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        ),
+        &shared_fail_plan,
+        shared_criterion_id,
+    );
+    add_evidence_obligation_value(
+        dir.path(),
+        &db,
+        "pob-audit-shared-pass",
+        &shared_pass_obligation,
+    );
+    add_evidence_obligation_value(
+        dir.path(),
+        &db,
+        "pob-audit-shared-fail",
+        &shared_fail_obligation,
+    );
+    let shared_run = run_evidence_value(
+        dir.path(),
+        &db,
+        "pob-audit-shared-pass",
+        &instance_id,
+        json!({"kind": "process", "uri": "local://health"}),
+    );
+    assert_evidence_envelope(&shared_run, "evidence.run", true);
+    let shared_pass_audit = run("prep", &["plan", "audit", &shared_pass_plan]);
+    let shared_pass_clause = clause(&shared_pass_audit, "verification_logged");
+    assert_eq!(shared_pass_audit["holds"], true, "{shared_pass_audit}");
+    assert_eq!(shared_pass_clause["criteria"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        shared_pass_clause["criteria"][0]["criterion_id"],
+        shared_criterion_id
+    );
+    assert_eq!(shared_pass_clause["criteria"][0]["status"], "satisfied");
+    assert_eq!(
+        shared_pass_clause["criteria"][0]["observations"][0]["covering_receipt_ids"][0],
+        shared_run["object"]["receipt"]["id"]
+    );
+    let shared_fail_audit = run("prep", &["plan", "audit", &shared_fail_plan]);
+    let shared_fail_clause = clause(&shared_fail_audit, "verification_logged");
+    assert_eq!(shared_fail_audit["holds"], false, "{shared_fail_audit}");
+    assert_eq!(shared_fail_clause["criteria"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        shared_fail_clause["criteria"][0]["criterion_id"],
+        shared_criterion_id
+    );
+    assert_eq!(shared_fail_clause["criteria"][0]["status"], "unsatisfied");
+    assert_eq!(
+        shared_fail_clause["criteria"][0]["observations"][0]["gap_reason"],
+        "missing_observation"
+    );
+    assert!(
+        shared_fail_clause["criteria"][0]["receipt_digests"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{shared_fail_clause}"
+    );
+
+    let (multi_plan, multi_item) = create_settled_plan("Multiple criteria audit");
+    let multi_receipt_obligation = bind_obligation(
+        evidence_obligation_for(
+            "pob-audit-multi-receipt",
+            &policy_digest,
+            "com.example.health.status",
+            "multi criterion receipt evidence",
+            json!({"status": "ok"}),
+            json!({"kind": "process", "uri": "local://health"}),
+            environment.clone(),
+            json!({"kind": "process", "id": "runtime-local"}),
+            json!([]),
+            "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        ),
+        &multi_plan,
+        "crit-audit-multi-receipt",
+    );
+    let multi_waiver_target = json!({"kind": "process", "uri": "local://waived"});
+    let multi_waived_obligation = bind_obligation(
+        evidence_obligation_for(
+            "pob-audit-multi-waived",
+            &policy_digest,
+            "com.example.health.status",
+            "multi criterion waived evidence",
+            json!({"status": "ok"}),
+            multi_waiver_target.clone(),
+            environment.clone(),
+            json!({"kind": "process", "id": "runtime-local"}),
+            json!([]),
+            "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+        ),
+        &multi_plan,
+        "crit-audit-multi-waived",
+    );
+    add_evidence_obligation_value(
+        dir.path(),
+        &db,
+        "pob-audit-multi-receipt",
+        &multi_receipt_obligation,
+    );
+    add_evidence_obligation_value(
+        dir.path(),
+        &db,
+        "pob-audit-multi-waived",
+        &multi_waived_obligation,
+    );
+    let multi_run = run_evidence_value(
+        dir.path(),
+        &db,
+        "pob-audit-multi-receipt",
+        &instance_id,
+        json!({"kind": "process", "uri": "local://health"}),
+    );
+    assert_evidence_envelope(&multi_run, "evidence.run", true);
+    let expired_waiver_digest = insert_evidence_waiver(
+        dir.path(),
+        &db,
+        "waiver-audit-expired",
+        &multi_item,
+        "pob-audit-multi-waived",
+        "obs-pob-audit-multi-waived",
+        "crit-audit-multi-waived",
+        multi_waiver_target.clone(),
+        "2020-01-01T00:00:00Z",
+    );
+    let multi_expired_audit = run("prep", &["plan", "audit", &multi_plan]);
+    let multi_expired_clause = clause(&multi_expired_audit, "verification_logged");
+    assert_eq!(multi_expired_audit["holds"], false, "{multi_expired_audit}");
+    let expired_waived = multi_expired_clause["criteria"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|criterion| criterion["criterion_id"] == "crit-audit-multi-waived")
+        .unwrap();
+    assert_eq!(expired_waived["status"], "unsatisfied");
+    assert_eq!(expired_waived["actionable_now"], true);
+    assert!(
+        !expired_waived["waiver_digests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|digest| digest.as_str() == Some(expired_waiver_digest.as_str())),
+        "{expired_waived}"
+    );
+    let wrong_scope_waiver_digest = insert_evidence_waiver(
+        dir.path(),
+        &db,
+        "waiver-audit-overbroad-wrong-scope",
+        &multi_item,
+        "pob-audit-multi-waived",
+        "obs-pob-audit-multi-waived",
+        "crit-audit-overbroad",
+        multi_waiver_target.clone(),
+        "2099-01-01T00:00:00Z",
+    );
+    let multi_wrong_scope_audit = run("prep", &["plan", "audit", &multi_plan]);
+    let multi_wrong_scope_clause = clause(&multi_wrong_scope_audit, "verification_logged");
+    let wrong_scope_waived = multi_wrong_scope_clause["criteria"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|criterion| criterion["criterion_id"] == "crit-audit-multi-waived")
+        .unwrap();
+    assert_eq!(
+        multi_wrong_scope_audit["holds"], false,
+        "{multi_wrong_scope_audit}"
+    );
+    assert_eq!(wrong_scope_waived["status"], "unsatisfied");
+    assert!(
+        !wrong_scope_waived["waiver_digests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|digest| digest.as_str() == Some(wrong_scope_waiver_digest.as_str())),
+        "overbroad wrong-scope waiver must remain visible in storage but not satisfy criterion: {wrong_scope_waived}"
+    );
+    let waiver_digest = insert_evidence_waiver(
+        dir.path(),
+        &db,
+        "waiver-audit-valid",
+        &multi_item,
+        "pob-audit-multi-waived",
+        "obs-pob-audit-multi-waived",
+        "crit-audit-multi-waived",
+        multi_waiver_target,
+        "2099-01-01T00:00:00Z",
+    );
+    let multi_audit = run("prep", &["plan", "audit", &multi_plan]);
+    let multi_clause = clause(&multi_audit, "verification_logged");
+    assert_eq!(multi_audit["holds"], true, "{multi_audit}");
+    assert_eq!(multi_clause["criteria"].as_array().unwrap().len(), 2);
+    let receipt_criterion = multi_clause["criteria"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|criterion| criterion["criterion_id"] == "crit-audit-multi-receipt")
+        .unwrap();
+    let waived_criterion = multi_clause["criteria"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|criterion| criterion["criterion_id"] == "crit-audit-multi-waived")
+        .unwrap();
+    assert_eq!(receipt_criterion["status"], "satisfied");
+    assert_eq!(receipt_criterion["actionable_now"], false);
+    assert_eq!(
+        receipt_criterion["observations"][0]["covering_receipt_ids"][0],
+        multi_run["object"]["receipt"]["id"]
+    );
+    assert_eq!(waived_criterion["status"], "waived");
+    assert_eq!(waived_criterion["actionable_now"], false);
+    assert_eq!(
+        waived_criterion["observations"][0]["waiver_id"],
+        "waiver-audit-valid"
+    );
+    assert!(
+        waived_criterion["waiver_digests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|digest| digest.as_str() == Some(waiver_digest.as_str())),
+        "{waived_criterion}"
+    );
+    let multi_human = run_human("prep", &["plan", "audit", &multi_plan]);
+    assert!(multi_human.contains("receipts:"), "{multi_human}");
+    assert!(
+        multi_human.contains("waiver: waiver-audit-valid"),
+        "{multi_human}"
+    );
+    assert!(multi_human.contains("non-actionable"), "{multi_human}");
+
+    let (stale_plan, stale_item) = create_open_plan("Stale evidence audit");
+    let mut stale_base = bind_obligation(
+        evidence_obligation_for(
+            "pob-audit-stale-base",
+            &policy_digest,
+            "com.example.health.status",
+            "target bound evidence",
+            json!({"status": "ok"}),
+            json!({"kind": "process", "uri": "local://health", "digest": "sha256:1212121212121212121212121212121212121212121212121212121212121212"}),
+            environment.clone(),
+            json!({"kind": "process", "id": "runtime-local"}),
+            json!(["target_change"]),
+            "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        ),
+        &stale_plan,
+        "crit-audit-stale",
+    );
+    stale_base["item_id"] = json!(stale_item.clone());
+    add_evidence_obligation_value(dir.path(), &db, "pob-audit-stale-base", &stale_base);
+    let stale_base_run = run_evidence_value(
+        dir.path(),
+        &db,
+        "pob-audit-stale-base",
+        &instance_id,
+        json!({"kind": "process", "uri": "local://health", "digest": "sha256:1212121212121212121212121212121212121212121212121212121212121212"}),
+    );
+    assert_evidence_envelope(&stale_base_run, "evidence.run", true);
+    let mut stale_current =
+        superseding_obligation(stale_base, "pob-audit-stale", "pob-audit-stale-base");
+    stale_current["observations"][0]["target"]["digest"] =
+        json!("sha256:3434343434343434343434343434343434343434343434343434343434343434");
+    add_evidence_obligation_value(dir.path(), &db, "pob-audit-stale", &stale_current);
+    let stale_audit = run("prep", &["plan", "audit", &stale_plan]);
+    let stale_clause = clause(&stale_audit, "verification_logged");
+    assert_eq!(stale_audit["holds"], false, "{stale_audit}");
+    assert_eq!(stale_clause["criteria"][0]["status"], "stale");
+    assert_eq!(
+        stale_clause["criteria"][0]["observations"][0]["gap_reason"],
+        "stale_target"
+    );
+    let stale_raw = raw_coverage(dir.path(), &db, "crit-audit-stale");
+    assert_persisted_verdict(&db, &stale_raw);
+    let stale_attempted_receipt_id = stale_base_run["object"]["receipt"]["id"].as_str().unwrap();
+    assert_eq!(
+        stale_raw["object"]["coverage"]["observation_coverage"][0]["attempted_receipt_ids"][0],
+        stale_attempted_receipt_id,
+        "{stale_raw}"
+    );
+    assert!(
+        stale_raw["object"]["receipt_digests"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{stale_raw}"
+    );
+    let stale_trace = run("prep", &["trace", "item", &stale_item]);
+    assert_stale_proof(
+        &stale_trace["proof"],
+        &stale_raw,
+        "crit-audit-stale",
+        "obs-pob-audit-stale-base",
+        stale_attempted_receipt_id,
+        "stale_target",
+    );
+    let stale_preview = run("prep", &["map", "preview", "--close", &stale_item]);
+    assert_eq!(stale_preview["can_close"], false, "{stale_preview}");
+    assert_eq!(stale_preview["proof_blocks_close"], true);
+    assert_stale_proof(
+        &stale_preview["proof"],
+        &stale_raw,
+        "crit-audit-stale",
+        "obs-pob-audit-stale-base",
+        stale_attempted_receipt_id,
+        "stale_target",
+    );
+    let stale_status = run("prep", &["map", "status"]);
+    let stale_ready = stale_status["ready"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["item"]["id"] == stale_item)
+        .unwrap();
+    assert_stale_proof(
+        &stale_ready["proof"],
+        &stale_raw,
+        "crit-audit-stale",
+        "obs-pob-audit-stale-base",
+        stale_attempted_receipt_id,
+        "stale_target",
+    );
+    let stale_approval = run(
+        "prep",
+        &[
+            "approval",
+            "request",
+            &stale_item,
+            "--reason",
+            "stale proof review",
+        ],
+    );
+    assert_stale_proof(
+        &stale_approval["proof"],
+        &stale_raw,
+        "crit-audit-stale",
+        "obs-pob-audit-stale-base",
+        stale_attempted_receipt_id,
+        "stale_target",
+    );
+    let stale_decision = run("prep", &["approval", "approve", &stale_item, "--by", "qa"]);
+    assert_stale_proof(
+        &stale_decision["proof"],
+        &stale_raw,
+        "crit-audit-stale",
+        "obs-pob-audit-stale-base",
+        stale_attempted_receipt_id,
+        "stale_target",
+    );
+    run(
+        "maker",
+        &[
+            "log",
+            "add",
+            "--item",
+            &stale_item,
+            "--kind",
+            "completion",
+            "--summary",
+            "stale item implementation complete",
+        ],
+    );
+    let stale_close = planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "maker")
+        .args([
+            "--db",
+            &db_arg,
+            "--json",
+            "close",
+            &stale_item,
+            "--summary",
+            "stale done",
+        ])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let stale_close: Value = serde_json::from_slice(&stale_close).unwrap();
+    assert!(
+        stale_close["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("binding Evidence coverage is not proven"),
+        "{stale_close}"
+    );
+    let stale_review = run("maker", &["review", "request", &stale_item]);
+    let stale_review_id = stale_review["review"]["id"].as_str().unwrap().to_string();
+    let stale_review_trace = run("checker", &["trace", "item", &stale_review_id]);
+    assert_stale_proof(
+        &stale_review_trace["target"]["proof"],
+        &stale_raw,
+        "crit-audit-stale",
+        "obs-pob-audit-stale-base",
+        stale_attempted_receipt_id,
+        "stale_target",
+    );
+    let stale_review_evidence = run("checker", &["review", "evidence", &stale_item]);
+    assert_stale_proof(
+        &stale_review_evidence["evidence"]["proof"],
+        &stale_raw,
+        "crit-audit-stale",
+        "obs-pob-audit-stale-base",
+        stale_attempted_receipt_id,
+        "stale_target",
+    );
+    run("maker", &["pick", "release", &stale_item, "--force"]);
+    let stale_pick = run("maker", &["pick", "--peek", "--plan", &stale_plan]);
+    assert_eq!(stale_pick["item"]["id"], stale_item);
+    assert_stale_proof(
+        &stale_pick["proof"],
+        &stale_raw,
+        "crit-audit-stale",
+        "obs-pob-audit-stale-base",
+        stale_attempted_receipt_id,
+        "stale_target",
+    );
+    let stale_picked = run("maker", &["pick", "--plan", &stale_plan]);
+    assert_stale_proof(
+        &stale_picked["proof"],
+        &stale_raw,
+        "crit-audit-stale",
+        "obs-pob-audit-stale-base",
+        stale_attempted_receipt_id,
+        "stale_target",
+    );
+    let stale_picked_status = run("prep", &["map", "status"]);
+    let stale_picked_entry = stale_picked_status["picked"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["item"]["id"] == stale_item)
+        .unwrap();
+    assert_stale_proof(
+        &stale_picked_entry["proof"],
+        &stale_raw,
+        "crit-audit-stale",
+        "obs-pob-audit-stale-base",
+        stale_attempted_receipt_id,
+        "stale_target",
+    );
+    {
+        let conn = Connection::open(&db).unwrap();
+        conn.execute(
+            "UPDATE items SET picked_at = datetime('now', '-1 hour'), last_heartbeat_at = datetime('now', '-1 hour') WHERE id = ?1",
+            [&stale_item],
+        )
+        .unwrap();
+    }
+    let stale_recovery = run("prep", &["recover", "sweep", "--older-than-seconds", "1"]);
+    let stale_recovered = stale_recovery["stale"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["item"]["id"] == stale_item)
+        .unwrap();
+    assert_stale_proof(
+        &stale_recovered["proof"],
+        &stale_raw,
+        "crit-audit-stale",
+        "obs-pob-audit-stale-base",
+        stale_attempted_receipt_id,
+        "stale_target",
+    );
+
+    let (stale_policy_plan, stale_policy_item) = create_open_plan("Stale policy evidence audit");
+    let mut stale_policy_obligation = bind_obligation(
+        evidence_obligation_for(
+            "pob-audit-stale-policy",
+            &policy_digest,
+            "com.example.health.status",
+            "policy-bound evidence",
+            json!({"status": "ok"}),
+            json!({"kind": "process", "uri": "local://health"}),
+            environment.clone(),
+            json!({"kind": "process", "id": "runtime-local"}),
+            json!(["policy_change"]),
+            "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        ),
+        &stale_policy_plan,
+        "crit-audit-stale-policy",
+    );
+    stale_policy_obligation["item_id"] = json!(stale_policy_item.clone());
+    add_evidence_obligation_value(
+        dir.path(),
+        &db,
+        "pob-audit-stale-policy",
+        &stale_policy_obligation,
+    );
+    let stale_policy_run = run_evidence_value(
+        dir.path(),
+        &db,
+        "pob-audit-stale-policy",
+        &instance_id,
+        json!({"kind": "process", "uri": "local://health"}),
+    );
+    assert_evidence_envelope(&stale_policy_run, "evidence.run", true);
+    rewrite_evidence_policy_fixture(dir.path(), |policy| {
+        policy["freshness_policy"]["max_age_seconds"] = json!(7200);
+    });
+    let stale_policy_raw = raw_coverage(dir.path(), &db, "crit-audit-stale-policy");
+    let stale_policy_receipt_id = stale_policy_run["object"]["receipt"]["id"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        stale_policy_raw["object"]["status"], "stale",
+        "{stale_policy_raw}"
+    );
+    assert_eq!(
+        stale_policy_raw["object"]["coverage"]["scope"],
+        json!({
+            "kind": "criterion",
+            "id": "crit-audit-stale-policy",
+            "criterion_id": "crit-audit-stale-policy",
+            "plan_id": stale_policy_plan,
+            "item_id": stale_policy_item,
+        }),
+        "{stale_policy_raw}"
+    );
+    assert_eq!(
+        stale_policy_raw["object"]["coverage"]["observation_coverage"][0]["attempted_receipt_ids"],
+        json!([stale_policy_receipt_id]),
+        "{stale_policy_raw}"
+    );
+    assert_eq!(
+        stale_policy_raw["object"]["coverage"]["validation_details"]["freshness"]["gap_reasons"],
+        json!(["stale_policy"]),
+        "{stale_policy_raw}"
+    );
+    assert_stale_projection_surfaces(
+        &stale_policy_plan,
+        &stale_policy_item,
+        "crit-audit-stale-policy",
+        "obs-pob-audit-stale-policy",
+        &stale_policy_raw,
+        stale_policy_receipt_id,
+        "stale_policy",
+    );
+
+    let refreshed_policy = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args(["--db", &db_arg, "--json", "evidence", "policy"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    let refreshed_policy_digest = refreshed_policy["object"]["digest"].as_str().unwrap();
+    let (stale_adapter_plan, stale_adapter_item) =
+        create_open_plan("Stale adapter schema evidence audit");
+    let mut stale_adapter_obligation = bind_obligation(
+        evidence_obligation_for(
+            "pob-audit-stale-adapter",
+            refreshed_policy_digest,
+            "com.example.health.status",
+            "adapter-schema-bound evidence",
+            json!({"status": "ok"}),
+            json!({"kind": "process", "uri": "local://health"}),
+            environment.clone(),
+            json!({"kind": "process", "id": "runtime-local"}),
+            json!(["adapter_schema_change"]),
+            "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        ),
+        &stale_adapter_plan,
+        "crit-audit-stale-adapter",
+    );
+    stale_adapter_obligation["item_id"] = json!(stale_adapter_item.clone());
+    add_evidence_obligation_value(
+        dir.path(),
+        &db,
+        "pob-audit-stale-adapter",
+        &stale_adapter_obligation,
+    );
+    let stale_adapter_run = run_evidence_value(
+        dir.path(),
+        &db,
+        "pob-audit-stale-adapter",
+        &instance_id,
+        json!({"kind": "process", "uri": "local://health"}),
+    );
+    assert_evidence_envelope(&stale_adapter_run, "evidence.run", true);
+    let stale_adapter_digest = rewrite_evidence_runner_manifest(dir.path(), |manifest| {
+        manifest["version"] = json!("1.0.1");
+        manifest["supported_observations"][0]["schema_digest"] =
+            json!("sha256:4545454545454545454545454545454545454545454545454545454545454545");
+        manifest["availability_probe"]["execution"]["payload_schema"]["schema_digest"] =
+            json!("sha256:4545454545454545454545454545454545454545454545454545454545454545");
+    });
+    rewrite_evidence_policy_fixture(dir.path(), |policy| {
+        policy["adapter_registrations"][0]["manifest_digest"] = json!(stale_adapter_digest);
+        policy["adapter_registrations"][0]["payload_schemas"][0]["schema_digest"] =
+            json!("sha256:4545454545454545454545454545454545454545454545454545454545454545");
+        policy["adapter_registrations"][0]["execution_contract"]["payload_schema"]["schema_digest"] =
+            json!("sha256:4545454545454545454545454545454545454545454545454545454545454545");
+    });
+    single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args(["--db", &db_arg, "--json", "evidence", "policy"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    let stale_adapter_raw = raw_coverage(dir.path(), &db, "crit-audit-stale-adapter");
+    let stale_adapter_receipt_id = stale_adapter_run["object"]["receipt"]["id"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        stale_adapter_raw["object"]["status"], "stale",
+        "{stale_adapter_raw}"
+    );
+    assert_eq!(
+        stale_adapter_raw["object"]["coverage"]["scope"],
+        json!({
+            "kind": "criterion",
+            "id": "crit-audit-stale-adapter",
+            "criterion_id": "crit-audit-stale-adapter",
+            "plan_id": stale_adapter_plan,
+            "item_id": stale_adapter_item,
+        }),
+        "{stale_adapter_raw}"
+    );
+    assert_eq!(
+        stale_adapter_raw["object"]["coverage"]["observation_coverage"][0]["attempted_receipt_ids"],
+        json!([stale_adapter_receipt_id]),
+        "{stale_adapter_raw}"
+    );
+    assert_eq!(
+        stale_adapter_raw["object"]["coverage"]["validation_details"]["freshness"]["gap_reasons"],
+        json!(["stale_adapter_schema"]),
+        "{stale_adapter_raw}"
+    );
+    assert_stale_projection_surfaces(
+        &stale_adapter_plan,
+        &stale_adapter_item,
+        "crit-audit-stale-adapter",
+        "obs-pob-audit-stale-adapter",
+        &stale_adapter_raw,
+        stale_adapter_receipt_id,
+        "stale_adapter_schema",
+    );
+
+    let unavailable_dir = tempdir().unwrap();
+    let unavailable_db_dir = tempdir().unwrap();
+    let unavailable_db = unavailable_db_dir.path().join("planr.sqlite");
+    let unavailable_db_arg = unavailable_db.to_str().unwrap().to_string();
+    write_evidence_policy_fixture(unavailable_dir.path());
+    rewrite_evidence_policy_fixture(unavailable_dir.path(), |policy| {
+        policy["adapter_registrations"][0]["execution_contract"]["executable"] =
+            json!("planr-definitely-missing-adapter");
+    });
+    init_git_repo(unavailable_dir.path());
+    init_evidence_project(unavailable_dir.path(), &unavailable_db, "Unavailable Audit");
+    let unavailable_run = |worker: &str, args: &[&str]| -> Value {
+        let output = planr()
+            .current_dir(unavailable_dir.path())
+            .env("PLANR_WORKER_ID", worker)
+            .args(["--db", &unavailable_db_arg, "--json"])
+            .args(args)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice(&output).unwrap()
+    };
+    let unavailable_product = unavailable_run("prep", &["plan", "new", "Unavailable audit"]);
+    let unavailable_product_id = unavailable_product["plan"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let unavailable_build = unavailable_run(
+        "prep",
+        &["plan", "split", &unavailable_product_id, "--slice", "Audit"],
+    );
+    let unavailable_plan = unavailable_build["plan"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let unavailable_path = unavailable_build["plan"]["path"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let text = fs::read_to_string(&unavailable_path).unwrap();
+    let frontmatter_end = text.find("\n---\n").unwrap() + 5;
+    fs::write(
+        &unavailable_path,
+        format!(
+            "{}\n# Build Plan\n\n## Scope Decision\n\nUnavailable audit.\n\n## Verification\n\nEvidence coverage.\n\n## Acceptance Criteria\n\n- Capability evidence passes.\n\n## Steps\n\n### Ship\n\nDo it.\n",
+            &text[..frontmatter_end]
+        ),
+    )
+    .unwrap();
+    let unavailable_map = unavailable_run("prep", &["map", "build", "--from", &unavailable_plan]);
+    let unavailable_item = unavailable_map["created"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    unavailable_run(
+        "prep",
+        &[
+            "context",
+            "add",
+            &format!("GOAL CONTRACT {unavailable_plan}: DONE when Evidence coverage passes."),
+            "--tag",
+            "goal-contract",
+        ],
+    );
+    let unavailable_policy = single_json_document(
+        &planr()
+            .current_dir(unavailable_dir.path())
+            .args(["--db", &unavailable_db_arg, "--json", "evidence", "policy"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    let unavailable_probe = &unavailable_policy["object"]["registry"]["probes"][0];
+    let unavailable_instance = unavailable_probe["instance_id"].as_str().unwrap();
+    let unavailable_environment =
+        capability_instance_environment(&unavailable_db, unavailable_instance);
+    let mut unavailable_obligation = evidence_obligation_for(
+        "pob-audit-unavailable",
+        unavailable_policy["object"]["digest"].as_str().unwrap(),
+        "com.example.health.status",
+        "unavailable evidence",
+        json!({"status": "ok"}),
+        json!({"kind": "process", "uri": "local://health"}),
+        unavailable_environment,
+        json!({"kind": "process", "id": "runtime-local"}),
+        json!([]),
+        "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    );
+    unavailable_obligation["plan_id"] = json!(unavailable_plan);
+    unavailable_obligation["item_id"] = json!(unavailable_item.clone());
+    unavailable_obligation["criterion_id"] = json!("crit-audit-unavailable");
+    add_evidence_obligation_value(
+        unavailable_dir.path(),
+        &unavailable_db,
+        "pob-audit-unavailable",
+        &unavailable_obligation,
+    );
+    let unavailable_attempt = run_evidence_value_with_code(
+        unavailable_dir.path(),
+        &unavailable_db,
+        "pob-audit-unavailable",
+        unavailable_instance,
+        json!({"kind": "process", "uri": "local://health"}),
+        3,
+    );
+    assert_evidence_envelope(&unavailable_attempt, "evidence.run", true);
+    let unavailable_audit = unavailable_run("prep", &["plan", "audit", &unavailable_plan]);
+    let unavailable_clause = clause(&unavailable_audit, "verification_logged");
+    assert_eq!(unavailable_audit["holds"], false, "{unavailable_audit}");
+    assert_eq!(unavailable_clause["criteria"][0]["status"], "blocked");
+    assert_eq!(
+        unavailable_clause["criteria"][0]["observations"][0]["gap_reason"],
+        "missing_capability"
+    );
+    let unavailable_trace = unavailable_run("prep", &["trace", "item", &unavailable_item]);
+    assert_eq!(unavailable_trace["proof"]["status"], "not_proven");
+    assert_eq!(
+        unavailable_trace["proof"]["non_actionable_blockers"][0]["reason"],
+        "missing_capability"
+    );
+    assert_eq!(unavailable_trace["proof"]["actionable_now"], false);
+    assert_eq!(
+        unavailable_trace["proof"]["next_action"],
+        "restore evidence capability"
+    );
+    let unavailable_raw = raw_coverage(
+        unavailable_dir.path(),
+        &unavailable_db,
+        "crit-audit-unavailable",
+    );
+    assert_persisted_verdict(&unavailable_db, &unavailable_raw);
+    let unavailable_attempted_receipt_id = unavailable_attempt["object"]["receipt"]["id"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        unavailable_raw["object"]["coverage"]["observation_coverage"][0]["attempted_receipt_ids"]
+            [0],
+        unavailable_attempted_receipt_id,
+        "{unavailable_raw}"
+    );
+    assert!(
+        unavailable_raw["object"]["receipt_digests"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{unavailable_raw}"
+    );
+    assert!(
+        unavailable_raw["object"]["waiver_digests"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{unavailable_raw}"
+    );
+    assert_missing_capability_proof(
+        &unavailable_trace["proof"],
+        &unavailable_raw,
+        "crit-audit-unavailable",
+        "obs-pob-audit-unavailable",
+        unavailable_attempted_receipt_id,
+    );
+    let unavailable_preview =
+        unavailable_run("prep", &["map", "preview", "--close", &unavailable_item]);
+    assert_eq!(
+        unavailable_preview["can_close"], false,
+        "{unavailable_preview}"
+    );
+    assert_eq!(unavailable_preview["proof_blocks_close"], true);
+    assert_missing_capability_proof(
+        &unavailable_preview["proof"],
+        &unavailable_raw,
+        "crit-audit-unavailable",
+        "obs-pob-audit-unavailable",
+        unavailable_attempted_receipt_id,
+    );
+    let unavailable_status = unavailable_run("prep", &["map", "status"]);
+    let unavailable_ready = unavailable_status["ready"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["item"]["id"] == unavailable_item)
+        .unwrap();
+    assert_missing_capability_proof(
+        &unavailable_ready["proof"],
+        &unavailable_raw,
+        "crit-audit-unavailable",
+        "obs-pob-audit-unavailable",
+        unavailable_attempted_receipt_id,
+    );
+    let unavailable_approval = unavailable_run(
+        "prep",
+        &[
+            "approval",
+            "request",
+            &unavailable_item,
+            "--reason",
+            "missing capability review",
+        ],
+    );
+    assert_missing_capability_proof(
+        &unavailable_approval["proof"],
+        &unavailable_raw,
+        "crit-audit-unavailable",
+        "obs-pob-audit-unavailable",
+        unavailable_attempted_receipt_id,
+    );
+    let unavailable_decision = unavailable_run(
+        "prep",
+        &["approval", "approve", &unavailable_item, "--by", "qa"],
+    );
+    assert_missing_capability_proof(
+        &unavailable_decision["proof"],
+        &unavailable_raw,
+        "crit-audit-unavailable",
+        "obs-pob-audit-unavailable",
+        unavailable_attempted_receipt_id,
+    );
+    unavailable_run(
+        "maker",
+        &[
+            "log",
+            "add",
+            "--item",
+            &unavailable_item,
+            "--kind",
+            "completion",
+            "--summary",
+            "unavailable item implementation complete",
+        ],
+    );
+    let unavailable_close = planr()
+        .current_dir(unavailable_dir.path())
+        .env("PLANR_WORKER_ID", "maker")
+        .args([
+            "--db",
+            &unavailable_db_arg,
+            "--json",
+            "close",
+            &unavailable_item,
+            "--summary",
+            "unavailable done",
+        ])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let unavailable_close: Value = serde_json::from_slice(&unavailable_close).unwrap();
+    assert!(
+        unavailable_close["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("binding Evidence coverage is not proven"),
+        "{unavailable_close}"
+    );
+    let unavailable_review = unavailable_run("maker", &["review", "request", &unavailable_item]);
+    let unavailable_review_id = unavailable_review["review"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let unavailable_review_trace =
+        unavailable_run("checker", &["trace", "item", &unavailable_review_id]);
+    assert_missing_capability_proof(
+        &unavailable_review_trace["target"]["proof"],
+        &unavailable_raw,
+        "crit-audit-unavailable",
+        "obs-pob-audit-unavailable",
+        unavailable_attempted_receipt_id,
+    );
+    let unavailable_review_evidence =
+        unavailable_run("checker", &["review", "evidence", &unavailable_item]);
+    assert_missing_capability_proof(
+        &unavailable_review_evidence["evidence"]["proof"],
+        &unavailable_raw,
+        "crit-audit-unavailable",
+        "obs-pob-audit-unavailable",
+        unavailable_attempted_receipt_id,
+    );
+    unavailable_run("maker", &["pick", "release", &unavailable_item, "--force"]);
+    let unavailable_pick =
+        unavailable_run("maker", &["pick", "--peek", "--plan", &unavailable_plan]);
+    assert_eq!(unavailable_pick["item"]["id"], unavailable_item);
+    assert_missing_capability_proof(
+        &unavailable_pick["proof"],
+        &unavailable_raw,
+        "crit-audit-unavailable",
+        "obs-pob-audit-unavailable",
+        unavailable_attempted_receipt_id,
+    );
+    let unavailable_picked = unavailable_run("maker", &["pick", "--plan", &unavailable_plan]);
+    assert_missing_capability_proof(
+        &unavailable_picked["proof"],
+        &unavailable_raw,
+        "crit-audit-unavailable",
+        "obs-pob-audit-unavailable",
+        unavailable_attempted_receipt_id,
+    );
+    let unavailable_picked_status = unavailable_run("prep", &["map", "status"]);
+    let unavailable_picked_entry = unavailable_picked_status["picked"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["item"]["id"] == unavailable_item)
+        .unwrap();
+    assert_missing_capability_proof(
+        &unavailable_picked_entry["proof"],
+        &unavailable_raw,
+        "crit-audit-unavailable",
+        "obs-pob-audit-unavailable",
+        unavailable_attempted_receipt_id,
+    );
+    {
+        let conn = Connection::open(&unavailable_db).unwrap();
+        conn.execute(
+            "UPDATE items SET picked_at = datetime('now', '-1 hour'), last_heartbeat_at = datetime('now', '-1 hour') WHERE id = ?1",
+            [&unavailable_item],
+        )
+        .unwrap();
+    }
+    let unavailable_recovery =
+        unavailable_run("prep", &["recover", "sweep", "--older-than-seconds", "1"]);
+    let unavailable_recovered = unavailable_recovery["stale"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["item"]["id"] == unavailable_item)
+        .unwrap();
+    assert_missing_capability_proof(
+        &unavailable_recovered["proof"],
+        &unavailable_raw,
+        "crit-audit-unavailable",
+        "obs-pob-audit-unavailable",
+        unavailable_attempted_receipt_id,
     );
 }

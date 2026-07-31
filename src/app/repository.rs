@@ -397,6 +397,11 @@ impl App {
             ),
             _ => {}
         }
+        if let Some(next_action) = self.proof_close_blocker(item_id)? {
+            bail!(
+                "invalid_transition: cannot close item {item_id}; binding Evidence coverage is not proven. next proof action: {next_action}"
+            );
+        }
         Ok(())
     }
 
@@ -424,7 +429,13 @@ impl App {
         let mut stmt = self.conn.prepare(sql)?;
         let ids = collect_rows(stmt.query_map([], |row| row.get::<_, String>(0))?)?;
         ids.iter()
-            .map(|id| Ok(json!({"item": self.get_item(id)?, "approval": self.item_approval(id)?})))
+            .map(|id| {
+                Ok(json!({
+                    "item": self.get_item(id)?,
+                    "approval": self.item_approval(id)?,
+                    "proof": self.proof_status_for_item(id)?,
+                }))
+            })
             .collect()
     }
 
@@ -604,19 +615,25 @@ impl App {
         let mut reviews = Vec::new();
         for item in items {
             match item.status.as_str() {
-                "ready" => ready.push(item),
+                "ready" => ready.push(json!({
+                    "item": item,
+                    "proof": self.proof_status_for_item(&item.id)?,
+                })),
                 "picked" | "running" => picked.push(json!({
                     "item": item,
                     "runtime": self.item_runtime(&item.id)?,
                     "approval": self.item_approval(&item.id)?,
+                    "proof": self.proof_status_for_item(&item.id)?,
                 })),
                 "in_review" => in_review.push(json!({
                     "item": item,
                     "open_reviews": self.open_review_items(&item.id)?,
+                    "proof": self.proof_status_for_item(&item.id)?,
                 })),
                 "pending" | "blocked" => blocked.push(json!({
                     "item": item,
                     "blockers": self.blocking_items_for(&item.id)?,
+                    "proof": self.proof_status_for_item(&item.id)?,
                 })),
                 _ => {
                     if item.work_type == "review" && item.status != "closed" {
@@ -645,6 +662,7 @@ impl App {
         let child_blockers = self.open_child_items(item_id)?;
         let review_blockers = self.open_review_items(item_id)?;
         let approval = self.item_approval(item_id)?;
+        let proof = self.proof_status_for_item(item_id)?;
         let recovery = self.item_recovery(item_id)?;
         let conditions = self.item_conditions(item_id)?;
         let approval_blocks_close = matches!(
@@ -660,7 +678,9 @@ impl App {
             && blockers.is_empty()
             && child_blockers.is_empty()
             && review_blockers.is_empty()
-            && !approval_blocks_close;
+            && !approval_blocks_close
+            && !(proof["active_binding"].as_bool() == Some(true)
+                && proof["pass"].as_bool() != Some(true));
         Ok(json!({
             "mode": "preview",
             "action": "close",
@@ -669,6 +689,9 @@ impl App {
             "status_blocks_close": invalid_status,
             "approval_blocks_close": approval_blocks_close,
             "approval": approval,
+            "proof_blocks_close": proof["active_binding"].as_bool() == Some(true)
+                && proof["pass"].as_bool() != Some(true),
+            "proof": proof,
             "recovery": recovery,
             "conditions": conditions,
             "post_condition_unverified": conditions

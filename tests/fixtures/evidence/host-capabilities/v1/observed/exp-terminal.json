@@ -1,0 +1,83 @@
+{
+  "schema_version": "planr.host_capability_observed_raw.v1",
+  "payload_version": "host-capability-raw/1.0.0",
+  "experiment_id": "exp-terminal",
+  "host_identity": {
+    "host": "codex",
+    "surface": "terminal",
+    "version": "missing",
+    "adapter_version": "planr-host-experiment-harness/1.0.0"
+  },
+  "surface": "terminal",
+  "tool_name": "functions.exec_command",
+  "event_source": "codex.developer_tool.exec_command",
+  "started_at": "2026-07-29T18:38:17Z",
+  "ended_at": "2026-07-29T18:38:17Z",
+  "input": {
+    "input_kind": "controlled_probe",
+    "command": "printf 'planr-host-experiment-v1\\n'",
+    "cwd": "$PLANR_REPOSITORY_ROOT"
+  },
+  "events": [
+    {
+      "sequence": 1,
+      "event_name": "started",
+      "payload_version": "host-event/1.0.0",
+      "tool_name": "functions.exec_command",
+      "event_source": "codex.developer_tool.exec_command",
+      "payload": {
+        "input_kind": "controlled_probe"
+      }
+    },
+    {
+      "sequence": 2,
+      "event_name": "final",
+      "final": true,
+      "payload_version": "host-event/1.0.0",
+      "tool_name": "functions.exec_command",
+      "event_source": "codex.developer_tool.exec_command",
+      "payload": {
+        "final_status": "available",
+        "exit_code": 0
+      }
+    }
+  ],
+  "result": {
+    "final_status": "available",
+    "permissions": {
+      "network": "not_used",
+      "filesystem": "workspace",
+      "environment": "not_captured",
+      "secrets": "not_requested"
+    },
+    "sandbox": {
+      "mode": "danger-full-access",
+      "writable_roots": [
+        "$PLANR_REPOSITORY_ROOT"
+      ]
+    },
+    "missing_fields": [
+      "host_version"
+    ],
+    "blind_spots": [
+      "shell PTY internals and private agent transcript are intentionally not captured"
+    ],
+    "artifact_refs": [
+      {
+        "id": "artifact-terminal-stdout",
+        "kind": "stdout",
+        "root_kind": "fixture_root",
+        "path": "artifacts/terminal/stdout.txt",
+        "digest": "sha256:e65d8d5b23eb2786cf6aa3b2a15a5c470ca90b0cce51cc6f8c4571775e71ef7e"
+      }
+    ],
+    "artifact_digests": {
+      "artifact-terminal-stdout": "sha256:e65d8d5b23eb2786cf6aa3b2a15a5c470ca90b0cce51cc6f8c4571775e71ef7e"
+    },
+    "availability_reason": "terminal exec produced a final event and verified stdout artifact"
+  },
+  "provenance_ref": {
+    "path": "provenance/host-capability-captures.json",
+    "digest": "sha256:3c1cd2f4322c22f0e41c82983728b7b3e3cf774d49c46b1d3ffecb6fd184c483"
+  }
+}

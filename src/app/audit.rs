@@ -1,8 +1,7 @@
-//! Goal contract audit: clause-by-clause verdict over a plan's map scope.
-//! One command answers "does the contract hold?" with evidence instead of
-//! forcing agents to stitch the verdict together from map/log/approval calls.
-
 use super::App;
+use super::audit_evidence::{
+    append_audit_proof_human, append_evidence_clause_human, plan_evidence_coverage_clause,
+};
 use crate::storage::row_to_item;
 use crate::util::collect_rows;
 use anyhow::Result;
@@ -83,22 +82,19 @@ impl App {
             )
             .optional()?;
 
-        // Live verification is contract-scoped: only goal runs promise an
-        // oracle, so the clause is binding only when a contract is stored.
-        let verification_required = contract.is_some();
-        let verification_pass = !verification_logs.is_empty();
+        let evidence_clause =
+            plan_evidence_coverage_clause(self, plan_id, contract.is_some(), verification_logs)?;
+        let proof = self.proof_status_for_plan(plan_id)?;
         let clauses = vec![
             items_clause,
             json!({"clause": "reviews_complete", "pass": open_reviews.is_empty(), "open": open_evidence(&open_reviews)}),
             json!({"clause": "approvals_clear", "pass": approval_blocked.is_empty(), "open": approval_blocked}),
-            json!({"clause": "verification_logged", "pass": verification_pass, "required": verification_required, "logs": verification_logs}),
+            evidence_clause,
         ];
         let holds = clauses.iter().all(|clause| {
             clause["pass"].as_bool().unwrap_or(false)
                 || !clause["required"].as_bool().unwrap_or(true)
         });
-        // An open verdict ends in the exact next command, not a clause list
-        // the agent must translate into an action.
         let next = if holds {
             None
         } else if scope.is_empty() {
@@ -118,12 +114,30 @@ impl App {
                 blocked["id"].as_str().unwrap_or_default()
             ))
         } else if !open_items.is_empty() {
-            // Open work but nothing ready: someone holds a lease or a gate
-            // is stuck — inspect, then recover if leases are stale.
             Some(
                 "planr map status (then `planr recover sweep --apply` if leases are stale)"
                     .to_string(),
             )
+        } else if let Some(evidence) = clauses
+            .iter()
+            .find(|clause| {
+                clause["clause"] == "verification_logged"
+                    && clause["authority"] == "evidence_coverage"
+                    && !clause["pass"].as_bool().unwrap_or(false)
+                    && clause["required"].as_bool().unwrap_or(true)
+            })
+            .and_then(|clause| clause["criteria"].as_array())
+            .and_then(|criteria| {
+                criteria.iter().find(|criterion| {
+                    criterion["pass"].as_bool() != Some(true)
+                        && criterion["actionable_now"].as_bool().unwrap_or(true)
+                })
+            })
+        {
+            Some(format!(
+                "planr evidence explain --scope criterion --id {}",
+                evidence["criterion_id"].as_str().unwrap_or_default()
+            ))
         } else {
             // Everything settled; only the verification clause is open.
             Some(format!(
@@ -134,6 +148,7 @@ impl App {
             "plan": plan,
             "contract": contract,
             "clauses": clauses,
+            "proof": proof,
             "holds": holds,
             "next": next,
             "remaining": self.progress_value()?,
@@ -158,15 +173,16 @@ impl App {
                 human.push_str(&format!(" — {detail}"));
             }
             for open in clause["open"].as_array().into_iter().flatten() {
+                let status = open["status"]
+                    .as_str()
+                    .or(open["approval_status"].as_str())
+                    .unwrap_or_default();
                 human.push_str(&format!(
-                    "\n  open: {} [{}]",
-                    open["id"].as_str().unwrap_or_default(),
-                    open["status"]
-                        .as_str()
-                        .or(open["approval_status"].as_str())
-                        .unwrap_or_default()
+                    "\n  open: {} [{status}]",
+                    open["id"].as_str().unwrap_or_default()
                 ));
             }
+            append_evidence_clause_human(&mut human, clause);
             human.push('\n');
         }
         if value["holds"].as_bool().unwrap_or(false) {
@@ -177,6 +193,7 @@ impl App {
                 human.push_str(&format!("\nnext: {next}"));
             }
         }
+        append_audit_proof_human(&mut human, &value["proof"]);
         human
     }
 }

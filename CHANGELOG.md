@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-07-30
+
+### Added
+
+- Add Planr Evidence as a binding acceptance-proof layer: proof obligations, capability manifests and instances, immutable attempts, trusted receipts, coverage verdicts, waivers, migration previews, and shared CLI/MCP/HTTP surfaces.
+- Add executable Evidence documentation and generated fixtures for API-only success, repository-owned custom adapters, full-stack HTTP plus browser coverage, forged-claim rejection, stale evidence, missing capability, and curl-not-browser scope.
+- Add release and dogfood checks that regenerate CLI/MCP references and Evidence examples from the candidate binary, verify the host capability matrix, and exercise proof-gated audit, trace, pick, review, stop-hook, and recovery flows.
+
+### Changed
+
+- Plan and item audit can now distinguish claim-only legacy verification logs from binding Evidence coverage. Logs remain review narrative; they do not become trusted proof unless migrated into proof obligations and covered by trusted receipts or waivers.
+- Release candidate preparation now includes Evidence docs/reference drift checks, candidate-binary examples, strict trust-boundary tests, and package/install smoke evidence before publication approval.
+
+### Migration Notes
+
+- Existing projects continue to load without manual SQL. Planr applies additive SQLite schema upgrades when opening the database.
+- Existing verification logs are preserved as legacy claim-only diagnostics. To bind old acceptance criteria, create a `planr.evidence.migration.v1` payload, run `planr evidence migrate --input <file> --json` to preview, then rerun with `--apply` and satisfy the new obligations with trusted receipts or approved waivers.
+- Repository-owned custom observations must declare a namespaced JSON Schema, adapter manifest, and `.planr/evidence.yaml` registration. Planr core does not need code changes for those repository namespaces, but policy weakening or stale source/policy/adapter bindings fail closed.
+
+### Security
+
+- Trusted receipt fields cannot be supplied by agents, public API clients, MCP callers, adapter stdout, or imported proposals. Planr constructs trusted receipts only after validating source, target, environment, capability, observation, fixture, freshness, policy, and runtime bindings.
+- Curl-backed HTTP evidence is accepted only for HTTP obligations. Browser-rendered obligations require a browser-capable verifier and reject curl-only claims.
+
 ## [1.9.0] - 2026-07-27
 
 ### Added
@@ -548,7 +572,8 @@ Initial Planr product release.
 - Tag-driven release pipeline with multi-target builds (darwin/linux, arm64/x86_64) and Homebrew tap automation.
 - Skill workflow documentation for Codex, Claude Code, Cursor, and MCP-only clients.
 
-[Unreleased]: https://github.com/instructa/planr/compare/v1.9.0...HEAD
+[Unreleased]: https://github.com/instructa/planr/compare/v1.10.0...HEAD
+[1.10.0]: https://github.com/instructa/planr/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/instructa/planr/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/instructa/planr/compare/v1.7.3...v1.8.0
 [1.7.3]: https://github.com/instructa/planr/compare/v1.7.2...v1.7.3

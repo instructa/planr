@@ -1,0 +1,12 @@
+{
+  "schema_version": "planr.host_capability_mechanical_invocation.v1",
+  "argv": [
+    "$HOME/.local/bin/claude",
+    "--version"
+  ],
+  "cwd": "$PLANR_REPOSITORY_ROOT",
+  "exit_status": 0,
+  "signal": null,
+  "stdout_bytes": 22,
+  "stderr_bytes": 0
+}

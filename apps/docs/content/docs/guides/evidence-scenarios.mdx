@@ -1,0 +1,211 @@
+---
+title: Evidence Scenarios
+description: Copy-paste Evidence recipes backed by generated candidate-binary examples with explicit proven and not-proven scope.
+---
+
+These scenarios are documented from `tests/fixtures/evidence/docs/v1/examples.generated.json`.
+
+- Fixture schema: `planr.evidence_docs_examples.v1`
+- Candidate binary used by the fixture: `target/debug/planr`
+- Evidence schema digest: `sha256:803b4c9799d8a71b85c6fbc94559b1173aadedc316a93f40ee9898a162a0a9bc`
+- Host matrix digest: `sha256:dc4365247b11919b60b3bd4e922f60e63619eb1d58060d01655b6e05044a4df0`
+
+Use the generated file for exact DTO shape. The snippets below show the copy-paste command pattern and the proven/not-proven scope carried by the fixture.
+
+## API-only HTTP success
+
+Fixture case: `api-only-success` — API-only HTTP success.
+
+```bash
+PLANR_REPO=/path/to/planr
+node -e 'require("node:http").createServer((_, r) => r.end("{\"status\":\"ok\"}")).listen(3000, "127.0.0.1")' &
+SERVER_PID=$!
+planr project init "Evidence API" --json
+node "$PLANR_REPO/apps/docs/scripts/create-evidence-scenario-files.mjs" --scenario api-only --api-url http://127.0.0.1:3000/health
+planr evidence run --input pob-docs-api-http.run.json --json
+planr evidence coverage --scope obligation --id pob-docs-api-http --json
+kill "$SERVER_PID"
+```
+
+The helper writes `.planr/evidence/schemas/com.example.http.status.schema.json`, `.planr/evidence/adapters/verifier-http-curl-v1.manifest.json`, `.planr/evidence.yaml`, `pob-docs-api-http.obligation.json`, and `pob-docs-api-http.run.json`. The disposable policy registers `com.example.http.status` and `verifier-http-curl-v1`. The run input binds the HTTP obligation to the probed curl capability instance.
+
+Proven scope:
+
+- curl-backed repository API/HTTP capability produced a trusted receipt
+- obligation coverage is satisfied through the candidate binary
+
+Not-proven scope:
+
+- no browser-rendered observation was attempted
+
+## Repository custom adapter
+
+Fixture case: `repository-custom-extension` — Repository custom namespaced schema and adapter execution.
+
+```bash
+PLANR_REPO=/path/to/planr
+planr project init "Evidence custom adapter" --json
+node "$PLANR_REPO/apps/docs/scripts/create-evidence-scenario-files.mjs" --scenario repository-custom-extension
+planr evidence run --input pob-docs-queue-depth.run.json --json
+planr evidence coverage --scope obligation --id pob-docs-queue-depth --json
+```
+
+The helper writes `.planr/evidence/schemas/com.example.queue.depth.v2.schema.json`, `.planr/evidence/adapters/verifier-queue-depth-v2.manifest.json`, `.planr/evidence.yaml`, `pob-docs-queue-depth.obligation.json`, and `pob-docs-queue-depth.run.json`. The repository owns `com.example.queue.depth.v2`; Planr core does not need a code change for that namespace. The policy registers the schema digest, manifest digest, observation type, payload schema, and execution contract.
+
+Proven scope:
+
+- repository-owned com.example.queue.depth.v2 schema is registered outside Planr core
+- repository-owned verifier-queue-depth-v2 adapter executed and satisfied its obligation
+
+Not-proven scope:
+
+- the extension only proves its declared com.example.queue.depth.v2 observation type
+- no Planr core registry/status ownership is modified by the repository fixture
+
+## Full-stack HTTP plus real Chrome/CDP
+
+Fixture case: `full-stack-composition` — Full-stack composition from unsatisfied to satisfied plan coverage.
+
+```bash
+planr evidence coverage --scope plan --id <plan-id> --json
+planr evidence run --input pob-docs-full-http.run.json --json
+planr evidence run --input pob-browser-cdp.run.json --json
+planr evidence coverage --scope plan --id <plan-id> --json
+```
+
+The first coverage call is unsatisfied because no receipts exist. The fixture then runs HTTP proof and six real Chrome/CDP observations for the disposable workflow target, and the final plan coverage is satisfied.
+
+Proven scope:
+
+- initial plan coverage is not satisfied before receipts exist
+- HTTP API and six real Chrome/CDP observations compose into satisfied plan coverage
+
+Not-proven scope:
+
+- browser proof covers the disposable workflow target, not an arbitrary product URL
+
+## Forged trusted fields
+
+Fixture case: `forged-claim-rejection` — Forged trusted-field run input is rejected before trust.
+
+```bash
+cat > forged-run.json <<'JSON'
+{
+  "obligation_id": "pob-docs-forged",
+  "capability_instance_id": "capinst-example",
+  "target": { "kind": "process", "uri": "local://health" },
+  "receipt": { "id": "receipt-forged-by-caller", "receipt_status": "trusted" },
+  "attempt": { "id": "attempt-forged-by-caller", "attempt_status": "passed" }
+}
+JSON
+
+planr evidence run --input forged-run.json --json
+```
+
+Public run input also rejects `receipt_json`, `trusted_binding_json`, `trusted_receipt`, `receipt_status`, and `provenance`. The CLI, MCP, and HTTP surfaces share this boundary.
+
+Proven scope:
+
+- the binary rejects caller-supplied trusted receipt/attempt fields in run input
+- no trusted receipt is constructed from caller-supplied data
+
+Not-proven scope:
+
+- does not test every forged trusted-field variant beyond receipt/attempt injection
+
+## Stale evidence after policy drift
+
+Fixture case: `stale-evidence` — Stale evidence is invalidated after repository policy drift.
+
+```bash
+planr evidence run --input pob-docs-stale-policy.run.json --json
+node - <<'NODE'
+const { createHash } = require('node:crypto');
+const { readFileSync, writeFileSync } = require('node:fs');
+function canonicalJson(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((entry) => canonicalJson(entry)).join(',')}]`;
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
+}
+const policy = JSON.parse(readFileSync('.planr/evidence.yaml', 'utf8'));
+policy.freshness_policy.max_age_seconds = 7200;
+delete policy.policy_digest;
+policy.policy_digest = `sha256:${createHash('sha256').update(canonicalJson(policy)).digest('hex')}`;
+writeFileSync('.planr/evidence.yaml', `${JSON.stringify(policy, null, 2)}\n`);
+NODE
+planr evidence coverage --scope obligation --id pob-docs-stale-policy --json
+```
+
+The first run creates a valid receipt. After the policy changes, coverage no longer treats that receipt as fresh.
+
+Proven scope:
+
+- a valid receipt is created before policy drift
+- coverage marks the previous receipt stale after policy mutation
+
+Not-proven scope:
+
+- the fixture does not refresh the stale receipt
+
+## Missing capability
+
+Fixture case: `missing-capability` — Missing capability is explicit.
+
+```bash
+planr evidence capability list --json
+planr evidence run --input pob-docs-missing-capability.run.json --json
+planr evidence coverage --scope obligation --id pob-docs-missing-capability --json
+```
+
+The disposable adapter points at an executable that is not present. Planr records the capability as unavailable and does not select a fallback.
+
+Proven scope:
+
+- an unavailable repository capability cannot be used to mint a receipt
+- the binary returns the canonical capability-unavailable rejection
+
+Not-proven scope:
+
+- no fallback capability is selected for the obligation
+
+## Curl HTTP is not browser proof
+
+Fixture case: `curl-http-not-browser` — Curl can prove HTTP-only scope, not browser-rendered obligations.
+
+```bash
+planr evidence run --input pob-docs-curl-http.run.json --json
+planr evidence run --input pob-docs-browser-rendered-with-curl.run.json --json
+```
+
+Curl is strong evidence for an HTTP obligation when the target, schema, and policy ask for HTTP status. It is rejected for a browser-rendered obligation because the observation type and runtime target do not match.
+
+Proven scope:
+
+- curl-backed HTTP evidence satisfies the HTTP obligation
+- the same curl capability is rejected for a browser-rendered obligation
+
+Not-proven scope:
+
+- HTTP-only proof is not browser-rendered proof
+
+## Troubleshooting distinctions
+
+Use the failure classification instead of collapsing every failure into “test failed”:
+
+- `missing_capability`: adapter or host capability is unavailable.
+- `permission_denied`: the capability exists but lacks permission.
+- `sandbox_blocked`: the sandbox prevented the observation.
+- `environment_unavailable`: required local/host environment is absent.
+- `external_dependency_unavailable`: a remote dependency could not be reached.
+- `product_failed`: the product behavior did not meet the expected observation.
+- `verifier_failed`: the verifier could not make a trustworthy observation.
+- `stale_policy`, `stale_adapter_schema`, `stale_target`, `stale_environment`: a previous receipt no longer matches current binding inputs.
+
+When in doubt, run:
+
+```bash
+planr evidence classifications --json
+planr evidence explain --scope obligation --id <obligation-id> --json
+planr evidence attempts --obligation <obligation-id> --json
+planr evidence receipts --obligation <obligation-id> --json
+```

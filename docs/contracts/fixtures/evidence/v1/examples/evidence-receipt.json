@@ -1,0 +1,93 @@
+{
+  "id": "erec-planr-api-health-v1",
+  "schema_version": "evidence.contract.v1",
+  "criterion_id": "criterion-api-health",
+  "obligation_id": "pob-planr-api-health-v1",
+  "receipt_status": "trusted",
+  "source": {
+    "revision": "0123456789abcdef0123456789abcdef01234567",
+    "tree_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+    "dirty": false
+  },
+  "target": {
+    "kind": "local_service",
+    "uri": "http://127.0.0.1:4173/health",
+    "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+  },
+  "environment": {
+    "kind": "local",
+    "id": "dev-shell",
+    "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+  },
+  "vantage_point": {
+    "kind": "localhost",
+    "identity": "127.0.0.1"
+  },
+  "capability": {
+    "manifest_id": "vcap-planr-http-process-v1",
+    "manifest_digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+    "instance_id": "vcinst-planr-http-process-v1",
+    "instance_digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777"
+  },
+  "provenance": {
+    "source": "planr_observed_execution",
+    "assigned_by": "planr",
+    "execution_id": "exec-20260728-api-health",
+    "tool_call_id": null
+  },
+  "observations": [
+    {
+      "requirement_id": "obs-http-200",
+      "type": "planr.api.http.response",
+      "outcome": "passed",
+      "predicate": {
+        "status": 200,
+        "json_path": "$.status",
+        "equals": "ok"
+      },
+      "actual": {
+        "status": 200,
+        "json": {
+          "status": "ok"
+        }
+      }
+    }
+  ],
+  "attempt_ids": [
+    "eatt-planr-api-health-v1"
+  ],
+  "retry_history": [],
+  "artifacts": [
+    {
+      "id": "artifact-http-response",
+      "kind": "stdout",
+      "digest": "sha256:8888888888888888888888888888888888888888888888888888888888888888"
+    }
+  ],
+  "raw_result": {
+    "kind": "artifact",
+    "artifact_id": "artifact-http-response",
+    "digest": "sha256:8888888888888888888888888888888888888888888888888888888888888888"
+  },
+  "config_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  "fixture_disclosure": {
+    "fixtures_used": false,
+    "mocks_used": false
+  },
+  "permissions": {
+    "network": "localhost_only",
+    "filesystem": "read_workspace"
+  },
+  "sandbox": {
+    "mode": "bounded_process",
+    "limits": {
+      "timeout_ms": 10000,
+      "stdout_bytes": 1048576,
+      "stderr_bytes": 1048576
+    }
+  },
+  "proof_gaps": [],
+  "started_at": "2026-07-28T12:00:05Z",
+  "ended_at": "2026-07-28T12:00:06Z",
+  "receipt_digest": "sha256:6ea111943fdafe268a5bbe85b0fecaab75890dbcb9b2e2dfb966f3c6916e348f"
+}

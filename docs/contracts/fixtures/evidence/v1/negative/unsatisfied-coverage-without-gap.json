@@ -1,0 +1,63 @@
+{
+  "id": "cverdict-unsatisfied-no-gap",
+  "schema_version": "evidence.contract.v1",
+  "scope": {
+    "kind": "criterion",
+    "id": "criterion-api-health"
+  },
+  "evaluated_at": "2026-07-28T12:00:08Z",
+  "status": "unsatisfied",
+  "observation_coverage": [
+    {
+      "requirement_id": "obs-http-200",
+      "status": "covered",
+      "covering_receipt_ids": ["erec-planr-api-health-v1"]
+    }
+  ],
+  "validation_details": {
+    "trust": {
+      "status": "failed",
+      "checked_at": "2026-07-28T12:00:08Z",
+      "receipt_ids": [],
+      "gap_reasons": ["missing_observation"]
+    },
+    "freshness": {
+      "status": "passed",
+      "checked_at": "2026-07-28T12:00:08Z",
+      "receipt_ids": [],
+      "gap_reasons": []
+    },
+    "target": {
+      "status": "passed",
+      "checked_at": "2026-07-28T12:00:08Z",
+      "receipt_ids": [],
+      "gap_reasons": []
+    },
+    "schema": {
+      "status": "passed",
+      "checked_at": "2026-07-28T12:00:08Z",
+      "receipt_ids": [],
+      "gap_reasons": []
+    },
+    "provenance": {
+      "status": "passed",
+      "checked_at": "2026-07-28T12:00:08Z",
+      "receipt_ids": [],
+      "gap_reasons": []
+    },
+    "fixture": {
+      "status": "passed",
+      "checked_at": "2026-07-28T12:00:08Z",
+      "receipt_ids": [],
+      "gap_reasons": []
+    },
+    "completion": {
+      "status": "failed",
+      "checked_at": "2026-07-28T12:00:08Z",
+      "receipt_ids": [],
+      "gap_reasons": ["missing_observation"]
+    }
+  },
+  "suggested_next_action": "run required observation",
+  "actionable_now": true
+}

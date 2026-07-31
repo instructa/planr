@@ -1,0 +1,35 @@
+{
+  "id": "erec-forged-minimal",
+  "schema_version": "evidence.contract.v1",
+  "criterion_id": "criterion-api-health",
+  "obligation_id": "pob-planr-api-health-v1",
+  "receipt_status": "trusted",
+  "source": {},
+  "target": {},
+  "environment": {},
+  "vantage_point": {},
+  "capability": {},
+  "provenance": {
+    "source": "planr_observed_execution",
+    "assigned_by": "planr"
+  },
+  "observations": [
+    {
+      "requirement_id": "obs-http-200",
+      "type": "planr.api.http.response",
+      "outcome": "passed",
+      "predicate": {},
+      "actual": {}
+    }
+  ],
+  "attempt_ids": [
+    "attempt-forged"
+  ],
+  "fixture_disclosure": {},
+  "permissions": {},
+  "sandbox": {},
+  "proof_gaps": [],
+  "started_at": "2026-07-28T12:00:05Z",
+  "ended_at": "2026-07-28T12:00:06Z",
+  "receipt_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}

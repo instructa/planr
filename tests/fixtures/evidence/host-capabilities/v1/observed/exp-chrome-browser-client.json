@@ -1,0 +1,100 @@
+{
+  "schema_version": "planr.host_capability_observed_raw.v1",
+  "payload_version": "host-capability-raw/1.0.0",
+  "experiment_id": "exp-chrome-browser-client",
+  "host_identity": {
+    "host": "codex",
+    "surface": "chrome-browser-client",
+    "version": "missing",
+    "adapter_version": "planr-host-experiment-harness/1.0.0"
+  },
+  "surface": "chrome-browser-client",
+  "tool_name": "browser-client.mjs chrome Runtime.evaluate",
+  "event_source": "browser-client:chrome",
+  "started_at": "2026-07-29T18:38:17Z",
+  "ended_at": "2026-07-29T18:38:17Z",
+  "input": {
+    "input_kind": "controlled_probe",
+    "setup": "browser-client get('extension') / Chrome browser client",
+    "navigation": "https://example.com/",
+    "operations": [
+      "browser-client setup succeeded",
+      "agent.browsers inventory exposed Chrome extension browser viewport and tab pageAssets+cdp",
+      "fresh Chrome tab navigated to https://example.com/",
+      "Runtime.evaluate",
+      "browser-client domSnapshot",
+      "browser-client screenshot",
+      "browser-client readEvents"
+    ]
+  },
+  "events": [
+    {
+      "sequence": 1,
+      "event_name": "started",
+      "payload_version": "host-event/1.0.0",
+      "tool_name": "browser-client.mjs chrome Runtime.evaluate",
+      "event_source": "browser-client:chrome",
+      "payload": {
+        "input_kind": "controlled_probe"
+      }
+    },
+    {
+      "sequence": 2,
+      "event_name": "final",
+      "final": true,
+      "payload_version": "host-event/1.0.0",
+      "tool_name": "browser-client.mjs chrome Runtime.evaluate",
+      "event_source": "browser-client:chrome",
+      "payload": {
+        "final_status": "available",
+        "title": "Example Domain",
+        "url": "https://example.com/",
+        "bodyVisible": true,
+        "heading_count": 1
+      }
+    }
+  ],
+  "result": {
+    "final_status": "available",
+    "permissions": {
+      "network": "https://example.com/",
+      "filesystem": "not_used",
+      "environment": "Chrome extension browser client",
+      "secrets": "not_requested"
+    },
+    "sandbox": {
+      "mode": "browser-client-chrome",
+      "writable_roots": []
+    },
+    "missing_fields": [
+      "host_version",
+      "matching_page_load_event",
+      "matching_console_event",
+      "screenshot_artifact",
+      "screenshot_digest"
+    ],
+    "blind_spots": [
+      "CDP readEvents returned cursor 27 with no matching Page.loadEventFired or Runtime.consoleAPICalled events"
+    ],
+    "artifact_refs": [
+      {
+        "id": "artifact-chrome-browser-client-cdp-result",
+        "kind": "cdp-json-result",
+        "root_kind": "fixture_root",
+        "path": "artifacts/chrome-browser-client/cdp-result.json",
+        "digest": "sha256:e310662068a31132ef354f621d119059d710f61047d215656d2c39e6b7c83cfc"
+      }
+    ],
+    "artifact_digests": {
+      "artifact-chrome-browser-client-cdp-result": "sha256:e310662068a31132ef354f621d119059d710f61047d215656d2c39e6b7c83cfc"
+    },
+    "notes": [
+      "Browser tab was finalized and closed after capture."
+    ],
+    "availability_reason": "native Chrome browser-client produced CDP Runtime.evaluate and DOM observations; screenshot evidence was unavailable in the persisted artifact"
+  },
+  "provenance_ref": {
+    "path": "provenance/host-capability-captures.json",
+    "digest": "sha256:3c1cd2f4322c22f0e41c82983728b7b3e3cf774d49c46b1d3ffecb6fd184c483"
+  }
+}

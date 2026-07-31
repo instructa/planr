@@ -1,8 +1,12 @@
 mod eval_schema;
+mod evidence_schema;
 mod rows;
 mod schema;
+mod stop_schema;
 
+#[allow(unused_imports)]
 pub use rows::{row_to_context, row_to_item, row_to_log, row_to_plan, row_to_project};
+#[allow(unused_imports)]
 pub use schema::ensure_schema;
 
 use anyhow::Result;
@@ -24,6 +28,7 @@ pub fn open_db(path: &Path) -> Result<Connection> {
         fs::create_dir_all(parent)?;
     }
     let conn = Connection::open(path)?;
+    evidence_schema::register_connection_functions(&conn)?;
     // busy_timeout must be set before journal_mode: the WAL conversion
     // needs an exclusive lock, and with the default timeout of 0 two
     // processes opening a fresh database concurrently (parallel workers'

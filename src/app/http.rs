@@ -113,6 +113,33 @@ impl App {
                 }
             }
         };
+        if path.starts_with("/v1/evidence") {
+            let (status, body) = match self.http_evidence_route(method, path, query, &body_json) {
+                Ok(response) => response,
+                Err(error) => {
+                    let message = error.to_string();
+                    let code = infer_error_code(&message);
+                    let status = match code {
+                        "not_found" => "404 Not Found",
+                        "internal_error" => "500 Internal Server Error",
+                        _ => "400 Bad Request",
+                    };
+                    (
+                        status,
+                        serde_json::to_string(&json!({
+                            "error": {"code": code, "message": message, "details": {}}
+                        }))?,
+                    )
+                }
+            };
+            write!(
+                stream,
+                "HTTP/1.1 {status}\r\n{CORS_HEADERS}content-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            )?;
+            return Ok(());
+        }
         let body_result: Result<String> = (|| {
             let body = match (method, path) {
                 ("GET", "/review") | ("GET", "/review/") => self.review_workspace_html(),

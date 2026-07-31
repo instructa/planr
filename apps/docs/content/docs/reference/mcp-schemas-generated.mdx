@@ -1,6 +1,6 @@
 ---
 title: Generated MCP Tool Schemas
-description: Complete Planr 1.9.0 tools/list inventory with every property, type, description, required field, enum/default declaration, and additionalProperties rule.
+description: Complete Planr 1.10.0 tools/list inventory with every property, type, description, required field, enum/default declaration, and additionalProperties rule.
 ---
 
 <Callout type="info" title="Generated runtime contract">
@@ -983,6 +983,334 @@ Preview a privacy-minimized debug bundle
 }
 ```
 
+## `planr_evidence_policy`
+
+Validate and show the repository Evidence policy
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {},
+  "required": [],
+  "type": "object"
+}
+```
+
+## `planr_evidence_obligation_add`
+
+Add a proof obligation through the canonical Evidence service
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "input": {
+      "description": "ProofObligation JSON object",
+      "type": "object"
+    }
+  },
+  "required": [
+    "input"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_evidence_obligation_list`
+
+List proof obligations, optionally filtered by plan, item, or criterion
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "criterion": {
+      "description": "Optional criterion id",
+      "type": "string"
+    },
+    "item": {
+      "description": "Optional item id",
+      "type": "string"
+    },
+    "plan": {
+      "description": "Optional plan id",
+      "type": "string"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+## `planr_evidence_obligation_show`
+
+Show one proof obligation
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "description": "Proof obligation id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_evidence_migrate`
+
+Preview or apply explicit plan-scoped migration from legacy verification claims to binding Evidence obligations
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "apply": {
+      "description": "Apply the migration; omit or false for preview",
+      "type": "boolean"
+    },
+    "input": {
+      "description": "planr.evidence.migration.v1 payload with plan_id and obligations[]",
+      "type": "object"
+    }
+  },
+  "required": [
+    "input"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_evidence_classifications`
+
+Show canonical Evidence gap reasons and legacy/operator aliases
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {},
+  "required": [],
+  "type": "object"
+}
+```
+
+## `planr_evidence_capability_list`
+
+List verification capability manifests and instances
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {},
+  "required": [],
+  "type": "object"
+}
+```
+
+## `planr_evidence_capability_show`
+
+Show one verification capability instance
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "description": "Capability instance id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_evidence_run`
+
+Run a configured process capability and record trusted process evidence
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "input": {
+      "description": "Untrusted run request with obligation_id, capability_instance_id, execution_contract, target, and environment",
+      "type": "object"
+    }
+  },
+  "required": [
+    "input"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_evidence_import`
+
+Import an untrusted validated artifact proposal without allowing trusted receipt construction
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "artifact_root": {
+      "description": "Directory that contains referenced artifacts",
+      "type": "string"
+    },
+    "input": {
+      "description": "Untrusted evidence proposal",
+      "type": "object"
+    }
+  },
+  "required": [
+    "input",
+    "artifact_root"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_evidence_host_capture_import`
+
+Validate and persist a fresh external Codex host capture as trusted Evidence
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "input": {
+      "description": "planr.evidence.host_capture.import.v1 payload with obligation_id and import_root",
+      "type": "object"
+    }
+  },
+  "required": [
+    "input"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_evidence_host_capture_run`
+
+Run a policy-registered host capture helper and persist Planr-observed Evidence
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "input": {
+      "description": "planr.evidence.host_capture.run.v1 payload with obligation_id and manifest_id",
+      "type": "object"
+    }
+  },
+  "required": [
+    "input"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_evidence_attempts`
+
+List or show Evidence process attempts
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "description": "Optional attempt id",
+      "type": "string"
+    },
+    "obligation": {
+      "description": "Optional obligation id filter",
+      "type": "string"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+## `planr_evidence_receipts`
+
+List or show trusted Evidence receipts
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "description": "Optional receipt id",
+      "type": "string"
+    },
+    "obligation": {
+      "description": "Optional obligation id filter",
+      "type": "string"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+## `planr_evidence_coverage`
+
+Evaluate Evidence coverage for an obligation, criterion, item, or plan
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "description": "Scope id",
+      "type": "string"
+    },
+    "scope": {
+      "description": "obligation, criterion, item, or plan",
+      "type": "string"
+    }
+  },
+  "required": [
+    "scope",
+    "id"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_evidence_explain`
+
+Explain Evidence coverage with policy, attempts, receipts, and repository snapshot context
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "description": "Scope id",
+      "type": "string"
+    },
+    "scope": {
+      "description": "obligation, criterion, item, or plan",
+      "type": "string"
+    }
+  },
+  "required": [
+    "scope",
+    "id"
+  ],
+  "type": "object"
+}
+```
+
 ## `planr_eval_suite_check`
 
 Store or verify an immutable eval suite snapshot
@@ -1453,7 +1781,7 @@ Add project or item context
       "type": "string"
     },
     "kind": {
-      "description": "Context kind (default discovery)",
+      "description": "Context kind label (default discovery)",
       "type": "string"
     }
   },

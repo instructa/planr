@@ -188,6 +188,9 @@ cat dist/planr-*/SHA256SUMS
 The artifact contains:
 
 - `planr`
+- `scripts/host-capability-experiment.mjs`
+- `scripts/host-capability-runtime/v1/schemas/*.schema.json`
+- `scripts/planr-host-capability-validator`
 - `README.md`
 - `LICENSE.md`
 - `SHA256SUMS`
@@ -211,6 +214,9 @@ npm pack --dry-run
 The package must include:
 
 - `npm/bin/planr.js`
+- `scripts/host-capability-experiment.mjs`
+- `scripts/host-capability-runtime/v1/schemas/*.schema.json`
+- `scripts/planr-host-capability-validator`
 - `docs/`
 - `docs/fixtures/mcp-contract.json`
 - `plugins/`

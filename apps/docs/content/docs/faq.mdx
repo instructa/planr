@@ -73,7 +73,7 @@ Export a JSON package with the plans/logs you need, inspect it for sensitive dat
 
 ## How do I know a long-running goal is done?
 
-Run `planr plan audit <plan-id> --json`. A goal contract normally requires settled items, complete reviews, clear approvals, and required verification logs. The final summary must agree with the map and evidence.
+Run `planr plan audit <plan-id> --json`. Pre-Evidence plans preserve legacy verification logs as claim-only diagnostics. Binding Evidence plans require settled items, complete reviews, clear approvals, and fresh canonical Evidence coverage or valid waivers. Use `planr evidence migrate --input migration.json` to preview explicit plan-scoped migration before `--apply`.
 
 ## Can I use only the CLI?
 

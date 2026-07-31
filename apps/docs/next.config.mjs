@@ -4,6 +4,7 @@ import { createMDX } from 'fumadocs-mdx/next';
 const config = {
   output: 'export',
   reactStrictMode: true,
+  generateBuildId: async () => 'planr-docs-static',
 };
 
 const withMDX = createMDX();

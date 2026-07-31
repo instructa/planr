@@ -60,6 +60,7 @@ impl App {
         let git = self.git_evidence(&owned_files);
         Ok(json!({
             "item": item,
+            "proof": self.proof_status_for_item(item_id)?,
             "git": git,
             "provenance": {
                 "logged_files": logged_files,

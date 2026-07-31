@@ -1,0 +1,111 @@
+{
+  "schema_version": "planr.host_capability_observed_raw.v1",
+  "payload_version": "host-capability-raw/1.0.0",
+  "experiment_id": "exp-cursor-agent-host-capture",
+  "host_identity": {
+    "host": "cursor",
+    "surface": "cursor-agent",
+    "version": "2026.07.17-3e2a980",
+    "adapter_version": "planr-host-experiment-harness/1.0.0"
+  },
+  "surface": "cursor-agent",
+  "tool_name": "$HOME/.local/bin/cursor-agent --version",
+  "event_source": "process:cursor-agent",
+  "started_at": "2026-07-30T08:17:48Z",
+  "ended_at": "2026-07-30T08:17:48Z",
+  "input": {
+    "input_kind": "mechanical_availability_probe",
+    "command": [
+      "$HOME/.local/bin/cursor-agent",
+      "--version"
+    ],
+    "probe": "read-only host version probe"
+  },
+  "events": [
+    {
+      "sequence": 1,
+      "event_name": "started",
+      "payload_version": "host-event/1.0.0",
+      "tool_name": "$HOME/.local/bin/cursor-agent --version",
+      "event_source": "process:cursor-agent",
+      "payload": {
+        "input_kind": "mechanical_availability_probe"
+      }
+    },
+    {
+      "sequence": 2,
+      "event_name": "final",
+      "final": true,
+      "payload_version": "host-event/1.0.0",
+      "tool_name": "$HOME/.local/bin/cursor-agent --version",
+      "event_source": "process:cursor-agent",
+      "payload": {
+        "final_status": "unavailable",
+        "exit_code": 0
+      }
+    }
+  ],
+  "result": {
+    "final_status": "unavailable",
+    "availability_reason": "cursor cursor-agent mechanical version probe returned 2026.07.17-3e2a980, but no host capture payload/event contract was observed",
+    "permissions": {
+      "network": "not_used",
+      "filesystem": "read_only_binary_version_probe",
+      "environment": "version probe only; no host session launched",
+      "secrets": "not_requested"
+    },
+    "sandbox": {
+      "mode": "not_entered",
+      "writable_roots": []
+    },
+    "missing_fields": [
+      "live_event_stream",
+      "final_result_payload",
+      "artifact_contract"
+    ],
+    "blind_spots": [
+      "installed binary version does not prove host capture payload support",
+      "no paid/network host run was performed"
+    ],
+    "artifact_refs": [
+      {
+        "id": "artifact-cursor-agent-host-capture-stdout",
+        "kind": "invocation-stdout",
+        "root_kind": "fixture_root",
+        "path": "artifacts/cursor-agent-host-capture/stdout.txt",
+        "digest": "sha256:ff67fa8c4d173904e13f0da944d7f763f5399ec48052b81c1ae3c7d87f118f4a"
+      },
+      {
+        "id": "artifact-cursor-agent-host-capture-stderr",
+        "kind": "invocation-stderr",
+        "root_kind": "fixture_root",
+        "path": "artifacts/cursor-agent-host-capture/stderr.txt",
+        "digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "id": "artifact-cursor-agent-host-capture-result",
+        "kind": "invocation-result",
+        "root_kind": "fixture_root",
+        "path": "artifacts/cursor-agent-host-capture/result.json",
+        "digest": "sha256:1013ea396e2334b85980c6540bc79dede0014ae14f44bf7f4c3b32900198b76b"
+      }
+    ],
+    "artifact_digests": {
+      "artifact-cursor-agent-host-capture-stdout": "sha256:ff67fa8c4d173904e13f0da944d7f763f5399ec48052b81c1ae3c7d87f118f4a",
+      "artifact-cursor-agent-host-capture-stderr": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "artifact-cursor-agent-host-capture-result": "sha256:1013ea396e2334b85980c6540bc79dede0014ae14f44bf7f4c3b32900198b76b"
+    },
+    "experiment_plan": [
+      "Run $HOME/.local/bin/cursor-agent --version as a bounded read-only version probe without network or paid model calls.",
+      "Capture a final event stream, permissions, sandbox state, and artifact contract only if the host exposes one.",
+      "Keep cursor cursor-agent host capture unavailable until replay validates an observed payload contract."
+    ],
+    "notes": [
+      "mechanical_unavailable_probe records binary availability only and must not be promoted to observed_capture"
+    ]
+  },
+  "provenance_ref": {
+    "path": "provenance/host-capability-captures.json",
+    "digest": "sha256:3c1cd2f4322c22f0e41c82983728b7b3e3cf774d49c46b1d3ffecb6fd184c483"
+  }
+}

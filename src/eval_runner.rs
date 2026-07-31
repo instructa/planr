@@ -1,19 +1,17 @@
 #![allow(dead_code)] // Internal eval runner service; CLI/MCP adapters are downstream map items.
 
 use crate::app::EvalReusableCaseEvidence;
+use crate::execution::{
+    BoundedProcessInput, BoundedProcessOutput, CancellationToken, run_bounded_process,
+    sha256_prefixed,
+};
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    io::Read,
     path::{Component, Path, PathBuf},
-    process::{Command, Stdio},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant},
 };
@@ -137,17 +135,6 @@ pub(crate) struct EvalRunOptions {
     pub(crate) cancellation: CancellationToken,
 }
 
-struct BoundedCommandInput<'a> {
-    repo_root: &'a Path,
-    argv: &'a [String],
-    timeout: Duration,
-    output_limit_bytes: usize,
-    seed: u64,
-    repetition_index: usize,
-    warmup: bool,
-    cancellation: &'a CancellationToken,
-}
-
 impl Default for EvalRunOptions {
     fn default() -> Self {
         Self {
@@ -155,27 +142,6 @@ impl Default for EvalRunOptions {
             reusable_cases: Vec::new(),
             cancellation: CancellationToken::new(),
         }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct CancellationToken {
-    cancelled: Arc<AtomicBool>,
-}
-
-impl CancellationToken {
-    pub(crate) fn new() -> Self {
-        Self {
-            cancelled: Arc::new(AtomicBool::new(false)),
-        }
-    }
-
-    pub(crate) fn cancel(&self) {
-        self.cancelled.store(true, Ordering::SeqCst);
-    }
-
-    fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::SeqCst)
     }
 }
 
@@ -824,9 +790,20 @@ struct EvalSampleRunInput<'a> {
     options: &'a EvalRunOptions,
 }
 
+struct EvalCommandRunInput<'a> {
+    repo_root: &'a Path,
+    argv: &'a [String],
+    timeout: Duration,
+    output_limit_bytes: usize,
+    seed: u64,
+    repetition_index: usize,
+    warmup: bool,
+    cancellation: &'a CancellationToken,
+}
+
 fn run_sample(input: EvalSampleRunInput<'_>) -> Result<EvalSampleEvidence> {
     let start = Instant::now();
-    let command = run_bounded_command(BoundedCommandInput {
+    let command = run_eval_command(EvalCommandRunInput {
         repo_root: input.repo_root,
         argv: &input.case.subject.argv,
         timeout: Duration::from_millis(input.case.timeout_ms),
@@ -858,117 +835,41 @@ fn run_sample(input: EvalSampleRunInput<'_>) -> Result<EvalSampleEvidence> {
     })
 }
 
-fn run_bounded_command(input: BoundedCommandInput<'_>) -> Result<EvalCommandEvidence> {
-    let mut child = Command::new(&input.argv[0])
-        .args(&input.argv[1..])
-        .env_clear()
-        .env("PLANR_EVAL_SEED", input.seed.to_string())
-        .env(
-            "PLANR_EVAL_REPETITION_INDEX",
-            input.repetition_index.to_string(),
-        )
-        .env("PLANR_EVAL_WARMUP", if input.warmup { "1" } else { "0" })
-        .current_dir(input.repo_root)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("spawning {}", input.argv[0]))?;
-    let stdout = child.stdout.take().context("capturing child stdout")?;
-    let stderr = child.stderr.take().context("capturing child stderr")?;
-    let output_exceeded = Arc::new(AtomicBool::new(false));
-    let stdout_handle = drain_limited(
-        stdout,
-        input.output_limit_bytes,
-        Arc::clone(&output_exceeded),
-    );
-    let stderr_handle = drain_limited(
-        stderr,
-        input.output_limit_bytes,
-        Arc::clone(&output_exceeded),
-    );
-    let deadline = Instant::now() + input.timeout;
-    let mut timed_out = false;
-    let mut interrupted = false;
-    loop {
-        if child.try_wait()?.is_some() {
-            break;
-        }
-        if input.cancellation.is_cancelled() {
-            interrupted = true;
-            let _ = child.kill();
-            break;
-        }
-        if output_exceeded.load(Ordering::SeqCst) {
-            let _ = child.kill();
-            break;
-        }
-        if Instant::now() >= deadline {
-            timed_out = true;
-            let _ = child.kill();
-            break;
-        }
-        thread::sleep(Duration::from_millis(5));
+fn run_eval_command(input: EvalCommandRunInput<'_>) -> Result<EvalCommandEvidence> {
+    let output = run_bounded_process(BoundedProcessInput {
+        cwd: input.repo_root,
+        argv: input.argv,
+        env: vec![
+            ("PLANR_EVAL_SEED", input.seed.to_string()),
+            (
+                "PLANR_EVAL_REPETITION_INDEX",
+                input.repetition_index.to_string(),
+            ),
+            (
+                "PLANR_EVAL_WARMUP",
+                if input.warmup { "1" } else { "0" }.to_string(),
+            ),
+        ],
+        timeout: input.timeout,
+        output_limit_bytes: input.output_limit_bytes,
+        stdout_limit_bytes: None,
+        stderr_limit_bytes: None,
+        cancellation: input.cancellation,
+    })?;
+    Ok(eval_command_evidence_from_output(output))
+}
+
+fn eval_command_evidence_from_output(output: BoundedProcessOutput) -> EvalCommandEvidence {
+    EvalCommandEvidence {
+        argv: output.argv,
+        exit_code: output.exit_code,
+        timed_out: output.timed_out,
+        interrupted: output.interrupted,
+        stdout_digest: output.stdout_digest,
+        stderr_digest: output.stderr_digest,
+        stdout_excerpt: output.stdout_excerpt,
+        stderr_excerpt: output.stderr_excerpt,
     }
-    let status = child.wait()?;
-    let stdout = join_drain(stdout_handle)?;
-    let stderr = join_drain(stderr_handle)?;
-    if output_exceeded.load(Ordering::SeqCst)
-        || stdout.truncated
-        || stderr.truncated
-        || stdout.bytes.len() > input.output_limit_bytes
-        || stderr.bytes.len() > input.output_limit_bytes
-    {
-        bail!("output_limit_exceeded");
-    }
-    Ok(EvalCommandEvidence {
-        argv: input.argv.to_vec(),
-        exit_code: status.code(),
-        timed_out,
-        interrupted,
-        stdout_digest: sha256_prefixed(&stdout.bytes),
-        stderr_digest: sha256_prefixed(&stderr.bytes),
-        stdout_excerpt: bounded_utf8_excerpt(&stdout.bytes, input.output_limit_bytes),
-        stderr_excerpt: bounded_utf8_excerpt(&stderr.bytes, input.output_limit_bytes),
-    })
-}
-
-#[derive(Debug)]
-struct DrainedOutput {
-    bytes: Vec<u8>,
-    truncated: bool,
-}
-
-fn drain_limited<R: Read + Send + 'static>(
-    mut reader: R,
-    limit: usize,
-    output_exceeded: Arc<AtomicBool>,
-) -> thread::JoinHandle<Result<DrainedOutput>> {
-    thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let mut buffer = [0_u8; 4096];
-        let mut truncated = false;
-        loop {
-            let read = reader.read(&mut buffer)?;
-            if read == 0 {
-                break;
-            }
-            if bytes.len() + read > limit {
-                let allowed = limit.saturating_sub(bytes.len());
-                bytes.extend_from_slice(&buffer[..allowed]);
-                truncated = true;
-                output_exceeded.store(true, Ordering::SeqCst);
-                break;
-            }
-            bytes.extend_from_slice(&buffer[..read]);
-        }
-        Ok(DrainedOutput { bytes, truncated })
-    })
-}
-
-fn join_drain(handle: thread::JoinHandle<Result<DrainedOutput>>) -> Result<DrainedOutput> {
-    handle
-        .join()
-        .map_err(|_| anyhow::anyhow!("output drain thread panicked"))?
 }
 
 fn assert_sample(case: &EvalRunnerCase, sample: &EvalSampleEvidence) -> Vec<String> {
@@ -1027,15 +928,6 @@ fn assert_sample(case: &EvalRunnerCase, sample: &EvalSampleEvidence) -> Vec<Stri
     reasons.sort();
     reasons.dedup();
     reasons
-}
-
-fn sha256_prefixed(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    format!("sha256:{digest:x}")
-}
-
-fn bounded_utf8_excerpt(bytes: &[u8], limit: usize) -> String {
-    String::from_utf8_lossy(&bytes[..bytes.len().min(limit)]).to_string()
 }
 
 fn required_value<'a>(value: &'a Value, name: &str) -> Result<&'a Value> {

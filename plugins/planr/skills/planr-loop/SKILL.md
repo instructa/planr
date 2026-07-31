@@ -13,6 +13,8 @@ Evaluation subcommands run only when the user explicitly requests them, the sele
 
 Recover the stored `GOAL CONTRACT <plan-id>` from Planr every iteration. If absent, store one that requires settled items with evidence, complete reviews, clear approvals, and a live oracle. Never weaken it.
 
+At the start of the host thread that drives an active goal, run `planr stop activate --plan <plan-id>` once. Codex hosts should let Planr use `CODEX_THREAD_ID`; otherwise provide a stable explicit session with `--session <id>`. Leave the binding active until `planr plan audit <plan-id> --json` returns `holds: true`. Run `planr stop deactivate --plan <plan-id>` only for explicit user cancellation or after a durable ownership transfer has activated the same plan in the successor session; a budgeted handoff alone must not deactivate an unfinished goal.
+
 Each iteration follows the Planr stage protocols:
 
 1. `planr plan audit <plan-id> --json`; `holds: true` exits.

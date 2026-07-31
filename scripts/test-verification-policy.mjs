@@ -27,10 +27,7 @@ for (const fixture of fixtures) {
   }
   assert.equal(selection.reasons.length, selection.selectedGates.length, `${fixture.name}: every gate has a reason`);
   assert.ok(selection.reasons.every(({ gate, detail }) => gate && detail), `${fixture.name}: reasons are explanatory`);
-  assert.equal(selection.liveVerification.browser, fixture.browser, `${fixture.name}: browser selection`);
-  if (fixture.browser) {
-    assert.ok(selection.liveVerification.paths.length > 0, `${fixture.name}: browser paths are explicit`);
-  }
+  assert.deepEqual(selection.liveVerification.paths, [], `${fixture.name}: automatic CI does not select browser paths`);
 }
 
 assert.equal("security" in GATES, false, "automatic security scanning is not a verification gate");

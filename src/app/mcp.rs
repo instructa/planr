@@ -576,6 +576,7 @@ impl App {
             "planr_debug_bundle" => Ok(mcp_json(
                 self.debug_bundle(args.get("item").and_then(Value::as_str))?,
             )),
+            name if name.starts_with("planr_evidence_") => self.mcp_evidence_tool_call(name, args),
             "planr_eval_suite_check" => Ok(mcp_eval_json(
                 "eval.suite.check",
                 self.eval_suite_check_value(

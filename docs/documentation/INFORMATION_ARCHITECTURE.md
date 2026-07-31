@@ -20,7 +20,7 @@ This file records the implemented route and navigation contract. Routes are publ
 
 ## Implemented route tree
 
-The 62 MDX files below are the current page tree and must agree with every `meta.json` file and `COVERAGE.md`.
+The 66 MDX files below are the current page tree and must agree with every `meta.json` file and `COVERAGE.md`.
 
 ```text
 /docs

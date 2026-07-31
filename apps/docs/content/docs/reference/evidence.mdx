@@ -1,0 +1,188 @@
+---
+title: Evidence Reference
+description: Public Evidence policy, obligation, capability, run, import, coverage, migration, classification, waiver, and host-surface contracts.
+---
+
+This page is the human reference for Planr Evidence. The frozen object vocabulary is [`docs/contracts/EVIDENCE_CONTRACT_V1.md`](https://github.com/instructa/planr/blob/main/docs/contracts/EVIDENCE_CONTRACT_V1.md). Runtime command surfaces are also listed in [Generated CLI help](/docs/reference/cli-generated), [MCP schemas](/docs/reference/mcp-schemas-generated), and [Local HTTP API](/docs/reference/http-api).
+
+## CLI Commands
+
+```bash
+planr evidence policy --json
+planr evidence policy --check --json
+planr evidence obligation add --input obligation.json --json
+planr evidence obligation list --plan <plan-id> --json
+planr evidence obligation show <obligation-id> --json
+planr evidence capability list --json
+planr evidence capability show <capability-instance-id> --json
+planr evidence run --input run.json --json
+planr evidence import --input import.json --artifact-root . --json
+planr evidence host-capture import --input host-import.json --json
+planr evidence host-capture run --input host-run.json --json
+planr evidence attempts --obligation <obligation-id> --json
+planr evidence receipts --obligation <obligation-id> --json
+planr evidence coverage --scope obligation --id <obligation-id> --json
+planr evidence coverage --scope criterion --id <criterion-id> --json
+planr evidence coverage --scope item --id <item-id> --json
+planr evidence coverage --scope plan --id <plan-id> --json
+planr evidence explain --scope plan --id <plan-id> --json
+planr evidence migrate --input migration.json --json
+planr evidence migrate --input migration.json --apply --json
+planr evidence classifications --json
+```
+
+Exit code `0` means the command succeeded and the Evidence verdict is passing or informational. Exit code `2` is an unsatisfied Evidence verdict. Exit code `3` is blocked. Exit code `1` is request or execution error. The JSON envelope carries `schema`, `command`, `ok`, `object` or `error`, and `exit.code`.
+
+## MCP Tools
+
+The MCP tools call the same application services:
+
+- `planr_evidence_policy`
+- `planr_evidence_obligation_add`
+- `planr_evidence_obligation_list`
+- `planr_evidence_obligation_show`
+- `planr_evidence_migrate`
+- `planr_evidence_classifications`
+- `planr_evidence_capability_list`
+- `planr_evidence_capability_show`
+- `planr_evidence_run`
+- `planr_evidence_import`
+- `planr_evidence_host_capture_import`
+- `planr_evidence_host_capture_run`
+- `planr_evidence_attempts`
+- `planr_evidence_receipts`
+- `planr_evidence_coverage`
+- `planr_evidence_explain`
+
+Use [Generated MCP schemas](/docs/reference/mcp-schemas-generated) for exact required fields and `additionalProperties` behavior.
+
+## HTTP Endpoints
+
+Start `planr serve --port 7526`; the server binds `127.0.0.1`.
+
+| Method | Path |
+| --- | --- |
+| GET | `/v1/evidence/policy` |
+| POST | `/v1/evidence/obligations` |
+| GET | `/v1/evidence/obligations?plan=<plan-id>` |
+| GET | `/v1/evidence/obligations/<obligation-id>` |
+| GET | `/v1/evidence/capabilities` |
+| GET | `/v1/evidence/capabilities/<capability-instance-id>` |
+| POST | `/v1/evidence/run` |
+| POST | `/v1/evidence/import` |
+| POST | `/v1/evidence/host-capture/import` |
+| POST | `/v1/evidence/host-capture/run` |
+| GET | `/v1/evidence/attempts?obligation=<obligation-id>` |
+| GET | `/v1/evidence/receipts?obligation=<obligation-id>` |
+| POST | `/v1/evidence/coverage` |
+| POST | `/v1/evidence/explain` |
+| POST | `/v1/evidence/migrate` |
+| GET | `/v1/evidence/classifications` |
+
+HTTP errors use the same Evidence envelope and map `bad_request` to 400, `not_found` to 404, `conflict` to 409, and `internal_error` to 500.
+
+## Run Input
+
+Process-backed runs accept a JSON object like:
+
+```json
+{
+  "obligation_id": "pob-public-run",
+  "capability_instance_id": "capinst-verifier-generic-adapter-...",
+  "target": { "kind": "process", "uri": "local://health" }
+}
+```
+
+`manifest_id` can replace `capability_instance_id` when the command should probe the manifest and resolve an instance. `execution_contract`, `environment`, and `fixture_disclosure` are allowed only as untrusted inputs that Planr validates against policy and capability bindings.
+
+These fields are rejected in public run input because only Planr can construct them:
+
+- `attempt`
+- `receipt`
+- `receipt_json`
+- `trusted_binding_json`
+- `trusted_receipt`
+- `receipt_status`
+- `provenance`
+
+## Migration
+
+Migration turns pre-Evidence plan criteria into immutable `ProofObligation` rows.
+
+```bash
+planr evidence migrate --input migration.json --json
+planr evidence migrate --input migration.json --apply --json
+```
+
+Preview is the default and does not write obligations. Apply is idempotent: duplicate IDs, lineage collisions, cross-project containment, and changed immutable fields are reported instead of silently rewriting history. Migration does not rewrite plans, logs, reviews, artifacts, or legacy claims.
+
+## Classifications
+
+Canonical gap reasons include:
+
+- `missing_observation`
+- `missing_capability`
+- `permission_denied`
+- `sandbox_blocked`
+- `environment_unavailable`
+- `external_dependency_unavailable`
+- `product_failed`
+- `verifier_failed`
+- `timed_out`
+- `aborted`
+- `inconclusive_result`
+- `stale_source`
+- `stale_target`
+- `stale_environment`
+- `stale_policy`
+- `stale_adapter_schema`
+- `stale_configuration`
+- `target_mismatch`
+- `schema_mismatch`
+- `manifest_mismatch`
+- `untrusted_provenance`
+- `fixture_disallowed`
+- `mock_disallowed`
+- `insufficient_assurance`
+- `waiver_missing`
+- `waiver_expired`
+- `unknown_observation_type`
+- `unsupported_runtime_target`
+
+Legacy aliases are normalized by `planr evidence classifications --json`; do not create new spelling in docs, tests, or adapters.
+
+## Host Capability Matrix
+
+The generated host matrix is versioned at `tests/fixtures/evidence/host-capabilities/v1/expected/host-surface-matrix.json`. The docs example fixture records host matrix digest `sha256:dc4365247b11919b60b3bd4e922f60e63619eb1d58060d01655b6e05044a4df0`.
+
+The matrix is intentionally honest:
+
+- Available terminal or local-function probes do not automatically become trusted production adapters.
+- Degraded browser surfaces are recorded as degraded, not silently upgraded.
+- Unavailable app-server, exec stream, or MCP-server surfaces remain unavailable.
+- A Chrome/browser-client capture can support browser proof only when Planr validates the required artifact, host identity, final CDP/DOM observation, target binding, and provenance.
+- Playwright is not required for Evidence. It can be one possible host surface when available and validated.
+
+## Waivers And Limits
+
+Waivers are approval-backed exceptions for observations that cannot be proven by receipt. They should be scoped, reasoned, expiring, and auditable. A waiver can satisfy coverage for its declared observation; it cannot manufacture a receipt, hide stale evidence, or weaken namespace/schema/provenance rules.
+
+Limits remain explicit:
+
+- A valid import can persist artifact validation without creating trusted receipts.
+- A trusted receipt can go stale after source, target, environment, policy, adapter schema, or configuration drift.
+- A capability instance can expire or become invalid after environment or permission changes.
+- A curl receipt can satisfy an HTTP obligation and still fail a browser-rendered obligation.
+- Fixture-backed proof must disclose fixtures when policy requires it.
+
+## Drift Gates
+
+These commands fail when public surfaces or generated Evidence examples drift:
+
+```bash
+pnpm docs:evidence-examples:check
+pnpm --filter @planr/docs reference:check
+pnpm --filter @planr/docs verify:reference
+```
+
+The Evidence docs verifier reads `tests/fixtures/evidence/docs/v1/examples.generated.json`, `docs/contracts/fixtures/evidence/v1/schemas/evidence-contract-v1.schema.json`, and the host matrix fixture. It fails if case IDs, titles, proven scope, not-proven scope, schema digest, host matrix digest, or public reference links disappear from the docs.

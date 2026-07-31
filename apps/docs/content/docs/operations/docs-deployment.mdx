@@ -35,7 +35,7 @@ For Cloudflare-local development, use `pnpm docs:alchemy:dev`. Normal content wo
 
 Require successful HTTP responses and expected content from `/`, `/docs`, a representative deep route such as `/docs/getting-started/installation`, `/docs/getting-started/installation.md`, and `/api/search`. Confirm canonical metadata uses the configured origin, the browser finds Installation through the client-side search index, an unknown route renders the recovery 404, and static assets load without browser errors.
 
-The promotion command automatically checks `/`, `/docs`, the Installation HTML and Markdown routes, and `/api/search`, with a ten-second request bound per route. The verification selection records `live_browser=true` only for changed interactive application code. When selected, run one focused browser oracle for the changed interaction and record it separately; text, Markdown, link, and image changes do not select a browser, and promotion never restores a blanket browser suite.
+The promotion command automatically checks `/`, `/docs`, the Installation HTML and Markdown routes, and `/api/search`, with a ten-second request bound per route. Automatic documentation CI does not select or launch a browser. Run `pnpm docs:evidence-examples:generate` locally when you need the opt-in Chrome/CDP proof; text, Markdown, link, image, and application changes never restore a blanket browser suite.
 
 ## Promote
 

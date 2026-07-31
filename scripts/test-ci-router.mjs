@@ -12,7 +12,6 @@ assert.deepEqual(routeSelection(docsSelection), {
   policy_version: POLICY_VERSION,
   policy_digest: POLICY_DIGEST,
   changed_files_digest: docsSelection.changedFilesDigest,
-  live_browser: "false",
   docs: "true",
   quality: "false",
   release: "false",
@@ -24,10 +23,8 @@ assert.equal(releaseRoute.docs, "false");
 assert.equal(releaseRoute.quality, "false");
 assert.equal(releaseRoute.release, "true");
 assert.equal(releaseRoute.linux_portability, "true");
-assert.equal(releaseRoute.live_browser, "false");
 const interactiveRoute = routeSelection(classifyChanges([{ status: "M", path: "apps/docs/components/tabs.tsx" }]));
 assert.equal(interactiveRoute.docs, "true");
-assert.equal(interactiveRoute.live_browser, "true");
 const fullRoute = routeSelection(classifyChanges([{ status: "M", path: "scripts/ci-router.mjs" }]));
 for (const job of ["docs", "quality", "release", "linux_portability"]) assert.equal(fullRoute[job], "true");
 assert.throws(

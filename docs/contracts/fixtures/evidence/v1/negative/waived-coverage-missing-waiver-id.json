@@ -1,0 +1,27 @@
+{
+  "id": "cverdict-waived-missing-waiver",
+  "schema_version": "evidence.contract.v1",
+  "scope": {
+    "kind": "criterion",
+    "id": "criterion-api-health"
+  },
+  "evaluated_at": "2026-07-28T12:00:08Z",
+  "status": "waived",
+  "observation_coverage": [
+    {
+      "requirement_id": "obs-http-200",
+      "status": "waived",
+      "gap_reason": "missing_observation"
+    }
+  ],
+  "validation_details": {
+    "trust": {
+      "status": "failed",
+      "checked_at": "2026-07-28T12:00:08Z",
+      "receipt_ids": [],
+      "gap_reasons": ["missing_observation"]
+    }
+  },
+  "suggested_next_action": "record waiver id",
+  "actionable_now": true
+}

@@ -1,0 +1,111 @@
+---
+title: Evidence Trust Model
+description: How Planr turns acceptance criteria into trusted, local-first proof without accepting agent-authored claims as authority.
+---
+
+Planr Evidence is the binding proof layer for acceptance criteria. It stores what must be proven, what capability can observe it, what actually ran, what receipt Planr trusted, and why a scope is satisfied, waived, blocked, stale, or still missing proof.
+
+The frozen vocabulary lives in [`docs/contracts/EVIDENCE_CONTRACT_V1.md`](https://github.com/instructa/planr/blob/main/docs/contracts/EVIDENCE_CONTRACT_V1.md). Public CLI, MCP, and HTTP references are [CLI](/docs/reference/cli), [MCP](/docs/reference/mcp), and [Local HTTP API](/docs/reference/http-api).
+
+## Trust Boundary
+
+Evidence treats agent JSON, logs, adapter stdout, and artifacts as proposals. They can carry observations, but they cannot assign trust to themselves. Only Planr constructs trusted receipts after it validates all bindings.
+
+Trusted fields that public run input cannot supply include:
+
+- `attempt`
+- `receipt`
+- `receipt_json`
+- `trusted_binding_json`
+- `trusted_receipt`
+- `receipt_status`
+- `provenance`
+
+If any of those fields appears in `planr evidence run`, `planr_evidence_run`, or `POST /v1/evidence/run`, Planr rejects the request before persisting an attempt or receipt.
+
+## Core Objects
+
+| Object | Owner | What it means |
+| --- | --- | --- |
+| `ProofObligation` | Reviewed plan or migration | A binding or advisory criterion-level proof requirement. |
+| `ObservationRequirement` | Obligation | One atomic fact: type, subject, expected value, target, environment, runtime target. |
+| `VerificationCapabilityManifest` | Repository or host adapter | Static declaration of observation types, runtime targets, permissions, limits, probe contract, and blind spots. |
+| `VerificationCapabilityInstance` | Planr probe | Runtime availability snapshot for one exact manifest, environment, permission set, and host. |
+| `EvidenceAttempt` | Planr execution | Immutable record of a run, including command/tool identity, output bounds, digests, exit, and raw result. |
+| `EvidenceReceipt` | Planr trust service | Trusted receipt built only after source, target, environment, capability, observation, freshness, fixture, and policy checks pass. |
+| `CoverageVerdict` | Planr coverage service | The durable answer for an obligation, criterion, item, or plan scope. |
+| `EvidenceWaiver` | Approval-backed human decision | An explicit, expiring exception for observations that cannot be proven by receipt. |
+
+Logs remain narrative evidence. A legacy verification log can support review, but it is not a binding receipt unless migrated into Evidence and covered by trusted receipt or waiver.
+
+## `.planr/evidence.yaml`
+
+The repository policy is the local source of truth for Evidence behavior. A minimal policy has:
+
+- `defaults`: preset id, binding default, and assurance level.
+- `named_presets`: reusable observation groups for common proof shapes.
+- `observation_schema_registrations`: namespaced observation types with JSON Schema digests.
+- `adapter_registrations`: manifest path, manifest digest, observation types, payload schemas, provenance path, and execution contract.
+- `extension_namespaces`: the namespaces this repository owns.
+- `trust_policy`: accepted provenance kinds and whether user attestation is allowed.
+- `freshness_policy`: maximum age and invalidation triggers such as `source_change`, `target_change`, `policy_change`, and `adapter_schema_change`.
+- `fixture_policy`: whether fixtures or mocks may be used and whether disclosure is required.
+- `completion_policy`: whether satisfied or waived coverage is required before closure.
+- `layering_policy`: how this policy composes with lower layers.
+
+Policy digests are canonical JSON SHA-256 digests over the policy without the top-level `policy_digest` field. Receipt digests follow the same rule over receipts without `receipt_digest`.
+
+## Layered Monotonic Policy
+
+Policy layering is monotonic strengthening. A higher layer can add requirements, narrow trusted provenance, require fresher evidence, or require stronger fixture disclosure. It must not silently weaken a lower layer. Any weakening needs an explicit waiver or a new major contract.
+
+Practical examples:
+
+- A product plan can require API proof for a criterion.
+- A build plan can add browser, queue, or deployment observations for the same criterion.
+- A repository can add a custom namespace and adapter without changing Planr core.
+- A stale lower-layer receipt remains stale after policy or adapter-schema drift until refreshed or waived.
+
+## Presets And Obligations
+
+Presets are authoring conveniences. Obligations are the durable, reviewed records that coverage evaluates.
+
+Use presets when several criteria share the same observation shape. Materialize obligations when a plan becomes binding:
+
+```bash
+planr evidence migrate --input migration.json --json
+planr evidence migrate --input migration.json --apply --json
+planr evidence obligation list --plan <plan-id> --json
+```
+
+Migration preview is dry-run by default. `--apply` materializes ordinary immutable obligations. Repeating the same migration is idempotent: already-materialized obligations are reported instead of duplicated.
+
+## Custom Namespaces
+
+Custom observation types use reverse-domain or project-local namespaces, such as `com.example.queue.depth.v2` or `project.checkout.payment.completed`.
+
+Authoring a custom adapter does not require Planr core changes:
+
+1. Add a JSON Schema under `.planr/evidence/schemas/`.
+2. Add a manifest under `.planr/evidence/adapters/`.
+3. Register both in `.planr/evidence.yaml`.
+4. Add the namespace to `extension_namespaces`.
+5. Probe capabilities with `planr evidence capability list --json`.
+6. Run obligations with `planr evidence run --input run.json --json`.
+
+Unknown or unregistered observation types remain uncovered. A weaker built-in proof cannot satisfy a custom obligation.
+
+## Capability Honesty
+
+Capability manifests are claims about what an adapter can observe. Capability instances are runtime snapshots from Planr probes. Coverage uses the instance, not the manifest alone.
+
+Availability can be `available`, `unavailable`, `degraded`, `permission_denied`, `sandbox_blocked`, `unsupported`, or `probe_failed`. These statuses are not interchangeable:
+
+- A missing executable is a missing capability.
+- A permission denial is not a product failure.
+- A sandbox block is not the same as an unavailable environment.
+- A non-zero product result is not a verifier failure.
+- HTTP/curl evidence is strong for HTTP obligations, but it is not browser-rendered evidence.
+- Browser/CDP proof must come from a browser/CDP observation path or a validated host-capture path, not from a process result relabeled as browser proof.
+
+See [Evidence Reference](/docs/reference/evidence) for classifications and [Evidence Scenarios](/docs/guides/evidence-scenarios) for generated examples with explicit proven and not-proven scope.

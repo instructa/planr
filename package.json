@@ -1,6 +1,6 @@
 {
   "name": "planr",
-  "version": "1.9.0",
+  "version": "1.10.0",
   "description": "Local-first planning and execution coordination for coding agents.",
   "license": "MIT",
   "repository": {
@@ -14,6 +14,9 @@
   "files": [
     "npm/bin/planr.js",
     "npm/native",
+    "scripts/host-capability-experiment.mjs",
+    "scripts/host-capability-runtime",
+    "scripts/planr-host-capability-validator",
     "plugins",
     "README.md",
     "LICENSE.md",
@@ -52,12 +55,15 @@
     "docs:verify-agent-journey": "pnpm --filter @planr/docs verify:agent-journey",
     "docs:verify-agent-landing": "pnpm --filter @planr/docs verify:agent-landing",
     "docs:verify-concepts": "cargo build --bin planr && pnpm --filter @planr/docs verify:concepts",
+    "docs:verify-evidence-docs": "pnpm --filter @planr/docs verify:evidence-docs",
     "docs:verify-maintenance": "pnpm --filter @planr/docs verify:maintenance",
     "docs:sync-linux-portability": "pnpm --filter @planr/docs sync:linux-portability",
     "docs:verify-deployment": "pnpm --filter @planr/docs verify:deployment",
     "docs:verify-release": "pnpm --filter @planr/docs verify:release",
     "docs:verify-release-live": "pnpm --filter @planr/docs verify:release-live",
     "docs:verify-clean-install": "pnpm --filter @planr/docs verify:clean-install",
+    "docs:evidence-examples:generate": "cargo build --bin planr && pnpm --filter @planr/docs evidence-examples:generate",
+    "docs:evidence-examples:check": "cargo build --bin planr && pnpm --filter @planr/docs evidence-examples:check",
     "verify:switchloom-cross-product": "node scripts/verify-switchloom-cross-product.mjs",
     "docs:reference:generate": "cargo build --bin planr && pnpm --filter @planr/docs reference:generate",
     "docs:verify-reference": "cargo build --bin planr && pnpm --filter @planr/docs reference:check && pnpm --filter @planr/docs verify:reference"

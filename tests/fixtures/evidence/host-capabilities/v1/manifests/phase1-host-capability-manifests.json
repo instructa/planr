@@ -1,0 +1,24 @@
+{
+  "schema_version": "planr.host_capability_manifest_reference.v1",
+  "manifest_ids": [
+    "host-built-in-browser-manifest",
+    "host-chrome-browser-client-manifest",
+    "host-chrome-cdp-manifest",
+    "host-claude-code-host-capture-manifest",
+    "host-claude-code-manifest",
+    "host-codex-app-server-manifest",
+    "host-codex-exec-manifest",
+    "host-codex-hook-events-manifest",
+    "host-codex-mcp-server-manifest",
+    "host-computer-use-manifest",
+    "host-cursor-agent-host-capture-manifest",
+    "host-cursor-agent-manifest",
+    "host-local-function-manifest",
+    "host-mcp-browser-manifest",
+    "host-pi-cli-host-capture-manifest",
+    "host-pi-cli-manifest",
+    "host-terminal-manifest"
+  ],
+  "trusted_adapter_enabled": false,
+  "source": "phase1 committed fixture manifest reference"
+}

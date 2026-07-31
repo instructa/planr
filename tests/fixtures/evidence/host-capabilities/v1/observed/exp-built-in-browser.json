@@ -1,0 +1,82 @@
+{
+  "schema_version": "planr.host_capability_observed_raw.v1",
+  "payload_version": "host-capability-raw/1.0.0",
+  "experiment_id": "exp-built-in-browser",
+  "host_identity": {
+    "host": "codex",
+    "surface": "built-in-browser",
+    "version": "missing",
+    "adapter_version": "planr-host-experiment-harness/1.0.0"
+  },
+  "surface": "built-in-browser",
+  "tool_name": "browser-client.mjs setupAtlasRuntime",
+  "event_source": "browser-client:iab",
+  "started_at": "2026-07-29T18:38:17Z",
+  "ended_at": "2026-07-29T18:38:17Z",
+  "input": {
+    "input_kind": "mechanical_availability_probe",
+    "probe": "setupAtlasRuntime({backend:'iab'}) via browser-client.mjs",
+    "attempts": 2,
+    "reset_between_attempts": true
+  },
+  "events": [
+    {
+      "sequence": 1,
+      "event_name": "final",
+      "final": true,
+      "payload_version": "host-event/1.0.0",
+      "tool_name": "browser-client.mjs setupAtlasRuntime",
+      "event_source": "browser-client:iab",
+      "payload": {
+        "final_status": "unavailable",
+        "isError": true,
+        "redacted_message": "Cannot redefine property: process"
+      }
+    }
+  ],
+  "result": {
+    "final_status": "unavailable",
+    "permissions": {
+      "network": "not_probed",
+      "filesystem": "not_probed",
+      "environment": "browser-client iab setup failed before any browser event capture",
+      "secrets": "not_requested"
+    },
+    "sandbox": {
+      "mode": "not_entered",
+      "writable_roots": []
+    },
+    "missing_fields": [
+      "setup_runtime",
+      "navigation_event",
+      "visible_dom_or_screenshot",
+      "final_status_payload",
+      "host_version"
+    ],
+    "blind_spots": [
+      "In-app browser backend failed during setup, so no user-equivalent browser observation is present"
+    ],
+    "artifact_refs": [
+      {
+        "id": "artifact-built-in-browser-error",
+        "kind": "setup-error",
+        "root_kind": "fixture_root",
+        "path": "artifacts/built-in-browser/error.txt",
+        "digest": "sha256:188f871f94defaf1c40337ea63a49ab604cf51b6a10d7effb46b64bedfa61dc2"
+      }
+    ],
+    "artifact_digests": {
+      "artifact-built-in-browser-error": "sha256:188f871f94defaf1c40337ea63a49ab604cf51b6a10d7effb46b64bedfa61dc2"
+    },
+    "experiment_plan": [
+      "Run live capture in a host exposing the built-in Browser tool.",
+      "Capture target URL, rendered snapshot, interaction events, final event, and artifacts.",
+      "Do not treat curl or documentation as rendered-browser evidence."
+    ],
+    "availability_reason": "browser-client iab setup failed with runtime incompatibility"
+  },
+  "provenance_ref": {
+    "path": "provenance/host-capability-captures.json",
+    "digest": "sha256:3c1cd2f4322c22f0e41c82983728b7b3e3cf774d49c46b1d3ffecb6fd184c483"
+  }
+}

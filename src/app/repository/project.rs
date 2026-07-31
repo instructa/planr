@@ -7,6 +7,22 @@ use rusqlite::{OptionalExtension, params};
 
 impl App {
     pub(crate) fn default_project(&self) -> Result<Project> {
+        let root = self.root.to_string_lossy().to_string();
+        if let Some(project) = self
+            .conn
+            .query_row(
+                "SELECT id, name, root_path, description, status
+                 FROM projects
+                 WHERE status = 'active' AND root_path = ?1
+                 ORDER BY created_at DESC
+                 LIMIT 1",
+                params![root],
+                row_to_project,
+            )
+            .optional()?
+        {
+            return Ok(project);
+        }
         self.conn
             .query_row(
                 "SELECT id, name, root_path, description, status FROM projects WHERE status = 'active' ORDER BY created_at DESC LIMIT 1",

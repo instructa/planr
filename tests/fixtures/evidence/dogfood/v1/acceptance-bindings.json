@@ -1,0 +1,26 @@
+{
+  "schema_version": "planr.evidence_dogfood.acceptance_bindings.v1",
+  "plan_id": "pln-ee908510",
+  "item_id": "i-bind-the-evidence-feature-s-own-df40",
+  "source": ".planr/plans/product/configurable-acceptance-evidence-and-proof-gated-completion/QA_ACCEPTANCE_TESTS.md",
+  "acceptance_criteria": [
+    "AC-001",
+    "AC-002",
+    "AC-003",
+    "AC-004",
+    "AC-005",
+    "AC-006",
+    "AC-007",
+    "AC-008",
+    "AC-009",
+    "AC-010",
+    "AC-011",
+    "AC-012"
+  ],
+  "binding_obligation_prefix": "pob-evidence-dogfood-",
+  "diagnostic_obligations": [
+    "pob-evidence-dogfood-legacy-browser-diagnostic",
+    "pob-evidence-dogfood-missing-capability-diagnostic"
+  ],
+  "local_artifact_root": ".planr/artifacts/evidence-dogfood/v1"
+}

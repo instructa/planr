@@ -1,0 +1,52 @@
+{
+  "id": "vcap-planr-http-process-v1",
+  "schema_version": "evidence.contract.v1",
+  "version": "1.0.0",
+  "adapter_kind": "process",
+  "adapter_digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+  "supported_surfaces": ["local-process"],
+  "supported_observations": [
+    {
+      "type": "planr.api.http.response",
+      "schema_ref": "planr.api.http.response@v1",
+      "schema_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    }
+  ],
+  "supported_interactions": ["http-get"],
+  "supported_artifacts": ["stdout"],
+  "runtime_targets": [
+    {
+      "kind": "process",
+      "id": "planr-doc-fixture"
+    }
+  ],
+  "provenance_path": "planr_observed_execution",
+  "permissions": {
+    "network": "localhost_only",
+    "filesystem": "read_workspace"
+  },
+  "costs": {
+    "network": "local"
+  },
+  "determinism": "deterministic for static health endpoint",
+  "repeatability": "replayable from source tree and target URI",
+  "independence": "adapter observes process output independently of agent text",
+  "blind_spots": ["external network failures outside localhost are not covered"],
+  "availability_probe": {
+    "kind": "process",
+    "execution": {
+      "kind": "process",
+      "executable": "curl",
+      "args": ["--version"],
+      "working_directory": ".",
+      "timeout_ms": 5000,
+      "stdout_limit_bytes": 65536,
+      "stderr_limit_bytes": 65536,
+      "payload_schema": {
+        "type": "planr.api.http.response",
+        "schema_ref": "planr.api.http.response@v1",
+        "schema_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      }
+    }
+  }
+}

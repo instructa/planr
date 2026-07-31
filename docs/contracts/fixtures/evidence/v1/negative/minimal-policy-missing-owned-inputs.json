@@ -1,0 +1,5 @@
+{
+  "id": "epolicy-minimal",
+  "schema_version": "evidence.contract.v1",
+  "policy_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+}

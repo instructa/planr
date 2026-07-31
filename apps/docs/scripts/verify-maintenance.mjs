@@ -102,7 +102,7 @@ const deployment = await readPage('operations', 'docs-deployment');
 requireMarkers(deployment, 'deployment runbook', [
   'Node.js 22', 'pnpm install --frozen-lockfile', 'NEXT_PUBLIC_SITE_URL',
   'Alchemy v2', 'direct Cloudflare assets', 'planr.so', 'pnpm docs:deploy',
-  '/api/search', '--receipt .planr/receipts/docs.json', 'live_browser=true',
+  '/api/search', '--receipt .planr/receipts/docs.json', 'pnpm docs:evidence-examples:generate',
 ]);
 
 const rollback = await readPage('operations', 'rollback');

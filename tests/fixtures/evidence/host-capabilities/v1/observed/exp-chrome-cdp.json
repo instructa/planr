@@ -1,0 +1,80 @@
+{
+  "schema_version": "planr.host_capability_observed_raw.v1",
+  "payload_version": "host-capability-raw/1.0.0",
+  "experiment_id": "exp-chrome-cdp",
+  "host_identity": {
+    "host": "codex",
+    "surface": "chrome-cdp",
+    "version": "missing",
+    "adapter_version": "planr-host-experiment-harness/1.0.0"
+  },
+  "surface": "chrome-cdp",
+  "tool_name": "mcp__chrome_devtools_tileborn__list_pages",
+  "event_source": "mcp:chrome_devtools_tileborn",
+  "started_at": "2026-07-29T18:38:17Z",
+  "ended_at": "2026-07-29T18:38:17Z",
+  "input": {
+    "input_kind": "mechanical_availability_probe",
+    "tool": "list_pages",
+    "arguments": {}
+  },
+  "events": [
+    {
+      "sequence": 1,
+      "event_name": "final",
+      "final": true,
+      "payload_version": "host-event/1.0.0",
+      "tool_name": "mcp__chrome_devtools_tileborn__list_pages",
+      "event_source": "mcp:chrome_devtools_tileborn",
+      "payload": {
+        "final_status": "unavailable",
+        "isError": true,
+        "redacted_message": "Could not connect to Chrome: failed to fetch browser webSocket URL"
+      }
+    }
+  ],
+  "result": {
+    "final_status": "unavailable",
+    "permissions": {
+      "network": "not_probed",
+      "filesystem": "not_probed",
+      "environment": "tool returned isError true because Chrome websocket URL was unavailable",
+      "secrets": "not_requested"
+    },
+    "sandbox": {
+      "mode": "not_entered",
+      "writable_roots": []
+    },
+    "missing_fields": [
+      "target_id",
+      "protocol_events",
+      "screenshot_or_dom_artifact",
+      "host_version"
+    ],
+    "blind_spots": [
+      "A future CDP adapter must prove target binding and rendered state from observed protocol events"
+    ],
+    "artifact_refs": [
+      {
+        "id": "artifact-chrome-devtools-error",
+        "kind": "mcp-text-error",
+        "root_kind": "fixture_root",
+        "path": "artifacts/chrome-devtools/error.txt",
+        "digest": "sha256:6078a4639657cc48750dd28363d7bfa830c7b20d8a720b4875445cc7f8100d04"
+      }
+    ],
+    "artifact_digests": {
+      "artifact-chrome-devtools-error": "sha256:6078a4639657cc48750dd28363d7bfa830c7b20d8a720b4875445cc7f8100d04"
+    },
+    "experiment_plan": [
+      "Start a disposable Chrome target with remote debugging enabled.",
+      "Capture target discovery, navigation, runtime console, network, screenshot, and final status.",
+      "Classify missing endpoint or denied access as unavailable or permission_denied."
+    ],
+    "availability_reason": "Chrome DevTools MCP could not connect to a browser websocket"
+  },
+  "provenance_ref": {
+    "path": "provenance/host-capability-captures.json",
+    "digest": "sha256:3c1cd2f4322c22f0e41c82983728b7b3e3cf774d49c46b1d3ffecb6fd184c483"
+  }
+}

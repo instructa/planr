@@ -26,7 +26,11 @@ impl App {
             params![ApprovalStatus::Requested.as_str(), reason, item_id],
         )?;
         ensure_item_changed(changed, item_id)?;
-        Ok(json!({"item": self.get_item(item_id)?, "approval": self.item_approval(item_id)?}))
+        Ok(json!({
+            "item": self.get_item(item_id)?,
+            "approval": self.item_approval(item_id)?,
+            "proof": self.proof_status_for_item(item_id)?,
+        }))
     }
 
     pub(crate) fn approve_value(
@@ -59,7 +63,11 @@ impl App {
             params![status.as_str(), by, comment, item_id],
         )?;
         ensure_item_changed(changed, item_id)?;
-        Ok(json!({"item": self.get_item(item_id)?, "approval": self.item_approval(item_id)?}))
+        Ok(json!({
+            "item": self.get_item(item_id)?,
+            "approval": self.item_approval(item_id)?,
+            "proof": self.proof_status_for_item(item_id)?,
+        }))
     }
 
     pub(crate) fn add_log_value(&self, input: LogInput<'_>) -> Result<Value> {
@@ -73,6 +81,7 @@ impl App {
         Ok(json!({
             "closed": item_id,
             "unlocked": self.unlocked_since(&ready_before)?,
+            "proof": self.proof_status_for_item(item_id)?,
         }))
     }
 

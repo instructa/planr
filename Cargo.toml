@@ -1,6 +1,6 @@
 [package]
 name = "planr"
-version = "1.9.0"
+version = "1.10.0"
 edition = "2024"
 license = "MIT"
 description = "Local-first planning and execution coordination for coding agents"
@@ -19,13 +19,18 @@ path = "src/main.rs"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 cliclack = "0.5.4"
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.32", features = ["bundled", "functions"] }
+quick-xml = "0.41"
 serde = { version = "1", features = ["derive"] }
+serde_jcs = "0.2"
 serde_json = "1"
 serde_yaml = "0.9"
 sha2 = "0.10"
+libc = "0.2"
+jsonschema = { version = "0.49.2", default-features = false }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 slug = "0.1"
-time = { version = "0.3", features = ["formatting"] }
+time = { version = "0.3", features = ["formatting", "parsing"] }
 toml = "0.8"
 toml_edit = "0.22"
 uuid = { version = "1", features = ["v4"] }

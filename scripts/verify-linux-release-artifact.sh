@@ -40,10 +40,26 @@ extract="$verify_root/extract"
 mkdir -p "$extract"
 
 actual_members="$(tar -tzf "$asset" | LC_ALL=C sort)"
-expected_members="$(printf '%s\n' LICENSE.md README.md SHA256SUMS planr | LC_ALL=C sort)"
-if [ "$actual_members" != "$expected_members" ]; then
+for required in \
+  LICENSE.md \
+  README.md \
+  SHA256SUMS \
+  planr \
+  scripts/host-capability-experiment.mjs \
+  scripts/planr-host-capability-validator \
+  scripts/host-capability-runtime/v1/schemas/host-capability-observed-raw.schema.json \
+  scripts/host-capability-runtime/v1/schemas/host-capability-expected-manifest.schema.json \
+  scripts/host-capability-runtime/v1/schemas/host-capability-provenance.schema.json
+do
+  if ! printf '%s\n' "$actual_members" | grep -Fx "$required" >/dev/null; then
+    echo "release tarball is missing required path: $required" >&2
+    exit 1
+  fi
+done
+unexpected_members="$(printf '%s\n' "$actual_members" | grep -Ev '^(LICENSE.md|README.md|SHA256SUMS|planr|scripts/|scripts/host-capability-experiment\.mjs|scripts/planr-host-capability-validator|scripts/host-capability-runtime/|scripts/host-capability-runtime/v1/|scripts/host-capability-runtime/v1/schemas/|scripts/host-capability-runtime/v1/schemas/host-capability-(observed-raw|expected-manifest|provenance)\.schema\.json)$' || true)"
+if [ -n "$unexpected_members" ]; then
   echo "release tarball contains unexpected paths:" >&2
-  printf '%s\n' "$actual_members" >&2
+  printf '%s\n' "$unexpected_members" >&2
   exit 1
 fi
 tar -xzf "$asset" -C "$extract"
@@ -53,23 +69,29 @@ tar -xzf "$asset" -C "$extract"
 )
 
 binary="$extract/planr"
+validator="$extract/scripts/planr-host-capability-validator"
 test -x "$binary"
-file "$binary" | grep -Eq 'ELF 64-bit.*(x86-64|ARM aarch64)'
-if readelf -l "$binary" | grep -q 'INTERP'; then
-  echo "Linux release binary has a dynamic program interpreter" >&2
-  exit 1
-fi
-if readelf -d "$binary" | grep -q '(NEEDED)'; then
-  echo "Linux release binary has dynamic shared-library dependencies" >&2
-  exit 1
-fi
-if strings "$binary" | grep -Eq 'GLIBC_[0-9]'; then
-  echo "Linux release binary retains a glibc symbol requirement" >&2
-  exit 1
-fi
+test -x "$validator"
+for executable in "$binary" "$validator"; do
+  file "$executable" | grep -Eq 'ELF 64-bit.*(x86-64|ARM aarch64)'
+  if readelf -l "$executable" | grep -q 'INTERP'; then
+    echo "Linux release binary has a dynamic program interpreter: $executable" >&2
+    exit 1
+  fi
+  if readelf -d "$executable" | grep -q '(NEEDED)'; then
+    echo "Linux release binary has dynamic shared-library dependencies: $executable" >&2
+    exit 1
+  fi
+  if strings "$executable" | grep -Eq 'GLIBC_[0-9]'; then
+    echo "Linux release binary retains a glibc symbol requirement: $executable" >&2
+    exit 1
+  fi
+done
 
 reported="$($binary --version)"
 test "$reported" = "planr $version"
+validator_identity="$($validator --identity)"
+printf '%s\n' "$validator_identity" | grep -q '"validator":"planr-host-capability-validator"'
 
 docker run --rm \
   --platform "$docker_platform" \
@@ -87,9 +109,12 @@ mkdir -p "$npm_fixture/npm/bin" "$npm_fixture/npm/native/$target"
 cp package.json "$npm_fixture/package.json"
 cp npm/bin/planr.js "$npm_fixture/npm/bin/planr.js"
 cp "$binary" "$npm_fixture/npm/native/$target/planr"
+cp "$validator" "$npm_fixture/npm/native/$target/planr-host-capability-validator"
 chmod 755 "$npm_fixture/npm/native/$target/planr"
+chmod 755 "$npm_fixture/npm/native/$target/planr-host-capability-validator"
 cmp "$binary" "$npm_fixture/npm/native/$target/planr"
+cmp "$validator" "$npm_fixture/npm/native/$target/planr-host-capability-validator"
 npm_reported="$(cd "$npm_fixture" && node npm/bin/planr.js --version)"
 test "$npm_reported" = "planr $version"
 
-echo "linux_release_verification=passed target=$target linkage=static-musl runtime=alpine-3.20.8 lifecycle=passed npm_bytes=identical"
+echo "linux_release_verification=passed target=$target linkage=static-musl runtime=alpine-3.20.8 lifecycle=passed npm_bytes=identical validator_bytes=identical"

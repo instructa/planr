@@ -38,6 +38,24 @@ const HTTP_ROUTE_MANIFEST = [
   ['GET ends_with:/items', '/v1/projects/{project_id}/items'], ['POST ends_with:/items', '/v1/projects/{project_id}/items'],
   ['GET ends_with:/unlocks', '/v1/items/{id}/unlocks'], ['GET ends_with:/preview-close', '/v1/items/{id}/preview-close'],
   ['POST exact:/v1/recover/sweep', '/v1/recover/sweep'], ['POST exact:/v1/policy/admit', '/v1/policy/admit'],
+  ['GET exact:/v1/evidence/policy', '/v1/evidence/policy'],
+  ['GET exact:/v1/evidence/obligations', '/v1/evidence/obligations'],
+  ['POST exact:/v1/evidence/obligations', '/v1/evidence/obligations'],
+  ['POST exact:/v1/evidence/migrate', '/v1/evidence/migrate'],
+  ['GET exact:/v1/evidence/classifications', '/v1/evidence/classifications'],
+  ['GET starts_with:/v1/evidence/obligations/', '/v1/evidence/obligations/{id}'],
+  ['GET exact:/v1/evidence/capabilities', '/v1/evidence/capabilities'],
+  ['GET starts_with:/v1/evidence/capabilities/', '/v1/evidence/capabilities/{id}'],
+  ['POST exact:/v1/evidence/run', '/v1/evidence/run'],
+  ['POST exact:/v1/evidence/import', '/v1/evidence/import'],
+  ['POST exact:/v1/evidence/host-capture/import', '/v1/evidence/host-capture/import'],
+  ['POST exact:/v1/evidence/host-capture/run', '/v1/evidence/host-capture/run'],
+  ['GET exact:/v1/evidence/attempts', '/v1/evidence/attempts'],
+  ['GET starts_with:/v1/evidence/attempts/', '/v1/evidence/attempts/{id}'],
+  ['GET exact:/v1/evidence/receipts', '/v1/evidence/receipts'],
+  ['GET starts_with:/v1/evidence/receipts/', '/v1/evidence/receipts/{id}'],
+  ['POST exact:/v1/evidence/coverage', '/v1/evidence/coverage'],
+  ['POST exact:/v1/evidence/explain', '/v1/evidence/explain'],
   ['POST ends_with:/insert', '/v1/items/{id}/insert'], ['POST ends_with:/amend', '/v1/items/{id}/amend'], ['POST ends_with:/replan', '/v1/items/{id}/replan'],
   ['POST ends_with:/heartbeat', '/v1/items/{id}/heartbeat'], ['POST ends_with:/progress', '/v1/items/{id}/progress'],
   ['POST ends_with:/pause', '/v1/items/{id}/pause'], ['POST ends_with:/resume', '/v1/items/{id}/resume'],
@@ -66,7 +84,7 @@ function extractHttpRouteSignatures(source) {
     const line = raw.trim();
     if (!line.includes('=>')) continue;
     if (line.includes(', p) if')) {
-      const method = line.match(/^\("([A-Z]+)", p\)/)?.[1];
+      const method = line.match(/^\("([A-Z]+)", p\)/)?.[1] ?? (line.match(/^\(m, p\)/) && 'ANY');
       const predicates = [...line.matchAll(/p\.(starts_with|ends_with)\("([^"]+)"\)/g)]
         .map((match) => `${match[1]}:${match[2]}`)
         .join('&');
@@ -75,6 +93,30 @@ function extractHttpRouteSignatures(source) {
     } else {
       for (const match of line.matchAll(/\(("[A-Z]+"|_), "([^"]+)"\)/g)) {
         signatures.push(`${match[1] === '_' ? 'ANY' : match[1].slice(1, -1)} exact:${match[2]}`);
+      }
+    }
+  }
+  return signatures;
+}
+
+function extractEvidenceRouteSignatures(source) {
+  const start = source.indexOf('match (method, path)');
+  const end = source.indexOf('_ => Err(anyhow!("route not found: {method} {path}"))', start);
+  assert.ok(start >= 0 && end > start, 'Could not locate authoritative Evidence HTTP route match');
+  const signatures = [];
+  for (const raw of source.slice(start, end).split('\n')) {
+    const line = raw.trim();
+    if (!line.includes('=>')) continue;
+    if (line.includes(', p) if')) {
+      const method = line.match(/^\("([A-Z]+)", p\)/)?.[1];
+      const predicates = [...line.matchAll(/p\.(starts_with|ends_with)\("([^"]+)"\)/g)]
+        .map((match) => `${match[1]}:${match[2]}`)
+        .join('&');
+      assert.ok(method && predicates, `Unparsed Evidence HTTP route: ${line}`);
+      signatures.push(`${method} ${predicates}`);
+    } else {
+      for (const match of line.matchAll(/\("([A-Z]+)", "([^"]+)"\)/g)) {
+        signatures.push(`${match[1]} exact:${match[2]}`);
       }
     }
   }
@@ -120,12 +162,17 @@ try {
   check(responses[0].result.protocolVersion === '2025-03-26', 'MCP protocol version matches documented 2025-03-26');
 
   const httpSource = await readFile(path.join(repositoryRoot, 'src', 'app', 'http.rs'), 'utf8');
+  const httpEvidenceSource = await readFile(path.join(repositoryRoot, 'src', 'app', 'http_evidence.rs'), 'utf8');
   const httpPage = await readFile(path.join(docsRoot, 'content', 'docs', 'reference', 'http-api.mdx'), 'utf8');
-  const extractedHttpRoutes = extractHttpRouteSignatures(httpSource).sort();
+  const extractedHttpRoutes = [
+    ...extractHttpRouteSignatures(httpSource),
+    ...extractEvidenceRouteSignatures(httpEvidenceSource),
+  ].sort();
   const manifestedHttpRoutes = HTTP_ROUTE_MANIFEST.map(([signature]) => signature).sort();
   assert.deepEqual(extractedHttpRoutes, manifestedHttpRoutes, 'HTTP router and checked public route manifest drifted');
   assertions.push(`HTTP route manifest exactly matches all ${manifestedHttpRoutes.length} authoritative router arms`);
   for (const [signature, route] of HTTP_ROUTE_MANIFEST) check(httpPage.includes(route), `HTTP reference covers ${signature} as ${route}`);
+  check(!httpPage.includes('`/v1/evidence`'), 'HTTP reference does not advertise unsupported root /v1/evidence route');
 
   const configPage = await readFile(path.join(docsRoot, 'content', 'docs', 'reference', 'configuration-and-storage.mdx'), 'utf8');
   const envNames = ['PLANR_DB', 'PLANR_WORKER_ID', 'PLANR_SESSION_ID', 'PLANR_PROFILE', 'PLANR_NATIVE_BIN', 'PLANR_BIN', 'PLANR_DOWNLOAD', 'PLANR_REPO', 'PLANR_VERSION', 'PLANR_TARGET', 'PLANR_RELEASE_BASE_URL', 'PLANR_SKIP_CHECKSUM'];

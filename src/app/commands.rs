@@ -315,9 +315,10 @@ impl App {
                                 item["id"].as_str().unwrap_or_default(),
                                 item["title"].as_str().unwrap_or_default(),
                             ));
+                            super::proof::append_proof_status_human(human, &entry["proof"]);
                         }
                     };
-                list(&mut human, "ready:", &status["ready"], None);
+                list(&mut human, "ready:", &status["ready"], Some("item"));
                 list(&mut human, "picked:", &status["picked"], Some("item"));
                 list(&mut human, "in_review:", &status["in_review"], Some("item"));
                 list(&mut human, "blocked:", &status["blocked"], Some("item"));
@@ -736,7 +737,7 @@ impl App {
         human.push_str(&Self::progress_human(&progress));
         human.push_str(&Self::settlement_extras_human(&extras));
         self.emit(
-            json!({"closed": item_id, "item": self.get_item(&item_id)?, "log_id": log_id, "unlocked": extras["unlocked"], "post_condition": extras["post_condition"], "hint": extras["hint"], "next": next, "remaining": progress}),
+            json!({"closed": item_id, "item": self.get_item(&item_id)?, "log_id": log_id, "unlocked": extras["unlocked"], "post_condition": extras["post_condition"], "hint": extras["hint"], "proof": extras["proof"], "next": next, "remaining": progress}),
             human,
         )
     }
@@ -921,6 +922,7 @@ impl App {
             "project": self.default_project().ok(),
             "clients": checks,
             "registry": registry,
+            "evidence": self.evidence_doctor_value()?,
             "mcp": {"command": "planr mcp"}
         });
         if self.json {
@@ -965,6 +967,15 @@ impl App {
                     registry["hint"].as_str().unwrap_or_default()
                 ),
             }
+            let evidence = &data["evidence"];
+            println!(
+                "evidence: {} ({} obligation(s), {} capability instance(s), {} attempt(s), {} receipt(s))",
+                evidence["status"].as_str().unwrap_or("warning"),
+                evidence["storage"]["proof_obligations"],
+                evidence["storage"]["capability_instances"],
+                evidence["storage"]["attempts"],
+                evidence["storage"]["receipts"],
+            );
             println!("mcp: planr mcp");
             Ok(())
         }
