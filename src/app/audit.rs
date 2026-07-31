@@ -128,10 +128,9 @@ impl App {
             })
             .and_then(|clause| clause["criteria"].as_array())
             .and_then(|criteria| {
-                criteria.iter().find(|criterion| {
-                    criterion["pass"].as_bool() != Some(true)
-                        && criterion["actionable_now"].as_bool().unwrap_or(true)
-                })
+                criteria
+                    .iter()
+                    .find(|criterion| criterion["pass"].as_bool() != Some(true))
             })
         {
             Some(format!(
@@ -139,7 +138,8 @@ impl App {
                 evidence["criterion_id"].as_str().unwrap_or_default()
             ))
         } else {
-            // Everything settled; only the verification clause is open.
+            // Frozen pre-Evidence compatibility is the only remaining owner
+            // that may direct an operator to a verification log.
             Some(format!(
                 "planr log add --item <verifier-item-id> --kind verification --summary \"verified <flow>: <observed outcome>\" --cmd \"<exact command>\" (scope: plan {plan_id})"
             ))

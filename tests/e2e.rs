@@ -939,7 +939,7 @@ fn git_stdout(root: &Path, args: &[&str]) -> String {
 }
 
 fn evidence_source_binding(root: &Path) -> Value {
-    let untracked = git_stdout(root, &["ls-files", "--others", "--exclude-standard"])
+    let untracked = source_git_stdout(root, &["ls-files", "--others", "--exclude-standard"])
         .lines()
         .filter(|line| !line.is_empty())
         .map(|relative| {
@@ -951,10 +951,10 @@ fn evidence_source_binding(root: &Path) -> Value {
         .collect::<Vec<_>>();
     let revision = git_stdout(root, &["rev-parse", "--verify", "HEAD"]);
     let head_tree = git_stdout(root, &["rev-parse", "HEAD^{tree}"]);
-    let index = git_stdout(root, &["ls-files", "-s"]);
-    let status = git_stdout(root, &["status", "--porcelain=v1"]);
-    let diff = git_stdout(root, &["diff", "--binary", "HEAD"]);
-    let diff_cached = git_stdout(root, &["diff", "--cached", "--binary"]);
+    let index = source_git_stdout(root, &["ls-files", "-s"]);
+    let status = source_git_stdout(root, &["status", "--porcelain=v1"]);
+    let diff = source_git_stdout(root, &["diff", "--binary", "HEAD"]);
+    let diff_cached = source_git_stdout(root, &["diff", "--cached", "--binary"]);
     json!({
         "revision": revision,
         "tree_digest": sha256_json(&json!({
@@ -968,6 +968,25 @@ fn evidence_source_binding(root: &Path) -> Value {
         })),
         "dirty": !status.trim().is_empty(),
     })
+}
+
+fn source_git_stdout(root: &Path, args: &[&str]) -> String {
+    let mut scoped = args.to_vec();
+    scoped.push("--");
+    scoped.extend_from_slice(&[
+        ".",
+        ":(exclude).planr/planr.sqlite",
+        ":(exclude).planr/planr.sqlite-shm",
+        ":(exclude).planr/planr.sqlite-wal",
+        ":(exclude).planr/artifacts/**",
+        ":(exclude).planr/reviews/**",
+        ":(exclude).planr/verification/**",
+        ":(exclude).planr/evidence/runs/**",
+        ":(exclude).planr/evidence/attempts/**",
+        ":(exclude).planr/evidence/receipts/**",
+        ":(exclude).planr/evidence/coverage/**",
+    ]);
+    git_stdout(root, &scoped)
 }
 
 fn evidence_obligation(id: &str, policy_digest: &str, environment: Value) -> Value {
@@ -7828,7 +7847,7 @@ fn evidence_e2e_scenarios_cover_api_queue_stale_retry_unavailable_and_browser_ga
     assert_eq!(flaky_coverage["object"]["coverage"]["actionable_now"], true);
     assert_eq!(
         flaky_coverage["object"]["coverage"]["suggested_next_action"],
-        "rerun flaky evidence"
+        "inspect exhausted or inconclusive verifier evidence"
     );
     assert_eq!(
         flaky_coverage["object"]["canonical_projection"]["status"],
@@ -7840,7 +7859,7 @@ fn evidence_e2e_scenarios_cover_api_queue_stale_retry_unavailable_and_browser_ga
     );
     assert_eq!(
         flaky_coverage["object"]["canonical_projection"]["suggested_next_action"],
-        "rerun flaky evidence"
+        "inspect exhausted or inconclusive verifier evidence"
     );
     let flaky_attempted =
         flaky_coverage["object"]["coverage"]["observation_coverage"][0]["attempted_receipt_ids"]
@@ -14606,8 +14625,23 @@ VALUES ('pln-stop-other', 'p-stop-other', 'build', 'other.md', 'Other Stop Plan'
         &codex_stop_envelope(dir.path(), "thread-stop", true),
         &db_arg,
     );
-    assert_codex_stop_output_schema(&reentrant, true);
-    assert_eq!(reentrant["decision"], "block", "{reentrant}");
+    assert_codex_stop_output_schema(&reentrant, false);
+    assert!(reentrant.as_object().unwrap().is_empty(), "{reentrant}");
+    planr()
+        .current_dir(dir.path())
+        .env("CODEX_THREAD_ID", "thread-stop")
+        .args([
+            "--db", &db_arg, "--json", "stop", "resume", "--plan", &plan_id,
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"status\": \"resumed\""));
+    let resumed = stop(
+        &codex_stop_envelope(dir.path(), "thread-stop", true),
+        &db_arg,
+    );
+    assert_codex_stop_output_schema(&resumed, true);
+    assert_eq!(resumed["decision"], "block", "{resumed}");
     let malformed = stop("{", &db_arg);
     assert_codex_stop_output_schema(&malformed, false);
     assert!(malformed.as_object().unwrap().is_empty(), "{malformed}");
@@ -14719,10 +14753,7 @@ VALUES ('pln-stop-other', 'p-stop-other', 'build', 'other.md', 'Other Stop Plan'
         let moved = stop(&official("thread-move"), &db_arg);
         assert_eq!(moved["decision"], "block", "iteration {index}: {moved}");
         assert!(
-            moved["reason"]
-                .as_str()
-                .unwrap()
-                .contains(&format!("total {}/6", index + 1)),
+            moved["reason"].as_str().unwrap().contains("total 1/6"),
             "iteration {index}: {moved}"
         );
     }
@@ -14737,11 +14768,8 @@ VALUES ('pln-stop-other', 'p-stop-other', 'build', 'other.md', 'Other Stop Plan'
         &exhausted_obligation,
     );
     let total_exhausted = stop(&official("thread-move"), &db_arg);
-    assert_codex_stop_output_schema(&total_exhausted, false);
-    assert!(
-        total_exhausted.as_object().unwrap().is_empty(),
-        "{total_exhausted}"
-    );
+    assert_codex_stop_output_schema(&total_exhausted, true);
+    assert_eq!(total_exhausted["decision"], "block", "{total_exhausted}");
 
     let missing_planr = StdCommand::new("sh")
         .arg(&script)
@@ -16380,6 +16408,311 @@ fn evidence_migration_explicitly_binds_pre_evidence_plans_without_rewriting_clai
     assert_eq!(http_classifications["object"], classifications["object"]);
     server.kill().unwrap();
     server.wait().unwrap();
+}
+
+#[test]
+fn evidence_readiness_and_versioned_rebind_are_fail_closed_and_atomic() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    let db_arg = db.to_str().unwrap().to_string();
+    write_evidence_policy_fixture(dir.path());
+    let helper_relative = ".planr/evidence/adapters/runner.sh";
+    let helper_path = dir.path().join(helper_relative);
+    let helper_source = "#!/bin/sh\nprintf '{\"status\":\"ok\"}'\n";
+    fs::write(&helper_path, helper_source).unwrap();
+    let execution = json!({
+        "kind": "process",
+        "executable": "sh",
+        "args": [helper_relative],
+        "working_directory": ".",
+        "timeout_ms": 5000,
+        "stdout_limit_bytes": 4096,
+        "stderr_limit_bytes": 1024,
+        "payload_schema": {
+            "type": "com.example.health.status",
+            "schema_ref": "schema://com.example.health.status",
+            "schema_digest": sha256_json(&json!({
+                "type": "object",
+                "required": ["status"],
+                "properties": {"status": {"const": "ok"}},
+                "additionalProperties": false
+            })),
+        },
+    });
+    let file_identity = host_capture_run_helper_identity(dir.path(), &execution, helper_relative);
+    let manifest_digest = rewrite_evidence_runner_manifest(dir.path(), |manifest| {
+        manifest["availability_probe"]["execution"] = execution.clone();
+        manifest["adapter_digest"] = json!(process_adapter_digest(&execution, vec![file_identity]));
+    });
+    rewrite_evidence_policy_fixture(dir.path(), |policy| {
+        policy["adapter_registrations"][0]["manifest_digest"] = json!(manifest_digest);
+        policy["adapter_registrations"][0]["execution_contract"] = execution.clone();
+    });
+    init_git_repo(dir.path());
+    init_evidence_project(dir.path(), &db, "Evidence Rebind");
+    let run = |args: &[&str]| -> Value {
+        single_json_document(
+            &planr()
+                .current_dir(dir.path())
+                .args(["--db", &db_arg, "--json"])
+                .args(args)
+                .assert()
+                .success()
+                .get_output()
+                .stdout,
+        )
+    };
+    let product = run(&["plan", "new", "Rebind Product"]);
+    let product_id = product["plan"]["id"].as_str().unwrap();
+    let build = run(&["plan", "split", product_id, "--slice", "Rebind Build"]);
+    let plan_id = build["plan"]["id"].as_str().unwrap().to_string();
+    let policy = run(&["evidence", "policy"]);
+    let policy_digest = policy["object"]["digest"].as_str().unwrap();
+    let probe = policy["object"]["registry"]["probes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|probe| probe["manifest_id"] == "verifier-generic-adapter")
+        .unwrap();
+    let environment = capability_instance_environment(&db, probe["instance_id"].as_str().unwrap());
+    let mut old = evidence_obligation_for(
+        "pob-rebind-old",
+        policy_digest,
+        "com.example.health.status",
+        "rebind health",
+        json!({"status": "ok"}),
+        json!({"kind": "process", "uri": "local://health"}),
+        environment,
+        json!({"kind": "process", "id": "runtime-local"}),
+        json!([]),
+        "sha256:abababababababababababababababababababababababababababababababab",
+    );
+    old["plan_id"] = json!(plan_id);
+    old["item_id"] = Value::Null;
+    old["criterion_id"] = json!("crit-rebind");
+    old["observations"][0]["payload_schema"] =
+        json!({"schema_ref": "schema://com.example.health.status"});
+    add_evidence_obligation_value(dir.path(), &db, "pob-rebind-old", &old);
+
+    let mut incompatible = old.clone();
+    incompatible["id"] = json!("pob-readiness-incompatible");
+    incompatible["criterion_id"] = json!("crit-readiness-incompatible");
+    incompatible["observations"][0]["id"] = json!("obs-readiness-incompatible");
+    incompatible["observations"][0]["payload_schema"] =
+        json!({"schema_ref": "schema://com.example.unregistered.result"});
+    add_evidence_obligation_value(dir.path(), &db, "pob-readiness-incompatible", &incompatible);
+    let blocked_readiness = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                &db_arg,
+                "--json",
+                "evidence",
+                "readiness",
+                "--scope",
+                "obligation",
+                "--id",
+                "pob-readiness-incompatible",
+            ])
+            .assert()
+            .failure()
+            .code(3)
+            .get_output()
+            .stdout,
+    );
+    assert_eq!(
+        blocked_readiness["object"]["status"], "blocked",
+        "{blocked_readiness}"
+    );
+    assert!(
+        blocked_readiness["object"]["gaps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|gap| gap["code"] == "missing_payload_schema_registration"),
+        "{blocked_readiness}"
+    );
+    let mut compatible = incompatible;
+    compatible["id"] = json!("pob-readiness-compatible");
+    compatible["supersedes"] = json!("pob-readiness-incompatible");
+    compatible["observations"][0]["payload_schema"] =
+        json!({"schema_ref": "schema://com.example.health.status"});
+    compatible["config_digest"] =
+        json!("sha256:bcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbc");
+    compatible["created_at"] = json!("2026-07-31T19:59:00Z");
+    add_evidence_obligation_value(dir.path(), &db, "pob-readiness-compatible", &compatible);
+
+    let mut incompatible_runtime = compatible.clone();
+    incompatible_runtime["id"] = json!("pob-readiness-runtime-incompatible");
+    incompatible_runtime["supersedes"] = Value::Null;
+    incompatible_runtime["criterion_id"] = json!("crit-readiness-runtime");
+    incompatible_runtime["observations"][0]["id"] = json!("obs-readiness-runtime");
+    incompatible_runtime["observations"][0]["runtime_target"] =
+        json!({"kind": "process", "id": "runtime-unregistered"});
+    incompatible_runtime["config_digest"] =
+        json!("sha256:dededededededededededededededededededededededededededededededede");
+    incompatible_runtime["created_at"] = json!("2026-07-31T19:59:01Z");
+    add_evidence_obligation_value(
+        dir.path(),
+        &db,
+        "pob-readiness-runtime-incompatible",
+        &incompatible_runtime,
+    );
+    let runtime_blocked = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                &db_arg,
+                "--json",
+                "evidence",
+                "readiness",
+                "--scope",
+                "obligation",
+                "--id",
+                "pob-readiness-runtime-incompatible",
+            ])
+            .assert()
+            .failure()
+            .code(3)
+            .get_output()
+            .stdout,
+    );
+    assert!(
+        runtime_blocked["object"]["gaps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|gap| {
+                gap["code"] == "verifier_contract_mismatch"
+                    && gap["runtime_target"]["id"] == "runtime-unregistered"
+            }),
+        "{runtime_blocked}"
+    );
+    let mut compatible_runtime = incompatible_runtime;
+    compatible_runtime["id"] = json!("pob-readiness-runtime-compatible");
+    compatible_runtime["supersedes"] = json!("pob-readiness-runtime-incompatible");
+    compatible_runtime["observations"][0]["runtime_target"] =
+        json!({"kind": "process", "id": "runtime-local"});
+    compatible_runtime["config_digest"] =
+        json!("sha256:efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef");
+    compatible_runtime["created_at"] = json!("2026-07-31T19:59:02Z");
+    add_evidence_obligation_value(
+        dir.path(),
+        &db,
+        "pob-readiness-runtime-compatible",
+        &compatible_runtime,
+    );
+
+    let readiness = run(&["evidence", "readiness", "--scope", "plan", "--id", &plan_id]);
+    assert_evidence_envelope(&readiness, "evidence.readiness", true);
+    assert_eq!(readiness["object"]["status"], "passed", "{readiness}");
+
+    fs::write(&helper_path, format!("{helper_source}# drift\n")).unwrap();
+    let drifted_readiness = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                &db_arg,
+                "--json",
+                "evidence",
+                "readiness",
+                "--scope",
+                "plan",
+                "--id",
+                &plan_id,
+            ])
+            .assert()
+            .failure()
+            .code(3)
+            .get_output()
+            .stdout,
+    );
+    assert!(
+        drifted_readiness["object"]["gaps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|gap| gap["code"] == "adapter_digest_drift"),
+        "{drifted_readiness}"
+    );
+    fs::write(&helper_path, helper_source).unwrap();
+    let restored_readiness = run(&["evidence", "readiness", "--scope", "plan", "--id", &plan_id]);
+    assert_eq!(
+        restored_readiness["object"]["status"], "passed",
+        "{restored_readiness}"
+    );
+
+    let mut proposed = old.clone();
+    proposed["id"] = json!("pob-rebind-new");
+    proposed["supersedes"] = json!("pob-rebind-old");
+    proposed["config_digest"] =
+        json!("sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd");
+    proposed["created_at"] = json!("2026-07-31T20:00:00Z");
+    let mut input = json!({
+        "schema_version": "planr.evidence.rebind.v1",
+        "plan_id": plan_id,
+        "manifest_id": "verifier-generic-adapter",
+        "obligations": [proposed],
+    });
+    let input_path = dir.path().join("rebind.json");
+    fs::write(&input_path, serde_json::to_vec_pretty(&input).unwrap()).unwrap();
+    let preview = run(&[
+        "evidence",
+        "rebind",
+        "--input",
+        input_path.to_str().unwrap(),
+    ]);
+    assert_evidence_envelope(&preview, "evidence.rebind", true);
+    let preview_digest = preview["object"]["preview"]["preview_digest"]
+        .as_str()
+        .unwrap();
+    input["preview_digest"] = json!(preview_digest);
+    fs::write(&input_path, serde_json::to_vec_pretty(&input).unwrap()).unwrap();
+
+    planr()
+        .current_dir(dir.path())
+        .env("PLANR_EVIDENCE_REBIND_FAIL_AFTER_CREATES", "1")
+        .args([
+            "--db",
+            &db_arg,
+            "--json",
+            "evidence",
+            "rebind",
+            "--input",
+            input_path.to_str().unwrap(),
+            "--apply",
+        ])
+        .assert()
+        .failure();
+    let rolled_back: i64 = Connection::open(&db)
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM proof_obligations WHERE id = 'pob-rebind-new'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(rolled_back, 0, "failed rebind must roll back every write");
+
+    let applied = run(&[
+        "evidence",
+        "rebind",
+        "--input",
+        input_path.to_str().unwrap(),
+        "--apply",
+    ]);
+    assert_eq!(applied["object"]["status"], "applied", "{applied}");
+    assert_eq!(applied["object"]["created"][0]["obligation_version"], 2);
+    let old_row = run(&["evidence", "obligation", "show", "pob-rebind-old"]);
+    let new_row = run(&["evidence", "obligation", "show", "pob-rebind-new"]);
+    assert_eq!(old_row["object"]["obligation"]["obligation_version"], 1);
+    assert_eq!(
+        new_row["object"]["obligation"]["supersedes_obligation_id"],
+        "pob-rebind-old"
+    );
 }
 
 #[test]
@@ -24989,8 +25322,8 @@ fn guess_killer_pack_auto_chain_audit_review_mode_unlocked_and_repair_errors() {
     );
     assert_eq!(closed["review_mode"], "single_agent", "{closed}");
 
-    // F3 arc: settled board holds without a contract; a stored contract
-    // makes verification binding; a verification log satisfies it.
+    // F3 frozen pre-Evidence compatibility: a settled board holds without a
+    // contract; adding a contract requires one claim-only verification log.
     let audit = run("prep", &["plan", "audit", &build_id]);
     assert_eq!(audit["holds"], true, "all settled, no contract: {audit}");
     run(

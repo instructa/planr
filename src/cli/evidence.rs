@@ -29,8 +29,12 @@ pub(crate) enum EvidenceCommand {
     Coverage(EvidenceCoverageArgs),
     /// Explain coverage, candidates, and durable records for an Evidence scope.
     Explain(EvidenceCoverageArgs),
+    /// Check that active obligations have compatible schemas and available capabilities before goal work.
+    Readiness(EvidenceCoverageArgs),
     /// Preview or apply explicit pre-Evidence plan migration into binding Evidence obligations.
     Migrate(EvidenceMigrationArgs),
+    /// Preview or apply an immutable versioned capability/obligation rebind.
+    Rebind(EvidenceMigrationArgs),
     /// Show canonical Evidence gap classifications and legacy/operator aliases.
     Classifications,
 }

@@ -35,6 +35,7 @@ pub(crate) struct ConfiguredProcessRunInput<'a> {
     pub capability_instance: VerificationCapabilityInstance,
     pub execution_contract: ProcessExecutionContract,
     pub payload_json_schema: Option<Value>,
+    pub observation_payload_json_schemas: BTreeMap<String, Value>,
     pub target: TargetBinding,
     pub environment: EnvironmentBinding,
     pub fixture_disclosure: FixtureDisclosure,
@@ -128,6 +129,7 @@ where
             receipt_value: input.receipt_value,
             receipt_digest: input.receipt_digest,
             trusted_binding_value: input.trusted_binding_value,
+            retry_predecessor_attempt_id: input.retry_predecessor_attempt_id,
         },
     )?;
     tx.commit()?;
@@ -237,17 +239,7 @@ pub(crate) fn run_configured_process_adapter(
         ensure_process_adapter_digest(&manifest, resolved)?;
     }
     let resolved_run = resolved.run();
-    let config_digest = sha256_json_digest(&json!({
-        "execution_contract": execution_contract_value,
-        "source": source_binding,
-        "target": input.target,
-        "environment": capability_instance.environment,
-        "fixture_disclosure": input.fixture_disclosure,
-        "env": adapter_env,
-        "retry_of": input.retry_of,
-        "attempt_index": input.attempt_index,
-        "max_attempts": input.max_attempts,
-    }))?;
+    let config_digest = input.obligation.config_digest.as_str().to_string();
     let started_at = timestamp();
     let output = match &resolved {
         ResolvedProcessRunResolution::Runnable(resolved) => {
@@ -283,44 +275,44 @@ pub(crate) fn run_configured_process_adapter(
         }
         _ => unreachable!("resolved process state and execution output diverged"),
     };
-    let structured_observation_results = if process_result.status == AttemptStatus::Passed
-        && requires_structured_observation_results(&input.execution_contract)
-    {
-        match strict_structured_observation_results(
-            &input.obligation,
-            &input.execution_contract,
-            &input.target,
-            &input.environment,
-            &input.fixture_disclosure,
-            input.repository_root,
-            &process_result.raw_result,
-        ) {
-            Ok(results) => Some(results),
-            Err(error) => {
-                mark_structured_observation_failure(&mut process_result, error.to_string())?;
-                None
+    let validated_observation_results = if process_result.status == AttemptStatus::Passed {
+        if requires_structured_observation_results(&input.execution_contract) {
+            match strict_structured_observation_results(
+                &input.obligation,
+                &input.execution_contract,
+                &input.observation_payload_json_schemas,
+                &input.target,
+                &input.environment,
+                &input.fixture_disclosure,
+                input.repository_root,
+                &process_result.raw_result,
+            ) {
+                Ok(results) => Some(results),
+                Err(error) => {
+                    mark_structured_observation_failure(&mut process_result, error.to_string())?;
+                    None
+                }
+            }
+        } else {
+            match strict_ordinary_process_observation_results(
+                &input.obligation,
+                input.payload_json_schema.as_ref(),
+                &process_result.raw_result,
+            ) {
+                Ok(results) => Some(results),
+                Err(OrdinaryObservationError::Malformed(error)) => {
+                    mark_ordinary_observation_verifier_failure(&mut process_result, error)?;
+                    None
+                }
+                Err(OrdinaryObservationError::SemanticMismatch(error)) => {
+                    mark_semantic_observation_mismatch(&mut process_result, error)?;
+                    None
+                }
             }
         }
     } else {
         None
     };
-    if process_result.status == AttemptStatus::Passed
-        && !requires_structured_observation_results(&input.execution_contract)
-    {
-        match strict_ordinary_process_observation_results(
-            &input.obligation,
-            input.payload_json_schema.as_ref(),
-            &process_result.raw_result,
-        ) {
-            Ok(()) => {}
-            Err(OrdinaryObservationError::Malformed(error)) => {
-                mark_ordinary_observation_verifier_failure(&mut process_result, error)?;
-            }
-            Err(OrdinaryObservationError::SemanticMismatch(error)) => {
-                mark_semantic_observation_mismatch(&mut process_result, error)?;
-            }
-        }
-    }
     if matches!(resolved, ResolvedProcessRunResolution::Runnable(_))
         && process_result.status != AttemptStatus::Passed
     {
@@ -377,7 +369,7 @@ pub(crate) fn run_configured_process_adapter(
             &input.obligation,
             process_result.status,
             &process_result.raw_result,
-            structured_observation_results.as_ref(),
+            validated_observation_results.as_ref(),
         )?,
         attempt_ids: vec![EvidenceId::parse(attempt_id.clone())?],
         retry_history: retry_history(&retry_lineage, process_result.status),
@@ -466,7 +458,7 @@ fn registered_capability_manifest(
     serde_json::from_str(&snapshot).context("decoding registered capability manifest snapshot")
 }
 
-fn ensure_process_adapter_digest(
+pub(crate) fn ensure_process_adapter_digest(
     manifest: &super::model::VerificationCapabilityManifest,
     resolved: &ResolvedProcessRun,
 ) -> Result<()> {
@@ -572,17 +564,21 @@ fn ensure_contract_compatibility(
     instance: &VerificationCapabilityInstance,
     execution: &ProcessExecutionContract,
 ) -> Result<()> {
+    let structured = requires_structured_observation_results(execution);
     if execution.payload_schema.schema_ref != instance.observed_payload_contract.schema_ref {
         bail!("execution contract payload schema does not match registered capability instance");
     }
-    if !supports_observation_type(instance, execution.payload_schema.observation_type.as_str()) {
+    if !structured
+        && !supports_observation_type(instance, execution.payload_schema.observation_type.as_str())
+    {
         bail!("execution contract observation type is not supported by capability instance");
     }
     for observation in &obligation.observations {
         if !supports_observation_type(instance, observation.observation_type.as_str()) {
             bail!("proof obligation observation type is not supported by capability instance");
         }
-        if let Some(payload_schema) = &observation.payload_schema
+        if !structured
+            && let Some(payload_schema) = &observation.payload_schema
             && payload_schema.schema_ref != instance.observed_payload_contract.schema_ref
         {
             bail!("proof obligation payload schema does not match capability instance");
@@ -1254,9 +1250,6 @@ fn observation_actual(
     {
         return actual.clone();
     }
-    if let Some(actual) = legacy_structured_stdout_observation_actual(raw_result, observation) {
-        return actual;
-    }
     value_object_or_wrapped(raw_result.clone())
 }
 
@@ -1267,6 +1260,7 @@ fn requires_structured_observation_results(execution: &ProcessExecutionContract)
 fn strict_structured_observation_results(
     obligation: &ProofObligation,
     execution: &ProcessExecutionContract,
+    observation_payload_json_schemas: &BTreeMap<String, Value>,
     target: &TargetBinding,
     environment: &EnvironmentBinding,
     fixture_disclosure: &FixtureDisclosure,
@@ -1365,6 +1359,34 @@ fn strict_structured_observation_results(
         if actual.get("schema_ref").and_then(Value::as_str) != Some(expected_schema_ref) {
             bail!("structured observation result schema_ref mismatch for {requirement_id}");
         }
+        if let Some(schema) = observation_payload_json_schemas.get(requirement_id) {
+            let validator = jsonschema::draft202012::options()
+                .build(schema)
+                .with_context(|| {
+                    format!(
+                        "structured observation payload schema is invalid for {requirement_id} ({expected_schema_ref})"
+                    )
+                })?;
+            let schema_errors = validator
+                .iter_errors(&Value::Object(actual.clone()))
+                .map(|error| {
+                    format!(
+                        "{}: {error}",
+                        if error.instance_path().as_str().is_empty() {
+                            "/"
+                        } else {
+                            error.instance_path().as_str()
+                        }
+                    )
+                })
+                .collect::<Vec<_>>();
+            if !schema_errors.is_empty() {
+                bail!(
+                    "structured observation payload schema mismatch for {requirement_id} ({expected_schema_ref}): {}",
+                    schema_errors.join("; ")
+                );
+            }
+        }
         if !actual_satisfies_expected(&Value::Object(actual.clone()), &requirement.expected) {
             bail!(
                 "structured observation result actual does not satisfy expected predicate for {requirement_id}"
@@ -1393,7 +1415,7 @@ fn strict_ordinary_process_observation_results(
     obligation: &ProofObligation,
     payload_json_schema: Option<&Value>,
     raw_result: &Value,
-) -> std::result::Result<(), OrdinaryObservationError> {
+) -> std::result::Result<BTreeMap<String, Map<String, Value>>, OrdinaryObservationError> {
     if raw_result
         .get("stdout_truncated")
         .and_then(Value::as_bool)
@@ -1440,18 +1462,27 @@ fn strict_ordinary_process_observation_results(
             )));
         }
     }
+    let actual_object = parsed.as_object().cloned().ok_or_else(|| {
+        OrdinaryObservationError::Malformed(
+            "ordinary process stdout must be a JSON object".to_string(),
+        )
+    })?;
+    let mut actuals = BTreeMap::new();
     for observation in &obligation.observations {
-        let actual = legacy_structured_stdout_observation_actual(raw_result, observation)
-            .map(Value::Object)
-            .unwrap_or_else(|| parsed.clone());
+        let actual = Value::Object(actual_object.clone());
         if !actual_satisfies_expected(&actual, &observation.expected) {
             return Err(OrdinaryObservationError::SemanticMismatch(format!(
                 "ordinary process actual does not satisfy expected predicate for {}",
                 observation.id.as_str()
             )));
         }
+        let mut bound_actual = actual_object.clone();
+        if let Some(schema) = &observation.payload_schema {
+            bound_actual.insert("schema_ref".to_string(), json!(schema.schema_ref));
+        }
+        actuals.insert(observation.id.as_str().to_string(), bound_actual);
     }
-    Ok(())
+    Ok(actuals)
 }
 
 fn ensure_structured_fixture_disclosure_matches(
@@ -1764,44 +1795,6 @@ fn actual_satisfies_expected(actual: &Value, expected: &Value) -> bool {
     }
 }
 
-fn legacy_structured_stdout_observation_actual(
-    raw_result: &Value,
-    observation: &super::model::ObservationRequirement,
-) -> Option<Map<String, Value>> {
-    let stdout = raw_result.get("stdout_excerpt")?.as_str()?;
-    let parsed: Value = serde_json::from_str(stdout).ok()?;
-    if let Some(results) = parsed.get("observation_results").and_then(Value::as_object)
-        && let Some(actual) = results.get(observation.id.as_str())
-    {
-        return Some(value_object_or_wrapped(actual.clone()));
-    }
-    if let Some(results) = parsed.get("observations").and_then(Value::as_object)
-        && let Some(actual) = results.get(observation.id.as_str())
-    {
-        return Some(value_object_or_wrapped(actual.clone()));
-    }
-    if let Some(results) = parsed.get("observations").and_then(Value::as_array) {
-        for result in results {
-            let matches_id = result
-                .get("requirement_id")
-                .or_else(|| result.get("id"))
-                .and_then(Value::as_str)
-                == Some(observation.id.as_str());
-            let matches_type = result.get("type").and_then(Value::as_str)
-                == Some(observation.observation_type.as_str());
-            if matches_id && matches_type {
-                return Some(value_object_or_wrapped(
-                    result
-                        .get("actual")
-                        .cloned()
-                        .unwrap_or_else(|| result.clone()),
-                ));
-            }
-        }
-    }
-    None
-}
-
 fn value_object_or_wrapped(value: Value) -> Map<String, Value> {
     match value {
         Value::Object(map) => map,
@@ -2029,6 +2022,7 @@ struct PersistedReceipt<'a> {
     receipt_value: &'a Value,
     receipt_digest: &'a str,
     trusted_binding_value: &'a Value,
+    retry_predecessor_attempt_id: Option<&'a str>,
 }
 
 fn persist_attempt(conn: &Connection, evidence: PersistedAttempt<'_>) -> Result<()> {
@@ -2077,11 +2071,25 @@ fn persist_attempt(conn: &Connection, evidence: PersistedAttempt<'_>) -> Result<
 }
 
 fn persist_receipt(conn: &Connection, evidence: PersistedReceipt<'_>) -> Result<()> {
+    let supersedes_receipt_id = evidence
+        .retry_predecessor_attempt_id
+        .map(|attempt_id| {
+            conn.query_row(
+                "SELECT id FROM evidence_receipts WHERE attempt_id = ?1 LIMIT 1",
+                [attempt_id],
+                |row| row.get::<_, String>(0),
+            )
+            .with_context(|| {
+                format!("retry predecessor attempt {attempt_id} is missing its receipt")
+            })
+        })
+        .transpose()?;
     conn.execute(
         "INSERT INTO evidence_receipts(
           id, project_id, obligation_id, attempt_id, receipt_status, receipt_digest,
-          trusted_binding_json, observations_json, provenance_json, receipt_json, created_at
-        ) VALUES (?1, ?2, ?3, ?4, 'trusted', ?5, ?6, ?7, ?8, ?9, ?10)",
+          trusted_binding_json, observations_json, provenance_json, receipt_json,
+          supersedes_receipt_id, created_at
+        ) VALUES (?1, ?2, ?3, ?4, 'trusted', ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             string_field(evidence.receipt_value, "id")?,
             evidence.project_id,
@@ -2092,6 +2100,7 @@ fn persist_receipt(conn: &Connection, evidence: PersistedReceipt<'_>) -> Result<
             serde_json::to_string(&evidence.receipt_value["observations"])?,
             serde_json::to_string(&evidence.receipt_value["provenance"])?,
             serde_json::to_string(evidence.receipt_value)?,
+            supersedes_receipt_id,
             evidence.attempt.ended_at,
         ],
     )?;
@@ -2248,8 +2257,10 @@ mod tests {
               observations_json TEXT NOT NULL,
               provenance_json TEXT NOT NULL,
               receipt_json TEXT NOT NULL,
+              supersedes_receipt_id TEXT,
               created_at TEXT NOT NULL,
-              FOREIGN KEY(attempt_id) REFERENCES evidence_attempts(id)
+              FOREIGN KEY(attempt_id) REFERENCES evidence_attempts(id),
+              FOREIGN KEY(supersedes_receipt_id) REFERENCES evidence_receipts(id)
             );
             CREATE TRIGGER evidence_attempts_no_update
             BEFORE UPDATE ON evidence_attempts
@@ -2656,6 +2667,7 @@ mod tests {
             capability_instance: instance,
             execution_contract,
             payload_json_schema: None,
+            observation_payload_json_schemas: BTreeMap::new(),
             target: TargetBinding {
                 kind: "process".to_string(),
                 uri: Some("local://process".to_string()),
@@ -2724,6 +2736,7 @@ mod tests {
         )
         .unwrap();
         let obligation = obligation();
+        let expected_config_digest = obligation.config_digest.as_str().to_string();
         let instance = instance();
         let contract =
             execution_contract("sh", vec!["-c", "printf '{\"contains\":\"ready\"}'"], 5000);
@@ -2756,6 +2769,10 @@ mod tests {
         assert_eq!(
             output.receipt_value["fixture_disclosure"]["fixtures_used"],
             json!(true)
+        );
+        assert_eq!(
+            output.receipt_value["config_digest"],
+            json!(expected_config_digest)
         );
         let receipt_attempt: String = conn
             .query_row(
@@ -3335,6 +3352,24 @@ mod tests {
             )
             .unwrap();
         assert_eq!(persisted_predecessor, second.attempt.id.as_str());
+        let second_receipt_id = second.receipt_value["id"].as_str().unwrap();
+        let third_supersedes: String = conn
+            .query_row(
+                "SELECT supersedes_receipt_id FROM evidence_receipts WHERE attempt_id = ?1",
+                [third.attempt.id.as_str()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(third_supersedes, second_receipt_id);
+        let first_receipt_id = first.receipt_value["id"].as_str().unwrap();
+        let second_supersedes: String = conn
+            .query_row(
+                "SELECT supersedes_receipt_id FROM evidence_receipts WHERE attempt_id = ?1",
+                [second.attempt.id.as_str()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(second_supersedes, first_receipt_id);
     }
 
     #[test]
@@ -3810,6 +3845,7 @@ mod tests {
             strict_structured_observation_results(
                 &obligation,
                 &execution,
+                &BTreeMap::new(),
                 &target,
                 &environment,
                 &fixture_disclosure,
@@ -3923,6 +3959,7 @@ mod tests {
                 strict_structured_observation_results(
                     &obligation,
                     &execution,
+                    &BTreeMap::new(),
                     &target,
                     &environment,
                     &fixture_disclosure,
@@ -3937,6 +3974,7 @@ mod tests {
             strict_structured_observation_results(
                 &obligation,
                 &execution,
+                &BTreeMap::new(),
                 &target,
                 &environment,
                 &fixture_disclosure,
@@ -3947,6 +3985,103 @@ mod tests {
             .to_string()
             .contains("truncated")
         );
+    }
+
+    #[test]
+    fn strict_structured_observation_results_validates_extracted_payload_schema() {
+        let mut obligation = obligation();
+        obligation.observations = serde_json::from_value(json!([{
+            "id": "obs-visible",
+            "type": "example.process.stdout",
+            "subject": "visible",
+            "expected": {"visible": true},
+            "target": {"kind": "process", "uri": "local://process"},
+            "environment": {"kind": "local", "id": "dev-shell", "digest": DIGEST_B},
+            "runtime_target": {"kind": "process", "id": "test"},
+            "payload_schema": {"schema_ref": "example.visible.result@v1"}
+        }]))
+        .unwrap();
+        let mut execution = execution_contract("sh", vec!["-c", "true"], 5000);
+        execution.payload_schema.schema_ref =
+            "schema://planr.structured_observation_results.v1".to_string();
+        let target: TargetBinding =
+            serde_json::from_value(json!({"kind": "process", "uri": "local://process"})).unwrap();
+        let environment: EnvironmentBinding =
+            serde_json::from_value(json!({"kind": "local", "id": "dev-shell", "digest": DIGEST_B}))
+                .unwrap();
+        let fixture_disclosure = FixtureDisclosure {
+            fixtures_used: false,
+            mocks_used: false,
+            fixture_refs: None,
+            mock_refs: None,
+        };
+        let digest = sha256_json_digest(&serde_json::to_value(&execution).unwrap()).unwrap();
+        let payload = |visible: Value| {
+            json!({
+                "schema_version": "planr.structured_observation_results.v1",
+                "target": serde_json::to_value(&target).unwrap(),
+                "observed_target": {
+                    "kind": "process",
+                    "initial_uri": "local://process",
+                    "final_uri": "local://process"
+                },
+                "environment": serde_json::to_value(&environment).unwrap(),
+                "execution_contract_digest": digest,
+                "fixture_disclosure": serde_json::to_value(&fixture_disclosure).unwrap(),
+                "observations": [{
+                    "requirement_id": "obs-visible",
+                    "type": "example.process.stdout",
+                    "actual": {
+                        "schema_ref": "example.visible.result@v1",
+                        "visible": visible
+                    }
+                }]
+            })
+        };
+        let schemas = BTreeMap::from([(
+            "obs-visible".to_string(),
+            json!({
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["schema_ref", "visible"],
+                "properties": {
+                    "schema_ref": {"const": "example.visible.result@v1"},
+                    "visible": {"type": "boolean"}
+                }
+            }),
+        )]);
+
+        let valid = strict_structured_observation_results(
+            &obligation,
+            &execution,
+            &schemas,
+            &target,
+            &environment,
+            &fixture_disclosure,
+            Path::new("."),
+            &raw_result_for_stdout(&payload(json!(true)).to_string(), false),
+        )
+        .unwrap();
+        assert_eq!(valid["obs-visible"]["visible"], true);
+
+        let error = strict_structured_observation_results(
+            &obligation,
+            &execution,
+            &schemas,
+            &target,
+            &environment,
+            &fixture_disclosure,
+            Path::new("."),
+            &raw_result_for_stdout(&payload(json!("yes")).to_string(), false),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("payload schema mismatch for obs-visible"),
+            "{error}"
+        );
+        assert!(error.contains("/visible"), "{error}");
     }
 
     #[test]
