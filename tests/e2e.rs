@@ -14662,11 +14662,15 @@ VALUES ('pln-stop-other', 'p-stop-other', 'build', 'other.md', 'Other Stop Plan'
         .stdout(std::process::Stdio::piped())
         .spawn()
         .and_then(|mut child| {
-            child
+            if let Err(error) = child
                 .stdin
                 .as_mut()
                 .unwrap()
-                .write_all(official("thread-stop").as_bytes())?;
+                .write_all(official("thread-stop").as_bytes())
+                && error.kind() != std::io::ErrorKind::BrokenPipe
+            {
+                return Err(error);
+            }
             child.wait_with_output()
         })
         .unwrap();
