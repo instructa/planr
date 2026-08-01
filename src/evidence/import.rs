@@ -1778,6 +1778,65 @@ mod tests {
         sha256_prefixed_bytes(content.as_bytes())
     }
 
+    #[test]
+    fn generic_validator_stdout_accepts_optional_planr_schema_binding_only() {
+        let result = json!({
+            "kind": "planr.import.validator.generic_predicate.result",
+            "version": "1.0.0",
+            "verdict": "passed",
+            "artifact_set_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "predicate_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "verifier_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "verifier_instance_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        });
+        let stdout = result.to_string();
+        let stdout_digest = sha256_prefixed_bytes(stdout.as_bytes());
+        let raw_result = json!({
+            "kind": "process_output",
+            "exit": {"exit_code": 0},
+            "stdout_truncated": false,
+            "stderr_truncated": false,
+            "stdout_bytes": stdout.len(),
+            "stderr_bytes": 0,
+            "stdout_digest": stdout_digest,
+            "stderr_digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "stdout_excerpt": stdout,
+        });
+        let raw_result_digest = sha256_json_digest(&raw_result).unwrap();
+        let actual = result.as_object().unwrap().clone();
+
+        assert!(
+            validator_stdout_result(&actual, &raw_result, &stdout_digest, &raw_result_digest,)
+                .is_ok()
+        );
+
+        let mut schema_bound = actual.clone();
+        schema_bound.insert(
+            "schema_ref".to_string(),
+            json!("schema://planr.import.validator.generic_predicate"),
+        );
+        assert!(
+            validator_stdout_result(
+                &schema_bound,
+                &raw_result,
+                &stdout_digest,
+                &raw_result_digest,
+            )
+            .is_ok()
+        );
+
+        schema_bound.insert("schema_ref".to_string(), json!(false));
+        assert!(
+            validator_stdout_result(
+                &schema_bound,
+                &raw_result,
+                &stdout_digest,
+                &raw_result_digest,
+            )
+            .is_err()
+        );
+    }
+
     fn process_adapter_digest(root: &Path, execution: &ProcessExecutionContract) -> String {
         sha256_json_digest(&json!({
             "schema_version": "planr.process_adapter.binding.v1",

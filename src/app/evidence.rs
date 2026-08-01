@@ -904,9 +904,12 @@ impl App {
             if existing["config_digest"].as_str() != Some(obligation.config_digest.as_str()) {
                 invalidation.push("configuration_change");
             }
+            let proposed_obligation_digest =
+                crate::canonical_json::sha256_json_digest(&serde_json::to_value(&obligation)?)?;
             entries.push(json!({
                 "current_obligation_id": old_id.as_str(),
                 "proposed_obligation_id": obligation.id.as_str(),
+                "proposed_obligation_digest": proposed_obligation_digest,
                 "criterion_id": obligation.criterion_id.as_str(),
                 "current_version": existing["obligation_version"],
                 "proposed_version": version,
@@ -1245,10 +1248,18 @@ impl App {
             .as_array()
             .cloned()
             .unwrap_or_default();
-        let superseded_ids = obligation_rows
-            .iter()
-            .filter_map(|row| row["supersedes_obligation_id"].as_str())
-            .collect::<BTreeSet<_>>();
+        let project = self.default_project()?;
+        let superseded_ids = {
+            let mut statement = self.conn.prepare(
+                "SELECT DISTINCT supersedes_obligation_id
+                 FROM proof_obligations
+                 WHERE project_id = ?1 AND supersedes_obligation_id IS NOT NULL",
+            )?;
+            let rows = statement.query_map(params![project.id], |row| row.get::<_, String>(0))?;
+            crate::util::collect_rows(rows)?
+                .into_iter()
+                .collect::<BTreeSet<_>>()
+        };
         let active = obligation_rows
             .iter()
             .filter(|row| row["binding"].as_bool() == Some(true))
@@ -1545,21 +1556,11 @@ impl App {
                 cancellation: &cancellation,
             },
         )?;
-        let verdict = output
-            .attempt
-            .exit
-            .get("error")
-            .and_then(Value::as_str)
-            .filter(|error| {
-                *error == "verifier_failed"
-                    && output
-                        .attempt
-                        .raw_result
-                        .get("ordinary_observation_error")
-                        .is_some()
-            })
-            .unwrap_or_else(|| output.attempt.status.as_str())
-            .to_string();
+        let verdict = evidence_run_verdict(
+            output.attempt.status,
+            &output.attempt.exit,
+            &output.attempt.raw_result,
+        );
         Ok(json!({
             "attempt": output.attempt,
             "receipt": output.receipt_value,
@@ -2567,6 +2568,18 @@ impl App {
         };
         Ok(json!({"receipts": rows}))
     }
+}
+
+fn evidence_run_verdict(status: AttemptStatus, exit: &Value, raw_result: &Value) -> String {
+    exit.get("error")
+        .and_then(Value::as_str)
+        .filter(|error| {
+            *error == "verifier_failed"
+                && (raw_result.get("ordinary_observation_error").is_some()
+                    || raw_result.get("structured_observation_error").is_some())
+        })
+        .unwrap_or_else(|| status.as_str())
+        .to_string()
 }
 
 pub(crate) fn evidence_success_envelope(command: &str, object: Value) -> Value {
@@ -4001,6 +4014,31 @@ mod tests {
         assert_eq!(
             evidence_success_envelope("evidence.run", json!({"verdict": "blocked"}))["exit"]["code"],
             EVIDENCE_BLOCKED
+        );
+    }
+
+    #[test]
+    fn evidence_run_verdict_projects_both_verifier_failure_kinds() {
+        let exit = json!({"error": "verifier_failed"});
+        assert_eq!(
+            evidence_run_verdict(
+                AttemptStatus::Failed,
+                &exit,
+                &json!({"ordinary_observation_error": "invalid JSON"}),
+            ),
+            "verifier_failed"
+        );
+        assert_eq!(
+            evidence_run_verdict(
+                AttemptStatus::Failed,
+                &exit,
+                &json!({"structured_observation_error": "schema mismatch"}),
+            ),
+            "verifier_failed"
+        );
+        assert_eq!(
+            evidence_run_verdict(AttemptStatus::Failed, &exit, &json!({})),
+            "failed"
         );
     }
 }

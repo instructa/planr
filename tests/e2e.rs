@@ -16543,6 +16543,41 @@ fn evidence_readiness_and_versioned_rebind_are_fail_closed_and_atomic() {
     compatible["created_at"] = json!("2026-07-31T19:59:00Z");
     add_evidence_obligation_value(dir.path(), &db, "pob-readiness-compatible", &compatible);
 
+    let superseded_readiness = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                &db_arg,
+                "--json",
+                "evidence",
+                "readiness",
+                "--scope",
+                "obligation",
+                "--id",
+                "pob-readiness-incompatible",
+            ])
+            .assert()
+            .failure()
+            .code(3)
+            .get_output()
+            .stdout,
+    );
+    assert!(
+        superseded_readiness["object"]["active_obligation_ids"]
+            .as_array()
+            .is_some_and(Vec::is_empty),
+        "{superseded_readiness}"
+    );
+    assert!(
+        superseded_readiness["object"]["gaps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|gap| gap["code"] == "missing_obligation"),
+        "{superseded_readiness}"
+    );
+
     let mut incompatible_runtime = compatible.clone();
     incompatible_runtime["id"] = json!("pob-readiness-runtime-incompatible");
     incompatible_runtime["supersedes"] = Value::Null;
@@ -16670,6 +16705,52 @@ fn evidence_readiness_and_versioned_rebind_are_fail_closed_and_atomic() {
         .as_str()
         .unwrap();
     input["preview_digest"] = json!(preview_digest);
+    fs::write(&input_path, serde_json::to_vec_pretty(&input).unwrap()).unwrap();
+
+    let mut changed_after_preview = input.clone();
+    changed_after_preview["obligations"][0]["config_digest"] =
+        json!("sha256:fdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfd");
+    fs::write(
+        &input_path,
+        serde_json::to_vec_pretty(&changed_after_preview).unwrap(),
+    )
+    .unwrap();
+    let stale_preview = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                &db_arg,
+                "--json",
+                "evidence",
+                "rebind",
+                "--input",
+                input_path.to_str().unwrap(),
+                "--apply",
+            ])
+            .assert()
+            .failure()
+            .get_output()
+            .stdout,
+    );
+    assert_evidence_error(
+        &stale_preview,
+        "evidence.rebind",
+        "conflict",
+        "requires current preview_digest",
+    );
+    assert_eq!(
+        Connection::open(&db)
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM proof_obligations WHERE id = 'pob-rebind-new'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0,
+        "stale rebind preview must not persist the changed obligation"
+    );
     fs::write(&input_path, serde_json::to_vec_pretty(&input).unwrap()).unwrap();
 
     planr()
