@@ -206,8 +206,8 @@ Use $planr-goal to prepare an autonomous goal for the weekly overview feature.
 context (tag: goal-contract).
 
 Goal: ship the weekly overview feature. DONE when every in-scope map item is closed
-with log evidence, all reviews are closed complete, and a live verification log shows
-the feature working in the browser. Iteration budget: 10.
+with implementation evidence, all reviews are closed complete, and canonical Evidence
+coverage proves the feature working in the browser. Iteration budget: 10.
 ```
 
 Mid-project work (a new feature, refactor, or fix on an existing project) works the same — it gets its own feature-scoped plan and extends the existing map. Both journeys with example prompts: [Prompt Recipes](https://planr.so/docs/agents/prompt-recipes). Coding agents inspect progress with the compact default `planr map show` or, preferably, `planr map show --json`. The tree preserves exact dependency vocabulary while marking satisfied edges as `blocks✓`; active `blocks` stay red. The boxed `planr map show --view diagram` renderer is exclusively for human supervision and uses neutral `then` routes once those dependencies are satisfied. Agents must not invoke it. Humans can add `--full` for complete status, title, worker, critical-lane, and pressure details. Interactive map output colors states automatically; `--no-color` and `NO_COLOR` keep it plain.

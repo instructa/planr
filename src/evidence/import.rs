@@ -432,53 +432,81 @@ fn validator_stdout_result(
     attempt_stdout_digest: &str,
     receipt_raw_result_digest: &str,
 ) -> Result<GenericValidatorResult, EvidenceDomainError> {
-    let raw_result_value = Value::Object(actual.clone());
-    if &raw_result_value != attempt_raw_result {
-        return Err(EvidenceDomainError::InvalidTrustedBinding(
-            "adapter_predicate.trusted_validator_observation.actual.attempt_raw_result",
-        ));
-    }
-    if actual.get("kind").and_then(Value::as_str) != Some("process_output")
-        || actual
+    let process_result =
+        attempt_raw_result
+            .as_object()
+            .ok_or(EvidenceDomainError::InvalidTrustedBinding(
+                "adapter_predicate.trusted_validator_observation.attempt.raw_result",
+            ))?;
+    if process_result.get("kind").and_then(Value::as_str) != Some("process_output")
+        || process_result
             .get("exit")
             .and_then(Value::as_object)
             .and_then(|exit| exit.get("exit_code"))
             .and_then(Value::as_i64)
             != Some(0)
-        || actual.get("stdout_truncated").and_then(Value::as_bool) != Some(false)
-        || actual.get("stderr_truncated").and_then(Value::as_bool) != Some(false)
-        || actual.get("stderr_bytes").and_then(Value::as_u64) != Some(0)
-        || actual.get("stdout_digest").and_then(Value::as_str) != Some(attempt_stdout_digest)
-        || actual.get("stderr_digest").and_then(Value::as_str)
+        || process_result
+            .get("stdout_truncated")
+            .and_then(Value::as_bool)
+            != Some(false)
+        || process_result
+            .get("stderr_truncated")
+            .and_then(Value::as_bool)
+            != Some(false)
+        || process_result.get("stderr_bytes").and_then(Value::as_u64) != Some(0)
+        || process_result.get("stdout_digest").and_then(Value::as_str)
+            != Some(attempt_stdout_digest)
+        || process_result.get("stderr_digest").and_then(Value::as_str)
             != Some("sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+    {
+        return Err(EvidenceDomainError::InvalidTrustedBinding(
+            "adapter_predicate.trusted_validator_observation.attempt.raw_result",
+        ));
+    }
+    let actual_raw_result_digest = sha256_json_digest(attempt_raw_result)
+        .map_err(|err| EvidenceDomainError::Digest(err.to_string()))?;
+    if actual_raw_result_digest != receipt_raw_result_digest {
+        return Err(EvidenceDomainError::InvalidTrustedBinding(
+            "adapter_predicate.trusted_validator_observation.attempt.raw_result_digest",
+        ));
+    }
+    let stdout_excerpt = process_result
+        .get("stdout_excerpt")
+        .and_then(Value::as_str)
+        .ok_or(EvidenceDomainError::MissingTrustedBinding(
+            "adapter_predicate.trusted_validator_observation.attempt.stdout",
+        ))?;
+    let stdout_bytes = stdout_excerpt.as_bytes();
+    if process_result.get("stdout_bytes").and_then(Value::as_u64) != Some(stdout_bytes.len() as u64)
+        || sha256_prefixed_bytes(stdout_bytes) != attempt_stdout_digest
+    {
+        return Err(EvidenceDomainError::InvalidTrustedBinding(
+            "adapter_predicate.trusted_validator_observation.attempt.stdout",
+        ));
+    }
+    let parsed: Value = serde_json::from_str(stdout_excerpt).map_err(|_| {
+        EvidenceDomainError::InvalidTrustedBinding(
+            "adapter_predicate.trusted_validator_observation.attempt.stdout",
+        )
+    })?;
+    let mut observed = actual.clone();
+    if observed
+        .get("schema_ref")
+        .is_some_and(|value| !value.is_string())
     {
         return Err(EvidenceDomainError::InvalidTrustedBinding(
             "adapter_predicate.trusted_validator_observation.actual",
         ));
     }
-    let actual_raw_result_digest = sha256_json_digest(&raw_result_value)
-        .map_err(|err| EvidenceDomainError::Digest(err.to_string()))?;
-    if actual_raw_result_digest != receipt_raw_result_digest {
+    observed.remove("schema_ref");
+    if Value::Object(observed) != parsed {
         return Err(EvidenceDomainError::InvalidTrustedBinding(
-            "adapter_predicate.trusted_validator_observation.actual.raw_result_digest",
+            "adapter_predicate.trusted_validator_observation.actual",
         ));
     }
-    let stdout_excerpt = actual.get("stdout_excerpt").and_then(Value::as_str).ok_or(
-        EvidenceDomainError::MissingTrustedBinding(
-            "adapter_predicate.trusted_validator_observation.actual.stdout",
-        ),
-    )?;
-    let stdout_bytes = stdout_excerpt.as_bytes();
-    if actual.get("stdout_bytes").and_then(Value::as_u64) != Some(stdout_bytes.len() as u64)
-        || sha256_prefixed_bytes(stdout_bytes) != attempt_stdout_digest
-    {
-        return Err(EvidenceDomainError::InvalidTrustedBinding(
-            "adapter_predicate.trusted_validator_observation.actual.stdout",
-        ));
-    }
-    let result: GenericValidatorResult = serde_json::from_str(stdout_excerpt).map_err(|_| {
+    let result: GenericValidatorResult = serde_json::from_value(parsed).map_err(|_| {
         EvidenceDomainError::InvalidTrustedBinding(
-            "adapter_predicate.trusted_validator_observation.actual.stdout",
+            "adapter_predicate.trusted_validator_observation.actual",
         )
     })?;
     result.validate()?;
@@ -1750,6 +1778,65 @@ mod tests {
         sha256_prefixed_bytes(content.as_bytes())
     }
 
+    #[test]
+    fn generic_validator_stdout_accepts_optional_planr_schema_binding_only() {
+        let result = json!({
+            "kind": "planr.import.validator.generic_predicate.result",
+            "version": "1.0.0",
+            "verdict": "passed",
+            "artifact_set_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "predicate_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "verifier_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "verifier_instance_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        });
+        let stdout = result.to_string();
+        let stdout_digest = sha256_prefixed_bytes(stdout.as_bytes());
+        let raw_result = json!({
+            "kind": "process_output",
+            "exit": {"exit_code": 0},
+            "stdout_truncated": false,
+            "stderr_truncated": false,
+            "stdout_bytes": stdout.len(),
+            "stderr_bytes": 0,
+            "stdout_digest": stdout_digest,
+            "stderr_digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "stdout_excerpt": stdout,
+        });
+        let raw_result_digest = sha256_json_digest(&raw_result).unwrap();
+        let actual = result.as_object().unwrap().clone();
+
+        assert!(
+            validator_stdout_result(&actual, &raw_result, &stdout_digest, &raw_result_digest,)
+                .is_ok()
+        );
+
+        let mut schema_bound = actual.clone();
+        schema_bound.insert(
+            "schema_ref".to_string(),
+            json!("schema://planr.import.validator.generic_predicate"),
+        );
+        assert!(
+            validator_stdout_result(
+                &schema_bound,
+                &raw_result,
+                &stdout_digest,
+                &raw_result_digest,
+            )
+            .is_ok()
+        );
+
+        schema_bound.insert("schema_ref".to_string(), json!(false));
+        assert!(
+            validator_stdout_result(
+                &schema_bound,
+                &raw_result,
+                &stdout_digest,
+                &raw_result_digest,
+            )
+            .is_err()
+        );
+    }
+
     fn process_adapter_digest(root: &Path, execution: &ProcessExecutionContract) -> String {
         sha256_json_digest(&json!({
             "schema_version": "planr.process_adapter.binding.v1",
@@ -2610,6 +2697,7 @@ process.stdout.write(JSON.stringify(result));
                 capability_instance: instance,
                 execution_contract,
                 payload_json_schema: None,
+                observation_payload_json_schemas: BTreeMap::new(),
                 target: TargetBinding {
                     kind: "process".to_string(),
                     uri: Some("local://generic-validator".to_string()),

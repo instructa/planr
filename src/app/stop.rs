@@ -123,6 +123,16 @@ impl App {
                     "session_id": session_id
                 }))
             }
+            StopCommand::Resume(args) => {
+                let session_id = stop_session_identity(args.session)?;
+                self.clear_stop_state_for_session(&args.plan, &session_id)?;
+                self.record_active_stop_binding_for_plan(&args.plan, &session_id)?;
+                emit_stop_decision(json!({
+                    "status": "resumed",
+                    "scope": {"kind": "plan", "id": args.plan},
+                    "session_id": session_id
+                }))
+            }
         }
     }
 
@@ -144,7 +154,6 @@ impl App {
         let state = self.bump_stop_state(&active, &fingerprint)?;
         let same_limit = same_gap_limit(has_actionable);
         if let Some(exhaustion) = continuation_exhaustion(has_actionable, &state) {
-            self.clear_stop_state(&active.key)?;
             let _ = exhaustion;
             return Ok(stop_allow());
         }
@@ -282,6 +291,16 @@ impl App {
         Ok(())
     }
 
+    fn clear_stop_state_for_session(&self, plan_id: &str, session_id: &str) -> Result<()> {
+        let project_id = self.default_project()?.id;
+        self.conn.execute(
+            "DELETE FROM stop_enforcement_state
+             WHERE project_id = ?1 AND session_id = ?2 AND scope_kind = 'plan' AND scope_id = ?3",
+            params![project_id, session_id, plan_id],
+        )?;
+        Ok(())
+    }
+
     fn bump_stop_state(&self, active: &ActiveStopScope, fingerprint: &str) -> Result<StopState> {
         let existing = self
             .conn
@@ -350,8 +369,8 @@ fn next_stop_counts(existing: Option<(&str, i64, i64)>, fingerprint: &str) -> St
             total_count: total + 1,
             same_count: same + 1,
         },
-        Some((_old, total, _same)) => StopState {
-            total_count: total + 1,
+        Some((_old, _total, _same)) => StopState {
+            total_count: 1,
             same_count: 1,
         },
         None => StopState {
@@ -613,7 +632,7 @@ mod tests {
         assert_eq!(
             next_stop_counts(Some(("fp-a", 2, 2)), "fp-b"),
             StopState {
-                total_count: 3,
+                total_count: 1,
                 same_count: 1
             }
         );

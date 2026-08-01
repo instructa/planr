@@ -192,7 +192,10 @@ async function runEvidence(workspace, id, input) {
 function capabilityInstance(capabilities, manifestId) {
   const probe = capabilities.stdout.object.registry.probes.find((entry) => entry.manifest_id === manifestId);
   const instance = capabilities.stdout.object.instances.find((entry) => entry.id === probe?.instance_id);
-  assert.ok(instance, `missing capability instance for ${manifestId}`);
+  assert.ok(
+    instance,
+    `missing capability instance for ${manifestId}: ${JSON.stringify(capabilities.stdout.object)}`,
+  );
   return instance;
 }
 
@@ -220,6 +223,9 @@ function browserCdpObligation({ planId, policyDigest, spec, environment, configD
       target: spec.target,
       environment,
       runtime_target: spec.runtimeTarget,
+      payload_schema: {
+        schema_ref: spec.payloadSchemas.find((schema) => schema.type === type).schema_ref,
+      },
     })),
     fixture_policy: { fixtures_allowed: true, mocks_allowed: false, disclosure_required: true },
     freshness_policy: { invalidate_on: ['policy_change', 'adapter_schema_change'] },
@@ -250,25 +256,44 @@ async function writeBrowserCdpSpec(workspace, port, debugPort, chromePath) {
   await mkdir(path.dirname(helperPath), { recursive: true });
   await writeFile(helperPath, helper, { mode: 0o755 });
 
-  const schema = {
+  const envelopeSchema = {
     schema_version: 'evidence.contract.v1',
-    type: 'com.example.browser.cdp',
+    type: 'planr.structured_observation_results',
     schema_ref: 'schema://planr.structured_observation_results.v1',
     json_schema: { type: 'object' },
   };
-  const observationTypes = [
-    'com.example.browser.rendered_visibility',
-    'com.example.browser.user_interaction',
-    'com.example.browser.navigation',
-    'com.example.browser.network',
-    'com.example.browser.console',
-    'com.example.browser.reload_storage',
-  ];
-  const payloadSchemas = observationTypes.map((type) => ({
+  const observationSchemas = [
+    ['com.example.browser.rendered_visibility', 'visible', { type: 'boolean' }],
+    ['com.example.browser.user_interaction', 'clicked', { type: 'boolean' }],
+    ['com.example.browser.navigation', 'path', { type: 'string' }],
+    ['com.example.browser.network', 'api_status', { type: 'integer' }],
+    ['com.example.browser.console', 'error_count', { type: 'integer' }],
+    ['com.example.browser.reload_storage', 'persisted', { type: 'boolean' }],
+  ].map(([type, property, propertySchema]) => ({
+    schema_version: 'evidence.contract.v1',
     type,
+    schema_ref: `schema://${type}`,
+    json_schema: {
+      type: 'object',
+      required: ['schema_ref', property],
+      additionalProperties: true,
+      properties: {
+        schema_ref: { const: `schema://${type}` },
+        [property]: propertySchema,
+      },
+    },
+  }));
+  const observationTypes = observationSchemas.map((schema) => schema.type);
+  const payloadSchemas = observationSchemas.map((schema) => ({
+    type: schema.type,
     schema_ref: schema.schema_ref,
     schema_digest: sha256Json(schema),
   }));
+  const envelopePayloadSchema = {
+    type: envelopeSchema.type,
+    schema_ref: envelopeSchema.schema_ref,
+    schema_digest: sha256Json(envelopeSchema),
+  };
   const target = { kind: 'browser', uri: `http://127.0.0.1:${port}/workflow` };
   const execution = {
     kind: 'process',
@@ -278,7 +303,7 @@ async function writeBrowserCdpSpec(workspace, port, debugPort, chromePath) {
     timeout_ms: 20000,
     stdout_limit_bytes: 65536,
     stderr_limit_bytes: 65536,
-    payload_schema: payloadSchemas[0],
+    payload_schema: envelopePayloadSchema,
   };
   const cwd = await pathRealpath(workspace);
   const canonicalHelper = await pathRealpath(helperPath);
@@ -317,7 +342,9 @@ async function writeBrowserCdpSpec(workspace, port, debugPort, chromePath) {
   const helperDigest = sha256(helper);
   return {
     id: manifest.id,
-    schema,
+    schema: observationSchemas[0],
+    schemas: observationSchemas,
+    envelopeSchema,
     payloadSchema: payloadSchemas[0],
     payloadSchemas,
     observationType: observationTypes[0],
@@ -444,6 +471,9 @@ try {
       configDigest: apiDefinition.configDigest,
     }),
   );
+  const apiReadiness = requireSuccess(
+    run(api, ['evidence', 'readiness', '--scope', 'plan', '--id', apiPlanId, '--json']),
+  );
   const apiRun = requireSuccess(
     await runEvidence(
       api,
@@ -467,6 +497,7 @@ try {
       redactWorkspace(
         {
           policy: apiPolicy.stdout,
+          readiness: apiReadiness.stdout,
           run: apiRun.stdout,
           coverage: apiCoverage.stdout,
         },
@@ -502,6 +533,9 @@ try {
       configDigest: customDefinition.configDigest,
     }),
   );
+  const customReadiness = requireSuccess(
+    run(custom, ['evidence', 'readiness', '--scope', 'plan', '--id', customPlanId, '--json']),
+  );
   const customRun = requireSuccess(
     await runEvidence(
       custom,
@@ -523,6 +557,7 @@ try {
     exit_code: customRun.exit_code,
     output: {
       manifest_digest: customSpec.manifestDigest,
+      readiness: redactVolatileEvidence(redactWorkspace(customReadiness.stdout, custom)),
       run: redactVolatileEvidence(redactWorkspace(customRun.stdout, custom)),
       coverage: redactVolatileEvidence(redactWorkspace(customCoverage.stdout, custom)),
     },
@@ -584,6 +619,9 @@ try {
       configDigest: 'sha256:3131313131313131313131313131313131313131313131313131313131313131',
     }),
   );
+  const fullReadiness = requireSuccess(
+    run(fullStack, ['evidence', 'readiness', '--scope', 'plan', '--id', fullPlanId, '--json']),
+  );
   const fullHttpRun = requireSuccess(
     await runEvidence(fullStack, 'pob-docs-full-http', {
       obligation_id: 'pob-docs-full-http',
@@ -609,6 +647,7 @@ try {
       redactWorkspace(
         {
           before: beforeFull.stdout,
+          readiness: fullReadiness.stdout,
           runs: [fullHttpRun.stdout, fullBrowserRun.stdout],
           after: afterFull.stdout,
         },

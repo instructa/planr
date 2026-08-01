@@ -142,6 +142,17 @@ impl CapabilityRegistry {
         diagnostics
     }
 
+    pub(crate) fn availability_statuses_for(
+        &self,
+        capability: &RegisteredCapability,
+    ) -> BTreeSet<&'static str> {
+        self.runtime_availability
+            .iter()
+            .filter(|(key, _)| key.matches_capability(capability))
+            .map(|(_, status)| status.as_str())
+            .collect()
+    }
+
     pub(crate) fn available_diagnostics_for_declared_observations(
         &self,
         declared_observation_types: impl IntoIterator<Item = String>,
@@ -526,12 +537,30 @@ impl CapabilityRegistry {
             mismatches
                 .push("payload_schemas do not match manifest supported_observations".to_string());
         }
-        if !payload_schema_matches(
+        if !execution_payload_schema_matches(
             &declaration.execution_contract.payload_schema,
             &manifest.supported_observations,
         ) {
             mismatches.push(
                 "execution_contract payload_schema does not match manifest supported_observations"
+                    .to_string(),
+            );
+        }
+        if manifest
+            .supported_artifacts
+            .iter()
+            .any(|artifact| artifact == "planr.structured_observation_results.v1")
+            && (declaration.execution_contract.payload_schema.schema_ref
+                != "schema://planr.structured_observation_results.v1"
+                || manifest
+                    .availability_probe
+                    .execution
+                    .payload_schema
+                    .schema_ref
+                    != "schema://planr.structured_observation_results.v1")
+        {
+            mismatches.push(
+                "structured observation results require the Planr structured envelope as the execution payload schema"
                     .to_string(),
             );
         }
@@ -633,7 +662,7 @@ fn validate_manifest_runtime_permissions(manifest: &VerificationCapabilityManife
 }
 
 fn validate_manifest_payload_projection(manifest: &VerificationCapabilityManifest) -> Result<()> {
-    if payload_schema_matches(
+    if execution_payload_schema_matches(
         &manifest.availability_probe.execution.payload_schema,
         &manifest.supported_observations,
     ) {
@@ -836,6 +865,14 @@ fn payload_schema_matches(
             && binding.schema_ref == candidate.schema_ref
             && binding.schema_digest.as_str() == candidate.schema_digest.as_str()
     })
+}
+
+fn execution_payload_schema_matches(
+    candidate: &PayloadSchemaBinding,
+    supported: &[PayloadSchemaBinding],
+) -> bool {
+    candidate.schema_ref == "schema://planr.structured_observation_results.v1"
+        || payload_schema_matches(candidate, supported)
 }
 
 fn validate_executable_name(executable: &str) -> Result<()> {
@@ -1309,7 +1346,9 @@ fn capability_instance(
     let schema_ref = payload_schema.schema_ref.clone();
     let mut observation_types = Vec::with_capacity(manifest.supported_observations.len());
     for supported in &manifest.supported_observations {
-        if supported.schema_ref != schema_ref {
+        if schema_ref != "schema://planr.structured_observation_results.v1"
+            && supported.schema_ref != schema_ref
+        {
             bail!("manifest supported_observations must share the availability probe schema_ref");
         }
         observation_types.push(supported.observation_type.clone());
@@ -2213,6 +2252,35 @@ mod tests {
             registry.diagnostics()[0]
                 .message
                 .contains("execution_contract payload_schema"),
+            "{:?}",
+            registry.diagnostics()
+        );
+    }
+
+    #[test]
+    fn registry_rejects_structured_result_artifact_with_inner_execution_schema() {
+        let dir = tempdir().unwrap();
+        let mut manifest_value = manifest_value("cargo", vec!["--version"], 1024);
+        manifest_value["supported_artifacts"] =
+            json!(["stdout", "planr.structured_observation_results.v1"]);
+        let digest = write_manifest(dir.path(), &manifest_value);
+        let registration = registration_for_manifest(&digest, &manifest_value);
+
+        let registry = CapabilityRegistry::from_manifests_and_adapter_registrations(
+            dir.path(),
+            [],
+            &[registration],
+        );
+
+        assert_eq!(registry.capabilities().count(), 0);
+        assert_eq!(
+            registry.diagnostics()[0].code,
+            CapabilityRegistryDiagnosticCode::DeclaredManifestMismatch
+        );
+        assert!(
+            registry.diagnostics()[0]
+                .message
+                .contains("structured observation results require the Planr structured envelope"),
             "{:?}",
             registry.diagnostics()
         );

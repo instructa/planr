@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS proof_obligations(
   source_digest TEXT,
   supersedes_obligation_id TEXT,
   created_at TEXT NOT NULL,
+  retry_aggregation TEXT NOT NULL DEFAULT 'latest_applicable_pass'
+    CHECK(retry_aggregation IN ('latest_applicable_pass','all_applicable_pass')),
   FOREIGN KEY(project_id) REFERENCES projects(id),
   FOREIGN KEY(item_id) REFERENCES items(id),
   FOREIGN KEY(supersedes_obligation_id) REFERENCES proof_obligations(id)
@@ -776,6 +778,12 @@ END;
     backfill_evidence_waiver_observations(conn)?;
     validate_existing_proof_obligation_containment(conn)?;
     ensure_proof_obligations_canonical_indexes(conn)?;
+    ensure_column(
+        conn,
+        "proof_obligations",
+        "retry_aggregation",
+        "TEXT NOT NULL DEFAULT 'latest_applicable_pass' CHECK(retry_aggregation IN ('latest_applicable_pass','all_applicable_pass'))",
+    )?;
     Ok(())
 }
 

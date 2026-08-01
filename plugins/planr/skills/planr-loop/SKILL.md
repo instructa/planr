@@ -18,11 +18,12 @@ At the start of the host thread that drives an active goal, run `planr stop acti
 Each iteration follows the Planr stage protocols:
 
 1. `planr plan audit <plan-id> --json`; `holds: true` exits.
-2. Use `$planr-plan` or `$planr-task-graph` only when scope or graph structure is missing.
-3. Dispatch `$planr-work` for exactly one ready item scoped to `<plan-id>`; makers must use `planr pick --work-type code --plan <plan-id>`, never an unscoped pick, select the repository verification policy, and finish implementation with `planr done <item-id> ... --review`.
-4. Run the target-platform oracle when the goal requires one and record `planr log add --item <id> --kind verification --summary ... --cmd ...`. Deployment still requires prior human approval and a bounded live oracle.
-5. Dispatch `$planr-review`; the checker independently inspects the diff and validates the exact-source receipt, replaying only cheap, missing, failing, or explicitly high-risk evidence. Findings create fix work, while `complete --close-target` settles the target.
-6. Repeat from audit.
+2. For a binding Evidence plan, run `planr evidence readiness --scope plan --id <plan-id>`. Repair typed schema/capability/runtime gaps before product work. Use `planr evidence rebind --input <file>` and the returned preview digest only when an immutable adapter/obligation binding must be corrected without changing acceptance semantics.
+3. Use `$planr-plan` or `$planr-task-graph` only when scope or graph structure is missing.
+4. Dispatch `$planr-work` for exactly one ready item scoped to `<plan-id>`; makers must use `planr pick --work-type code --plan <plan-id>`, never an unscoped pick, select the repository verification policy, and finish implementation with `planr done <item-id> ... --review`.
+5. Run the configured target-platform method with `planr evidence run --input <run-file>`, then evaluate `planr evidence coverage --scope criterion --id <criterion-id>` and inspect gaps with `planr evidence explain ...`. Deployment still requires prior human approval and a bounded live oracle. Narrative logs never substitute for binding receipts.
+6. Dispatch `$planr-review`; the checker independently inspects the diff and validates the exact-source receipt, replaying only cheap, missing, failing, or explicitly high-risk evidence. Findings create fix work, while `complete --close-target` settles the target.
+7. Repeat from audit.
 
 One picked item per iteration. A small coherent change stays one implementation item with one signal-bearing review; do not create a new review boundary for every mechanical stage or for an already-reviewed successful live smoke. Use plain `done` only for low-signal setup/inspection work. Maker and checker stay separate when the host supports another agent; a maker never self-reviews when an independent checker is available, and never manufactures independence by changing worker identity. The reviewer must exercise independent judgment even when it relies on a green receipt rather than replaying an expensive gate. A worker may use `done --next`, which never returns its own review.
 
@@ -45,7 +46,7 @@ For generated Codex roles: The `spawn_agent` tool call itself must include `agen
 
 “Done” means the feature ran. For web dispatch `$planr-verify-web`; for CLI execute the built binary; for API use real requests; for iOS launch the simulator. Log the replayable command. A passing bounded live oracle is evidence for the existing review boundary, not a reason to start another full reviewer replay. If the capability is missing, record a blocker context, request approval, and pause—never fake proof.
 
-Recovery starts in a fresh session with audit, map state, the stored contract, and the next scoped pick. Read [recovery and platform details](references/recovery-and-verification.md) only when that branch is active.
+Recovery starts in a fresh session with audit, map state, Evidence readiness/explain, the stored contract, and the next scoped pick. A terminal unchanged Stop gap remains terminal; use `planr stop resume --plan <plan-id>` only after an explicit operator decision to reopen its bounded continuation window. Read [recovery and platform details](references/recovery-and-verification.md) only when that branch is active.
 
 ## Hard Rules
 

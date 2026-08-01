@@ -230,18 +230,18 @@ fn capture_source_binding(
         &["rev-parse", "HEAD^{tree}"],
         "source.tree_digest",
     )?;
-    let index = git_stdout(repository_root, &["ls-files", "-s"], "source.tree_digest")?;
-    let status = git_stdout(
+    let index = source_git_stdout(repository_root, &["ls-files", "-s"], "source.tree_digest")?;
+    let status = source_git_stdout(
         repository_root,
         &["status", "--porcelain=v1"],
         "source.dirty",
     )?;
-    let diff = git_stdout(
+    let diff = source_git_stdout(
         repository_root,
         &["diff", "--binary", "HEAD"],
         "source.tree_digest",
     )?;
-    let diff_cached = git_stdout(
+    let diff_cached = source_git_stdout(
         repository_root,
         &["diff", "--cached", "--binary"],
         "source.tree_digest",
@@ -267,7 +267,7 @@ fn capture_source_binding(
 }
 
 fn untracked_file_digests(repository_root: &Path) -> Result<Vec<Value>, EvidencePolicyDiagnostics> {
-    let files = git_stdout(
+    let files = source_git_stdout(
         repository_root,
         &["ls-files", "--others", "--exclude-standard"],
         "source.tree_digest",
@@ -298,6 +298,32 @@ fn untracked_file_digests(repository_root: &Path) -> Result<Vec<Value>, Evidence
             }))
         })
         .collect()
+}
+
+const SOURCE_PATHS: &[&str] = &[
+    ".",
+    ":(exclude).planr/planr.sqlite",
+    ":(exclude).planr/planr.sqlite-shm",
+    ":(exclude).planr/planr.sqlite-wal",
+    ":(exclude).planr/artifacts/**",
+    ":(exclude).planr/reviews/**",
+    ":(exclude).planr/verification/**",
+    ":(exclude).planr/evidence/runs/**",
+    ":(exclude).planr/evidence/attempts/**",
+    ":(exclude).planr/evidence/receipts/**",
+    ":(exclude).planr/evidence/coverage/**",
+];
+
+fn source_git_stdout(
+    repository_root: &Path,
+    args: &[&str],
+    field: &'static str,
+) -> Result<String, EvidencePolicyDiagnostics> {
+    let mut scoped = Vec::with_capacity(args.len() + SOURCE_PATHS.len() + 1);
+    scoped.extend_from_slice(args);
+    scoped.push("--");
+    scoped.extend_from_slice(SOURCE_PATHS);
+    git_stdout(repository_root, &scoped, field)
 }
 
 fn git_stdout(
@@ -2724,5 +2750,65 @@ mod tests {
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].scope_kind, "item");
         assert!(resolved[0].fixtures_allowed);
+    }
+
+    #[test]
+    fn source_snapshot_excludes_mutable_planr_runtime_but_keeps_contract_and_product_files() {
+        let repo = tempdir().unwrap();
+        fs::create_dir_all(repo.path().join(".planr/evidence/runs")).unwrap();
+        fs::create_dir_all(repo.path().join(".planr/evidence/adapters")).unwrap();
+        fs::write(repo.path().join("product.txt"), "product-v1\n").unwrap();
+        fs::write(repo.path().join(".planr/planr.sqlite"), "runtime-v1\n").unwrap();
+        fs::write(
+            repo.path().join(".planr/evidence/runs/run.json"),
+            "{\"run\":1}\n",
+        )
+        .unwrap();
+        fs::write(
+            repo.path().join(".planr/evidence/adapters/adapter.mjs"),
+            "process.stdout.write('{}')\n",
+        )
+        .unwrap();
+        for args in [
+            vec!["init"],
+            vec!["config", "user.email", "planr-test@example.invalid"],
+            vec!["config", "user.name", "Planr Test"],
+            vec!["add", "."],
+            vec!["commit", "-m", "initial"],
+        ] {
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(repo.path())
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "git failed: {output:?}");
+        }
+
+        let baseline = capture_source_binding(repo.path()).unwrap();
+        fs::write(repo.path().join(".planr/planr.sqlite"), "runtime-v2\n").unwrap();
+        fs::write(
+            repo.path().join(".planr/evidence/runs/run.json"),
+            "{\"run\":2}\n",
+        )
+        .unwrap();
+        let runtime_changed = capture_source_binding(repo.path()).unwrap();
+        assert_eq!(runtime_changed.tree_digest, baseline.tree_digest);
+        assert!(!runtime_changed.dirty);
+
+        fs::write(repo.path().join("product.txt"), "product-v2\n").unwrap();
+        let product_changed = capture_source_binding(repo.path()).unwrap();
+        assert_ne!(product_changed.tree_digest, baseline.tree_digest);
+        assert!(product_changed.dirty);
+
+        fs::write(repo.path().join("product.txt"), "product-v1\n").unwrap();
+        fs::write(
+            repo.path().join(".planr/evidence/adapters/adapter.mjs"),
+            "process.stdout.write('{\"changed\":true}')\n",
+        )
+        .unwrap();
+        let adapter_changed = capture_source_binding(repo.path()).unwrap();
+        assert_ne!(adapter_changed.tree_digest, baseline.tree_digest);
+        assert!(adapter_changed.dirty);
     }
 }

@@ -19,7 +19,7 @@ use crate::evidence::{
         evaluate_obligation_coverage, evaluate_plan_coverage, evaluate_plan_criterion_coverages,
     },
     execution::{
-        ConfiguredProcessRunInput, TrustedEvidencePersistenceInput,
+        ConfiguredProcessRunInput, TrustedEvidencePersistenceInput, ensure_process_adapter_digest,
         persist_trusted_evidence_atomically, resolve_process_run, run_configured_process_adapter,
         run_resolved_process,
     },
@@ -226,6 +226,11 @@ impl App {
                 self.evidence_explain_value(args.scope, &args.id),
                 "evidence explanation".to_string(),
             ),
+            EvidenceCommand::Readiness(args) => (
+                "evidence.readiness",
+                self.evidence_readiness_value(args.scope, &args.id),
+                "evidence readiness".to_string(),
+            ),
             EvidenceCommand::Migrate(args) => {
                 let value = read_json_file(&args.input)?;
                 (
@@ -235,6 +240,18 @@ impl App {
                         "evidence migration applied".to_string()
                     } else {
                         "evidence migration preview".to_string()
+                    },
+                )
+            }
+            EvidenceCommand::Rebind(args) => {
+                let value = read_json_file(&args.input)?;
+                (
+                    "evidence.rebind",
+                    self.evidence_rebind_value(value, args.apply),
+                    if args.apply {
+                        "evidence rebind applied".to_string()
+                    } else {
+                        "evidence rebind preview".to_string()
                     },
                 )
             }
@@ -419,9 +436,9 @@ impl App {
             "INSERT INTO proof_obligations(
               id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
               binding, observation_requirements_json, fixture_policy_json, freshness_policy_json,
-              assurance_policy_json, policy_digest, config_digest, source_digest,
-              supersedes_obligation_id, created_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+              assurance_policy_json, retry_aggregation, policy_digest, config_digest,
+              source_digest, supersedes_obligation_id, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             params![
                 obligation.id.as_str(),
                 project.id,
@@ -435,6 +452,7 @@ impl App {
                 obligation.fixture_policy.to_string(),
                 obligation.freshness_policy.to_string(),
                 obligation.assurance_policy.to_string(),
+                obligation_retry_aggregation(&obligation)?,
                 obligation.policy_digest.as_str(),
                 obligation.config_digest.as_str(),
                 source_digest,
@@ -568,7 +586,7 @@ impl App {
                 .query_row(
                     "SELECT id, project_id, plan_id, item_id, criterion_id, title, binding,
                             observation_requirements_json, fixture_policy_json, freshness_policy_json,
-                            assurance_policy_json, policy_digest, config_digest, source_digest,
+                            assurance_policy_json, retry_aggregation, policy_digest, config_digest, source_digest,
                             supersedes_obligation_id, obligation_version, created_at
                      FROM proof_obligations WHERE id = ?1",
                     params![obligation.id.as_str()],
@@ -721,6 +739,283 @@ impl App {
         }))
     }
 
+    pub(crate) fn evidence_rebind_value(&self, value: Value, apply: bool) -> Result<Value> {
+        self.conn
+            .execute_batch("BEGIN IMMEDIATE; SAVEPOINT evidence_rebind")?;
+        let result = self.evidence_rebind_value_inner(value, apply);
+        match result {
+            Ok(value) => {
+                self.conn.execute_batch("RELEASE evidence_rebind; COMMIT")?;
+                Ok(value)
+            }
+            Err(error) => {
+                let _ = self
+                    .conn
+                    .execute_batch("ROLLBACK TO evidence_rebind; RELEASE evidence_rebind; COMMIT");
+                Err(error)
+            }
+        }
+    }
+
+    fn evidence_rebind_value_inner(&self, value: Value, apply: bool) -> Result<Value> {
+        let object = value.as_object().ok_or_else(|| {
+            EvidenceCommandError::bad_request("evidence rebind input must be a JSON object")
+        })?;
+        let allowed = BTreeSet::from([
+            "schema_version",
+            "plan_id",
+            "manifest_id",
+            "obligations",
+            "preview_digest",
+        ]);
+        let unknown = object
+            .keys()
+            .filter(|key| !allowed.contains(key.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !unknown.is_empty() {
+            return Err(EvidenceCommandError::bad_request(format!(
+                "evidence rebind input has unknown fields: {}",
+                unknown.join(",")
+            ))
+            .into());
+        }
+        if object.get("schema_version").and_then(Value::as_str) != Some("planr.evidence.rebind.v1")
+        {
+            return Err(EvidenceCommandError::bad_request(
+                "evidence rebind schema_version must be planr.evidence.rebind.v1",
+            )
+            .into());
+        }
+        let plan_id = string_field(&value, "plan_id")?;
+        let manifest_id = string_field(&value, "manifest_id")?;
+        let plan = self.get_plan(&plan_id)?;
+        let project = self.default_project()?;
+        if plan.project_id != project.id {
+            return Err(EvidenceCommandError::bad_request(
+                "evidence rebind plan does not belong to current project",
+            )
+            .into());
+        }
+        let document = self.evidence_policy_document()?.ok_or_else(|| {
+            EvidenceCommandError::bad_request("evidence rebind requires .planr/evidence.yaml")
+        })?;
+        let mut registry = self.evidence_registry_from_policy(&document)?;
+        if !registry.diagnostics().is_empty() {
+            return Err(EvidenceCommandError::bad_request(format!(
+                "evidence rebind policy registry is invalid: {}",
+                serde_json::to_string(&registry_diagnostics_value(registry.diagnostics()))?
+            ))
+            .into());
+        }
+        let proposed_registered_capability = registry
+            .capabilities()
+            .find(|capability| capability.manifest.id.as_str() == manifest_id)
+            .cloned()
+            .ok_or_else(|| {
+                EvidenceCommandError::bad_request(format!(
+                    "evidence rebind manifest is not registered by current policy: {manifest_id}"
+                ))
+            })?;
+        let proposed_capability = json!({
+            "manifest_id": proposed_registered_capability.manifest.id.as_str(),
+            "version": proposed_registered_capability.manifest.version,
+            "manifest_digest": proposed_registered_capability.manifest_digest,
+            "adapter_digest": proposed_registered_capability.manifest.adapter_digest.as_str(),
+        });
+
+        let raw_obligations = object
+            .get("obligations")
+            .and_then(Value::as_array)
+            .filter(|values| !values.is_empty())
+            .ok_or_else(|| {
+                EvidenceCommandError::bad_request(
+                    "evidence rebind input requires at least one obligation",
+                )
+            })?;
+        let mut parsed = Vec::new();
+        let mut entries = Vec::new();
+        let mut affected_criteria = BTreeSet::new();
+        let mut current_capabilities = BTreeMap::new();
+        let mut seen_old = BTreeSet::new();
+        let mut seen_new = BTreeSet::new();
+        for raw in raw_obligations {
+            let obligation: ProofObligation =
+                serde_json::from_value(raw.clone()).map_err(|error| {
+                    EvidenceCommandError::bad_request(format!(
+                        "evidence rebind obligation is invalid: {error}"
+                    ))
+                })?;
+            self.validate_migration_obligation(&plan, &obligation)
+                .map_err(|error| EvidenceCommandError::bad_request(error.to_string()))?;
+            validate_rebind_capability_support(
+                &proposed_registered_capability.manifest,
+                &obligation,
+            )?;
+            let old_id = obligation.supersedes.as_ref().ok_or_else(|| {
+                EvidenceCommandError::bad_request(format!(
+                    "rebind obligation {} must supersede the active obligation",
+                    obligation.id.as_str()
+                ))
+            })?;
+            if !seen_old.insert(old_id.as_str().to_string())
+                || !seen_new.insert(obligation.id.as_str().to_string())
+            {
+                return Err(EvidenceCommandError::bad_request(
+                    "evidence rebind obligation ids and superseded ids must be unique",
+                )
+                .into());
+            }
+            let existing = self.evidence_obligation_record_value(old_id.as_str())?;
+            let is_active: bool = self.conn.query_row(
+                "SELECT NOT EXISTS(
+                   SELECT 1 FROM proof_obligations newer
+                   WHERE newer.project_id = proof_obligations.project_id
+                     AND newer.supersedes_obligation_id = proof_obligations.id
+                 ) FROM proof_obligations WHERE project_id = ?1 AND id = ?2 AND binding = 1",
+                params![project.id, old_id.as_str()],
+                |row| row.get(0),
+            )?;
+            if !is_active {
+                return Err(EvidenceCommandError::conflict(format!(
+                    "evidence rebind source obligation is not active: {}",
+                    old_id.as_str()
+                ))
+                .into());
+            }
+            validate_rebind_semantics(&existing, &obligation)?;
+            if obligation.policy_digest.as_str() != document.digest {
+                return Err(EvidenceCommandError::bad_request(format!(
+                    "rebind obligation {} policy_digest must match current repository policy {}",
+                    obligation.id.as_str(),
+                    document.digest
+                ))
+                .into());
+            }
+            let version = self.next_obligation_version(&project.id, &obligation)?;
+            affected_criteria.insert(obligation.criterion_id.as_str().to_string());
+            for capability in self.capability_versions_for_obligation(old_id.as_str())? {
+                current_capabilities.insert(capability.to_string(), capability);
+            }
+            let mut invalidation = Vec::new();
+            if existing["policy_digest"].as_str() != Some(obligation.policy_digest.as_str()) {
+                invalidation.push("policy_change");
+            }
+            if existing["config_digest"].as_str() != Some(obligation.config_digest.as_str()) {
+                invalidation.push("configuration_change");
+            }
+            let proposed_obligation_digest =
+                crate::canonical_json::sha256_json_digest(&serde_json::to_value(&obligation)?)?;
+            entries.push(json!({
+                "current_obligation_id": old_id.as_str(),
+                "proposed_obligation_id": obligation.id.as_str(),
+                "proposed_obligation_digest": proposed_obligation_digest,
+                "criterion_id": obligation.criterion_id.as_str(),
+                "current_version": existing["obligation_version"],
+                "proposed_version": version,
+                "semantic_dimensions": "unchanged",
+                "freshness_invalidation": invalidation,
+                "refresh_command": format!(
+                    "planr evidence run --input <run-file-for-{}>",
+                    obligation.id.as_str()
+                ),
+            }));
+            parsed.push(obligation);
+        }
+        let mut preview = json!({
+            "schema_version": "planr.evidence.rebind.preview.v1",
+            "plan_id": plan_id,
+            "proposed_capability": proposed_capability,
+            "current_capabilities": current_capabilities.into_values().collect::<Vec<_>>(),
+            "affected_criteria": affected_criteria.into_iter().collect::<Vec<_>>(),
+            "obligations": entries,
+        });
+        let preview_digest = crate::canonical_json::sha256_json_digest(&preview)?;
+        preview["preview_digest"] = json!(preview_digest);
+
+        let expected_digest = object.get("preview_digest").and_then(Value::as_str);
+        if apply && expected_digest != Some(preview_digest.as_str()) {
+            return Err(EvidenceCommandError::conflict(format!(
+                "evidence rebind apply requires current preview_digest {preview_digest}"
+            ))
+            .into());
+        }
+        let mut created = Vec::new();
+        let mut capability_instance = Value::Null;
+        if apply {
+            let resolution = registry.current_or_probe_and_store(
+                &self.conn,
+                &self.root,
+                &manifest_id,
+                self.default_capability_runtime(),
+            )?;
+            if resolution.instance.availability.status.as_str() != "available" {
+                return Err(EvidenceCommandError::conflict(format!(
+                    "evidence rebind capability is not available: {}",
+                    resolution.instance.availability.status.as_str()
+                ))
+                .into());
+            }
+            validate_rebind_environment(&parsed, &resolution.instance.environment)?;
+            capability_instance = json!({
+                "id": resolution.instance.id.as_str(),
+                "manifest_id": resolution.instance.manifest_id.as_str(),
+                "manifest_version": resolution.instance.adapter_version,
+                "manifest_digest": resolution.instance.manifest_digest.as_str(),
+            });
+            let fail_after = std::env::var("PLANR_EVIDENCE_REBIND_FAIL_AFTER_CREATES")
+                .ok()
+                .and_then(|value| value.parse::<usize>().ok());
+            for obligation in parsed {
+                created.push(
+                    self.evidence_obligation_add_value(serde_json::to_value(&obligation)?)?
+                        ["obligation"]
+                        .clone(),
+                );
+                if fail_after == Some(created.len()) {
+                    return Err(EvidenceCommandError::internal(format!(
+                        "injected evidence rebind failure after {} create(s)",
+                        created.len()
+                    ))
+                    .into());
+                }
+            }
+        }
+        Ok(json!({
+            "schema_version": "planr.evidence.rebind.v1",
+            "status": if apply { "applied" } else { "preview" },
+            "verdict": "valid",
+            "dry_run": !apply,
+            "preview": preview,
+            "capability_instance": capability_instance,
+            "created": created,
+            "next_action": if apply {
+                format!("run planr evidence readiness --scope plan --id {plan_id}, then refresh only invalidated criteria")
+            } else {
+                "copy preview.preview_digest into the input and rerun with --apply".to_string()
+            },
+        }))
+    }
+
+    fn capability_versions_for_obligation(&self, obligation_id: &str) -> Result<Vec<Value>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT instances.manifest_id, instances.manifest_version, instances.manifest_digest
+             FROM evidence_attempts attempts
+             JOIN verification_capability_instances instances
+               ON instances.id = attempts.capability_instance_id
+             WHERE attempts.obligation_id = ?1
+             ORDER BY instances.manifest_id, instances.manifest_version, instances.manifest_digest",
+        )?;
+        let rows = stmt.query_map(params![obligation_id], |row| {
+            Ok(json!({
+                "manifest_id": row.get::<_, String>(0)?,
+                "version": row.get::<_, String>(1)?,
+                "manifest_digest": row.get::<_, String>(2)?,
+            }))
+        })?;
+        crate::util::collect_rows(rows)
+    }
+
     fn validate_migration_obligation(
         &self,
         plan: &crate::model::Plan,
@@ -766,7 +1061,7 @@ impl App {
             .query_row(
                 "SELECT id, project_id, plan_id, item_id, criterion_id, title, binding,
                         observation_requirements_json, fixture_policy_json, freshness_policy_json,
-                        assurance_policy_json, policy_digest, config_digest, source_digest,
+                        assurance_policy_json, retry_aggregation, policy_digest, config_digest, source_digest,
                         supersedes_obligation_id, obligation_version, created_at
                  FROM proof_obligations
                  WHERE project_id = ?1 AND plan_id = ?2 AND criterion_id = ?3 AND obligation_version = ?4",
@@ -869,7 +1164,7 @@ impl App {
         let sql = format!(
             "SELECT id, project_id, plan_id, item_id, criterion_id, title, binding,
                     observation_requirements_json, fixture_policy_json, freshness_policy_json,
-                    assurance_policy_json, policy_digest, config_digest, source_digest,
+                    assurance_policy_json, retry_aggregation, policy_digest, config_digest, source_digest,
                     supersedes_obligation_id, obligation_version, created_at
              FROM proof_obligations{where_clause} ORDER BY created_at, id"
         );
@@ -929,6 +1224,203 @@ impl App {
         Ok(json!({"capability": value}))
     }
 
+    pub(crate) fn evidence_readiness_value(
+        &self,
+        scope: EvidenceCoverageScope,
+        id: &str,
+    ) -> Result<Value> {
+        let document = self.evidence_policy_document()?.ok_or_else(|| {
+            EvidenceCommandError::bad_request("evidence readiness requires .planr/evidence.yaml")
+        })?;
+        let mut registry = self.evidence_registry_from_policy(&document)?;
+        let probe = self.probe_registry_capabilities(&mut registry)?;
+        let obligations_value = match scope {
+            EvidenceCoverageScope::Obligation => {
+                json!({"obligations": [self.evidence_obligation_record_value(id)?]})
+            }
+            EvidenceCoverageScope::Criterion => {
+                self.evidence_obligations_value(None, None, Some(id))?
+            }
+            EvidenceCoverageScope::Item => self.evidence_obligations_value(None, Some(id), None)?,
+            EvidenceCoverageScope::Plan => self.evidence_obligations_value(Some(id), None, None)?,
+        };
+        let obligation_rows = obligations_value["obligations"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let project = self.default_project()?;
+        let superseded_ids = {
+            let mut statement = self.conn.prepare(
+                "SELECT DISTINCT supersedes_obligation_id
+                 FROM proof_obligations
+                 WHERE project_id = ?1 AND supersedes_obligation_id IS NOT NULL",
+            )?;
+            let rows = statement.query_map(params![project.id], |row| row.get::<_, String>(0))?;
+            crate::util::collect_rows(rows)?
+                .into_iter()
+                .collect::<BTreeSet<_>>()
+        };
+        let active = obligation_rows
+            .iter()
+            .filter(|row| row["binding"].as_bool() == Some(true))
+            .filter(|row| {
+                row["id"]
+                    .as_str()
+                    .is_some_and(|obligation_id| !superseded_ids.contains(obligation_id))
+            })
+            .collect::<Vec<_>>();
+        // The registry projection retains every repository diagnostic, but
+        // readiness blocks only on capabilities needed by this active scope.
+        let mut gaps = Vec::new();
+        if active.is_empty() {
+            gaps.push(json!({
+                "code": "missing_obligation",
+                "scope": scope.as_str(),
+                "id": id,
+                "message": "scope has no active binding proof obligations"
+            }));
+        }
+        let mut observation_types = BTreeSet::new();
+        for row in &active {
+            let obligation_id = row["id"].as_str().unwrap_or_default();
+            let observations: Vec<crate::evidence::model::ObservationRequirement> =
+                serde_json::from_value(row["observations"].clone()).with_context(|| {
+                    format!("decoding observations for readiness obligation {obligation_id}")
+                })?;
+            for observation in observations {
+                observation_types.insert(observation.observation_type.as_str().to_string());
+                let Some(payload_schema) = observation.payload_schema.as_ref() else {
+                    gaps.push(json!({
+                        "code": "missing_payload_schema",
+                        "obligation_id": obligation_id,
+                        "requirement_id": observation.id.as_str(),
+                        "message": "binding observation has no payload schema"
+                    }));
+                    continue;
+                };
+                match load_repository_observation_schema(
+                    &self.root,
+                    payload_schema.schema_ref.as_str(),
+                ) {
+                    Ok(Some(_)) => {}
+                    Ok(None) => gaps.push(json!({
+                        "code": "missing_payload_schema_registration",
+                        "obligation_id": obligation_id,
+                        "requirement_id": observation.id.as_str(),
+                        "schema_ref": payload_schema.schema_ref,
+                        "message": "repository payload schema is not registered"
+                    })),
+                    Err(error) => gaps.push(json!({
+                        "code": "invalid_payload_schema",
+                        "obligation_id": obligation_id,
+                        "requirement_id": observation.id.as_str(),
+                        "schema_ref": payload_schema.schema_ref,
+                        "message": error.to_string()
+                    })),
+                }
+                let matching = registry
+                    .capabilities()
+                    .filter(|capability| {
+                        let runtime_targets =
+                            serde_json::to_value(&capability.manifest.runtime_targets)
+                                .unwrap_or_else(|_| Value::Array(Vec::new()));
+                        capability
+                            .manifest
+                            .supported_observations
+                            .iter()
+                            .any(|binding| {
+                                binding.observation_type == observation.observation_type
+                                    && binding.schema_ref == payload_schema.schema_ref
+                            })
+                            && runtime_targets.as_array().is_some_and(|targets| {
+                                targets.contains(&observation.runtime_target)
+                            })
+                    })
+                    .collect::<Vec<_>>();
+                if matching.is_empty() {
+                    gaps.push(json!({
+                        "code": "verifier_contract_mismatch",
+                        "obligation_id": obligation_id,
+                        "requirement_id": observation.id.as_str(),
+                        "observation_type": observation.observation_type.as_str(),
+                        "schema_ref": payload_schema.schema_ref,
+                        "runtime_target": observation.runtime_target,
+                        "message": "no registered capability supports the observation type, payload schema, and runtime target"
+                    }));
+                    continue;
+                }
+
+                let mut available = false;
+                let mut usable = false;
+                let mut availability_statuses = BTreeSet::new();
+                let mut adapter_digest_errors = Vec::new();
+                for capability in matching {
+                    let statuses = registry.availability_statuses_for(capability);
+                    availability_statuses.extend(statuses.iter().copied());
+                    if !statuses.contains("available") {
+                        continue;
+                    }
+                    available = true;
+                    let Some(execution) = capability.repository_execution_contract.as_ref() else {
+                        usable = true;
+                        continue;
+                    };
+                    match resolve_process_run(&self.root, execution, &BTreeMap::new()).and_then(
+                        |resolved| ensure_process_adapter_digest(&capability.manifest, &resolved),
+                    ) {
+                        Ok(()) => usable = true,
+                        Err(error) => adapter_digest_errors.push((
+                            capability.manifest.id.as_str().to_string(),
+                            error.to_string(),
+                        )),
+                    }
+                }
+                if !available {
+                    gaps.push(json!({
+                        "code": if availability_statuses.contains("permission_denied") {
+                            "PermissionDenied"
+                        } else {
+                            "ProbeUnavailable"
+                        },
+                        "obligation_id": obligation_id,
+                        "requirement_id": observation.id.as_str(),
+                        "availability_statuses": availability_statuses,
+                        "message": "no matching capability has a currently available runtime instance"
+                    }));
+                } else if !usable {
+                    gaps.extend(
+                        adapter_digest_errors
+                            .into_iter()
+                            .map(|(manifest_id, message)| {
+                                json!({
+                                    "code": "adapter_digest_drift",
+                                    "manifest_id": manifest_id,
+                                    "obligation_id": obligation_id,
+                                    "requirement_id": observation.id.as_str(),
+                                    "message": message,
+                                })
+                            }),
+                    );
+                }
+            }
+        }
+        gaps.sort_by_key(|gap| gap.to_string());
+        gaps.dedup();
+        Ok(json!({
+            "status": if gaps.is_empty() { "passed" } else { "blocked" },
+            "scope": {"kind": scope.as_str(), "id": id},
+            "active_obligation_ids": active.iter().filter_map(|row| row["id"].as_str()).collect::<Vec<_>>(),
+            "observation_types": observation_types,
+            "registry": probe,
+            "gaps": gaps,
+            "next_action": if gaps.is_empty() {
+                "run configured evidence"
+            } else {
+                "repair the reported Evidence policy, schema, capability, or runtime gap"
+            }
+        }))
+    }
+
     pub(crate) fn evidence_run_value(&self, value: Value) -> Result<Value> {
         reject_trusted_receipt_input(&value)?;
         let project = self.default_project()?;
@@ -970,6 +1462,30 @@ impl App {
             )
             .map_err(|error| anyhow!("repository observation schema invalid: {error}"))?
         };
+        let observation_payload_json_schemas = obligation
+            .observations
+            .iter()
+            .filter_map(|observation| {
+                observation
+                    .payload_schema
+                    .as_ref()
+                    .map(|binding| (observation.id.as_str().to_string(), binding.schema_ref.clone()))
+            })
+            .map(|(requirement_id, schema_ref)| {
+                let schema = load_repository_observation_schema(&self.root, &schema_ref)
+                    .map_err(|error| {
+                        anyhow!(
+                            "repository observation schema invalid for {requirement_id} ({schema_ref}): {error}"
+                        )
+                    })?
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "repository observation schema missing for {requirement_id} ({schema_ref})"
+                        )
+                    })?;
+                Ok((requirement_id, schema))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
         let environment: EnvironmentBinding = match value.get("environment").cloned() {
             Some(value) => serde_json::from_value(value)?,
             None => instance.environment.clone(),
@@ -1023,6 +1539,7 @@ impl App {
                 capability_instance: instance,
                 execution_contract,
                 payload_json_schema,
+                observation_payload_json_schemas,
                 target,
                 environment,
                 fixture_disclosure,
@@ -1039,21 +1556,11 @@ impl App {
                 cancellation: &cancellation,
             },
         )?;
-        let verdict = output
-            .attempt
-            .exit
-            .get("error")
-            .and_then(Value::as_str)
-            .filter(|error| {
-                *error == "verifier_failed"
-                    && output
-                        .attempt
-                        .raw_result
-                        .get("ordinary_observation_error")
-                        .is_some()
-            })
-            .unwrap_or_else(|| output.attempt.status.as_str())
-            .to_string();
+        let verdict = evidence_run_verdict(
+            output.attempt.status,
+            &output.attempt.exit,
+            &output.attempt.raw_result,
+        );
         Ok(json!({
             "attempt": output.attempt,
             "receipt": output.receipt_value,
@@ -1686,6 +2193,7 @@ impl App {
             "status": coverage.status.as_str(),
             "receipt_digests": coverage.receipt_digests,
             "waiver_digests": coverage.waiver_digests,
+            "receipt_lineage": coverage.receipt_lineage,
             "verdict": coverage.status.as_str(),
         });
         value["canonical_projection"] = canonical_coverage_projection(&value);
@@ -1819,7 +2327,7 @@ impl App {
             .query_row(
                 "SELECT id, project_id, plan_id, item_id, criterion_id, title, binding,
                         observation_requirements_json, fixture_policy_json, freshness_policy_json,
-                        assurance_policy_json, policy_digest, config_digest, source_digest,
+                        assurance_policy_json, retry_aggregation, policy_digest, config_digest, source_digest,
                         supersedes_obligation_id, obligation_version, created_at
                  FROM proof_obligations WHERE project_id = ?1 AND id = ?2",
                 params![self.default_project()?.id, id],
@@ -2062,6 +2570,18 @@ impl App {
     }
 }
 
+fn evidence_run_verdict(status: AttemptStatus, exit: &Value, raw_result: &Value) -> String {
+    exit.get("error")
+        .and_then(Value::as_str)
+        .filter(|error| {
+            *error == "verifier_failed"
+                && (raw_result.get("ordinary_observation_error").is_some()
+                    || raw_result.get("structured_observation_error").is_some())
+        })
+        .unwrap_or_else(|| status.as_str())
+        .to_string()
+}
+
 pub(crate) fn evidence_success_envelope(command: &str, object: Value) -> Value {
     json!({
         "schema": "planr.evidence.command.v1",
@@ -2132,6 +2652,50 @@ pub(crate) fn evidence_migration_request(value: &Value) -> Result<(Value, bool)>
     }
 }
 
+pub(crate) fn evidence_rebind_request(value: &Value) -> Result<(Value, bool)> {
+    let object = value.as_object().ok_or_else(|| {
+        EvidenceCommandError::bad_request("evidence rebind request must be a JSON object")
+    })?;
+    if object.contains_key("input") || object.contains_key("apply") {
+        let allowed = BTreeSet::from(["input", "apply"]);
+        let unknown = object
+            .keys()
+            .filter(|key| !allowed.contains(key.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !unknown.is_empty() {
+            return Err(EvidenceCommandError::bad_request(format!(
+                "evidence rebind request has unknown fields: {}",
+                unknown.join(",")
+            ))
+            .into());
+        }
+        let input = object.get("input").cloned().ok_or_else(|| {
+            EvidenceCommandError::bad_request("evidence rebind request requires input")
+        })?;
+        if !input.is_object() {
+            return Err(EvidenceCommandError::bad_request(
+                "evidence rebind request input must be a JSON object",
+            )
+            .into());
+        }
+        let apply = object
+            .get("apply")
+            .map(|value| {
+                value.as_bool().ok_or_else(|| {
+                    EvidenceCommandError::bad_request(
+                        "evidence rebind request apply must be a boolean",
+                    )
+                })
+            })
+            .transpose()?
+            .unwrap_or(false);
+        Ok((input, apply))
+    } else {
+        Ok((value.clone(), false))
+    }
+}
+
 pub(crate) fn evidence_envelope_exit_code(envelope: &Value) -> i32 {
     envelope["exit"]["code"].as_i64().unwrap_or(1) as i32
 }
@@ -2165,11 +2729,167 @@ fn existing_obligation_matches(existing: &Value, obligation: &ProofObligation) -
         && existing["fixture_policy"] == obligation.fixture_policy
         && existing["freshness_policy"] == obligation.freshness_policy
         && existing["assurance_policy"] == obligation.assurance_policy
+        && existing["retry_aggregation"].as_str()
+            == obligation_retry_aggregation(obligation).ok().as_deref()
         && existing["policy_digest"].as_str() == Some(obligation.policy_digest.as_str())
         && existing["config_digest"].as_str() == Some(obligation.config_digest.as_str())
         && existing["supersedes_obligation_id"].as_str()
             == obligation.supersedes.as_ref().map(|id| id.as_str())
         && existing["created_at"].as_str() == Some(obligation.created_at.as_str())
+}
+
+fn validate_rebind_semantics(existing: &Value, obligation: &ProofObligation) -> Result<()> {
+    let current_observations = rebind_observation_semantics(&existing["observations"])?;
+    let proposed_observations =
+        rebind_observation_semantics(&serde_json::to_value(&obligation.observations)?)?;
+    let invariant_dimensions = [
+        (
+            "plan_id",
+            existing["plan_id"].clone(),
+            json!(obligation.plan_id.as_str()),
+        ),
+        (
+            "item_id",
+            existing["item_id"].clone(),
+            json!(obligation.item_id.as_ref().map(|id| id.as_str())),
+        ),
+        (
+            "criterion_id",
+            existing["criterion_id"].clone(),
+            json!(obligation.criterion_id.as_str()),
+        ),
+        ("title", existing["title"].clone(), json!(obligation.title)),
+        (
+            "binding",
+            existing["binding"].clone(),
+            json!(obligation.binding),
+        ),
+        ("observations", current_observations, proposed_observations),
+        (
+            "fixture_policy",
+            existing["fixture_policy"].clone(),
+            obligation.fixture_policy.clone(),
+        ),
+        (
+            "freshness_policy",
+            existing["freshness_policy"].clone(),
+            obligation.freshness_policy.clone(),
+        ),
+        (
+            "assurance_policy",
+            existing["assurance_policy"].clone(),
+            obligation.assurance_policy.clone(),
+        ),
+        (
+            "retry_aggregation",
+            existing["retry_aggregation"].clone(),
+            json!(obligation_retry_aggregation(obligation)?),
+        ),
+    ];
+    let changed = invariant_dimensions
+        .into_iter()
+        .filter_map(|(name, current, proposed)| (current != proposed).then_some(name))
+        .collect::<Vec<_>>();
+    if !changed.is_empty() {
+        return Err(EvidenceCommandError::conflict(format!(
+            "evidence rebind refuses semantic acceptance drift in {}; authorize a plan/criterion change instead",
+            changed.join(",")
+        ))
+        .into());
+    }
+    Ok(())
+}
+
+fn rebind_observation_semantics(observations: &Value) -> Result<Value> {
+    let mut observations = observations
+        .as_array()
+        .cloned()
+        .ok_or_else(|| EvidenceCommandError::bad_request("rebind observations must be an array"))?;
+    for observation in &mut observations {
+        observation
+            .as_object_mut()
+            .ok_or_else(|| {
+                EvidenceCommandError::bad_request("rebind observation must be an object")
+            })?
+            .remove("environment");
+    }
+    Ok(Value::Array(observations))
+}
+
+fn validate_rebind_capability_support(
+    manifest: &VerificationCapabilityManifest,
+    obligation: &ProofObligation,
+) -> Result<()> {
+    let runtime_targets = manifest
+        .runtime_targets
+        .iter()
+        .map(serde_json::to_value)
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    for observation in &obligation.observations {
+        let payload_schema = observation.payload_schema.as_ref().ok_or_else(|| {
+            EvidenceCommandError::bad_request(format!(
+                "rebind observation {} requires a payload schema",
+                observation.id.as_str()
+            ))
+        })?;
+        let supports_observation = manifest.supported_observations.iter().any(|binding| {
+            binding.observation_type == observation.observation_type
+                && binding.schema_ref == payload_schema.schema_ref
+        });
+        if !supports_observation {
+            return Err(EvidenceCommandError::conflict(format!(
+                "rebind capability {} does not support observation {} with schema {}",
+                manifest.id.as_str(),
+                observation.observation_type.as_str(),
+                payload_schema.schema_ref
+            ))
+            .into());
+        }
+        if !runtime_targets.contains(&observation.runtime_target) {
+            return Err(EvidenceCommandError::conflict(format!(
+                "rebind capability {} does not support runtime target for observation {}",
+                manifest.id.as_str(),
+                observation.id.as_str()
+            ))
+            .into());
+        }
+    }
+    Ok(())
+}
+
+fn validate_rebind_environment(
+    obligations: &[ProofObligation],
+    environment: &EnvironmentBinding,
+) -> Result<()> {
+    let expected = serde_json::to_value(environment)?;
+    for obligation in obligations {
+        for observation in &obligation.observations {
+            if observation.environment != expected {
+                return Err(EvidenceCommandError::conflict(format!(
+                    "rebind observation {} environment must match the current capability instance",
+                    observation.id.as_str()
+                ))
+                .into());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn obligation_retry_aggregation(obligation: &ProofObligation) -> Result<String> {
+    match obligation
+        .assurance_policy
+        .get("retry_aggregation")
+        .and_then(Value::as_str)
+        .unwrap_or("latest_applicable_pass")
+    {
+        "latest_applicable_pass" => Ok("latest_applicable_pass".to_string()),
+        "all_applicable_pass" => Ok("all_applicable_pass".to_string()),
+        other => Err(EvidenceCommandError::bad_request(format!(
+            "unsupported proof obligation retry aggregation: {other}"
+        ))
+        .into()),
+    }
 }
 
 pub(crate) fn evidence_classifications_value() -> Value {
@@ -3168,12 +3888,13 @@ fn obligation_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
         "fixture_policy": parse_json(row.get::<_, String>(8)?),
         "freshness_policy": parse_json(row.get::<_, String>(9)?),
         "assurance_policy": parse_json(row.get::<_, String>(10)?),
-        "policy_digest": row.get::<_, String>(11)?,
-        "config_digest": row.get::<_, String>(12)?,
-        "source_digest": row.get::<_, Option<String>>(13)?,
-        "supersedes_obligation_id": row.get::<_, Option<String>>(14)?,
-        "obligation_version": row.get::<_, i64>(15)?,
-        "created_at": row.get::<_, String>(16)?,
+        "retry_aggregation": row.get::<_, String>(11)?,
+        "policy_digest": row.get::<_, String>(12)?,
+        "config_digest": row.get::<_, String>(13)?,
+        "source_digest": row.get::<_, Option<String>>(14)?,
+        "supersedes_obligation_id": row.get::<_, Option<String>>(15)?,
+        "obligation_version": row.get::<_, i64>(16)?,
+        "created_at": row.get::<_, String>(17)?,
     }))
 }
 
@@ -3293,6 +4014,31 @@ mod tests {
         assert_eq!(
             evidence_success_envelope("evidence.run", json!({"verdict": "blocked"}))["exit"]["code"],
             EVIDENCE_BLOCKED
+        );
+    }
+
+    #[test]
+    fn evidence_run_verdict_projects_both_verifier_failure_kinds() {
+        let exit = json!({"error": "verifier_failed"});
+        assert_eq!(
+            evidence_run_verdict(
+                AttemptStatus::Failed,
+                &exit,
+                &json!({"ordinary_observation_error": "invalid JSON"}),
+            ),
+            "verifier_failed"
+        );
+        assert_eq!(
+            evidence_run_verdict(
+                AttemptStatus::Failed,
+                &exit,
+                &json!({"structured_observation_error": "schema mismatch"}),
+            ),
+            "verifier_failed"
+        );
+        assert_eq!(
+            evidence_run_verdict(AttemptStatus::Failed, &exit, &json!({})),
+            "failed"
         );
     }
 }

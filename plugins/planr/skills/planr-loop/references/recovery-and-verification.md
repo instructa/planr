@@ -16,9 +16,10 @@ Use `planr pick stale --older-than-seconds 900` before releasing abandoned owner
 Verification:
 
 ```bash
-planr log add --item <item-id> --kind verification \
-  --summary "verified <flow>: <observed outcome>" \
-  --cmd "<exact replayable command>"
+planr evidence readiness --scope criterion --id <criterion-id>
+planr evidence run --input <run-file>
+planr evidence coverage --scope criterion --id <criterion-id>
+planr evidence explain --scope criterion --id <criterion-id>
 ```
 
-Use browser automation for web, the built binary for CLI, real requests for API/backend, and simulator launch plus exercised flow for iOS. If tooling is unavailable, store blocker context, request approval, and pause.
+Use a capability whose declared observations cover the criterion: browser automation for rendered web behavior, the built binary for CLI, real requests for API/backend, and simulator launch plus exercised flow for iOS. If tooling is unavailable, preserve the typed blocker, request approval when appropriate, and pause. Do not replace it with a weaker method that observes different facts.

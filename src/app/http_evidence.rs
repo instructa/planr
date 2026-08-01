@@ -32,6 +32,11 @@ impl App {
                 super::evidence::evidence_migration_request(body_json)
                     .and_then(|(input, apply)| self.evidence_migration_value(input, apply)),
             ),
+            ("POST", "/v1/evidence/rebind") => http_evidence_json(
+                "evidence.rebind",
+                super::evidence::evidence_rebind_request(body_json)
+                    .and_then(|(input, apply)| self.evidence_rebind_value(input, apply)),
+            ),
             ("GET", "/v1/evidence/classifications") => http_evidence_json(
                 "evidence.classifications",
                 Ok(super::evidence::evidence_classifications_value()),

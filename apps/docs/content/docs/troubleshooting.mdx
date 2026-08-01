@@ -122,14 +122,16 @@ planr log add --item <item-id> --kind verification \
 planr plan audit <plan-id> --json
 ```
 
-For binding Evidence plans, that claim is not enough. Create an explicit migration payload with full `ProofObligation` objects, preview it, then apply only when the scope is correct:
+For binding Evidence plans, that claim is not enough. Run readiness, execute the configured method, then inspect canonical coverage:
 
 ```bash
-planr evidence migrate --input migration.json
-planr evidence migrate --input migration.json --apply
+planr evidence readiness --scope plan --id <plan-id>
+planr evidence run --input run.json
+planr evidence coverage --scope criterion --id <criterion-id>
+planr evidence explain --scope criterion --id <criterion-id>
 ```
 
-The command must be real evidence, not a planned future check, and migration never rewrites historical logs.
+Use `evidence migrate` only to opt a pre-Evidence plan into binding obligations. Use preview-digest-bound `evidence rebind` when an immutable adapter/configuration binding changed without changing the acceptance semantics. Neither route rewrites historical logs or trusted evidence.
 
 ## Prepare a safe bug report
 

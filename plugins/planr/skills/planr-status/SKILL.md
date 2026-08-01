@@ -34,9 +34,11 @@ When a loop or `/goal` run asks whether its stop condition holds, use the one-ca
 
 ```bash
 planr plan audit <plan-id> --json
+planr evidence readiness --scope plan --id <plan-id>
+planr evidence explain --scope plan --id <plan-id>
 ```
 
-It reads the stored contract, evaluates every clause with evidence (items settled, reviews complete, approvals clear, verification logged), and answers `holds: true/false` with the open items listed per clause. Report `contract holds` or `contract open` plus the exact unmet clauses straight from the audit output. Use `planr search "GOAL CONTRACT"` only to read the contract text itself.
+Audit answers `holds: true/false` from settled items, reviews, approvals, and canonical Evidence coverage. Readiness reports configuration/runtime blockers before execution; explain reports exact receipt applicability and gaps. Report `contract holds` or `contract open` plus the exact unmet clauses straight from these outputs. Use `planr search "GOAL CONTRACT"` only to read the contract text itself.
 
 ## Verdicts
 

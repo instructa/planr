@@ -301,6 +301,12 @@ pub fn mcp_tools() -> Vec<Value> {
             &["input"],
         ),
         tool(
+            "planr_evidence_rebind",
+            "Preview or apply an immutable versioned capability and obligation rebind",
+            json!({"input": prop("object", "planr.evidence.rebind.v1 payload with plan_id, manifest_id, obligations[], and preview_digest for apply"), "apply": prop("boolean", "Apply the rebind; omit or false for preview")}),
+            &["input"],
+        ),
+        tool(
             "planr_evidence_classifications",
             "Show canonical Evidence gap reasons and legacy/operator aliases",
             json!({}),
@@ -363,6 +369,12 @@ pub fn mcp_tools() -> Vec<Value> {
         tool(
             "planr_evidence_explain",
             "Explain Evidence coverage with policy, attempts, receipts, and repository snapshot context",
+            json!({"scope": prop("string", "obligation, criterion, item, or plan"), "id": prop("string", "Scope id")}),
+            &["scope", "id"],
+        ),
+        tool(
+            "planr_evidence_readiness",
+            "Check active Evidence obligations, payload schemas, registered capabilities, and runtime availability before goal work",
             json!({"scope": prop("string", "obligation, criterion, item, or plan"), "id": prop("string", "Scope id")}),
             &["scope", "id"],
         ),

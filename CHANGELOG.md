@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.10.0-alpha.2] - 2026-07-31
+
+### Fixed
+
+- Resolve active receipt and retry lineage before coverage aggregation so historical failures remain visible without poisoning a newer applicable pass.
+- Validate structured execution envelopes and every inner observation payload against their own repository schemas with typed diagnostics.
+- Bind trusted receipts to the immutable obligation configuration digest and exclude mutable Planr runtime outputs from source freshness while retaining plans, policies, adapters, and product files.
+- Fail readiness before execution when a repository adapter digest drifts or no capability matches the required observation type, payload schema, and runtime target.
+- Keep exhausted Stop gaps terminal until relevant proof state changes or an explicit resume reopens the bounded continuation window.
+
+### Added
+
+- Add executable Evidence readiness for CLI and MCP clients, plus immutable preview-and-apply rebinds for corrected capability contracts.
+- Add replayable command/backend, HTTP/API, and Chrome/CDP web examples that demonstrate readiness, execution, coverage, and audit behavior.
+
+### Changed
+
+- Make `latest_applicable_pass` the persisted retry aggregation default and retain `all_applicable_pass` as the explicit strict policy.
+- Route current Planr skills through readiness, configured Evidence execution, coverage, and rebind. Free-form verification logs remain narrative-only for binding Evidence.
+
 ## [1.10.0-alpha.1] - 2026-07-31
 
 ### Added
@@ -572,7 +592,8 @@ Initial Planr product release.
 - Tag-driven release pipeline with multi-target builds (darwin/linux, arm64/x86_64) and Homebrew tap automation.
 - Skill workflow documentation for Codex, Claude Code, Cursor, and MCP-only clients.
 
-[Unreleased]: https://github.com/instructa/planr/compare/v1.10.0-alpha.1...HEAD
+[Unreleased]: https://github.com/instructa/planr/compare/v1.10.0-alpha.2...HEAD
+[1.10.0-alpha.2]: https://github.com/instructa/planr/compare/v1.10.0-alpha.1...v1.10.0-alpha.2
 [1.10.0-alpha.1]: https://github.com/instructa/planr/compare/v1.9.0...v1.10.0-alpha.1
 [1.9.0]: https://github.com/instructa/planr/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/instructa/planr/compare/v1.7.3...v1.8.0

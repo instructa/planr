@@ -26,8 +26,11 @@ planr evidence coverage --scope criterion --id <criterion-id> --json
 planr evidence coverage --scope item --id <item-id> --json
 planr evidence coverage --scope plan --id <plan-id> --json
 planr evidence explain --scope plan --id <plan-id> --json
+planr evidence readiness --scope plan --id <plan-id> --json
 planr evidence migrate --input migration.json --json
 planr evidence migrate --input migration.json --apply --json
+planr evidence rebind --input rebind.json --json
+planr evidence rebind --input rebind.json --apply --json
 planr evidence classifications --json
 ```
 
@@ -42,6 +45,7 @@ The MCP tools call the same application services:
 - `planr_evidence_obligation_list`
 - `planr_evidence_obligation_show`
 - `planr_evidence_migrate`
+- `planr_evidence_rebind`
 - `planr_evidence_classifications`
 - `planr_evidence_capability_list`
 - `planr_evidence_capability_show`
@@ -53,6 +57,7 @@ The MCP tools call the same application services:
 - `planr_evidence_receipts`
 - `planr_evidence_coverage`
 - `planr_evidence_explain`
+- `planr_evidence_readiness`
 
 Use [Generated MCP schemas](/docs/reference/mcp-schemas-generated) for exact required fields and `additionalProperties` behavior.
 
@@ -77,6 +82,7 @@ Start `planr serve --port 7526`; the server binds `127.0.0.1`.
 | POST | `/v1/evidence/coverage` |
 | POST | `/v1/evidence/explain` |
 | POST | `/v1/evidence/migrate` |
+| POST | `/v1/evidence/rebind` |
 | GET | `/v1/evidence/classifications` |
 
 HTTP errors use the same Evidence envelope and map `bad_request` to 400, `not_found` to 404, `conflict` to 409, and `internal_error` to 500.
@@ -115,6 +121,77 @@ planr evidence migrate --input migration.json --apply --json
 ```
 
 Preview is the default and does not write obligations. Apply is idempotent: duplicate IDs, lineage collisions, cross-project containment, and changed immutable fields are reported instead of silently rewriting history. Migration does not rewrite plans, logs, reviews, artifacts, or legacy claims.
+
+## Readiness And Versioned Rebind
+
+Run readiness before a binding goal starts. It checks that every active observation has a registered JSON Schema, a capability matching its observation type, payload schema, and runtime target, a current repository adapter digest, and an available runtime instance without executing the product oracle:
+
+```bash
+planr evidence readiness --scope plan --id <plan-id> --json
+```
+
+If a repository fixes an adapter contract after obligations were bound, create new obligation IDs that `supersede` the active IDs. Preview computes the immutable capability/obligation transition and returns `preview.preview_digest`. Copy that digest into the input before apply:
+
+```json
+{
+  "schema_version": "planr.evidence.rebind.v1",
+  "plan_id": "pln-example",
+  "manifest_id": "verifier-project-v2",
+  "obligations": [{ "id": "pob-new", "supersedes": "pob-old", "...": "full ProofObligation" }],
+  "preview_digest": "sha256:..."
+}
+```
+
+```bash
+planr evidence rebind --input rebind.json --json
+planr evidence rebind --input rebind.json --apply --json
+```
+
+Apply is one transaction. It refuses criterion, target, fixture, freshness, assurance, or expected-observation drift. Those are product-scope changes and require plan/user authorization, not a rebind.
+
+Source freshness hashes product files plus repository-owned plans, policies, schemas, and adapters. Mutable Planr runtime outputs such as `planr.sqlite` and generated Evidence run, attempt, receipt, and coverage directories are excluded so recording a receipt cannot invalidate itself. Changing a policy, schema, adapter, or product file still changes the source binding.
+
+## Real Configurable Examples
+
+The executable examples live in [`apps/docs/scripts/generate-evidence-examples.mjs`](https://github.com/instructa/planr/blob/main/apps/docs/scripts/generate-evidence-examples.mjs) with the reusable policy/manifest builder in [`evidence-fixture-builder.mjs`](https://github.com/instructa/planr/blob/main/apps/docs/scripts/evidence-fixture-builder.mjs). They create fresh repositories and run the exact candidate binary.
+
+### Command or backend observation
+
+The queue-worker example registers `com.example.queue.depth.v2`, executes a repository-owned command, validates stdout against its registered payload schema, then evaluates coverage:
+
+```bash
+planr evidence readiness --scope criterion --id crit-pob-docs-queue-depth
+planr evidence run --input pob-docs-queue-depth.run.json
+planr evidence coverage --scope criterion --id crit-pob-docs-queue-depth
+planr evidence explain --scope criterion --id crit-pob-docs-queue-depth
+```
+
+Its method is a process adapter because the required fact is backend queue state. It does not claim browser behavior.
+
+### HTTP or API observation
+
+The API example starts a real loopback HTTP service and configures a curl process adapter for `com.example.http.status`. Curl is sufficient here because the obligation requires only the HTTP response payload:
+
+```json
+{
+  "type": "com.example.http.status",
+  "subject": "health endpoint",
+  "expected": { "status": "ok" },
+  "payload_schema": { "schema_ref": "schema://com.example.http.status" }
+}
+```
+
+The same curl capability is deliberately rejected by the separate `curl-http-not-browser` case when the obligation requires rendered browser facts.
+
+### Rendered web observation
+
+The full-stack example launches real Chrome and drives raw CDP. One structured execution returns six observations: rendered visibility, user interaction, navigation, network result, console errors, and persistence after reload. The outer execution contract uses `schema://planr.structured_observation_results.v1`; every inner `actual` value is separately validated against the JSON Schema registered for its observation type.
+
+```bash
+PLANR_BIN=target/debug/planr pnpm docs:evidence-examples:generate --live
+```
+
+CDP is only the configured method in this example. A native Browser host capture, Playwright, or another verified capability can satisfy the same obligations when it observes the same required facts and produces trusted provenance. A screenshot alone cannot prove reload persistence, and an HTTP response cannot prove rendered interaction.
 
 ## Classifications
 

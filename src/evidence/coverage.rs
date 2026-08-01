@@ -21,6 +21,7 @@ pub struct CoverageEvaluation {
     pub verdict: Value,
     pub receipt_digests: Vec<String>,
     pub waiver_digests: Vec<String>,
+    pub receipt_lineage: Value,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -62,6 +63,7 @@ struct ObligationRow {
     fixture_policy: Value,
     freshness_policy: Value,
     assurance_policy: Value,
+    retry_aggregation: RetryAggregationPolicy,
     policy_digest: String,
     config_digest: String,
     source_digest: Option<String>,
@@ -81,6 +83,7 @@ struct ReceiptCandidate {
     obligation_config_digest: String,
     obligation_source_digest: Option<String>,
     attempt_artifacts: Vec<ArtifactBinding>,
+    supersedes_receipt_id: Option<String>,
     value: Value,
     trusted_binding: TrustedReceiptBinding,
 }
@@ -111,6 +114,25 @@ struct ObservationCoverage {
     attempted_receipt_ids: BTreeSet<String>,
     waiver_id: Option<String>,
     gap_reasons: BTreeSet<&'static str>,
+    aggregation_policy: RetryAggregationPolicy,
+    superseded_receipt_ids: BTreeSet<String>,
+    diagnostic_receipt_ids: BTreeSet<String>,
+    rejected_receipt_ids: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RetryAggregationPolicy {
+    LatestApplicablePass,
+    AllApplicablePass,
+}
+
+impl RetryAggregationPolicy {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::LatestApplicablePass => "latest_applicable_pass",
+            Self::AllApplicablePass => "all_applicable_pass",
+        }
+    }
 }
 
 struct PersistCoverage<'a> {
@@ -427,6 +449,7 @@ fn evaluate_scope_coverage(
         ));
     }
     let mut observations = Vec::new();
+    let mut receipt_lineage = Vec::new();
     let mut validation = validation_scaffold(evaluated_at);
     let mut accepted_receipt_ids = BTreeSet::new();
     let mut accepted_receipt_digests = BTreeSet::new();
@@ -448,6 +471,7 @@ fn evaluate_scope_coverage(
                 validation: &mut validation,
             };
             let coverage = evaluate_observation(&mut context, requirement)?;
+            receipt_lineage.push(observation_lineage_value(&coverage));
             accepted_receipt_ids.extend(coverage.covering_receipt_ids.iter().cloned());
             for receipt in &receipts {
                 if coverage.covering_receipt_ids.contains(&receipt.id) {
@@ -503,6 +527,7 @@ fn evaluate_scope_coverage(
         verdict,
         receipt_digests,
         waiver_digests,
+        receipt_lineage: Value::Array(receipt_lineage),
     })
 }
 
@@ -518,6 +543,10 @@ fn evaluate_observation(
         attempted_receipt_ids: BTreeSet::new(),
         waiver_id: None,
         gap_reasons: BTreeSet::new(),
+        aggregation_policy: context.obligation.retry_aggregation,
+        superseded_receipt_ids: BTreeSet::new(),
+        diagnostic_receipt_ids: BTreeSet::new(),
+        rejected_receipt_ids: BTreeSet::new(),
     };
     let mut matching_waivers = Vec::new();
     for waiver in context.waivers {
@@ -533,6 +562,13 @@ fn evaluate_observation(
     let mut passed = Vec::new();
     let mut failed = Vec::new();
     let mut rejected_gaps: Vec<(String, BTreeSet<&'static str>)> = Vec::new();
+
+    let retry_superseded_ids = context
+        .receipts
+        .iter()
+        .filter(|receipt| receipt.obligation_id == context.obligation.id)
+        .filter_map(|receipt| receipt.supersedes_receipt_id.clone())
+        .collect::<BTreeSet<_>>();
 
     for receipt in context.receipts {
         let Some(observation) = receipt
@@ -551,6 +587,15 @@ fn evaluate_observation(
             continue;
         };
         coverage.attempted_receipt_ids.insert(receipt.id.clone());
+        let historical_obligation = receipt.obligation_id != context.obligation.id;
+        let superseded_retry = retry_superseded_ids.contains(&receipt.id);
+        let completion_relevant = !historical_obligation
+            && (coverage.aggregation_policy == RetryAggregationPolicy::AllApplicablePass
+                || !superseded_retry);
+        if historical_obligation || superseded_retry {
+            coverage.superseded_receipt_ids.insert(receipt.id.clone());
+            coverage.diagnostic_receipt_ids.insert(receipt.id.clone());
+        }
         let gaps = candidate_gaps(
             context.conn,
             context.obligation,
@@ -559,6 +604,10 @@ fn evaluate_observation(
             observation,
             context.repository_snapshot,
         )?;
+        if !completion_relevant {
+            rejected_gaps.push((receipt.id.clone(), gaps));
+            continue;
+        }
         if gaps.is_empty()
             && observation.get("outcome").and_then(Value::as_str)
                 == Some(AttemptStatus::Passed.as_str())
@@ -569,6 +618,7 @@ fn evaluate_observation(
                 .insert(requirement.id.as_str().to_string());
             passed.push(receipt.id.clone());
         } else {
+            coverage.rejected_receipt_ids.insert(receipt.id.clone());
             if observation.get("outcome").and_then(Value::as_str)
                 != Some(AttemptStatus::Passed.as_str())
             {
@@ -638,6 +688,27 @@ fn evaluate_observation(
         coverage.status = status_for_gap(primary_gap(&coverage));
     }
     Ok(coverage)
+}
+
+fn retry_aggregation_policy(value: &str) -> Result<RetryAggregationPolicy, EvidenceDomainError> {
+    match value {
+        "latest_applicable_pass" => Ok(RetryAggregationPolicy::LatestApplicablePass),
+        "all_applicable_pass" => Ok(RetryAggregationPolicy::AllApplicablePass),
+        other => Err(EvidenceDomainError::Digest(format!(
+            "unsupported proof obligation retry aggregation: {other}"
+        ))),
+    }
+}
+
+fn observation_lineage_value(coverage: &ObservationCoverage) -> Value {
+    json!({
+        "requirement_id": coverage.requirement_id,
+        "aggregation_policy": coverage.aggregation_policy.as_str(),
+        "covering_receipt_ids": coverage.covering_receipt_ids.iter().cloned().collect::<Vec<_>>(),
+        "superseded_receipt_ids": coverage.superseded_receipt_ids.iter().cloned().collect::<Vec<_>>(),
+        "diagnostic_receipt_ids": coverage.diagnostic_receipt_ids.iter().cloned().collect::<Vec<_>>(),
+        "rejected_receipt_ids": coverage.rejected_receipt_ids.iter().cloned().collect::<Vec<_>>(),
+    })
 }
 
 fn candidate_gaps(
@@ -822,8 +893,8 @@ fn load_obligation(
         .query_row(
             "SELECT id, project_id, plan_id, item_id, criterion_id, obligation_version,
                     observation_requirements_json, fixture_policy_json,
-                    freshness_policy_json, assurance_policy_json, policy_digest, config_digest,
-                    source_digest, supersedes_obligation_id
+                    freshness_policy_json, assurance_policy_json, retry_aggregation,
+                    policy_digest, config_digest, source_digest, supersedes_obligation_id
              FROM proof_obligations
              WHERE project_id = ?1 AND id = ?2",
             params![project_id, obligation_id],
@@ -841,8 +912,9 @@ fn load_obligation(
                     row.get::<_, String>(9)?,
                     row.get::<_, String>(10)?,
                     row.get::<_, String>(11)?,
-                    row.get::<_, Option<String>>(12)?,
+                    row.get::<_, String>(12)?,
                     row.get::<_, Option<String>>(13)?,
+                    row.get::<_, Option<String>>(14)?,
                 ))
             },
         )
@@ -860,7 +932,7 @@ fn load_obligation(
         item_id: row.3,
         criterion_id: row.4,
         obligation_version: row.5,
-        supersedes_obligation_id: row.13,
+        supersedes_obligation_id: row.14,
         observations,
         fixture_policy: serde_json::from_str(&row.7)
             .map_err(|err| EvidenceDomainError::Digest(err.to_string()))?,
@@ -868,9 +940,10 @@ fn load_obligation(
             .map_err(|err| EvidenceDomainError::Digest(err.to_string()))?,
         assurance_policy: serde_json::from_str(&row.9)
             .map_err(|err| EvidenceDomainError::Digest(err.to_string()))?,
-        policy_digest: row.10,
-        config_digest: row.11,
-        source_digest: row.12,
+        retry_aggregation: retry_aggregation_policy(&row.10)?,
+        policy_digest: row.11,
+        config_digest: row.12,
+        source_digest: row.13,
     })
 }
 
@@ -960,7 +1033,8 @@ fn load_receipts(
                 obligations.plan_id, obligations.item_id, obligations.criterion_id,
                 obligations.obligation_version, obligations.supersedes_obligation_id,
                 obligations.config_digest, obligations.source_digest,
-                receipts.trusted_binding_json, receipts.receipt_json
+                receipts.trusted_binding_json, receipts.receipt_json,
+                receipts.supersedes_receipt_id
          FROM evidence_receipts AS receipts
          JOIN proof_obligations AS obligations
            ON obligations.project_id = receipts.project_id
@@ -993,6 +1067,7 @@ fn load_receipts(
                 row.get::<_, Option<String>>(11)?,
                 row.get::<_, String>(12)?,
                 row.get::<_, String>(13)?,
+                row.get::<_, Option<String>>(14)?,
             ))
         })
         .map_err(|err| EvidenceDomainError::Digest(err.to_string()))?
@@ -1012,6 +1087,7 @@ fn load_receipts(
                 obligation_source_digest,
                 trusted_binding_json,
                 receipt_json,
+                supersedes_receipt_id,
             ) = row.map_err(|err| EvidenceDomainError::Digest(err.to_string()))?;
             let value: Value = serde_json::from_str(&receipt_json)
                 .map_err(|err| EvidenceDomainError::Digest(err.to_string()))?;
@@ -1031,6 +1107,7 @@ fn load_receipts(
                 obligation_config_digest,
                 obligation_source_digest,
                 attempt_artifacts,
+                supersedes_receipt_id,
                 value,
                 trusted_binding,
             })
@@ -1705,7 +1782,7 @@ fn suggested_next_action_for_status(status: &str) -> &'static str {
         "satisfied" | "waived" => "none",
         "stale" => "refresh stale evidence",
         "blocked" => "restore evidence capability",
-        "inconclusive" => "rerun flaky evidence",
+        "inconclusive" => "inspect exhausted or inconclusive verifier evidence",
         _ => "collect missing trusted evidence",
     }
 }
@@ -1735,7 +1812,7 @@ fn suggested_next_action(status: &CoverageStatus) -> &'static str {
         CoverageStatus::Satisfied | CoverageStatus::Waived => "none",
         CoverageStatus::Stale => "refresh stale evidence",
         CoverageStatus::Blocked => "restore evidence capability",
-        CoverageStatus::Inconclusive => "rerun flaky evidence",
+        CoverageStatus::Inconclusive => "inspect exhausted or inconclusive verifier evidence",
         CoverageStatus::Unsatisfied => "collect missing trusted evidence",
     }
 }
@@ -2273,6 +2350,128 @@ mod tests {
     }
 
     #[test]
+    fn superseded_obligation_failure_is_diagnostic_not_completion_relevant() {
+        let conn = conn();
+        seed_project(&conn);
+        seed_manifest(&conn, DIGEST_C);
+        seed_superseded_obligation_pair(&conn);
+        seed_receipt_with_outcome(
+            &conn,
+            ReceiptSeed {
+                receipt_id: "receipt-old-failed",
+                attempt_id: "attempt-old-failed",
+                obligation_id: "obl-old",
+                manifest_id: "manifest-coverage",
+                instance_id: "instance-coverage",
+                observation_id: "obs-one",
+                status_code: 500,
+                manifest_digest: DIGEST_C,
+                fixtures_used: false,
+                outcome: AttemptStatus::Failed,
+            },
+        );
+        seed_receipt_with_outcome(
+            &conn,
+            ReceiptSeed {
+                receipt_id: "receipt-current-passed",
+                attempt_id: "attempt-current-passed",
+                obligation_id: "obl-current",
+                manifest_id: "manifest-coverage",
+                instance_id: "instance-coverage",
+                observation_id: "obs-one",
+                status_code: 200,
+                manifest_digest: DIGEST_C,
+                fixtures_used: false,
+                outcome: AttemptStatus::Passed,
+            },
+        );
+
+        let evaluation = evaluate_obligation_coverage(
+            &conn,
+            "p-evidence",
+            "obl-current",
+            "2026-07-29T00:00:02Z",
+        )
+        .unwrap();
+
+        assert_eq!(evaluation.status, CoverageStatus::Satisfied);
+        assert_eq!(
+            evaluation.receipt_lineage[0]["aggregation_policy"],
+            "latest_applicable_pass"
+        );
+        assert_eq!(
+            evaluation.receipt_lineage[0]["covering_receipt_ids"],
+            json!(["receipt-current-passed"])
+        );
+        assert_eq!(
+            evaluation.receipt_lineage[0]["superseded_receipt_ids"],
+            json!(["receipt-old-failed"])
+        );
+        assert_eq!(
+            evaluation.receipt_lineage[0]["diagnostic_receipt_ids"],
+            json!(["receipt-old-failed"])
+        );
+        assert_coverage_schema_valid(&evaluation.verdict);
+    }
+
+    #[test]
+    fn explicit_all_applicable_pass_policy_keeps_mixed_active_results_inconclusive() {
+        let conn = conn();
+        seed_project(&conn);
+        seed_manifest(&conn, DIGEST_C);
+        seed_obligation_with_id(&conn, "obl-all-attempts", &["obs-one"]);
+        seed_receipt_with_outcome(
+            &conn,
+            ReceiptSeed {
+                receipt_id: "receipt-all-passed",
+                attempt_id: "attempt-all-passed",
+                obligation_id: "obl-all-attempts",
+                manifest_id: "manifest-coverage",
+                instance_id: "instance-coverage",
+                observation_id: "obs-one",
+                status_code: 200,
+                manifest_digest: DIGEST_C,
+                fixtures_used: false,
+                outcome: AttemptStatus::Passed,
+            },
+        );
+        seed_receipt_with_outcome(
+            &conn,
+            ReceiptSeed {
+                receipt_id: "receipt-all-failed",
+                attempt_id: "attempt-all-failed",
+                obligation_id: "obl-all-attempts",
+                manifest_id: "manifest-coverage",
+                instance_id: "instance-coverage",
+                observation_id: "obs-one",
+                status_code: 500,
+                manifest_digest: DIGEST_C,
+                fixtures_used: false,
+                outcome: AttemptStatus::Failed,
+            },
+        );
+
+        let evaluation = evaluate_obligation_coverage(
+            &conn,
+            "p-evidence",
+            "obl-all-attempts",
+            "2026-07-29T00:00:02Z",
+        )
+        .unwrap();
+
+        assert_eq!(evaluation.status, CoverageStatus::Inconclusive);
+        assert_eq!(
+            evaluation.receipt_lineage[0]["aggregation_policy"],
+            "all_applicable_pass"
+        );
+        assert_eq!(
+            evaluation.receipt_lineage[0]["rejected_receipt_ids"],
+            json!(["receipt-all-failed"])
+        );
+        assert_coverage_schema_valid(&evaluation.verdict);
+    }
+
+    #[test]
     fn waiver_requires_exact_source_binding_and_transition_history_keeps_stable_id() {
         let conn = conn();
         seed_project(&conn);
@@ -2363,6 +2562,10 @@ mod tests {
                 attempted_receipt_ids: BTreeSet::new(),
                 waiver_id: None,
                 gap_reasons: BTreeSet::from([gap]),
+                aggregation_policy: RetryAggregationPolicy::LatestApplicablePass,
+                superseded_receipt_ids: BTreeSet::new(),
+                diagnostic_receipt_ids: BTreeSet::new(),
+                rejected_receipt_ids: BTreeSet::new(),
             };
             assert_eq!(primary_gap(&coverage), gap);
             assert_coverage_schema_valid(&generated_verdict_for_coverage(coverage));
@@ -2376,6 +2579,10 @@ mod tests {
             attempted_receipt_ids: BTreeSet::new(),
             waiver_id: None,
             gap_reasons: BTreeSet::new(),
+            aggregation_policy: RetryAggregationPolicy::LatestApplicablePass,
+            superseded_receipt_ids: BTreeSet::new(),
+            diagnostic_receipt_ids: BTreeSet::new(),
+            rejected_receipt_ids: BTreeSet::new(),
         }));
         assert_coverage_schema_valid(&generated_verdict_for_coverage(ObservationCoverage {
             requirement_id: "obs-waived".to_string(),
@@ -2385,6 +2592,10 @@ mod tests {
             attempted_receipt_ids: BTreeSet::new(),
             waiver_id: Some("waiver-one".to_string()),
             gap_reasons: BTreeSet::from([GapReason::MissingObservation.as_str()]),
+            aggregation_policy: RetryAggregationPolicy::LatestApplicablePass,
+            superseded_receipt_ids: BTreeSet::new(),
+            diagnostic_receipt_ids: BTreeSet::new(),
+            rejected_receipt_ids: BTreeSet::new(),
         }));
     }
 
@@ -2830,14 +3041,22 @@ mod tests {
                 observation
             })
             .collect::<Vec<_>>();
+        let assurance_policy = if obligation_id == "obl-all-attempts" {
+            json!({
+                "accepted_provenance": ["planr_observed_execution"],
+                "retry_aggregation": "all_applicable_pass"
+            })
+        } else {
+            json!({"accepted_provenance": ["planr_observed_execution"]})
+        };
         conn.execute(
             "INSERT INTO proof_obligations(
               id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
               binding, observation_requirements_json, fixture_policy_json, freshness_policy_json,
-              assurance_policy_json, policy_digest, config_digest, source_digest, created_at
+              assurance_policy_json, retry_aggregation, policy_digest, config_digest, source_digest, created_at
             ) VALUES (
               ?1, 'p-evidence', 'pln-evidence', 'i-evidence', 'crit-coverage',
-              ?2, 'Coverage', 1, ?3, ?4, ?5, ?6, ?7, ?8, ?9, '2026-07-29T00:00:00Z'
+              ?2, 'Coverage', 1, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, '2026-07-29T00:00:00Z'
             )",
             params![
                 obligation_id,
@@ -2845,7 +3064,12 @@ mod tests {
                 Value::Array(observations).to_string(),
                 json!({"fixtures_allowed": false, "mocks_allowed": false}).to_string(),
                 json!({"source_revision": "0123456789abcdef", "invalidate_on": ["source_change", "target_change", "policy_change", "adapter_schema_change", "configuration_change"]}).to_string(),
-                json!({"accepted_provenance": ["planr_observed_execution"]}).to_string(),
+                assurance_policy.to_string(),
+                if obligation_id == "obl-all-attempts" {
+                    "all_applicable_pass"
+                } else {
+                    "latest_applicable_pass"
+                },
                 if obligation_id == "obl-policy-transition" {
                     DIGEST_D
                 } else {

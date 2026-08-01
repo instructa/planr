@@ -42,6 +42,7 @@ const HTTP_ROUTE_MANIFEST = [
   ['GET exact:/v1/evidence/obligations', '/v1/evidence/obligations'],
   ['POST exact:/v1/evidence/obligations', '/v1/evidence/obligations'],
   ['POST exact:/v1/evidence/migrate', '/v1/evidence/migrate'],
+  ['POST exact:/v1/evidence/rebind', '/v1/evidence/rebind'],
   ['GET exact:/v1/evidence/classifications', '/v1/evidence/classifications'],
   ['GET starts_with:/v1/evidence/obligations/', '/v1/evidence/obligations/{id}'],
   ['GET exact:/v1/evidence/capabilities', '/v1/evidence/capabilities'],

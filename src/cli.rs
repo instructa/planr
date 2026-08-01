@@ -56,8 +56,8 @@ pub(crate) enum Command {
     /// Evaluate stored run evidence: suite check, run, show, compare, gate,
     /// invalidate, and rescore through the shared eval services.
     Eval(EvalArgs),
-    /// Manage trusted Evidence policy, obligations, migrations, classifications,
-    /// capabilities, runs, imports, attempts, receipts, coverage, and explanations.
+    /// Manage trusted Evidence policy, obligations, readiness, migrations,
+    /// versioned rebinds, capabilities, runs, receipts, coverage, and explanations.
     Evidence(EvidenceArgs),
     Context(ContextArgs),
     Note(NoteArgs),
@@ -488,8 +488,9 @@ pub(crate) struct LogAddArgs {
     pub(crate) cmd: Vec<String>,
     #[arg(long)]
     pub(crate) tests: Vec<String>,
-    /// Log kind: completion (default), progress, or verification
-    /// (live-verify evidence; `plan audit` checks for it).
+    /// Log kind: completion (default), progress, or verification.
+    /// Verification logs are narrative claims; only frozen pre-Evidence plans
+    /// use them for compatibility. Binding Evidence requires trusted receipts.
     #[arg(long, default_value = "completion")]
     pub(crate) kind: String,
     #[arg(long)]
@@ -552,6 +553,8 @@ pub(crate) enum StopCommand {
     Activate(StopActivateArgs),
     /// Cancel/deactivate Stop enforcement for a plan in this explicit session/thread.
     Deactivate(StopDeactivateArgs),
+    /// Explicitly resume bounded Stop enforcement after a terminal unchanged gap.
+    Resume(StopActivateArgs),
 }
 
 #[derive(Args, Debug)]

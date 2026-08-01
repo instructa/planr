@@ -196,7 +196,9 @@ export function scenarioSpec(scenario, { apiUrl } = {}) {
 export async function writeEvidencePolicy(workspace, specs, { policyId = 'epolicy-docs-v1', unavailable = false } = {}) {
   const evidenceDir = path.join(workspace, '.planr', 'evidence');
   for (const spec of specs) {
-    await writeJson(path.join(evidenceDir, 'schemas', `${spec.observationType}.schema.json`), spec.schema);
+    for (const schema of spec.schemas ?? [spec.schema]) {
+      await writeJson(path.join(evidenceDir, 'schemas', `${schema.type}.schema.json`), schema);
+    }
     await writeJson(path.join(evidenceDir, 'adapters', `${spec.id}.manifest.json`), spec.manifest);
   }
 
@@ -326,6 +328,7 @@ export function obligation({
         target: spec.target,
         environment,
         runtime_target: spec.runtimeTarget,
+        payload_schema: { schema_ref: spec.payloadSchema.schema_ref },
       },
     ],
     fixture_policy: { fixtures_allowed: false, mocks_allowed: false, disclosure_required: true },
