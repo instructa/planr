@@ -491,11 +491,15 @@ fn validator_stdout_result(
     })?;
     let mut observed = actual.clone();
     if observed
-        .remove("schema_ref")
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .is_none()
-        || Value::Object(observed) != parsed
+        .get("schema_ref")
+        .is_some_and(|value| !value.is_string())
     {
+        return Err(EvidenceDomainError::InvalidTrustedBinding(
+            "adapter_predicate.trusted_validator_observation.actual",
+        ));
+    }
+    observed.remove("schema_ref");
+    if Value::Object(observed) != parsed {
         return Err(EvidenceDomainError::InvalidTrustedBinding(
             "adapter_predicate.trusted_validator_observation.actual",
         ));

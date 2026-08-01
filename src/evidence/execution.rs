@@ -281,10 +281,12 @@ pub(crate) fn run_configured_process_adapter(
                 &input.obligation,
                 &input.execution_contract,
                 &input.observation_payload_json_schemas,
-                &input.target,
-                &input.environment,
-                &input.fixture_disclosure,
-                input.repository_root,
+                StructuredObservationContext {
+                    target: &input.target,
+                    environment: &input.environment,
+                    fixture_disclosure: &input.fixture_disclosure,
+                    repository_root: input.repository_root,
+                },
                 &process_result.raw_result,
             ) {
                 Ok(results) => Some(results),
@@ -1257,14 +1259,18 @@ fn requires_structured_observation_results(execution: &ProcessExecutionContract)
     execution.payload_schema.schema_ref == "schema://planr.structured_observation_results.v1"
 }
 
+struct StructuredObservationContext<'a> {
+    target: &'a TargetBinding,
+    environment: &'a EnvironmentBinding,
+    fixture_disclosure: &'a FixtureDisclosure,
+    repository_root: &'a Path,
+}
+
 fn strict_structured_observation_results(
     obligation: &ProofObligation,
     execution: &ProcessExecutionContract,
     observation_payload_json_schemas: &BTreeMap<String, Value>,
-    target: &TargetBinding,
-    environment: &EnvironmentBinding,
-    fixture_disclosure: &FixtureDisclosure,
-    repository_root: &Path,
+    context: StructuredObservationContext<'_>,
     raw_result: &Value,
 ) -> Result<BTreeMap<String, Map<String, Value>>> {
     if raw_result
@@ -1285,11 +1291,11 @@ fn strict_structured_observation_results(
     {
         bail!("structured observation results schema_version mismatch");
     }
-    if parsed.get("target") != Some(&serde_json::to_value(target)?) {
+    if parsed.get("target") != Some(&serde_json::to_value(context.target)?) {
         bail!("structured observation results target does not match runtime target binding");
     }
-    ensure_structured_observed_target_matches(&parsed, target)?;
-    if parsed.get("environment") != Some(&serde_json::to_value(environment)?) {
+    ensure_structured_observed_target_matches(&parsed, context.target)?;
+    if parsed.get("environment") != Some(&serde_json::to_value(context.environment)?) {
         bail!(
             "structured observation results environment does not match runtime environment binding"
         );
@@ -1301,7 +1307,11 @@ fn strict_structured_observation_results(
     {
         bail!("structured observation results execution contract digest mismatch");
     }
-    ensure_structured_fixture_disclosure_matches(&parsed, repository_root, fixture_disclosure)?;
+    ensure_structured_fixture_disclosure_matches(
+        &parsed,
+        context.repository_root,
+        context.fixture_disclosure,
+    )?;
     let observations = parsed
         .get("observations")
         .and_then(Value::as_array)
@@ -3846,10 +3856,12 @@ mod tests {
                 &obligation,
                 &execution,
                 &BTreeMap::new(),
-                &target,
-                &environment,
-                &fixture_disclosure,
-                repository_root,
+                StructuredObservationContext {
+                    target: &target,
+                    environment: &environment,
+                    fixture_disclosure: &fixture_disclosure,
+                    repository_root,
+                },
                 &raw_result_for_stdout(&payload(valid_observations.clone()).to_string(), false),
             )
             .is_ok()
@@ -3960,10 +3972,12 @@ mod tests {
                     &obligation,
                     &execution,
                     &BTreeMap::new(),
-                    &target,
-                    &environment,
-                    &fixture_disclosure,
-                    repository_root,
+                    StructuredObservationContext {
+                        target: &target,
+                        environment: &environment,
+                        fixture_disclosure: &fixture_disclosure,
+                        repository_root,
+                    },
                     &raw_result_for_stdout(&stdout, false),
                 )
                 .is_err(),
@@ -3975,10 +3989,12 @@ mod tests {
                 &obligation,
                 &execution,
                 &BTreeMap::new(),
-                &target,
-                &environment,
-                &fixture_disclosure,
-                repository_root,
+                StructuredObservationContext {
+                    target: &target,
+                    environment: &environment,
+                    fixture_disclosure: &fixture_disclosure,
+                    repository_root,
+                },
                 &raw_result_for_stdout(&payload(valid_observations).to_string(), true),
             )
             .unwrap_err()
@@ -4056,10 +4072,12 @@ mod tests {
             &obligation,
             &execution,
             &schemas,
-            &target,
-            &environment,
-            &fixture_disclosure,
-            Path::new("."),
+            StructuredObservationContext {
+                target: &target,
+                environment: &environment,
+                fixture_disclosure: &fixture_disclosure,
+                repository_root: Path::new("."),
+            },
             &raw_result_for_stdout(&payload(json!(true)).to_string(), false),
         )
         .unwrap();
@@ -4069,10 +4087,12 @@ mod tests {
             &obligation,
             &execution,
             &schemas,
-            &target,
-            &environment,
-            &fixture_disclosure,
-            Path::new("."),
+            StructuredObservationContext {
+                target: &target,
+                environment: &environment,
+                fixture_disclosure: &fixture_disclosure,
+                repository_root: Path::new("."),
+            },
             &raw_result_for_stdout(&payload(json!("yes")).to_string(), false),
         )
         .unwrap_err()
