@@ -56,6 +56,16 @@ struct HermeticReuseBinding {
     toolchain_lock_digest: String,
 }
 
+struct HermeticReuseInput<'a> {
+    obligation: &'a ProofObligation,
+    instance: &'a VerificationCapabilityInstance,
+    execution_contract: &'a ProcessExecutionContract,
+    target: &'a TargetBinding,
+    environment: &'a EnvironmentBinding,
+    fixture_disclosure: &'a FixtureDisclosure,
+    env: &'a BTreeMap<String, String>,
+}
+
 fn is_hermetic_reuse_candidate(
     manifest: &VerificationCapabilityManifest,
     target: &TargetBinding,
@@ -1370,13 +1380,7 @@ impl App {
 
     fn hermetic_reuse_binding(
         &self,
-        obligation: &ProofObligation,
-        instance: &VerificationCapabilityInstance,
-        execution_contract: &ProcessExecutionContract,
-        target: &TargetBinding,
-        environment: &EnvironmentBinding,
-        fixture_disclosure: &FixtureDisclosure,
-        env: &BTreeMap<String, String>,
+        input: HermeticReuseInput<'_>,
     ) -> Result<Option<HermeticReuseBinding>> {
         if std::env::var_os("PLANR_TEST_EVIDENCE_PRE_COMMIT_MUTATE_SOURCE_PATH").is_some() {
             return Ok(None);
@@ -1388,18 +1392,24 @@ impl App {
                ON manifests.id = instances.manifest_id
               AND manifests.version = instances.manifest_version
              WHERE instances.id = ?1",
-            params![instance.id.as_str()],
+            params![input.instance.id.as_str()],
             |row| row.get(0),
         )?;
         let manifest: VerificationCapabilityManifest = serde_json::from_str(&manifest_json)?;
         let manifest_value = serde_json::to_value(&manifest)?;
-        if !is_hermetic_reuse_candidate(&manifest, target, fixture_disclosure, env)? {
+        if !is_hermetic_reuse_candidate(
+            &manifest,
+            input.target,
+            input.fixture_disclosure,
+            input.env,
+        )? {
             return Ok(None);
         }
         let snapshot = capture_repository_snapshot(&self.root)
             .map_err(|error| anyhow!("capturing hermetic reuse source: {error}"))?;
-        let execution_contract_digest =
-            crate::canonical_json::sha256_json_digest(&serde_json::to_value(execution_contract)?)?;
+        let execution_contract_digest = crate::canonical_json::sha256_json_digest(
+            &serde_json::to_value(input.execution_contract)?,
+        )?;
         let toolchain_lock_digest = self.toolchain_lock_digest()?;
         let policy_digest = self
             .evidence_policy_document()?
@@ -1407,15 +1417,15 @@ impl App {
             .digest;
         let key = crate::canonical_json::sha256_json_digest(&json!({
             "schema_version": "planr.evidence.hermetic-reuse-key.v1",
-            "obligation": obligation,
+            "obligation": input.obligation,
             "execution_contract_digest": execution_contract_digest,
             "source_tree_digest": snapshot.source.tree_digest,
             "toolchain_lock_digest": toolchain_lock_digest,
             "policy_digest": policy_digest,
             "capability_manifest": manifest_value,
-            "capability_instance": instance,
-            "target": target,
-            "environment": environment,
+            "capability_instance": input.instance,
+            "target": input.target,
+            "environment": input.environment,
         }))?;
         Ok(Some(HermeticReuseBinding {
             key,
@@ -1660,15 +1670,15 @@ impl App {
             .and_then(Value::as_u64)
             .unwrap_or(3) as u32;
         let hermetic_reuse = if retry_of.is_none() && attempt_index == 0 {
-            self.hermetic_reuse_binding(
-                &obligation,
-                &instance,
-                &execution_contract,
-                &target,
-                &environment,
-                &fixture_disclosure,
-                &env,
-            )?
+            self.hermetic_reuse_binding(HermeticReuseInput {
+                obligation: &obligation,
+                instance: &instance,
+                execution_contract: &execution_contract,
+                target: &target,
+                environment: &environment,
+                fixture_disclosure: &fixture_disclosure,
+                env: &env,
+            })?
         } else {
             None
         };
