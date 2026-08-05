@@ -4,7 +4,7 @@ This is the canonical inventory that maps shipped public surfaces to repository 
 
 ## Published route inventory
 
-The site currently owns 66 MDX routes. Next.js also emits the landing page and framework support routes during the production build.
+The site currently owns 67 MDX routes. Next.js also emits the landing page and framework support routes during the production build.
 
 | Section | Published routes |
 | --- | --- |
@@ -14,7 +14,7 @@ The site currently owns 66 MDX routes. Next.js also emits the landing page and f
 | Integrations | `/docs/integrations`, `/docs/integrations/codex`, `/docs/integrations/claude-code`, `/docs/integrations/cursor`, `/docs/integrations/grok-build`, `/docs/integrations/pi`, `/docs/integrations/generic-mcp`, `/docs/integrations/cli-only` |
 | Plugins | `/docs/plugins`, `/docs/plugins/switchloom` |
 | Concepts | `/docs/concepts`, `/docs/concepts/local-first-model`, `/docs/concepts/plans-and-map`, `/docs/concepts/graph-and-readiness`, `/docs/concepts/picks-and-leases`, `/docs/concepts/evidence-and-context`, `/docs/concepts/evidence-trust-model`, `/docs/concepts/reviews-and-approvals`, `/docs/concepts/recovery-packages-and-closure` |
-| Guides | `/docs/guides`, `/docs/guides/daily-worker-loop`, `/docs/guides/parallel-coordination`, `/docs/guides/handoff-and-resume`, `/docs/guides/review-and-fix-loops`, `/docs/guides/recover-interrupted-work`, `/docs/guides/packages-and-reuse`, `/docs/guides/evidence-scenarios`, `/docs/guides/recipes` |
+| Guides | `/docs/guides`, `/docs/guides/daily-worker-loop`, `/docs/guides/feature-run-work-packets`, `/docs/guides/parallel-coordination`, `/docs/guides/handoff-and-resume`, `/docs/guides/review-and-fix-loops`, `/docs/guides/recover-interrupted-work`, `/docs/guides/packages-and-reuse`, `/docs/guides/evidence-scenarios`, `/docs/guides/recipes` |
 | Reference | `/docs/reference`, `/docs/reference/cli`, `/docs/reference/cli-generated`, `/docs/reference/mcp`, `/docs/reference/mcp-schemas-generated`, `/docs/reference/http-api`, `/docs/reference/evidence`, `/docs/reference/configuration-and-storage`, `/docs/reference/data-and-status`, `/docs/reference/outputs-and-errors`, `/docs/reference/support-matrix`, `/docs/reference/maintenance` |
 | Contributing | `/docs/contributing`, `/docs/contributing/repository-setup`, `/docs/contributing/architecture`, `/docs/contributing/docs-authoring`, `/docs/contributing/testing`, `/docs/contributing/security-and-privacy` |
 | Operations | `/docs/operations`, `/docs/operations/release`, `/docs/operations/versioning-and-migrations`, `/docs/operations/docs-deployment`, `/docs/operations/health-and-diagnostics`, `/docs/operations/rollback`, `/docs/operations/documentation-governance` |
@@ -35,7 +35,7 @@ The site currently owns 66 MDX routes. Next.js also emits the landing page and f
 | Binding Evidence trust model | `src/evidence/`, `src/app/evidence.rs`, `docs/contracts/EVIDENCE_CONTRACT_V1.md` | `/docs/concepts/evidence-trust-model`, `/docs/reference/evidence`, `/docs/guides/evidence-scenarios` |
 | Reviews, approvals, fix chains | `src/app/review.rs`, `src/app/flow.rs`, `src/app/application.rs` | `/docs/concepts/reviews-and-approvals`, `/docs/guides/review-and-fix-loops` |
 | Recovery, conditions, packages, closure | `src/app/recovery.rs`, `src/app/packages.rs`, `src/app/flow.rs` | `/docs/concepts/recovery-packages-and-closure`, `/docs/guides/recover-interrupted-work`, `/docs/guides/packages-and-reuse` |
-| Worker loop, handoff, recipes | application flow and lease owners | `/docs/guides/daily-worker-loop`, `/docs/guides/handoff-and-resume`, `/docs/guides/recipes` |
+| Worker loop, typed FeatureRun packets, handoff, recipes | FeatureRun application flow and lease owners | `/docs/guides/daily-worker-loop`, `/docs/guides/feature-run-work-packets`, `/docs/guides/handoff-and-resume`, `/docs/guides/recipes` |
 | Copy-paste Evidence scenarios | `apps/docs/scripts/generate-evidence-examples.mjs`, `tests/fixtures/evidence/docs/` | `/docs/guides/evidence-scenarios` |
 
 ## CLI, MCP, HTTP, and data contracts
@@ -91,7 +91,7 @@ The executable and schema sources decide exact inventory. Editorial pages explai
 
 ## Audit completion checklist
 
-- [x] All 66 current MDX routes are explicitly inventoried.
+- [x] All 67 current MDX routes are explicitly inventoried.
 - [x] Every public product, CLI, MCP, HTTP, data, client, contributor, and operations surface has a current target and canonical source owner.
 - [x] Generated CLI and MCP inventories are separated from editorial guidance and mechanically checked.
 - [x] Retired aliases are isolated in `apps/docs/redirects.mjs` and resolve to a current route.
