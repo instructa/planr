@@ -880,7 +880,7 @@ fn eval_contract_records_typed_required_fields_for_evidence_objects() {
         "`matched_effective_treatment` object",
         "`efficiency_summary` object",
         "`target_kind` string enum: `run | comparison`",
-        "`planr_attachment_kind` string enum: `log | review | artifact`",
+        "`planr_attachment_kind` string enum: `log | artifact`",
         "`closure_authority` boolean, always `false` in V1",
     ] {
         assert!(

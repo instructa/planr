@@ -5,7 +5,7 @@ use crate::model::LinkKind;
 use crate::storage::row_to_item;
 use crate::util::{collect_rows, item_id, print_json, short_id, worker_id};
 use anyhow::{Result, bail};
-use rusqlite::{OptionalExtension, params};
+use rusqlite::params;
 use serde_json::{Value, json};
 use std::env;
 use std::io::{IsTerminal, Write, stdout};
@@ -15,7 +15,9 @@ use std::time::Duration;
 mod context;
 pub(crate) mod eval;
 mod evidence;
-mod item;
+#[allow(dead_code)]
+pub(crate) mod execution_run;
+pub(crate) mod item;
 mod link;
 mod plan;
 mod project;
@@ -311,11 +313,6 @@ impl App {
                        SELECT 1 FROM items c WHERE c.parent_item_id = items.id
                        AND c.status NOT IN ('closed','closed_partial','cancelled')
                      )
-                     AND NOT EXISTS (
-                       SELECT 1 FROM links l JOIN items r ON r.id = l.from_item
-                       WHERE l.to_item = items.id AND l.kind = 'reviews'
-                       AND r.status NOT IN ('closed','closed_partial','cancelled')
-                     )
                      AND COALESCE(approval_status, '') NOT IN ('requested','denied')
                      RETURNING id, status",
                 )?;
@@ -369,16 +366,6 @@ impl App {
         if open_children > 0 {
             bail!(
                 "invalid_transition: cannot close item with open child items; close or cancel them first (`planr trace item {item_id} --json` lists them)"
-            );
-        }
-        let open_review: Option<String> = self.conn.query_row(
-            "SELECT r.id FROM links l JOIN items r ON r.id = l.from_item WHERE l.to_item = ?1 AND l.kind = 'reviews' AND r.status NOT IN ('closed','closed_partial','cancelled') LIMIT 1",
-            params![item_id],
-            |row| row.get(0),
-        ).optional()?;
-        if let Some(review_id) = open_review {
-            bail!(
-                "invalid_transition: cannot close item with open reviews; close the review first: `planr review close {review_id} --verdict complete --close-target`"
             );
         }
         let approval_status: Option<String> = self.conn.query_row(
@@ -593,8 +580,23 @@ impl App {
         // Same explicit-zero status vocabulary as the `remaining` snapshot in
         // pick/done/close responses: one counts shape across all surfaces.
         let progress = self.progress_value_scoped(plan_path.as_deref())?;
+        let item_values = items
+            .iter()
+            .map(|item| {
+                let mut value = json!(item);
+                if let Ok(metadata) = self.item_metadata(&item.id) {
+                    if metadata
+                        .as_object()
+                        .is_some_and(|object| !object.is_empty())
+                    {
+                        value["metadata"] = metadata;
+                    }
+                }
+                value
+            })
+            .collect::<Vec<_>>();
         Ok(json!({
-            "items": items,
+            "items": item_values,
             "links": links,
             "counts": progress["counts"],
             "settled": progress["settled"],
@@ -612,8 +614,14 @@ impl App {
         let mut picked = Vec::new();
         let mut in_review = Vec::new();
         let mut blocked = Vec::new();
-        let mut reviews = Vec::new();
+        let execution_states = self.canonical_execution_states_for_project_value()?;
         for item in items {
+            if matches!(
+                item.work_type.as_str(),
+                "review" | "fix" | "follow-up-review"
+            ) {
+                continue;
+            }
             match item.status.as_str() {
                 "ready" => ready.push(json!({
                     "item": item,
@@ -627,7 +635,6 @@ impl App {
                 })),
                 "in_review" => in_review.push(json!({
                     "item": item,
-                    "open_reviews": self.open_review_items(&item.id)?,
                     "proof": self.proof_status_for_item(&item.id)?,
                 })),
                 "pending" | "blocked" => blocked.push(json!({
@@ -636,9 +643,7 @@ impl App {
                     "proof": self.proof_status_for_item(&item.id)?,
                 })),
                 _ => {
-                    if item.work_type == "review" && item.status != "closed" {
-                        reviews.push(item);
-                    }
+                    let _ = item;
                 }
             }
         }
@@ -650,7 +655,7 @@ impl App {
             "picked": picked,
             "in_review": in_review,
             "blocked": blocked,
-            "reviews": reviews,
+            "execution_states": execution_states,
             "links": links,
             "analysis": self.graph_status_value()?,
         }))
@@ -660,7 +665,6 @@ impl App {
         let item = self.get_item(item_id)?;
         let blockers = self.blocking_items_for(item_id)?;
         let child_blockers = self.open_child_items(item_id)?;
-        let review_blockers = self.open_review_items(item_id)?;
         let approval = self.item_approval(item_id)?;
         let proof = self.proof_status_for_item(item_id)?;
         let recovery = self.item_recovery(item_id)?;
@@ -677,7 +681,6 @@ impl App {
         let can_close = !invalid_status
             && blockers.is_empty()
             && child_blockers.is_empty()
-            && review_blockers.is_empty()
             && !approval_blocks_close
             && !(proof["active_binding"].as_bool() == Some(true)
                 && proof["pass"].as_bool() != Some(true));
@@ -700,7 +703,6 @@ impl App {
                 .is_some(),
             "blockers": blockers,
             "open_children": child_blockers,
-            "open_reviews": review_blockers,
             "would_unlock": close_effect.would_unlock,
             "would_remain_blocked": close_effect.would_remain_blocked,
         }))
@@ -774,17 +776,6 @@ impl App {
         let mut stmt = self.conn.prepare(
             "SELECT id, project_id, parent_item_id, title, description, status, work_type, priority, worker_id, plan_path
              FROM items WHERE parent_item_id = ?1 AND status NOT IN ('closed','closed_partial','cancelled') ORDER BY created_at",
-        )?;
-        let rows = stmt.query_map(params![item_id], row_to_item)?;
-        collect_rows(rows)
-    }
-
-    pub(crate) fn open_review_items(&self, item_id: &str) -> Result<Vec<Item>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT r.id, r.project_id, r.parent_item_id, r.title, r.description, r.status, r.work_type, r.priority, r.worker_id, r.plan_path
-             FROM links l JOIN items r ON r.id = l.from_item
-             WHERE l.to_item = ?1 AND l.kind = 'reviews' AND r.status NOT IN ('closed','closed_partial','cancelled')
-             ORDER BY r.created_at",
         )?;
         let rows = stmt.query_map(params![item_id], row_to_item)?;
         collect_rows(rows)

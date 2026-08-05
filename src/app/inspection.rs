@@ -321,7 +321,7 @@ impl App {
             "eval_evidence_refs": if include_logs { json!(self.eval_evidence_ref_values()?) } else { Value::Null },
             "contexts": self.list_contexts(None)?,
             "artifacts": self.list_artifacts(None)?,
-            "review_artifacts": json!(self.export_review_artifacts()?),
+            "execution_states": self.canonical_execution_states_for_project_value()?,
             // Raw file snapshot: routing declarations travel with the
             // package; a malformed registry exports as-is and `agents
             // check` diagnoses it on the other side.
@@ -361,21 +361,6 @@ impl App {
             }
         }
         Ok(files)
-    }
-
-    fn export_review_artifacts(&self) -> Result<Vec<Value>> {
-        Ok(self
-            .list_artifacts(None)?
-            .into_iter()
-            .filter(|artifact| artifact.get("kind").and_then(Value::as_str) == Some("review"))
-            .map(|artifact| {
-                let path = artifact.get("path").and_then(Value::as_str);
-                json!({
-                    "artifact": artifact,
-                    "content": path.and_then(|path| fs::read_to_string(path).ok()),
-                })
-            })
-            .collect())
     }
 
     pub(crate) fn record_run(

@@ -28,8 +28,8 @@ impl App {
             .map_err(Into::into)
     }
 
-    /// `exclude` keeps a worker from picking an item it must not own, e.g.
-    /// the review it just requested via `done --review --next`. `work_type`
+    /// `exclude` keeps a worker from picking an item it must not own.
+    /// ReviewGate work is leased outside the map-item query. `work_type`
     /// and `plan_path` narrow the lease for role-aware and plan-scoped picks.
     /// Read-only counterpart of `pick_next_ready_item_filtered`: the same
     /// candidate selection, no lease, no heartbeat, no event.
@@ -39,6 +39,7 @@ impl App {
     ) -> Result<Option<String>> {
         let project = self.default_project()?;
         self.promote_ready()?;
+        let worker = worker_id();
         Ok(self
             .conn
             .query_row(
@@ -47,17 +48,27 @@ impl App {
                  AND id IS NOT ?2
                  AND (?3 IS NULL OR work_type = ?3)
                  AND (?4 IS NULL OR plan_path = ?4)
+                 AND (worker_id IS NULL OR worker_id = ?5)
+                 AND NOT EXISTS (
+                   SELECT 1 FROM plans p
+                   JOIN feature_runs run ON run.plan_id = p.id
+                   JOIN review_gates gate ON gate.run_id = run.id
+                   WHERE p.path = items.plan_path
+                   AND run.status IN ('active','held')
+                   AND gate.status IN ('pending','leased','changes_requested')
+                 )
                  AND NOT EXISTS (
                    SELECT 1 FROM items c WHERE c.parent_item_id = items.id
                    AND c.status NOT IN ('cancelled')
                  )
-                 ORDER BY priority DESC, created_at ASC
+                 ORDER BY CASE WHEN worker_id = ?5 THEN 0 ELSE 1 END, priority DESC, created_at ASC
                  LIMIT 1",
                 params![
                     project.id,
                     filter.exclude,
                     filter.work_type,
-                    filter.plan_path
+                    filter.plan_path,
+                    worker
                 ],
                 |row| row.get::<_, String>(0),
             )
@@ -88,11 +99,20 @@ impl App {
                      AND id IS NOT ?4
                      AND (?5 IS NULL OR work_type = ?5)
                      AND (?6 IS NULL OR plan_path = ?6)
+                     AND (worker_id IS NULL OR worker_id = ?1)
+                     AND NOT EXISTS (
+                       SELECT 1 FROM plans p
+                       JOIN feature_runs run ON run.plan_id = p.id
+                       JOIN review_gates gate ON gate.run_id = run.id
+                       WHERE p.path = items.plan_path
+                       AND run.status IN ('active','held')
+                       AND gate.status IN ('pending','leased','changes_requested')
+                     )
                      AND NOT EXISTS (
                        SELECT 1 FROM items c WHERE c.parent_item_id = items.id
                        AND c.status NOT IN ('cancelled')
                      )
-                     ORDER BY priority DESC, created_at ASC
+                     ORDER BY CASE WHEN worker_id = ?1 THEN 0 ELSE 1 END, priority DESC, created_at ASC
                      LIMIT 1
                  )
                  AND status = 'ready'
@@ -135,9 +155,14 @@ impl App {
                  picked_at = datetime('now'),
                  last_heartbeat_at = datetime('now'),
                  updated_at = datetime('now')
-             WHERE id = ?3 AND status = 'ready'",
+             WHERE id = ?3
+             AND status = 'ready'
+             AND (worker_id IS NULL OR worker_id = ?1)",
             params![worker, token, item_id],
         )?;
+        if adopted == 0 {
+            self.ensure_worker_owns_or_unowned(item_id)?;
+        }
         if adopted > 0 {
             self.record_event(
                 "item_adopted",

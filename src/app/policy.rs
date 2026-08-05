@@ -8,7 +8,9 @@ use crate::execution_policy::{
     ActiveExecution, ConcurrencySnapshot, ExecutionAdmission, ExecutionAdmissionRequest,
     IsolationMode, admit_execution,
 };
-use crate::usage_policy::{POLICY_RELATIVE_PATH, PolicyLoad, load_policy};
+use crate::usage_policy::{
+    POLICY_RELATIVE_PATH, PolicyLoad, apply_policy_upgrade, load_policy, preview_policy_upgrade,
+};
 use crate::util::worker_id;
 use anyhow::{Result, bail};
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
@@ -26,6 +28,20 @@ impl App {
             PolicyCommand::Check => {
                 let (value, human) = self.policy_check_value()?;
                 self.emit(value, human)
+            }
+            PolicyCommand::Upgrade(args) => {
+                let upgrade = if args.apply {
+                    apply_policy_upgrade(&self.root)?
+                } else {
+                    preview_policy_upgrade(&self.root)?.ok_or_else(|| {
+                        anyhow::anyhow!("no supported legacy policy upgrade is available")
+                    })?
+                };
+                let mode = if args.apply { "apply" } else { "preview" };
+                self.emit(
+                    json!({"mode": mode, "upgrade": upgrade}),
+                    format!("{mode} usage policy upgrade"),
+                )
             }
             PolicyCommand::Admit(args) => {
                 let path = Path::new(&args.id);
@@ -166,6 +182,13 @@ impl App {
     }
 
     pub(crate) fn policy_check_value(&self) -> Result<(Value, String)> {
+        if let Some(upgrade) = preview_policy_upgrade(&self.root)? {
+            bail!(
+                "policy_upgrade_required:{} -> {}; run `planr policy upgrade` to preview",
+                upgrade.from_shape,
+                upgrade.to_shape
+            );
+        }
         match load_policy(&self.root) {
             PolicyLoad::Missing => Ok((
                 json!({

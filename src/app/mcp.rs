@@ -219,6 +219,9 @@ impl App {
             }
             "planr_plan_check" => Ok(mcp_json(self.plan_check_value(required_arg(&args, "id")?)?)),
             "planr_plan_audit" => Ok(mcp_json(self.plan_audit_value(required_arg(&args, "id")?)?)),
+            "planr_plan_final_review" => Ok(mcp_json(
+                self.ensure_plan_final_product_review_value(required_arg(&args, "id")?)?,
+            )),
             "planr_plan_link" => {
                 let source_id = required_arg(&args, "source_id")?;
                 let item_id = required_arg(&args, "item_id")?;
@@ -693,12 +696,6 @@ impl App {
                     self.ingest_review_feedback(item_id, feedback, "mcp")?,
                 ))
             }
-            "planr_review_artifact" => {
-                let review_id = required_arg(&args, "review_item_id")?;
-                Ok(mcp_json(json!({"artifact": self.write_review_artifact(
-                    crate::app::ReviewArtifactInput::bare(review_id),
-                )?})))
-            }
             "planr_review_evidence" => {
                 let item_id = required_arg(&args, "item_id")?;
                 let pr_context = args
@@ -734,8 +731,8 @@ impl App {
                     route_observation: route_observation.as_ref(),
                 })?})))
             }
-            "planr_review_close" => {
-                let review_id = required_arg(&args, "review_item_id")?;
+            "planr_review_gate_close" => {
+                let review_id = required_arg(&args, "review_gate_id")?;
                 let verdict = args
                     .get("verdict")
                     .and_then(Value::as_str)
@@ -751,22 +748,55 @@ impl App {
                             .collect::<Vec<_>>()
                     })
                     .unwrap_or_default();
-                Ok(mcp_json(
-                    self.close_review_item(
-                        review_id,
-                        verdict,
-                        findings,
-                        "mcp",
-                        args.get("reviewer").and_then(Value::as_str),
-                        args.get("close_target")
-                            .and_then(Value::as_bool)
-                            .unwrap_or(false),
-                    )?,
-                ))
+                Ok(mcp_json(self.complete_review_gate_surface_value(
+                    review_id,
+                    verdict,
+                    findings,
+                    "mcp",
+                    args.get("reviewer").and_then(Value::as_str),
+                )?))
+            }
+            "planr_review_findings_resolve" => {
+                let gate_id = required_arg(&args, "review_gate_id")?;
+                let finding_ids = args
+                    .get("finding_ids")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .collect::<Vec<_>>();
+                Ok(mcp_json(self.resolve_review_gate_findings_value(
+                    gate_id,
+                    &finding_ids,
+                )?))
             }
             "planr_close_item" => {
                 let item_id = required_arg(&args, "item_id")?;
-                let mut value = self.close_item_value(item_id, "closed from mcp")?;
+                let files = string_array_arg(&args, "files");
+                let commands = string_array_arg(&args, "commands");
+                let tests = string_array_arg(&args, "tests");
+                let mut value =
+                    self.settle_surface_completion_value(super::flow::SurfaceCompletionInput {
+                        item_id,
+                        summary: args
+                            .get("summary")
+                            .and_then(Value::as_str)
+                            .unwrap_or("closed from mcp"),
+                        files: &files,
+                        commands: &commands,
+                        tests: &tests,
+                        source: "mcp",
+                        profile: args.get("profile").and_then(Value::as_str),
+                        escalation_reason: args.get("escalation_reason").and_then(Value::as_str),
+                        escalation_reference: args
+                            .get("escalation_reference")
+                            .and_then(Value::as_str),
+                        escalation_explanation: args
+                            .get("escalation_explanation")
+                            .and_then(Value::as_str),
+                        write_log: true,
+                    })?;
                 value["next"] = json!("planr pick");
                 Ok(mcp_json(value))
             }
@@ -821,16 +851,16 @@ impl App {
                 "Create or refine a Planr product or build plan. Keep scope, ownership, verification, and acceptance criteria explicit."
             }
             "planr-work" => {
-                "Use Planr as: inspect map, pick one ready item, implement, log evidence, request or close review when appropriate."
+                "Use Planr as: inspect the map, pick one ready outcome, implement, log evidence, and settle it through the active FeatureRun."
             }
             "planr-review" => {
-                "Review item evidence against plan, changed files, commands, and acceptance criteria before closure."
+                "Review the leased ReviewGate against plan scope, changed files, commands, acceptance criteria, and exact-source evidence before recording a verdict."
             }
             "planr-map" => {
                 "Summarize ready, blocked, picked, review, and closed items. Identify critical path and pressure points."
             }
             "planr-summary" => {
-                "Produce a concise status summary grounded in Planr map, logs, contexts, and reviews."
+                "Produce a concise status summary grounded in Planr map, plan audit, logs, contexts, required independent material reviews, and the final product review."
             }
             _ => "Use Planr map, plans, logs, and reviews as the source of truth.",
         };

@@ -1,9 +1,9 @@
 use anyhow::Result;
 use rusqlite::{Connection, params};
 
-use super::{eval_schema, evidence_schema, stop_schema};
+use super::{eval_schema, evidence_schema, execution_run_schema, stop_schema};
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 pub fn ensure_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(
@@ -160,6 +160,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
     )?;
     eval_schema::ensure_eval_schema(conn)?;
     evidence_schema::ensure_evidence_schema(conn)?;
+    execution_run_schema::ensure_execution_run_schema(conn)?;
     stop_schema::ensure_stop_schema(conn)?;
     ensure_column(conn, "items", "last_heartbeat_at", "TEXT")?;
     ensure_column(conn, "items", "progress_percent", "INTEGER")?;

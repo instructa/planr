@@ -4,7 +4,7 @@ use crate::storage::row_to_item;
 use crate::util::{collect_rows, item_id};
 use anyhow::{Result, anyhow};
 use rusqlite::{OptionalExtension, params};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 impl App {
     pub(crate) fn create_item(
@@ -15,6 +15,7 @@ impl App {
         work_type: &str,
         plan_path: Option<&str>,
     ) -> Result<Item> {
+        validate_map_item_work_type(work_type)?;
         let project = self.default_project()?;
         let id = item_id(title);
         self.conn.execute(
@@ -41,6 +42,38 @@ impl App {
             )
             .optional()?
             .ok_or_else(|| anyhow!("item not found: {id}"))
+    }
+
+    pub(crate) fn item_metadata(&self, id: &str) -> Result<Value> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT metadata FROM items WHERE id = ?1",
+                params![id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten()
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_else(|| json!({})))
+    }
+
+    pub(crate) fn item_metadata_field(&self, id: &str, key: &str) -> Result<Option<Value>> {
+        let metadata = self.item_metadata(id)?;
+        Ok(metadata.get(key).cloned())
+    }
+
+    pub(crate) fn set_item_metadata_field(&self, id: &str, key: &str, value: Value) -> Result<()> {
+        let mut metadata = match self.item_metadata(id)? {
+            Value::Object(map) => map,
+            _ => Map::new(),
+        };
+        metadata.insert(key.to_string(), value);
+        self.conn.execute(
+            "UPDATE items SET metadata = ?2, updated_at = datetime('now') WHERE id = ?1",
+            params![id, Value::Object(metadata).to_string()],
+        )?;
+        Ok(())
     }
 
     /// The item's pinned routing profile id, if any. Lives outside the
@@ -88,23 +121,13 @@ impl App {
         })?;
         collect_rows(rows)
     }
+}
 
-    pub(crate) fn list_items_by_type(
-        &self,
-        work_type: &str,
-        not_status: Option<&str>,
-    ) -> Result<Vec<Item>> {
-        let sql = if not_status.is_some() {
-            "SELECT id, project_id, parent_item_id, title, description, status, work_type, priority, worker_id, plan_path FROM items WHERE work_type = ?1 AND status != ?2 ORDER BY created_at"
-        } else {
-            "SELECT id, project_id, parent_item_id, title, description, status, work_type, priority, worker_id, plan_path FROM items WHERE work_type = ?1 ORDER BY created_at"
-        };
-        let mut stmt = self.conn.prepare(sql)?;
-        let rows = if let Some(status) = not_status {
-            stmt.query_map(params![work_type, status], row_to_item)?
-        } else {
-            stmt.query_map(params![work_type], row_to_item)?
-        };
-        collect_rows(rows)
+pub(crate) fn validate_map_item_work_type(work_type: &str) -> Result<()> {
+    if work_type.trim() == "review" {
+        anyhow::bail!(
+            "invalid_map_item_work_type:{work_type}: ReviewGate work is leased through `planr pick --work-type review --plan <plan-id>`"
+        );
     }
+    Ok(())
 }

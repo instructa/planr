@@ -91,6 +91,12 @@ pub fn mcp_tools() -> Vec<Value> {
             &["id"],
         ),
         tool(
+            "planr_plan_final_review",
+            "Create or show the one plan-scoped final product review after outcome work and material item reviews settle",
+            json!({"id": prop("string", "Plan id")}),
+            &["id"],
+        ),
+        tool(
             "planr_plan_link",
             "Link a plan source to an item",
             json!({"source_id": prop("string", "Plan source id"), "item_id": prop("string", "Item id"), "relationship": prop("string", "Link relationship (default references)"), "section_id": prop("string", "Optional plan section id")}),
@@ -177,7 +183,7 @@ pub fn mcp_tools() -> Vec<Value> {
         tool(
             "planr_pick_item",
             "Atomically pick the next ready item",
-            json!({"work_type": prop("string", "Only lease items of this work type (e.g. review for checkers, code for makers)"), "plan": prop("string", "Only lease items belonging to this plan (plan id), so plan-scoped goal runs stay inside their contract"), "peek": prop("boolean", "Read the next work packet (incl. routing) without leasing it; the worker takes the lease")}),
+            json!({"work_type": prop("string", "Lease code outcomes, ReviewGates (`review`), or verification work"), "plan": prop("string", "Only lease work belonging to this plan id; ReviewGate and verification leases require it"), "peek": prop("boolean", "Read the next work packet (incl. routing) without leasing it; the worker takes the lease")}),
             &[],
         ),
         tool(
@@ -301,12 +307,6 @@ pub fn mcp_tools() -> Vec<Value> {
             &["input"],
         ),
         tool(
-            "planr_evidence_rebind",
-            "Preview or apply an immutable versioned capability and obligation rebind",
-            json!({"input": prop("object", "planr.evidence.rebind.v1 payload with plan_id, manifest_id, obligations[], and preview_digest for apply"), "apply": prop("boolean", "Apply the rebind; omit or false for preview")}),
-            &["input"],
-        ),
-        tool(
             "planr_evidence_classifications",
             "Show canonical Evidence gap reasons and legacy/operator aliases",
             json!({}),
@@ -422,8 +422,8 @@ pub fn mcp_tools() -> Vec<Value> {
         ),
         tool(
             "planr_eval_evidence_ref",
-            "Attach an eval run or comparison to an existing Planr log, review, or artifact without closing work",
-            json!({"target_kind": prop("string", "run or comparison"), "target_id": prop("string", "Eval target id"), "attachment_kind": prop("string", "log, review, or artifact"), "attachment_id": prop("string", "Planr attachment id"), "item_id": prop("string", "Item id that owns the evidence")}),
+            "Attach an eval run or comparison to an existing Planr log or artifact without closing work",
+            json!({"target_kind": prop("string", "run or comparison"), "target_id": prop("string", "Eval target id"), "attachment_kind": prop("string", "log or artifact"), "attachment_id": prop("string", "Planr attachment id"), "item_id": prop("string", "Item id that owns the evidence")}),
             &[
                 "target_kind",
                 "target_id",
@@ -459,27 +459,27 @@ pub fn mcp_tools() -> Vec<Value> {
             }
         }),
         tool(
-            "planr_review_artifact",
-            "Write a review artifact",
-            json!({"review_item_id": prop("string", "Review item id")}),
-            &["review_item_id"],
-        ),
-        tool(
             "planr_review_evidence",
             "Collect scoped Git and PR evidence for an item",
             json!({"item_id": prop("string", "Item id"), "pr_url": prop("string", "Optional pull request URL to record")}),
             &["item_id"],
         ),
         tool(
-            "planr_review_close",
-            "Close a review item with verdict",
-            json!({"review_item_id": prop("string", "Review item id"), "verdict": prop("string", "Verdict: complete, partial, failed, or unclear"), "findings": string_array("Findings discovered during review"), "reviewer": prop("string", "Reviewer identity recorded on the review log, artifact, and event (defaults to the worker id)"), "close_target": prop("boolean", "With verdict complete: also close the reviewed target item (requires a completion log on the target)")}),
-            &["review_item_id"],
+            "planr_review_gate_close",
+            "Complete a leased durable ReviewGate attempt",
+            json!({"review_gate_id": prop("string", "ReviewGate id"), "verdict": prop("string", "Verdict: complete/accepted or changes-requested"), "findings": string_array("Findings discovered during review"), "reviewer": prop("string", "Independent reviewer identity (defaults to the worker id)")}),
+            &["review_gate_id"],
+        ),
+        tool(
+            "planr_review_findings_resolve",
+            "Resolve durable ReviewGate findings and return the same gate to pending re-review",
+            json!({"review_gate_id": prop("string", "ReviewGate id"), "finding_ids": string_array("Finding ids resolved by the responsible maker")}),
+            &["review_gate_id", "finding_ids"],
         ),
         tool(
             "planr_close_item",
-            "Close an item after checks",
-            json!({"item_id": prop("string", "Item id")}),
+            "Settle an outcome through the canonical FeatureRun service",
+            json!({"item_id": prop("string", "Item id"), "summary": prop("string", "Completion summary"), "files": string_array("Changed files"), "commands": string_array("Commands run"), "tests": string_array("Tests run"), "profile": prop("string", "Executed route profile"), "escalation_reason": prop("string", "Structured escalation reason"), "escalation_reference": prop("string", "Required durable escalation reference"), "escalation_explanation": prop("string", "Required escalation explanation")}),
             &["item_id"],
         ),
         tool(

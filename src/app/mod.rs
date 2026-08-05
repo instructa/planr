@@ -12,6 +12,9 @@ mod audit_evidence;
 mod commands;
 mod eval_surface;
 mod evidence;
+mod execution_run;
+mod execution_state;
+mod feature_run_evidence;
 mod flow;
 mod git_review;
 mod graph;
@@ -35,7 +38,6 @@ mod recovery;
 mod render;
 mod repository;
 mod review;
-mod review_workspace;
 pub(crate) mod stop;
 mod surfaces;
 
@@ -43,7 +45,6 @@ pub(crate) use eval_surface::EvalCliExit;
 pub(crate) use evidence::EvidenceCliExit;
 pub(crate) use flow::LogInput;
 pub(crate) use repository::eval::EvalReusableCaseEvidence;
-pub(crate) use review::ReviewArtifactInput;
 
 pub(crate) struct App {
     pub(crate) conn: Connection,
@@ -124,6 +125,7 @@ impl App {
             Command::Map(args) => self.map(args.command),
             Command::Item(args) => self.item(args.command),
             Command::Link(args) => self.link(args.command),
+            Command::Run(args) => self.execution_run(args.command),
             Command::Pick(args) => self.pick(args.command, args.work_type, args.plan, args.peek),
             Command::Approval(args) => self.approval(args.command),
             Command::Log(args) => self.log(args.command),

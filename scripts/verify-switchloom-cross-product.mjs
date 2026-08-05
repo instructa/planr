@@ -525,6 +525,10 @@ function provisionRepoLocalPlanrSkills(repo) {
   );
 }
 
+function boundedMakerPrompt(itemId) {
+  return `Use $planr-work on item ${itemId} as the first item in a compatible same-plan maker run. Keep one worker identity, settle each ordinary outcome with planr done --next, write a compact durable handoff only at a genuine stop, and stop when settlement opens a material ReviewGate, work blocks, ownership is incompatible, the pick is empty, or the budget is reached.`;
+}
+
 function createPlanrLoopContract(repo) {
   const project = parseJson(stripPlanrNoise(run(planrBin, ["--json", "project", "init", "Host Oracle Project", "--client", "codex"], { cwd: repo }).stdout), "planr project init");
   const plan = parseJson(stripPlanrNoise(run(planrBin, ["--json", "plan", "new", "Host oracle loop", "--platform", "cli"], { cwd: repo }).stdout), "planr plan new").plan;
@@ -537,7 +541,7 @@ function createPlanrLoopContract(repo) {
     "Append one short evidence line to README.md.",
     "Run the replayable smoke command: grep -q \"Planr loop oracle smoke\" README.md.",
     `Before planr done/review, record live verification with: planr log add --item ${created.id} --kind verification --summary \"live verification on cli: README smoke line found\" --cmd \"grep -q 'Planr loop oracle smoke' README.md\".`,
-    "Then run planr done with --review and stop after requesting review.",
+    "Then run planr done with --escalate user-requested --escalation-ref switchloom-host-oracle --escalation-explanation 'The host oracle contract requires an independent checkpoint' and stop when the ReviewGate opens.",
   ].join(" ");
   const item = parseJson(stripPlanrNoise(run(planrBin, [
     "--json",
@@ -555,7 +559,7 @@ function createPlanrLoopContract(repo) {
     "--json",
     "context",
     "add",
-    `GOAL CONTRACT ${plan.id}: DONE when every in-scope map item is closed with log evidence, all reviews are closed with verdict complete, no open approvals remain, and a replayable --kind verification log exists for item ${item.id}. Iteration budget: 1. Driver entry is exactly $planr-loop. The driver must not implement directly. The generated .codex/config.toml roles are available to this Codex run, so routing.profile is not advisory and the driver must not claim role binding is unavailable. A default-role maker/checker spawn without agent_type is invalid and must not be waited on. The driver must dispatch maker with a spawn_agent tool call whose arguments include agent_type exactly model_routing_terra_high, fork_turns exactly none, task_name exactly maker, and message exactly "Use $planr-work on item ${item.id}. Stop after requesting review."; then wait for it. The driver must then dispatch reviewer with a spawn_agent tool call whose arguments include agent_type exactly model_routing_sol_high, fork_turns exactly none, task_name exactly reviewer, and message exactly "Use $planr-review on item ${item.id}. Close the review with a verdict."; then wait for it. Maker must use $planr-work through the native role, add the README smoke evidence, run grep, log --kind verification, then done --review. Reviewer must use $planr-review through the native role and close the review with a verdict.`,
+    `GOAL CONTRACT ${plan.id}: DONE when every in-scope outcome is settled with log evidence, every required ReviewGate is accepted, no open approvals remain, and a replayable --kind verification log exists for item ${item.id}. Iteration budget: 1. Driver entry is exactly $planr-loop. The driver must not implement directly. The generated .codex/config.toml roles are available to this Codex run, so routing.profile is not advisory and the driver must not claim role binding is unavailable. A default-role maker/checker spawn without agent_type is invalid and must not be waited on. The driver must dispatch maker with a spawn_agent tool call whose arguments include agent_type exactly model_routing_terra_high, fork_turns exactly none, task_name exactly maker, and message exactly "${boundedMakerPrompt(item.id)}"; then wait for it. The driver must then dispatch reviewer with a spawn_agent tool call whose arguments include agent_type exactly model_routing_sol_high, fork_turns exactly none, task_name exactly reviewer, and message exactly "Use $planr-review on the open ReviewGate for plan ${plan.id}. Close the gate with a verdict."; then wait for it. Maker must use $planr-work through the native role, add the README smoke evidence, run grep, log --kind verification, then settle with the structured switchloom-host-oracle escalation. Reviewer must use $planr-review through the native role and close the leased ReviewGate with a verdict.`,
     "--item",
     item.id,
     "--tag",
@@ -1893,26 +1897,10 @@ function retainedCompiledBundle() {
   return bundle;
 }
 
-function completeRetainedReviewIfNeeded(repo, contract) {
+function assertRetainedCanonicalAudit(repo, contract) {
   const audit = parseJson(stripPlanrNoise(run(planrBin, ["--json", "plan", "audit", contract.plan.id], { cwd: repo }).stdout), "replay pre-close plan audit");
-  if (audit.holds) {
-    receipt("retained Planr audit already holds", { plan: contract.plan.id });
-    return;
-  }
-  const review = parseJson(stripPlanrNoise(run(planrBin, ["--json", "trace", "item", "i-review-build-first-slice-8f04"], { cwd: repo }).stdout), "retained review trace");
-  assertEqual(review.item.status, "picked", "retained review status before replay close");
-  assertEqual(review.item.worker_id, "checker-reviewer", "retained review worker");
-  run(planrBin, [
-    "review",
-    "close",
-    "i-review-build-first-slice-8f04",
-    "--verdict",
-    "complete",
-    "--reviewer",
-    "checker-reviewer",
-    "--close-target",
-  ], { cwd: repo });
-  receipt("retained Planr review closed from replayed reviewer evidence", { review: "i-review-build-first-slice-8f04" });
+  assertEqual(audit.holds, true, "retained replay must already contain accepted canonical ReviewGates");
+  receipt("retained canonical Planr audit holds", { plan: contract.plan.id });
 }
 
 function retainedGoalContract(repo) {
@@ -1968,7 +1956,7 @@ function runReplayFromRetainedRoot() {
   const changedFiles = rolloutFilesForReplay(publicParentThreadId, outputPath);
   const hostEvidence = assertCodexLiveHostEvidence({ status: 0, stdout: replayOutput, stderr: "" }, outputPath, changedFiles, repo, contract);
   receipt("replayed authenticated Codex routed maker and reviewer", { outputPath, hostEvidence });
-  completeRetainedReviewIfNeeded(repo, contract);
+  assertRetainedCanonicalAudit(repo, contract);
   assertPlanAuditHolds(repo, contract);
   assertRetainedUninstallAndUnroutedPlanr(repo, contract);
   assertRetainedMissingAuthEvidence();
@@ -2344,7 +2332,7 @@ function runCommandOrderingSelfTest() {
   const sameCommand = [{
     index: 1,
     orderBase: 1_000_000,
-    command: "PLANR_WORKER_ID=maker planr log add --item i-build-first-slice-68d6 --kind verification --summary ok && planr done i-build-first-slice-68d6 --summary done --review",
+    command: "PLANR_WORKER_ID=maker planr log add --item i-build-first-slice-68d6 --kind verification --summary ok && planr done i-build-first-slice-68d6 --summary done",
   }];
   assertOk(
     findVerificationBeforeDone(sameCommand),
@@ -2356,7 +2344,7 @@ function runCommandOrderingSelfTest() {
   const reversedCommand = [{
     index: 1,
     orderBase: 1_000_000,
-    command: "planr done i-build-first-slice-68d6 --summary done --review && planr log add --item i-build-first-slice-68d6 --kind verification --summary late",
+    command: "planr done i-build-first-slice-68d6 --summary done && planr log add --item i-build-first-slice-68d6 --kind verification --summary late",
   }];
   assertThrowsWith(
     () => assertOk(findVerificationBeforeDone(reversedCommand), "done before verification unexpectedly accepted"),
@@ -2367,7 +2355,7 @@ function runCommandOrderingSelfTest() {
   const differentItemCommand = [{
     index: 1,
     orderBase: 1_000_000,
-    command: "planr log add --item i-other --kind verification --summary ok && planr done i-build-first-slice-68d6 --summary done --review",
+    command: "planr log add --item i-other --kind verification --summary ok && planr done i-build-first-slice-68d6 --summary done",
   }];
   assertThrowsWith(
     () => assertOk(findVerificationBeforeDone(differentItemCommand), "different-item verification unexpectedly accepted"),

@@ -787,7 +787,7 @@ mod tests {
             max_tool_calls: None,
             max_tokens: None,
             max_credits_micros: None,
-            review_reserve_percent: 0,
+            phase_reserves: crate::usage_policy::PhaseBudgetReserves::default(),
             budget_exhaustion: BudgetExhaustionBehavior::Stop,
             metering: MeteringMode::Unavailable,
         }
@@ -863,7 +863,7 @@ mod tests {
             verification: vec!["cargo test".to_string()],
             evidence_requirements: vec!["changed files".to_string()],
             max_attempts: 2,
-            stop_conditions: vec!["review requested".to_string()],
+            stop_conditions: vec!["ReviewGate opened".to_string()],
             risk: RiskLevel::Low,
             materiality_triggers: BTreeSet::<MaterialityTrigger>::new(),
             context: vec!["small context".to_string()],

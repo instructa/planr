@@ -20,7 +20,9 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Map, Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    env, fs,
+    env,
+    error::Error,
+    fmt, fs,
     path::{Component, Path, PathBuf},
     time::Duration,
 };
@@ -84,6 +86,7 @@ pub(crate) fn persist_host_capture_evidence(
     persist_trusted_evidence_atomically(
         conn,
         |_| Ok(()),
+        |_| Ok(()),
         TrustedEvidencePersistenceInput {
             project_id: input.project_id,
             obligation_id: input.obligation_id,
@@ -101,6 +104,7 @@ pub(crate) fn persist_host_capture_evidence(
 pub(crate) fn persist_trusted_evidence_atomically<F>(
     conn: &Connection,
     pre_attempt: F,
+    pre_commit: impl FnOnce(&Connection) -> Result<()>,
     input: TrustedEvidencePersistenceInput<'_>,
 ) -> Result<()>
 where
@@ -132,6 +136,15 @@ where
             retry_predecessor_attempt_id: input.retry_predecessor_attempt_id,
         },
     )?;
+    pre_commit(&tx)?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn persist_attempt_atomically(conn: &Connection, input: PersistedAttempt<'_>) -> Result<()> {
+    ensure_autocommit_storage_boundary(conn)?;
+    let tx = conn.unchecked_transaction()?;
+    persist_attempt(&tx, input)?;
     tx.commit()?;
     Ok(())
 }
@@ -165,7 +178,16 @@ pub(crate) fn run_configured_process_adapter(
     conn: &Connection,
     input: ConfiguredProcessRunInput<'_>,
 ) -> Result<ConfiguredProcessRunOutput> {
+    run_configured_process_adapter_guarded(conn, input, &|_| Ok(()))
+}
+
+pub(crate) fn run_configured_process_adapter_guarded(
+    conn: &Connection,
+    input: ConfiguredProcessRunInput<'_>,
+    feature_run_guard: &dyn Fn(&Connection) -> Result<()>,
+) -> Result<ConfiguredProcessRunOutput> {
     ensure_autocommit_storage_boundary(conn)?;
+    feature_run_guard(conn)?;
     let capability_instance = registered_capability_instance(conn, &input.capability_instance.id)
         .with_context(|| {
         format!(
@@ -190,8 +212,7 @@ pub(crate) fn run_configured_process_adapter(
     let repository_snapshot = capture_repository_snapshot(input.repository_root)
         .map_err(|err| anyhow::anyhow!("capturing repository evidence snapshot: {err}"))?;
     let source_binding = repository_snapshot.source.clone();
-    let policy_binding =
-        repository_snapshot.trusted_policy_binding(&input.obligation.policy_digest);
+    let policy_binding = repository_snapshot.trusted_policy_binding()?;
     ensure_runtime_bindings(
         &input.obligation,
         &capability_instance,
@@ -235,11 +256,18 @@ pub(crate) fn run_configured_process_adapter(
         Err(error) => return Err(error),
     };
     if let ResolvedProcessRunResolution::Runnable(resolved) = &resolved {
-        let manifest = registered_capability_manifest(conn, &capability_instance.manifest_id)?;
+        let manifest = registered_capability_manifest(conn, &capability_instance.id)?;
         ensure_process_adapter_digest(&manifest, resolved)?;
     }
     let resolved_run = resolved.run();
-    let config_digest = input.obligation.config_digest.as_str().to_string();
+    let config_digest = sha256_json_digest(&json!({
+        "schema_version": "planr.evidence.runtime-config.v1",
+        "capability_instance": capability_instance,
+        "execution_contract": execution_contract_value,
+        "target": input.target,
+        "environment": input.environment,
+        "fixture_disclosure": input.fixture_disclosure,
+    }))?;
     let started_at = timestamp();
     let output = match &resolved {
         ResolvedProcessRunResolution::Runnable(resolved) => {
@@ -315,37 +343,59 @@ pub(crate) fn run_configured_process_adapter(
     } else {
         None
     };
-    if matches!(resolved, ResolvedProcessRunResolution::Runnable(_))
-        && process_result.status != AttemptStatus::Passed
-    {
-        ensure_repository_snapshot_unchanged(input.repository_root, &repository_snapshot).context(
-            "repository evidence source or policy changed during configured process execution",
-        )?;
+    let post_process_repository_snapshot_mismatch =
+        if matches!(resolved, ResolvedProcessRunResolution::Runnable(_)) {
+            repository_snapshot_mismatch(input.repository_root, &repository_snapshot).context(
+                "checking repository evidence source and policy after configured process execution",
+            )?
+        } else {
+            None
+        };
+    if let Some(mismatch) = &post_process_repository_snapshot_mismatch {
+        mark_repository_snapshot_mismatch(&mut process_result, mismatch)?;
     }
-    let attempt = EvidenceAttempt {
-        id: EvidenceId::parse(attempt_id.clone())?,
-        schema_version: SchemaVersion::v1(),
-        criterion_id: input.obligation.criterion_id.clone(),
-        obligation_id: input.obligation.id.clone(),
-        capability_instance_id: capability_instance.id.clone(),
-        started_at: started_at.clone(),
-        ended_at: ended_at.clone(),
-        status: process_result.status,
-        resolved_command: resolved_run.command_identity.clone(),
-        exit: process_result.exit.clone(),
-        retry_lineage: retry_lineage.value.clone(),
-        stdout_digest: Sha256Digest::parse(process_result.stdout_digest.clone())?,
-        stderr_digest: Sha256Digest::parse(process_result.stderr_digest.clone())?,
-        raw_result: process_result.raw_result.clone(),
-        artifacts: process_result.artifacts.clone(),
-        output_bounds: process_result.output_bounds.clone(),
-    };
-    if matches!(resolved, ResolvedProcessRunResolution::Runnable(_))
-        && process_result.status == AttemptStatus::Passed
-    {
-        ensure_repository_snapshot_unchanged(input.repository_root, &repository_snapshot).context(
-            "repository evidence source or policy changed during configured process execution",
+    let attempt_from_process_result =
+        |process_result: &AdapterProcessResult| -> Result<EvidenceAttempt> {
+            Ok(EvidenceAttempt {
+                id: EvidenceId::parse(attempt_id.clone())?,
+                schema_version: SchemaVersion::v1(),
+                criterion_id: input.obligation.criterion_id.clone(),
+                obligation_id: input.obligation.id.clone(),
+                capability_instance_id: capability_instance.id.clone(),
+                started_at: started_at.clone(),
+                ended_at: ended_at.clone(),
+                status: process_result.status,
+                resolved_command: resolved_run.command_identity.clone(),
+                exit: process_result.exit.clone(),
+                retry_lineage: retry_lineage.value.clone(),
+                stdout_digest: Sha256Digest::parse(process_result.stdout_digest.clone())?,
+                stderr_digest: Sha256Digest::parse(process_result.stderr_digest.clone())?,
+                raw_result: process_result.raw_result.clone(),
+                artifacts: process_result.artifacts.clone(),
+                output_bounds: process_result.output_bounds.clone(),
+            })
+        };
+    let attempt = attempt_from_process_result(&process_result)?;
+    if let Some(mismatch) = post_process_repository_snapshot_mismatch {
+        persist_attempt_atomically(
+            conn,
+            PersistedAttempt {
+                project_id: input.project_id,
+                obligation_id: &input.obligation.id,
+                attempt: &attempt,
+                execution_contract_digest: &execution_contract_digest,
+                environment_digest: capability_instance.environment.digest.as_str(),
+                retry_predecessor_attempt_id: retry_lineage
+                    .retry_of
+                    .as_ref()
+                    .map(EvidenceId::as_str),
+            },
         )?;
+        bail!(
+            "{}; recorded failed attempt {} without trusted receipt",
+            mismatch.message,
+            attempt.id.as_str()
+        );
     }
     let raw_result_digest = sha256_json_digest(&process_result.raw_result)?;
     let instance_digest = sha256_json_digest(&serde_json::to_value(&capability_instance)?)?;
@@ -405,9 +455,21 @@ pub(crate) fn run_configured_process_adapter(
         .map_err(|err| anyhow::anyhow!("{err}"))?;
     let receipt_value = serde_json::to_value(&receipt)?;
     let receipt_digest = string_field(&receipt_value, "receipt_digest")?.to_string();
-    persist_trusted_evidence_atomically(
+    let persistence_result = persist_trusted_evidence_atomically(
         conn,
-        |_| Ok(()),
+        |tx| feature_run_guard(tx),
+        |tx| {
+            run_repository_snapshot_pre_commit_test_hook(input.repository_root)?;
+            if let Some(mismatch) =
+                repository_snapshot_mismatch(input.repository_root, &repository_snapshot).context(
+                    "checking repository evidence source and policy immediately before trusted receipt commit",
+                )?
+            {
+                bail!(RepositorySnapshotPreCommitMismatch { mismatch });
+            }
+            feature_run_guard(tx)?;
+            Ok(())
+        },
         TrustedEvidencePersistenceInput {
             project_id: input.project_id,
             obligation_id: &input.obligation.id,
@@ -419,7 +481,32 @@ pub(crate) fn run_configured_process_adapter(
             receipt_digest: &receipt_digest,
             trusted_binding_value: &trusted_binding_value,
         },
-    )?;
+    );
+    if let Err(error) = persistence_result {
+        let RepositorySnapshotPreCommitMismatch { mismatch } =
+            error.downcast::<RepositorySnapshotPreCommitMismatch>()?;
+        mark_repository_snapshot_mismatch(&mut process_result, &mismatch)?;
+        let failed_attempt = attempt_from_process_result(&process_result)?;
+        persist_attempt_atomically(
+            conn,
+            PersistedAttempt {
+                project_id: input.project_id,
+                obligation_id: &input.obligation.id,
+                attempt: &failed_attempt,
+                execution_contract_digest: &execution_contract_digest,
+                environment_digest: capability_instance.environment.digest.as_str(),
+                retry_predecessor_attempt_id: retry_lineage
+                    .retry_of
+                    .as_ref()
+                    .map(EvidenceId::as_str),
+            },
+        )?;
+        bail!(
+            "{}; recorded failed attempt {} without trusted receipt",
+            mismatch.message,
+            failed_attempt.id.as_str()
+        );
+    }
     Ok(ConfiguredProcessRunOutput {
         attempt,
         receipt_value,
@@ -450,11 +537,16 @@ fn registered_capability_instance(
 
 fn registered_capability_manifest(
     conn: &Connection,
-    manifest_id: &EvidenceId,
+    capability_instance_id: &EvidenceId,
 ) -> Result<super::model::VerificationCapabilityManifest> {
     let snapshot: String = conn.query_row(
-        "SELECT manifest_json FROM verification_capability_manifests WHERE id = ?1",
-        [manifest_id.as_str()],
+        "SELECT manifests.manifest_json
+         FROM verification_capability_instances instances
+         JOIN verification_capability_manifests manifests
+           ON manifests.id = instances.manifest_id
+          AND manifests.version = instances.manifest_version
+         WHERE instances.id = ?1",
+        [capability_instance_id.as_str()],
         |row| row.get(0),
     )?;
     serde_json::from_str(&snapshot).context("decoding registered capability manifest snapshot")
@@ -611,13 +703,9 @@ fn ensure_runtime_bindings(
         bail!("runtime environment does not match registered capability instance");
     }
     let target_value = serde_json::to_value(target)?;
-    let environment_value = serde_json::to_value(environment)?;
     for observation in &obligation.observations {
         if observation.target != target_value {
             bail!("proof obligation target does not match runtime target binding");
-        }
-        if observation.environment != environment_value {
-            bail!("proof obligation environment does not match runtime environment binding");
         }
     }
     ensure_fixture_disclosure_allowed(&obligation.fixture_policy, fixture_disclosure)
@@ -2124,17 +2212,102 @@ fn string_field<'a>(value: &'a Value, field: &str) -> Result<&'a str> {
         .with_context(|| format!("receipt field {field} must be a string"))
 }
 
-fn ensure_repository_snapshot_unchanged(
+#[derive(Debug, Clone)]
+struct RepositorySnapshotMismatch {
+    message: String,
+    exit_error: &'static str,
+    gap_reason: &'static str,
+}
+
+#[derive(Debug)]
+struct RepositorySnapshotPreCommitMismatch {
+    mismatch: RepositorySnapshotMismatch,
+}
+
+impl fmt::Display for RepositorySnapshotPreCommitMismatch {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.mismatch.message)
+    }
+}
+
+impl Error for RepositorySnapshotPreCommitMismatch {}
+
+pub(crate) fn run_repository_snapshot_pre_commit_test_hook(repository_root: &Path) -> Result<()> {
+    let Some(relative_path) = env::var_os("PLANR_TEST_EVIDENCE_PRE_COMMIT_MUTATE_SOURCE_PATH")
+    else {
+        return Ok(());
+    };
+    if !cfg!(debug_assertions) {
+        bail!("pre-commit source mutation test hook is only available in debug builds");
+    }
+    let relative_path = PathBuf::from(relative_path);
+    if relative_path.is_absolute()
+        || relative_path.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        bail!("pre-commit source mutation test hook path must stay inside the repository");
+    }
+    fs::write(
+        repository_root.join(relative_path),
+        "planr pre-commit source mutation\n",
+    )
+    .context("running pre-commit source mutation test hook")?;
+    Ok(())
+}
+
+fn repository_snapshot_mismatch(
     repository_root: &Path,
     expected: &EvidenceRepositorySnapshot,
-) -> Result<()> {
+) -> Result<Option<RepositorySnapshotMismatch>> {
     let current = capture_repository_snapshot(repository_root)
         .map_err(|err| anyhow::anyhow!("capturing repository evidence snapshot: {err}"))?;
-    if current.source != expected.source {
-        bail!("repository evidence source no longer matches launch snapshot");
-    }
     if current.policy != expected.policy {
-        bail!("repository evidence policy no longer matches launch snapshot");
+        return Ok(Some(RepositorySnapshotMismatch {
+            message: "repository evidence policy no longer matches launch snapshot before trusted receipt acceptance".to_string(),
+            exit_error: "stale_policy",
+            gap_reason: GapReason::StalePolicy.as_str(),
+        }));
+    }
+    if current.source != expected.source {
+        return Ok(Some(RepositorySnapshotMismatch {
+            message: "repository evidence source no longer matches launch snapshot before trusted receipt acceptance".to_string(),
+            exit_error: "stale_source",
+            gap_reason: GapReason::StaleSource.as_str(),
+        }));
+    }
+    Ok(None)
+}
+
+fn mark_repository_snapshot_mismatch(
+    process_result: &mut AdapterProcessResult,
+    mismatch: &RepositorySnapshotMismatch,
+) -> Result<()> {
+    process_result.status = AttemptStatus::Failed;
+    process_result.exit = json!({
+        "exit_code": 1,
+        "signal": null,
+        "error": mismatch.exit_error,
+    });
+    if let Some(raw) = process_result.raw_result.as_object_mut() {
+        raw.insert("exit".to_string(), process_result.exit.clone());
+        raw.insert(
+            "planr_adapter_gap_reasons".to_string(),
+            json!([mismatch.gap_reason]),
+        );
+        raw.insert(
+            "repository_snapshot_error".to_string(),
+            Value::String(mismatch.message.clone()),
+        );
+        let digest = sha256_json_digest(&json!({
+            "result": raw,
+            "status": process_result.status.as_str(),
+            "exit": process_result.exit,
+        }))?;
+        raw.insert("raw_result_digest".to_string(), json!(digest));
     }
     Ok(())
 }
@@ -2310,9 +2483,9 @@ mod tests {
                 obligation.criterion_id.as_str(),
                 obligation.title,
                 serde_json::to_string(&obligation.observations).unwrap(),
-                obligation.policy_digest.as_str(),
-                obligation.config_digest.as_str(),
-                obligation.created_at,
+                DIGEST_A,
+                DIGEST_B,
+                "2026-07-29T00:00:00Z",
             ],
         )
         .unwrap();
@@ -2451,9 +2624,7 @@ mod tests {
                 "type": "example.process.stdout",
                 "subject": "process stdout",
                 "expected": {"contains": "ready"},
-                "target": {"kind": "process", "uri": "local://process"},
-                "environment": {"kind": "local", "id": "dev-shell", "digest": DIGEST_B},
-                "runtime_target": {"kind": "process", "id": "test"}
+                "target": {"kind": "process", "uri": "local://process"}
             }],
             "fixture_policy": {
                 "fixtures_allowed": true,
@@ -2461,10 +2632,7 @@ mod tests {
                 "disclosure_required": true
             },
             "freshness_policy": {},
-            "assurance_policy": {},
-            "policy_digest": DIGEST_A,
-            "config_digest": DIGEST_B,
-            "created_at": "2026-07-29T00:00:00Z"
+            "assurance_policy": {}
         }))
         .unwrap()
     }
@@ -2736,6 +2904,66 @@ mod tests {
     }
 
     #[test]
+    fn registered_manifest_lookup_uses_the_selected_instance_version() {
+        let conn = conn();
+        let current_instance = instance();
+        let contract =
+            execution_contract("sh", vec!["-c", "printf '{\"contains\":\"ready\"}'"], 5000);
+        seed_instance_only(&conn, &current_instance, &contract);
+
+        let current_manifest_json: String = conn
+            .query_row(
+                "SELECT manifest_json FROM verification_capability_manifests
+                 WHERE id = ?1 AND version = '1.0.0'",
+                [current_instance.manifest_id.as_str()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let mut legacy_manifest: Value = serde_json::from_str(&current_manifest_json).unwrap();
+        legacy_manifest["version"] = json!("0.9.0");
+        legacy_manifest["adapter_digest"] = json!(DIGEST_C);
+        conn.execute(
+            "INSERT INTO verification_capability_manifests(
+               id, version, adapter_kind, adapter_digest, manifest_digest,
+               manifest_json, source_path, created_at
+             ) VALUES (?1, '0.9.0', 'process', ?2, ?2, ?3,
+                       '.planr/evidence/adapters/test-legacy.json', ?4)",
+            params![
+                current_instance.manifest_id.as_str(),
+                DIGEST_C,
+                serde_json::to_string(&legacy_manifest).unwrap(),
+                current_instance.captured_at,
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO verification_capability_instances(
+               id, manifest_id, manifest_version, manifest_digest, probe_execution_id,
+               availability_status, runtime_target_json, host_fingerprint_json,
+               capability_snapshot_json, probe_result_json, created_at
+             ) VALUES ('capinst-process-legacy', ?1, '0.9.0', ?2, 'probe-legacy',
+                       'available', '{}', '{}', '{}', '{}', ?3)",
+            params![
+                current_instance.manifest_id.as_str(),
+                DIGEST_C,
+                current_instance.captured_at,
+            ],
+        )
+        .unwrap();
+
+        let current = registered_capability_manifest(&conn, &current_instance.id).unwrap();
+        let legacy = registered_capability_manifest(
+            &conn,
+            &EvidenceId::parse("capinst-process-legacy").unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(current.version, "1.0.0");
+        assert_eq!(legacy.version, "0.9.0");
+        assert_ne!(current.adapter_digest, legacy.adapter_digest);
+    }
+
+    #[test]
     fn configured_process_run_persists_attempt_then_trusted_receipt() {
         let conn = conn();
         let root = tempdir().unwrap();
@@ -2746,7 +2974,6 @@ mod tests {
         )
         .unwrap();
         let obligation = obligation();
-        let expected_config_digest = obligation.config_digest.as_str().to_string();
         let instance = instance();
         let contract =
             execution_contract("sh", vec!["-c", "printf '{\"contains\":\"ready\"}'"], 5000);
@@ -2762,6 +2989,10 @@ mod tests {
                 .as_str()
                 .to_string();
         let output = run_configured_process_adapter(&conn, input).unwrap();
+        let expected_config_digest = output.receipt_value["config_digest"]
+            .as_str()
+            .unwrap()
+            .to_string();
 
         assert_eq!(output.attempt.status, AttemptStatus::Passed);
         assert_eq!(
@@ -2882,7 +3113,7 @@ mod tests {
     }
 
     #[test]
-    fn configured_process_run_rolls_back_attempt_when_tracked_source_changes() {
+    fn configured_process_run_records_failed_attempt_without_receipt_when_tracked_source_changes() {
         let conn = conn();
         let root = tempdir().unwrap();
         let obligation = obligation();
@@ -2902,15 +3133,18 @@ mod tests {
 
         assert!(
             error.contains(
-                "repository evidence source or policy changed during configured process execution"
+                "repository evidence source no longer matches launch snapshot before trusted receipt acceptance"
             ),
             "{error}"
         );
-        assert_no_attempts_or_receipts(&conn);
+        assert_attempt_count(&conn, 1);
+        assert_receipt_count(&conn, 0);
+        assert_latest_attempt_failed_with_gap(&conn, "stale_source");
     }
 
     #[test]
-    fn configured_process_run_rolls_back_attempt_when_untracked_content_changes() {
+    fn configured_process_run_records_failed_attempt_without_receipt_when_untracked_content_changes()
+     {
         let conn = conn();
         let root = tempdir().unwrap();
         fs::write(root.path().join("same-untracked.txt"), "before\n").unwrap();
@@ -2929,15 +3163,17 @@ mod tests {
 
         assert!(
             error.contains(
-                "repository evidence source or policy changed during configured process execution"
+                "repository evidence source no longer matches launch snapshot before trusted receipt acceptance"
             ),
             "{error}"
         );
-        assert_no_attempts_or_receipts(&conn);
+        assert_attempt_count(&conn, 1);
+        assert_receipt_count(&conn, 0);
+        assert_latest_attempt_failed_with_gap(&conn, "stale_source");
     }
 
     #[test]
-    fn configured_process_run_rolls_back_attempt_when_policy_changes() {
+    fn configured_process_run_records_failed_attempt_without_receipt_when_policy_changes() {
         let conn = conn();
         let root = tempdir().unwrap();
         fs::create_dir_all(root.path().join(".planr")).unwrap();
@@ -2977,15 +3213,17 @@ mod tests {
 
         assert!(
             error.contains(
-                "repository evidence source or policy changed during configured process execution"
+                "repository evidence policy no longer matches launch snapshot before trusted receipt acceptance"
             ),
             "{error}"
         );
-        assert_no_attempts_or_receipts(&conn);
+        assert_attempt_count(&conn, 1);
+        assert_receipt_count(&conn, 0);
+        assert_latest_attempt_failed_with_gap(&conn, "stale_policy");
     }
 
     #[test]
-    fn configured_process_run_rolls_back_attempt_when_policy_is_removed() {
+    fn configured_process_run_records_failed_attempt_without_receipt_when_policy_is_removed() {
         let conn = conn();
         let root = tempdir().unwrap();
         fs::create_dir_all(root.path().join(".planr")).unwrap();
@@ -3009,11 +3247,13 @@ mod tests {
 
         assert!(
             error.contains(
-                "repository evidence source or policy changed during configured process execution"
+                "repository evidence policy no longer matches launch snapshot before trusted receipt acceptance"
             ),
             "{error}"
         );
-        assert_no_attempts_or_receipts(&conn);
+        assert_attempt_count(&conn, 1);
+        assert_receipt_count(&conn, 0);
+        assert_latest_attempt_failed_with_gap(&conn, "stale_policy");
     }
 
     #[test]
@@ -4183,6 +4423,29 @@ mod tests {
             })
             .unwrap();
         assert_eq!(receipts, expected);
+    }
+
+    fn assert_latest_attempt_failed_with_gap(conn: &Connection, expected_gap: &str) {
+        let attempt_json: String = conn
+            .query_row(
+                "SELECT attempt_json FROM evidence_attempts ORDER BY created_at DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let attempt: Value = serde_json::from_str(&attempt_json).unwrap();
+        assert_eq!(attempt["status"], "failed");
+        assert_eq!(attempt["exit"]["error"], expected_gap);
+        assert_eq!(
+            attempt["raw_result"]["planr_adapter_gap_reasons"],
+            json!([expected_gap])
+        );
+        assert!(
+            attempt["raw_result"]["repository_snapshot_error"]
+                .as_str()
+                .unwrap()
+                .contains("before trusted receipt acceptance")
+        );
     }
 
     fn assert_marker_absent(root: &Path, marker_name: &str) {

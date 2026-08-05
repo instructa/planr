@@ -387,8 +387,6 @@ pub(crate) struct ObservationRequirement {
     pub subject: String,
     pub expected: Value,
     pub target: Value,
-    pub environment: Value,
-    pub runtime_target: Value,
     #[serde(
         default,
         deserialize_with = "deserialize_optional_value_without_null",
@@ -515,9 +513,6 @@ pub(crate) struct ProofObligation {
     pub fixture_policy: Value,
     pub freshness_policy: Value,
     pub assurance_policy: Value,
-    pub policy_digest: Sha256Digest,
-    pub config_digest: Sha256Digest,
-    pub created_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supersedes: Option<EvidenceId>,
 }
@@ -1478,7 +1473,6 @@ impl EvidenceReceipt {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum TrustedPolicySource {
     Repository,
-    ProofObligation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

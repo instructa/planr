@@ -585,7 +585,7 @@ impl App {
         if !matches!(target_kind, "run" | "comparison") {
             bail!("invalid eval evidence target kind: {target_kind}");
         }
-        if !matches!(attachment_kind, "log" | "review" | "artifact") {
+        if !matches!(attachment_kind, "log" | "artifact") {
             bail!("invalid eval evidence attachment kind: {attachment_kind}");
         }
         let project = self.default_project()?;

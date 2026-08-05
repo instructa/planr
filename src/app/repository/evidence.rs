@@ -36,18 +36,6 @@ impl App {
             .ok_or_else(|| anyhow!("artifact not found: {id}"))
     }
 
-    pub(crate) fn latest_review_artifact(&self, review_id: &str) -> Result<Value> {
-        self.get_item(review_id)?;
-        self.conn
-            .query_row(
-                "SELECT id, project_id, item_id, name, kind, path, content, mime_type, size_bytes, metadata, created_at FROM artifacts WHERE item_id = ?1 AND kind = 'review' ORDER BY created_at DESC, id DESC LIMIT 1",
-                params![review_id],
-                artifact_row,
-            )
-            .optional()?
-            .ok_or_else(|| anyhow!("review artifact not found: {review_id}"))
-    }
-
     pub(crate) fn list_artifacts(&self, item: Option<&str>) -> Result<Vec<Value>> {
         let sql = if item.is_some() {
             "SELECT id, project_id, item_id, name, kind, path, content, mime_type, size_bytes, metadata, created_at FROM artifacts WHERE item_id = ?1 ORDER BY created_at DESC, rowid DESC LIMIT 100"

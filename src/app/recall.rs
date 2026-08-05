@@ -1,5 +1,6 @@
 use super::App;
 use super::lease::PickFilter;
+use super::repository::execution_run::ExecutionRunRepository;
 use crate::secrets::looks_secret_like;
 use crate::storage::row_to_item;
 use crate::util::collect_rows;
@@ -42,6 +43,40 @@ impl App {
         plan: Option<&str>,
         peek: bool,
     ) -> Result<Value> {
+        if work_type == Some("review") {
+            let plan_id = plan.ok_or_else(|| {
+                anyhow::anyhow!("review_gate_pick_requires_plan: use --plan <plan-id>")
+            })?;
+            return Ok(self
+                .review_gate_pick_value(plan_id, peek)?
+                .unwrap_or_else(|| {
+                    json!({
+                        "work_packet": null,
+                        "reason": "no_review_gate_ready",
+                        "remaining": self.progress_value().unwrap_or_else(|_| json!({})),
+                    })
+                }));
+        }
+        if work_type == Some("verification") {
+            let plan_id = plan.ok_or_else(|| {
+                anyhow::anyhow!("verification_pick_requires_plan: use --plan <plan-id>")
+            })?;
+            return Ok(self
+                .verification_work_packet_value(plan_id, peek)?
+                .unwrap_or_else(|| {
+                    json!({
+                        "work_packet": null,
+                        "reason": "no_verification_ready",
+                        "remaining": self.progress_value().unwrap_or_else(|_| json!({})),
+                    })
+                }));
+        }
+        if matches!(work_type, None | Some("code"))
+            && let Some(plan_id) = plan
+            && let Some(packet) = self.repair_work_packet_value(plan_id)?
+        {
+            return Ok(packet);
+        }
         let plan_path = plan.map(|id| self.get_plan(id)).transpose()?;
         let filter = PickFilter {
             exclude,
@@ -58,7 +93,10 @@ impl App {
         if let Some((id, worker)) = leased {
             let mut packet = self.work_packet(&id, worker.as_deref())?;
             if peek {
+                packet["work_packet"] = self.peek_outcome_work_packet(&id)?;
                 packet["peek"] = json!(true);
+            } else {
+                packet["work_packet"] = self.outcome_work_packet(&id)?;
             }
             Ok(packet)
         } else {
@@ -90,6 +128,28 @@ impl App {
         }
     }
 
+    /// Read-only outcome projection for `pick --peek`. Unlike the mutating
+    /// dispatch path, this never creates a FeatureRun or admits budget. If a
+    /// run already exists, expose its canonical persisted state as-is.
+    fn peek_outcome_work_packet(&self, item_id: &str) -> Result<Value> {
+        let item = self.get_item(item_id)?;
+        let Some(plan_path) = item.plan_path.as_deref() else {
+            return Ok(json!({"kind": "outcome", "item_id": item_id}));
+        };
+        let Some(plan_id) = self.plan_id_for_path(plan_path)? else {
+            return Ok(json!({"kind": "outcome", "item_id": item_id}));
+        };
+        let repository = ExecutionRunRepository::new(&self.conn);
+        let Some(run) = repository.active_feature_run_for_plan(&item.project_id, &plan_id)? else {
+            return Ok(json!({"kind": "outcome", "item_id": item_id}));
+        };
+        Ok(json!({
+            "kind": "outcome",
+            "item_id": item_id,
+            "execution_state": self.canonical_execution_state_value(&run.run.id, None)?,
+        }))
+    }
+
     /// One entry per ready item the active filters rejected, plus the pick
     /// commands that would lease that work.
     fn pick_exclusions(
@@ -107,7 +167,7 @@ impl App {
         let mut repair = Vec::new();
         for item in ready_items {
             let cause = if filter.exclude == Some(item.id.as_str()) {
-                "this worker just requested it (a maker never picks its own review)".to_string()
+                "this outcome is excluded from the current lease".to_string()
             } else if let Some(required) =
                 filter.work_type.filter(|wt| *wt != item.work_type.as_str())
             {

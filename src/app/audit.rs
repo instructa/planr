@@ -2,6 +2,7 @@ use super::App;
 use super::audit_evidence::{
     append_audit_proof_human, append_evidence_clause_human, plan_evidence_coverage_clause,
 };
+use super::repository::execution_run::{ExecutionRunRepository, ReviewGateKind};
 use crate::storage::row_to_item;
 use crate::util::collect_rows;
 use anyhow::Result;
@@ -25,17 +26,31 @@ impl App {
         };
         let is_open = |status: &crate::model::ItemStatus| !status.is_settled();
 
-        let open_items: Vec<_> = scope
+        let canonical_scope: Vec<_> = scope
+            .iter()
+            .filter(|item| {
+                !matches!(
+                    item.work_type.as_str(),
+                    "review" | "fix" | "follow-up-review"
+                )
+            })
+            .cloned()
+            .collect();
+        let open_items: Vec<_> = canonical_scope
             .iter()
             .filter(|item| is_open(&item.status))
             .cloned()
             .collect();
-        let open_reviews: Vec<_> = open_items
-            .iter()
-            .filter(|item| item.work_type == "review")
-            .cloned()
-            .collect();
-        let items_clause = if scope.is_empty() {
+        let repository = ExecutionRunRepository::new(&self.conn);
+        let open_non_final_reviews = match self.canonical_execution_run_id_for_plan(plan_id)? {
+            Some(run_id) => repository.review_gates_for_run(&run_id, true)?,
+            None => Vec::new(),
+        }
+        .into_iter()
+        .filter(|gate| gate.kind != ReviewGateKind::FinalProduct)
+        .map(|gate| self.review_gate_projection_value(&gate))
+        .collect::<Result<Vec<_>>>()?;
+        let items_clause = if canonical_scope.is_empty() {
             json!({"clause": "items_settled", "pass": false, "open": [], "detail": format!("no map items exist for this plan; run `planr map build --from {plan_id}` first")})
         } else {
             json!({"clause": "items_settled", "pass": open_items.is_empty(), "open": open_evidence(&open_items)})
@@ -85,9 +100,14 @@ impl App {
         let evidence_clause =
             plan_evidence_coverage_clause(self, plan_id, contract.is_some(), verification_logs)?;
         let proof = self.proof_status_for_plan(plan_id)?;
+        let material_review_clause = self.required_material_reviews_clause(plan_id)?;
+        let final_review_clause = self.final_product_review_clause_value(plan_id)?;
+        let final_review_for_next = final_review_clause.clone();
         let clauses = vec![
             items_clause,
-            json!({"clause": "reviews_complete", "pass": open_reviews.is_empty(), "open": open_evidence(&open_reviews)}),
+            json!({"clause": "reviews_complete", "pass": open_non_final_reviews.is_empty(), "open": open_non_final_reviews}),
+            material_review_clause,
+            final_review_clause,
             json!({"clause": "approvals_clear", "pass": approval_blocked.is_empty(), "open": approval_blocked}),
             evidence_clause,
         ];
@@ -97,16 +117,16 @@ impl App {
         });
         let next = if holds {
             None
-        } else if scope.is_empty() {
+        } else if canonical_scope.is_empty() {
             Some(format!("planr map build --from {plan_id}"))
-        } else if open_reviews.iter().any(|item| item.status == "ready") {
+        } else if open_non_final_reviews.iter().any(|entry| {
+            entry["review_gate"]["status"] == "pending"
+                || entry["review_gate"]["status"] == "leased"
+        }) {
             Some(format!(
                 "planr pick --plan {plan_id} --work-type review --json"
             ))
-        } else if open_items
-            .iter()
-            .any(|item| item.status == "ready" && item.work_type != "review")
-        {
+        } else if open_items.iter().any(|item| item.status == "ready") {
             Some(format!("planr pick --plan {plan_id} --json"))
         } else if let Some(blocked) = approval_blocked.first() {
             Some(format!(
@@ -118,6 +138,10 @@ impl App {
                 "planr map status (then `planr recover sweep --apply` if leases are stale)"
                     .to_string(),
             )
+        } else if final_review_for_next["pass"].as_bool() != Some(true) {
+            final_review_for_next["next"]
+                .as_str()
+                .map(ToOwned::to_owned)
         } else if let Some(evidence) = clauses
             .iter()
             .find(|clause| {
@@ -146,6 +170,7 @@ impl App {
         };
         Ok(json!({
             "plan": plan,
+            "execution_state": self.canonical_execution_state_for_plan_value(plan_id)?,
             "contract": contract,
             "clauses": clauses,
             "proof": proof,
@@ -155,8 +180,64 @@ impl App {
         }))
     }
 
+    fn required_material_reviews_clause(&self, plan_id: &str) -> Result<Value> {
+        let plan = self.get_plan(plan_id)?;
+        let repository = ExecutionRunRepository::new(&self.conn);
+        let mut stmt = self.conn.prepare(
+            "SELECT id, project_id, parent_item_id, title, description, status, work_type, priority, worker_id, plan_path
+             FROM items
+             WHERE plan_path = ?1
+             ORDER BY created_at, id",
+        )?;
+        let rows = stmt.query_map(params![plan.path], row_to_item)?;
+        let mut reviewed = Vec::new();
+        let mut open = Vec::new();
+        for row in rows {
+            let item = row?;
+            let Some(materiality) = self.item_metadata_field(&item.id, "materiality")? else {
+                continue;
+            };
+            if materiality["effective_review"]["required"].as_bool() != Some(true) {
+                continue;
+            }
+            let projection = repository
+                .review_gate_for_outcome_item(&item.id)?
+                .map(|gate| self.review_gate_projection_value(&gate))
+                .transpose()?;
+            let pass = projection
+                .as_ref()
+                .is_some_and(|entry| entry["accepted"] == true);
+            let entry = json!({
+                "id": item.id,
+                "status": item.status,
+                "title": item.title,
+                "review_gate": projection,
+                "pass": pass,
+            });
+            if !pass {
+                open.push(entry.clone());
+            }
+            reviewed.push(entry);
+        }
+        Ok(json!({
+            "clause": "required_material_reviews_complete",
+            "pass": open.is_empty(),
+            "required": true,
+            "open": open,
+            "reviewed": reviewed,
+        }))
+    }
+
     pub(crate) fn plan_audit_human(value: &Value) -> String {
-        let mut human = String::new();
+        let mut human = value["execution_state"]
+            .as_object()
+            .map(|_| {
+                format!(
+                    "{}\n",
+                    Self::canonical_execution_state_human(&value["execution_state"])
+                )
+            })
+            .unwrap_or_default();
         for clause in value["clauses"].as_array().into_iter().flatten() {
             let name = clause["clause"].as_str().unwrap_or_default();
             let pass = clause["pass"].as_bool().unwrap_or(false);
@@ -181,6 +262,9 @@ impl App {
                     "\n  open: {} [{status}]",
                     open["id"].as_str().unwrap_or_default()
                 ));
+                if let Some(reason) = open["reason"].as_str() {
+                    human.push_str(&format!(" — {reason}"));
+                }
             }
             append_evidence_clause_human(&mut human, clause);
             human.push('\n');

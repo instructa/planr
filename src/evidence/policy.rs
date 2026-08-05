@@ -133,16 +133,10 @@ pub(crate) struct EvidenceRepositorySnapshot {
 }
 
 impl EvidenceRepositorySnapshot {
-    pub(crate) fn trusted_policy_binding(
-        &self,
-        proof_obligation_digest: &Sha256Digest,
-    ) -> RepositoryPolicyBinding {
+    pub(crate) fn trusted_policy_binding(&self) -> anyhow::Result<RepositoryPolicyBinding> {
         self.policy
             .clone()
-            .unwrap_or_else(|| RepositoryPolicyBinding {
-                digest: proof_obligation_digest.clone(),
-                source: TrustedPolicySource::ProofObligation,
-            })
+            .ok_or_else(|| anyhow::anyhow!("repository Evidence policy is required for execution"))
     }
 }
 
@@ -300,13 +294,12 @@ fn untracked_file_digests(repository_root: &Path) -> Result<Vec<Value>, Evidence
         .collect()
 }
 
-const SOURCE_PATHS: &[&str] = &[
+pub(crate) const SOURCE_PATHS: &[&str] = &[
     ".",
     ":(exclude).planr/planr.sqlite",
     ":(exclude).planr/planr.sqlite-shm",
     ":(exclude).planr/planr.sqlite-wal",
     ":(exclude).planr/artifacts/**",
-    ":(exclude).planr/reviews/**",
     ":(exclude).planr/verification/**",
     ":(exclude).planr/evidence/runs/**",
     ":(exclude).planr/evidence/attempts/**",

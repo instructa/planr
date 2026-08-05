@@ -1,7 +1,7 @@
 {
   "id": "epolicy-default-v1",
   "schema_version": "evidence.contract.v1",
-  "policy_digest": "sha256:c1a2a26ece3ee7a3cf3166cd849664d723fe2fffda2dc0773b2c92dc8d1ae8c1",
+  "policy_digest": "sha256:4dc9ebefae0d8334a19d958a456d5633d615025e7643f999dfda6d4c30bfc613",
   "defaults": {
     "preset_id": "preset-http-health",
     "binding": true,
@@ -23,15 +23,6 @@
           "target": {
             "kind": "local_service",
             "uri": "http://127.0.0.1:4173/health"
-          },
-          "environment": {
-            "kind": "local",
-            "id": "dev-shell",
-            "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
-          },
-          "runtime_target": {
-            "kind": "process",
-            "id": "planr-doc-fixture"
           }
         }
       ]

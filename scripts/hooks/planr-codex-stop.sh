@@ -1,6 +1,7 @@
 #!/bin/sh
-# Planr Codex Stop hook. It fails open: hook infrastructure problems must
-# never prevent Codex from stopping.
+# Planr Codex Stop hook. The hook owns no workflow policy: it forwards the
+# host envelope to `planr stop`, whose plan audit reads canonical FeatureRun /
+# ReviewGate execution state. Infrastructure failures still fail open.
 set -u
 command -v planr >/dev/null 2>&1 || exit 0
 tmp=$(mktemp "${TMPDIR:-/tmp}/planr-codex-stop.XXXXXX") || exit 0

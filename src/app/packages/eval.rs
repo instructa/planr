@@ -13,7 +13,6 @@ struct PackagedEvalEvidenceRefContext<'a> {
     logs: &'a BTreeMap<&'a str, &'a str>,
     runs: &'a BTreeSet<&'a str>,
     comparisons: &'a BTreeSet<&'a str>,
-    review_links: &'a BTreeSet<(&'a str, &'a str)>,
     artifacts: &'a BTreeMap<&'a str, Option<&'a str>>,
 }
 
@@ -39,14 +38,13 @@ impl App {
     pub(super) fn validate_packaged_eval_identities(&self, data: &Value) -> Result<()> {
         let map = required_value(data, "map", "map")?;
         let items = required_array(map, "items", "map.items")?;
-        let links = required_array(map, "links", "map.links")?;
         let logs = optional_nullable_array(data, "logs")?;
         let eval_suite_snapshots = optional_nullable_array(data, "eval_suite_snapshots")?;
         let eval_runs = optional_nullable_array(data, "eval_runs")?;
         let eval_comparisons = optional_nullable_array(data, "eval_comparisons")?;
         let eval_invalidations = optional_nullable_array(data, "eval_invalidations")?;
         let eval_evidence_refs = optional_nullable_array(data, "eval_evidence_refs")?;
-        let review_artifacts = required_array(data, "review_artifacts", "review_artifacts")?;
+        let artifacts = required_array(data, "artifacts", "artifacts")?;
         let mut packaged_suite_snapshots = BTreeMap::new();
         for snapshot in eval_suite_snapshots {
             let digest = required_str(snapshot, "digest", "eval_suite_snapshots[].digest")?;
@@ -261,21 +259,11 @@ impl App {
             .iter()
             .map(|comparison| required_str(comparison, "id", "eval_comparisons[].id"))
             .collect::<Result<BTreeSet<_>>>()?;
-        let mut packaged_review_links = BTreeSet::new();
-        for link in links {
-            if required_str(link, "kind", "map.links[].kind")? == "reviews" {
-                packaged_review_links.insert((
-                    required_str(link, "from", "map.links[].from")?,
-                    required_str(link, "to", "map.links[].to")?,
-                ));
-            }
-        }
         let mut packaged_artifacts = BTreeMap::new();
-        for package in review_artifacts {
-            let artifact = required_value(package, "artifact", "review_artifacts[].artifact")?;
+        for artifact in artifacts {
             packaged_artifacts.insert(
-                required_str(artifact, "id", "review_artifacts[].artifact.id")?,
-                nullable_str(artifact, "item_id", "review_artifacts[].artifact.item_id")?,
+                required_str(artifact, "id", "artifacts[].id")?,
+                nullable_str(artifact, "item_id", "artifacts[].item_id")?,
             );
         }
         let evidence_ref_context = PackagedEvalEvidenceRefContext {
@@ -283,7 +271,6 @@ impl App {
             logs: &packaged_logs,
             runs: &packaged_runs,
             comparisons: &packaged_comparisons,
-            review_links: &packaged_review_links,
             artifacts: &packaged_artifacts,
         };
         for evidence_ref in eval_evidence_refs {
@@ -529,36 +516,6 @@ impl App {
                     ));
                 }
             }
-            "review" => {
-                let packaged_work_type = context.items.get(attachment_id).copied();
-                let existing_review_target = if packaged_work_type.is_none() {
-                    let review = self.get_item(attachment_id).map_err(|_| {
-                        anyhow!("invalid Planr package: eval evidence ref review attachment {attachment_id} is unresolved")
-                    })?;
-                    if review.work_type != "review" {
-                        return Err(anyhow!(
-                            "invalid Planr package: eval evidence ref review attachment {attachment_id} must be a review item"
-                        ));
-                    }
-                    self.review_target(attachment_id)?.map(|target| target.id)
-                } else {
-                    None
-                };
-                if packaged_work_type.is_some_and(|work_type| work_type != "review") {
-                    return Err(anyhow!(
-                        "invalid Planr package: eval evidence ref review attachment {attachment_id} must be a review item"
-                    ));
-                }
-                let packaged_reviews_claim =
-                    context.review_links.contains(&(attachment_id, item_id));
-                let reviews_claim =
-                    packaged_reviews_claim || existing_review_target.as_deref() == Some(item_id);
-                if !reviews_claim {
-                    return Err(anyhow!(
-                        "invalid Planr package: eval evidence ref review attachment {attachment_id} must review item {item_id}"
-                    ));
-                }
-            }
             "artifact" => {
                 let packaged_owner = context.artifacts.get(attachment_id).copied().flatten();
                 let existing_owner = if packaged_owner.is_none() {
@@ -581,7 +538,7 @@ impl App {
             }
             _ => {
                 return Err(anyhow!(
-                    "invalid Planr package: eval evidence ref attachment kind must be log, review, or artifact"
+                    "invalid Planr package: eval evidence ref attachment kind must be log or artifact"
                 ));
             }
         }

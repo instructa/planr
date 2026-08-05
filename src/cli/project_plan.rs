@@ -1,5 +1,6 @@
 use super::{ClientArg, IdArg, JsonOnlyArgs, PlanStageArg, PromptPrintArgs};
 use clap::{Args, Subcommand};
+use std::path::PathBuf;
 
 #[derive(Args, Debug)]
 pub(crate) struct AgentsArgs {
@@ -55,6 +56,8 @@ pub(crate) enum ProjectCommand {
     Init(ProjectInitArgs),
     Show(JsonOnlyArgs),
     List(JsonOnlyArgs),
+    /// Preview or atomically apply canonical project path relocation.
+    Relocate(ProjectRelocateArgs),
     Delete(ProjectDeleteArgs),
 }
 
@@ -78,6 +81,16 @@ pub(crate) struct ProjectDeleteArgs {
 }
 
 #[derive(Args, Debug)]
+pub(crate) struct ProjectRelocateArgs {
+    pub(crate) project_id: String,
+    #[arg(long)]
+    pub(crate) destination: PathBuf,
+    /// Apply the validated relocation. Without this flag the command is read-only.
+    #[arg(long)]
+    pub(crate) apply: bool,
+}
+
+#[derive(Args, Debug)]
 pub(crate) struct PlanArgs {
     #[command(subcommand)]
     pub(crate) command: PlanCommand,
@@ -90,6 +103,8 @@ pub(crate) enum PlanCommand {
     Split(PlanSplitArgs),
     Check(IdArg),
     Audit(IdArg),
+    /// Create or show the one plan-scoped final product review.
+    FinalReview(IdArg),
     Show(IdArg),
     List(PlanListArgs),
     Archive(IdArg),

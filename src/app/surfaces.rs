@@ -3,14 +3,13 @@ use crate::cli::{ArtifactCommand, DebugCommand, EventCommand, ScrubArgs, TraceCo
 use crate::util::short_id;
 use anyhow::{Result, anyhow, bail};
 use rusqlite::params;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::fs;
 
 impl App {
     /// Full work packet for an item: graph links, evidence logs, runtime,
-    /// recovery, conditions, and approval state. Review items additionally
-    /// inline their target item with its evidence logs, so a reviewer's
-    /// first trace already contains what is being audited.
+    /// recovery, conditions, and approval state. ReviewGate state is exposed
+    /// through the dedicated review surfaces rather than synthetic map items.
     pub(crate) fn trace_item_value(&self, item_id: &str) -> Result<serde_json::Value> {
         let mut value = json!({
             "item": self.get_item(item_id)?,
@@ -22,19 +21,23 @@ impl App {
             "approval": self.item_approval(item_id)?,
             "proof": self.proof_status_for_item(item_id)?,
         });
+        if let Some(materiality) = self.item_metadata_field(item_id, "materiality")? {
+            value["materiality"] = materiality;
+        }
+        if let Some(plan_id) = value["item"]["plan_path"]
+            .as_str()
+            .map(|path| self.plan_id_for_path(path))
+            .transpose()?
+            .flatten()
+        {
+            value["execution_state"] = self
+                .canonical_execution_state_for_plan_value(&plan_id)?
+                .unwrap_or(Value::Null);
+        }
         // Only present when a route is declared or a run recorded a
         // profile, so opted-out projects keep their exact trace shape.
         if let Some(routing) = self.trace_routing_value(item_id)? {
             value["routing"] = routing;
-        }
-        if value["item"]["work_type"] == "review" {
-            if let Some(target) = self.review_target(item_id)? {
-                value["target"] = json!({
-                    "item": self.get_item(&target.id)?,
-                    "logs": self.list_logs(Some(&target.id))?,
-                    "proof": self.proof_status_for_item(&target.id)?,
-                });
-            }
         }
         Ok(value)
     }
@@ -42,12 +45,17 @@ impl App {
     /// Human rendering of a trace; the JSON mode stays the full packet.
     fn trace_human(trace: &serde_json::Value) -> String {
         let item = &trace["item"];
-        let mut out = format!(
+        let mut out = trace
+            .get("execution_state")
+            .filter(|value| !value.is_null())
+            .map(|state| format!("{}\n", Self::canonical_execution_state_human(state)))
+            .unwrap_or_default();
+        out.push_str(&format!(
             "{} {} [{}]",
             item["id"].as_str().unwrap_or_default(),
             item["title"].as_str().unwrap_or_default(),
             item["status"].as_str().unwrap_or_default(),
-        );
+        ));
         if let Some(worker) = item["worker_id"].as_str() {
             out.push_str(&format!(" owner {worker}"));
         }

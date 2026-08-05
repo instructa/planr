@@ -2544,15 +2544,12 @@ process.stdout.write(JSON.stringify(result));
         });
         let target = json!({"kind": "process", "uri": "local://generic-validator"});
         let environment = json!({"kind": "local", "id": "env-local", "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"});
-        let runtime_target = json!({"kind": "process", "id": "runtime-local"});
         let observations = json!([{
             "id": "obs-generic-validator",
             "type": "planr.import.validator.generic_predicate",
             "subject": "validated-artifact-import",
             "expected": expected,
             "target": target.clone(),
-            "environment": environment.clone(),
-            "runtime_target": runtime_target,
             "payload_schema": {"schema_ref": "schema://planr.test.health"}
         }]);
         let obligation: ProofObligation = serde_json::from_value(json!({
@@ -2565,10 +2562,7 @@ process.stdout.write(JSON.stringify(result));
             "observations": observations,
             "fixture_policy": {"fixtures_allowed": false, "mocks_allowed": false, "disclosure_required": false},
             "freshness_policy": {},
-            "assurance_policy": {},
-            "policy_digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
-            "config_digest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
-            "created_at": "2026-07-29T00:00:00Z"
+            "assurance_policy": {}
         }))
         .unwrap();
         conn.execute(
@@ -2586,9 +2580,9 @@ process.stdout.write(JSON.stringify(result));
                 obligation.title.as_str(),
                 serde_json::to_string(&obligation.observations).unwrap(),
                 serde_json::to_string(&obligation.fixture_policy).unwrap(),
-                obligation.policy_digest.as_str(),
-                obligation.config_digest.as_str(),
-                obligation.created_at.as_str(),
+                "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+                "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+                "2026-07-29T00:00:00Z",
             ],
         )
         .unwrap();

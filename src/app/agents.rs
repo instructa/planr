@@ -583,7 +583,7 @@ impl App {
                 ),
             ],
             "pi" => vec![
-                "pi --approve --model <provider/model> --thinking <level> -p \"Use /skill:planr-work on item <item-id>. Stop after requesting review.\"".to_string(),
+                "pi --approve --model <provider/model> --thinking <level> -p \"Use /skill:planr-work on item <item-id> as the first item in a compatible same-plan maker run. Keep one worker identity, settle each ordinary outcome with planr done --next, write a compact durable handoff only at a genuine stop, and stop after requesting any material review, blocker, incompatible pick, empty pick, or budget boundary.\"".to_string(),
             ],
             _ => Vec::new(),
         };

@@ -154,7 +154,7 @@ CREATE TABLE IF NOT EXISTS eval_evidence_refs(
   project_id TEXT NOT NULL,
   target_kind TEXT NOT NULL CHECK(target_kind IN ('run','comparison')),
   target_id TEXT NOT NULL,
-  planr_attachment_kind TEXT NOT NULL CHECK(planr_attachment_kind IN ('log','review','artifact')),
+  planr_attachment_kind TEXT NOT NULL CHECK(planr_attachment_kind IN ('log','artifact')),
   planr_attachment_id TEXT NOT NULL,
   item_id TEXT NOT NULL,
   closure_authority INTEGER NOT NULL DEFAULT 0 CHECK(closure_authority = 0),
