@@ -11,7 +11,7 @@ The map is a dependency graph. An item is one live unit of work. Links express r
 | --- | --- |
 | `blocks` | Readiness-blocking. Downstream becomes ready only when upstream is `closed` or `closed_partial`. |
 | `hands_to` | Readiness-blocking with handoff context. It has the same `closed`/`closed_partial` requirement as `blocks`. |
-| `reviews` | A review item gates its target's closure. |
+| `reviews` | Historical read-only relationship; new review authority is represented by ReviewGate state. |
 | `relates_to` | Non-blocking context relationship. |
 
 Both link kinds block readiness when the kind is `blocks` or `hands_to`; the handoff link adds downstream context but is not a softer dependency.
@@ -26,7 +26,7 @@ The SQLite map owns link and status truth. Workers mutate only items they have l
 
 ## How it changes
 
-The direct lifecycle is `pending → ready → picked → closed`; `running` is an optional explicit work state. Evidence-backed `planr done` without `--review` closes directly. When review is requested, the branch is `picked` or `running` → `in_review` → `closed` after the review gate completes. Other states are `blocked`, `failed`, `cancelled`, and `closed_partial`.
+The direct item lifecycle is `pending → ready → picked → closed`; `running` is an optional explicit work state. Evidence-backed `planr done` settles the outcome through its FeatureRun and closes the item. When materiality or structured escalation requires review, a separate durable ReviewGate becomes pending while the FeatureRun waits for an independent accepted attempt. Other item states are `blocked`, `failed`, `cancelled`, and `closed_partial`.
 
 For readiness links, only an upstream `closed` or `closed_partial` status satisfies `blocks` and `hands_to`. A `cancelled` item counts as settled in aggregate progress, but it does **not** satisfy either readiness link; downstream remains pending until the graph is explicitly adapted. This prevents cancellation from silently authorizing dependent work.
 

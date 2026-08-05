@@ -5,7 +5,7 @@ description: Distinguish evidence-based checker work from explicit human decisio
 
 ## What they are
 
-A **review** is a graph item that checks a target against its plan, changed files, logs, tests, and live evidence. An **approval** is an explicit human decision attached to an item.
+A **ReviewGate** is durable audit state attached to a FeatureRun outcome or plan. It records independent leases, immutable attempts, findings, and acceptance. An **approval** is an explicit human decision attached to an item.
 
 ## Why both exist
 
@@ -13,18 +13,18 @@ Technical correctness and authorization are different questions. A reviewer can 
 
 ## Who owns them
 
-The maker submits evidence and requests review. A checker picks review work—ideally with a different `PLANR_WORKER_ID`. The named human approves or denies an approval request. The map enforces both gates.
+The maker submits evidence with plain `planr done`; Planr materiality decides whether a ReviewGate is required. A checker leases the gate with a different `PLANR_WORKER_ID`. The named human approves or denies an approval request. FeatureRun and map state enforce their respective gates.
 
 ## How they change
 
 ```bash
-planr done <item-id> --summary "Implemented feature" --cmd "cargo test" --review --json
+planr done <item-id> --summary "Implemented feature" --cmd "cargo test" --json
 planr pick --plan <plan-id> --work-type review --json
 planr review evidence <target-item-id> --json
-planr review close <review-item-id> --verdict complete --close-target --json
+planr review close <review-gate-id> --verdict complete --json
 ```
 
-Planr derives `review_mode` as `independent`, `single_agent`, or `unattributed` from recorded worker identity. A `not-complete` verdict with actionable findings creates fix and follow-up review work; the target stays `in_review` until the chain settles.
+Planr requires the leased reviewer to differ from the responsible maker. A `not-complete` verdict appends an immutable attempt and durable findings to the same gate. The maker resolves named findings, and that gate returns to pending independent re-review; no review or fix map items are created.
 
 ```bash
 planr approval request <item-id> --reason "production release"

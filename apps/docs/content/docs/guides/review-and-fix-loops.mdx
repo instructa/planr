@@ -8,8 +8,10 @@ description: Audit evidence independently and keep findings as explicit gated wo
 ```bash
 export PLANR_WORKER_ID="feature-maker"
 planr done <item-id> --summary "Implemented feature" --files src/feature.rs \
-  --cmd "cargo test feature" --tests "feature suite passed" --review --json
+  --cmd "cargo test feature" --tests "feature suite passed" --json
 ```
+
+Planr materiality decides whether this settlement creates or reuses a ReviewGate. For an intentional checkpoint beyond computed materiality, use `--escalate <reason>` together with `--escalation-ref` and `--escalation-explanation`.
 
 ## Checker: inspect before deciding
 
@@ -25,25 +27,48 @@ Compare acceptance criteria, implementation, focused tests, regressions, logs, a
 ## Clean verdict
 
 ```bash
-planr review close <review-item-id> \
+planr review close <review-gate-id> \
   --verdict complete \
-  --findings "Acceptance criteria and recorded verification are satisfied." \
-  --close-target \
+  --reviewer feature-checker \
   --json
 ```
 
 ## Findings verdict
 
 ```bash
-planr review close <review-item-id> \
+planr review close <review-gate-id> \
   --verdict not-complete \
+  --reviewer feature-checker \
   --findings "Empty input bypasses validation; add a regression test." \
   --json
-planr review artifact <review-item-id>
-planr map show --json
+planr review show <review-gate-id> --json
 ```
 
-Planr creates fix and follow-up review work. The original target remains `in_review`, so downstream work stays gated. The maker fixes only the explicit finding, records new evidence, and unlocks the follow-up checker item. Never close the original target merely by summarizing an unresolved finding.
+Planr records an immutable attempt and durable findings on the same ReviewGate. The FeatureRun remains gated. The responsible maker repairs only the named findings, records new evidence, and explicitly resolves their ids; the same gate then becomes ready for independent re-review. No workflow-only review or fix map items are created.
+
+```bash
+export PLANR_WORKER_ID="feature-maker"
+planr pick --plan <plan-id> --work-type code --json
+```
+
+The pick has `work_packet.kind: "outcome"`, `mode: "finding_repair"`, and the same gate in `execution_state`. It does not have a synthetic fix item. After changing only the named finding scope, attach evidence to the gate's outcome item and resolve the finding:
+
+```bash
+planr log add --item <review-gate-scope-item-id> \
+  --summary "Fixed empty input validation and added regression coverage." \
+  --files src/feature.rs --files tests/feature.rs \
+  --cmd "cargo test feature_empty_input -- --exact" \
+  --tests "feature_empty_input passed" \
+  --json
+planr review findings <same-review-gate-id> --resolve <finding-id> --json
+
+export PLANR_WORKER_ID="feature-checker"
+planr pick --plan <plan-id> --work-type review --json
+planr review close <same-review-gate-id> \
+  --verdict complete \
+  --reviewer feature-checker \
+  --json
+```
 
 ## Unclear verdict
 

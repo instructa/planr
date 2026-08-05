@@ -338,21 +338,21 @@ Kills the last structural guess from the fourth Codex dogfood run: map granulari
 
 ## [1.1.17] - 2026-06-11
 
-Attribution can never fall through a crack: fixes from the third manual Codex dogfood run, where `done --review` on a never-picked item left the target `ready` and the review `unattributed`.
+Attribution can never fall through a crack: fixes from the third manual Codex dogfood run, where settlement of a never-picked outcome could lose the responsible maker identity.
 
 ### Fixed
 
-- `done` on a ready item that was never picked now adopts it: the lease (worker id, pick token, timestamps) is written retroactively before logging, so the completion always records a maker, the `in_review` transition is never skipped silently, and `review_mode` can no longer degrade to `unattributed` through this path. Inspired by plandb's lenient-complete-with-backfill, extended to carry identity, not just timestamps.
-- `review request` on a settled item (`closed`, `closed_partial`, `cancelled`, `failed`) fails with `invalid_transition` and a follow-up suggestion instead of creating a gate on finished work. Pre-attaching a review gate to pending/blocked work stays legal.
+- `done` on a ready outcome that was never picked now adopts it: the lease is written retroactively before logging, so the FeatureRun always records its responsible maker.
+- Structured escalation on a settled outcome fails with `invalid_transition` instead of creating a ReviewGate on finished work.
 
 ### Added
 
-- `done --review` output names the target's resulting status ("… is in_review") and the `next` command is plan-scoped when the item belongs to a plan (`planr pick --plan <id> --work-type review --json`), so the reviewer command is copy-pastable without resolving the plan id.
-- `review close` explains an `unattributed` mode inline: the target carried no recorded lease — instead of stamping the word without context.
+- ReviewGate settlement output includes a plan-scoped reviewer pick command, so the checker command is copy-pastable without resolving the plan id.
+- ReviewGate closure reports attribution failures explicitly when the FeatureRun carries no responsible-maker lease.
 
 ### Changed
 
-- Skills: the goal contract's "all reviews closed" clause audits review items that exist — plain-`done` items satisfy the contract without a review gate, so skipping low-signal reviews never blocks `plan audit` (planr-goal, planr-loop).
+- Skills: goal contracts audit required durable ReviewGates; plain `done` outcomes satisfy the contract without a gate when materiality does not require one (planr-goal, planr-loop).
 - Skills: single-quote `--files` values containing `$` (route files like `watch.$videoId.tsx`) so the shell does not expand them (planr-work).
 
 ## [1.1.16] - 2026-06-11
@@ -363,12 +363,12 @@ Filter-aware picks and a breakdown contract, from the second manual Codex dogfoo
 
 - `item breakdown` has an explicit title contract: repeat `--into` once per child, or pass one value with newline- or comma-separated titles — both parse identically (CLI and MCP `planr_item_breakdown`). The output now lists every created child with id and status, the `blocks` chain links, the parked parent, and the next command, instead of a bare count. MCP breakdown now chains children and parks the parent exactly like the CLI (it previously created flat, unchained children).
 - A null pick caused by filters explains itself: when ready work exists but `--work-type`, `--plan`, or the own-review exclusion rejected all of it, `reason` is `ready_items_excluded_by_filter` and the response carries `excluded` (each ready item with its mismatch cause) and `repair` (the exact pick commands that would lease that work) — across CLI, MCP, and HTTP. Replaces the contradictory `no_ready_item_in_plan`/`no_ready_item_of_work_type` answers that reported `ready: 1` alongside "no item".
-- `done` without `--next` sets `next` to the exact follow-up command (`planr pick --work-type review --json` after a review request, `planr pick --json` after a close), so every settlement output ends in an action.
+- `done` without `--next` sets `next` to the exact follow-up command (a ReviewGate lease after material settlement, otherwise the next outcome pick), so every settlement output ends in an action.
 
 ### Changed
 
 - Skills: one agent instance keeps one `PLANR_WORKER_ID` — never export a second identity inside the same instance to make a review look `independent`; an honest `single_agent` stamp beats a fake `independent` one (planr-review, planr-loop).
-- Skills: request reviews where they carry signal — implementation slices and user-facing work finish with `done --review`; trivial inspection/baseline items close with plain `done`, evidence still required (planr-loop).
+- Skills: FeatureRun materiality opens ReviewGates where they carry signal; low-signal outcomes use plain `done`, with evidence still required (planr-loop).
 - Install docs list npm (`npm install -g planr`) as a package-manager path alongside Homebrew, and the Homebrew section no longer reads as pre-publication.
 
 ## [1.1.15] - 2026-06-11
@@ -430,12 +430,12 @@ Cosmetic batch from the v1.1.10 dogfood run.
 ### Added
 
 - `PLANR_WORKER_ID` environment override: agents export an explicit identity (e.g. `maker-1`, `checker-1`) once per session and every pick, log, heartbeat, and ownership check attributes to it instead of `client:host:user`. Takes precedence over `PLANR_SESSION_ID`.
-- `close_target` is available through MCP `planr_review_close` and HTTP `POST /v1/reviews/{id}/close` — full parity with `review close --close-target`.
+- ReviewGate closure is available consistently through CLI, MCP, and HTTP.
 
 ### Fixed
 
 - JSON errors carry the specific machine-readable code: closing a settled review reports `{"error": {"code": "already_closed"}}` instead of `internal_error`.
-- The review artifact written by `review close --close-target` snapshots the target after its transition, so the evidence shows the final status (`closed`) instead of the stale `in_review`.
+- Immutable ReviewGate attempts snapshot the canonical FeatureRun transition and verdict.
 - Item ids no longer contain `--` when the 32-char slug truncation lands on a hyphen.
 - `plan split` no longer duplicates the source title in the build plan title, slug, and filename when the slice already repeats it.
 
@@ -450,14 +450,14 @@ Fix pack from the v1.1.9 dogfood run.
 
 ### Added
 
-- `review close --reviewer <id>` records the checker's identity on the review log summary, the review artifact (`Reviewer:` line and metadata), and the `review_closed` event; defaults to the worker id. Maker and checker stay distinguishable in the audit trail.
-- `pick --work-type <type>` (CLI, MCP `planr_pick_item`, HTTP `POST /v1/pick`) restricts the lease to one work type, so checker agents pick only `review` items and makers only work items.
+- `review close --reviewer <id>` records the checker's identity on the immutable ReviewGate attempt and event. Maker and checker stay distinguishable in the audit trail.
+- `pick --work-type <type>` restricts leases to canonical code, review, or verification work, so checker agents lease ReviewGates while makers lease outcome items.
 - A null pick is never blind: `{"item": null}` now carries a `reason` (`empty_map`, `all_settled`, `nothing_ready`, `no_ready_item_of_work_type`, `ready_items_not_pickable`) and the `remaining` snapshot — across CLI, MCP, and HTTP.
 
 ### Fixed
 
-- `review close` on an already-settled review now fails with `already_closed` instead of exiting 0 and silently duplicating review logs, the target's auto-completion log, and the artifact — duplicates polluted handoff evidence for downstream items.
-- `close_effect` on a review item now previews the `--close-target` cascade: it lists the work that closing the review (and with it the reviewed item) would unlock, instead of claiming nothing unlocks right before the close promotes the next item.
+- Closing an already-settled gate now fails instead of silently duplicating immutable attempts or events.
+- ReviewGate projections preview the FeatureRun transition and work unlocked by an accepted verdict.
 
 ### Changed
 
@@ -482,14 +482,14 @@ Friction findings from the v1.1.7 comparison dogfood run.
 
 ### Added
 
-- `in_review` status: `done --review` / `review request` moves a picked or running item to `in_review` (ownership kept), so "work finished, waiting on the gate" is visible instead of masquerading as `running`. `in_review` items accept owner evidence and heartbeats, are excluded from new picks and stale sweeps, and `map status` reports them in their own bucket.
-- `trace item` on a review item inlines the target item and its completion logs under `target` — a reviewer's first trace already contains what is being audited.
+- FeatureRun phase and ReviewGate status make "work finished, waiting on the gate" visible without synthetic map-state rows.
+- ReviewGate projections identify their scope and expose the evidence needed by the checker.
 - `trace item` human mode renders the packet (status, owner, links, logs) instead of printing only "trace complete".
 - `review close` responses include the `remaining` board-progress snapshot, like `done` and `close`.
 
 ### Changed
 
-- Follow-up reviews created by a `not-complete`/`unclear` verdict now gate the same target item (`reviews` link), so `review close --close-target` keeps working across the fix chain and the target stays `in_review` until the chain settles.
+- Findings from a `not-complete`/`unclear` verdict remain on the same durable ReviewGate until the responsible maker repairs and resolves them for re-review.
 - Skills teach `--tests` for test evidence (test runs in `--tests`, build/serve commands in `--cmd`).
 
 ## [1.1.7] - 2026-06-10
@@ -503,7 +503,7 @@ Friction findings from the v1.1.7 comparison dogfood run.
 
 - `planr-loop` is now framed as the iteration protocol under an external orchestrator (`/goal`, automation, or human re-dispatch); the loop contract is stored in Planr context and re-read each iteration instead of relying on chat memory.
 - `planr-status` gained a goal-contract check: read the stored contract and report `contract holds` / `contract open` with the exact unmet clauses.
-- Skills overview and spec command surface teach the short worker path: `pick --json` -> `done --summary ... --review --next` -> `review close --close-target`.
+- Skills overview and spec command surface teach the short worker path: pick an outcome, settle with evidence, then independently close any ReviewGate opened by materiality.
 
 ## [1.1.6] - 2026-06-10
 
@@ -511,8 +511,8 @@ Overhead cut: 8 -> 3 commands per item.
 
 ### Added
 
-- `planr done` — compound worker command: completion log plus review request (`--review`) or direct close, and `--next` to pick the following item, in one call.
-- `review close --verdict complete --close-target` closes the review's target item along with the review (only when a completion log exists).
+- `planr done` — compound worker command: completion log plus canonical FeatureRun settlement, with `--next` to pick the following compatible outcome.
+- Accepted ReviewGate verdicts drive the canonical FeatureRun transition without a second target-close surface.
 
 ### Changed
 
@@ -571,7 +571,7 @@ Friction fixes from the dogfood run.
 
 - Packaged the repository as an official Codex, Claude Code, and Cursor plugin (skills plus `planr-worker`/`planr-reviewer` subagent roles).
 - `planr` router skill: one entry point that dispatches to the right stage skill from live map state.
-- `planr-loop` skill: autonomous closing loop — work, live verification, independent review, fix items — until the map is clean or the iteration budget runs out.
+- `planr-loop` skill: autonomous closing loop — work, live verification, independent ReviewGates, and finding repair — until the plan audit holds or the iteration budget runs out.
 - `planr-verify-web` capability skill for live browser verification.
 
 ### Fixed

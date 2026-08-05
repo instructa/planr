@@ -28,10 +28,12 @@ Work one item at a time:
 planr pick --json
 planr done <item-id> --summary "<outcome and decisive result>" \
   --files <path> --cmd "<build or live command>" \
-  --tests "<test command>" --review
+  --tests "<test command>"
 ```
 
-Every closure must be evidence-backed: changed files through `--files`, commands through `--cmd`, tests through `--tests`, remaining risk through context or findings, and review outcome through `planr review`. Use plain `done` only when review has no signal. Keep longer work current with `planr pick progress`, `pause`, and `resume`.
+Continue only from the typed packet you were authorized to perform. Makers consume `work_packet.kind: "outcome"`; `mode: "finding_repair"` repairs named findings on the same ReviewGate without a fix item, and `kind: "hold"` stops. Read lifecycle state only from `work_packet.execution_state`.
+
+Every closure must be evidence-backed: changed files through `--files`, commands through `--cmd`, tests through `--tests`, remaining risk through context or findings, and review outcome through `planr review`. Plain `planr done` is the standard outcome settlement. Branch on the returned `work_packet.transition` and `work_packet.kind`: continue only for another compatible outcome; stop for a ReviewGate, verification packet, hold, incompatible ownership or scope, or an empty pick. Use `--escalate <reason>` only for an allowed intentional override, always with `--escalation-ref <stable-reference>` and `--escalation-explanation <why-the-override-is-required>`; never use escalation to replace computed materiality. Keep longer work current with `planr pick progress`, `pause`, and `resume`.
 
 ## Plans And Dependencies
 
@@ -41,7 +43,7 @@ Create ordering explicitly with `planr link add <earlier> <later> --type blocks`
 
 ## Reviews And Approvals
 
-Request review after completion evidence. A complete review may use `planr review close <review-id> --verdict complete --close-target`. Findings use `--verdict not-complete`; Planr creates fix and follow-up review work.
+Plain `planr done` settles outcome evidence and lets FeatureRun materiality open or reuse a durable ReviewGate. Close a leased gate with `planr review close <review-gate-id> --verdict complete --reviewer <reviewer-id>`. Findings use `--verdict not-complete`; Planr appends an attempt and durable findings to that same gate. The responsible maker repairs the named findings and resolves them with `planr review findings <review-gate-id> --resolve <finding-id>` before re-review.
 
 Human gates use `planr approval request <item-id> --reason <reason>`. Never close with an open or denied approval.
 

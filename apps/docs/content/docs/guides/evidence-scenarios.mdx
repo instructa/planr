@@ -7,7 +7,7 @@ These scenarios are documented from `tests/fixtures/evidence/docs/v1/examples.ge
 
 - Fixture schema: `planr.evidence_docs_examples.v1`
 - Candidate binary used by the fixture: `target/debug/planr`
-- Evidence schema digest: `sha256:803b4c9799d8a71b85c6fbc94559b1173aadedc316a93f40ee9898a162a0a9bc`
+- Evidence schema digest: `sha256:6c23a7d943f7689dfa1219cf10adf88848f70bfc5b47b88807f79df10ae22e07`
 - Host matrix digest: `sha256:dc4365247b11919b60b3bd4e922f60e63619eb1d58060d01655b6e05044a4df0`
 
 Use the generated file for exact DTO shape. The snippets below show the copy-paste command pattern and the proven/not-proven scope carried by the fixture.
@@ -22,12 +22,13 @@ node -e 'require("node:http").createServer((_, r) => r.end("{\"status\":\"ok\"}"
 SERVER_PID=$!
 planr project init "Evidence API" --json
 node "$PLANR_REPO/apps/docs/scripts/create-evidence-scenario-files.mjs" --scenario api-only --api-url http://127.0.0.1:3000/health
-planr evidence run --input pob-docs-api-http.run.json --json
+planr evidence readiness --scope plan --id <plan-id> --json
+planr evidence run --input <exact-readiness.run_index.repository_path> --json
 planr evidence coverage --scope obligation --id pob-docs-api-http --json
 kill "$SERVER_PID"
 ```
 
-The helper writes `.planr/evidence/schemas/com.example.http.status.schema.json`, `.planr/evidence/adapters/verifier-http-curl-v1.manifest.json`, `.planr/evidence.yaml`, `pob-docs-api-http.obligation.json`, and `pob-docs-api-http.run.json`. The disposable policy registers `com.example.http.status` and `verifier-http-curl-v1`. The run input binds the HTTP obligation to the probed curl capability instance.
+The helper writes `.planr/evidence/schemas/com.example.http.status.schema.json`, `.planr/evidence/adapters/verifier-http-curl-v1.manifest.json`, `.planr/evidence.yaml`, and `pob-docs-api-http.obligation.json`; leased readiness writes the sealed executable run file and returns its exact `readiness.run_index.repository_path`. The disposable policy registers `com.example.http.status` and `verifier-http-curl-v1`; runtime, environment, manifest, source, and policy bindings live in that sealed file and resulting receipt.
 
 Proven scope:
 
@@ -46,11 +47,12 @@ Fixture case: `repository-custom-extension` — Repository custom namespaced sch
 PLANR_REPO=/path/to/planr
 planr project init "Evidence custom adapter" --json
 node "$PLANR_REPO/apps/docs/scripts/create-evidence-scenario-files.mjs" --scenario repository-custom-extension
-planr evidence run --input pob-docs-queue-depth.run.json --json
+planr evidence readiness --scope plan --id <plan-id> --json
+planr evidence run --input <exact-readiness.run_index.repository_path> --json
 planr evidence coverage --scope obligation --id pob-docs-queue-depth --json
 ```
 
-The helper writes `.planr/evidence/schemas/com.example.queue.depth.v2.schema.json`, `.planr/evidence/adapters/verifier-queue-depth-v2.manifest.json`, `.planr/evidence.yaml`, `pob-docs-queue-depth.obligation.json`, and `pob-docs-queue-depth.run.json`. The repository owns `com.example.queue.depth.v2`; Planr core does not need a code change for that namespace. The policy registers the schema digest, manifest digest, observation type, payload schema, and execution contract.
+The helper writes `.planr/evidence/schemas/com.example.queue.depth.v2.schema.json`, `.planr/evidence/adapters/verifier-queue-depth-v2.manifest.json`, `.planr/evidence.yaml`, and `pob-docs-queue-depth.obligation.json`; leased readiness writes the sealed executable run file and returns its exact `readiness.run_index.repository_path`. The repository owns `com.example.queue.depth.v2`; Planr core does not need a code change for that namespace.
 
 Proven scope:
 
@@ -68,8 +70,8 @@ Fixture case: `full-stack-composition` — Full-stack composition from unsatisfi
 
 ```bash
 planr evidence coverage --scope plan --id <plan-id> --json
-planr evidence run --input pob-docs-full-http.run.json --json
-planr evidence run --input pob-browser-cdp.run.json --json
+planr evidence readiness --scope plan --id <plan-id> --json
+planr evidence run --input <exact-readiness.run_index.repository_path> --json
 planr evidence coverage --scope plan --id <plan-id> --json
 ```
 

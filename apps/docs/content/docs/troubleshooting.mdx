@@ -83,7 +83,7 @@ planr trace item <target-item-id> --json
 planr map preview --close <target-item-id> --json
 ```
 
-Pick the ready review under a checker identity. If a previous review found issues, complete the generated fix and follow-up review chain; the target correctly remains gated until that chain closes.
+Lease the ready ReviewGate under an independent checker identity. If a previous attempt found issues, the responsible maker resolves the named findings with `planr review findings`; then an independent checker leases the same gate again. The FeatureRun remains gated until acceptance.
 
 ## Closure is rejected
 
@@ -126,12 +126,12 @@ For binding Evidence plans, that claim is not enough. Run readiness, execute the
 
 ```bash
 planr evidence readiness --scope plan --id <plan-id>
-planr evidence run --input run.json
+planr evidence run --input <exact-readiness.run_index.repository_path>
 planr evidence coverage --scope criterion --id <criterion-id>
 planr evidence explain --scope criterion --id <criterion-id>
 ```
 
-Use `evidence migrate` only to opt a pre-Evidence plan into binding obligations. Use preview-digest-bound `evidence rebind` when an immutable adapter/configuration binding changed without changing the acceptance semantics. Neither route rewrites historical logs or trusted evidence.
+Use `evidence migrate` only to opt a pre-Evidence plan into binding obligations. Runtime changes are recorded on new attempts and receipts for the same semantic obligation; migration never rewrites historical logs or trusted evidence.
 
 ## Prepare a safe bug report
 

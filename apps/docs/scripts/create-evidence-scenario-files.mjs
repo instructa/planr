@@ -7,7 +7,6 @@ import {
   SCENARIOS,
   SCENARIO_IDS,
   obligation,
-  scenarioRunInput,
   scenarioSpec,
   writeEvidencePolicy,
   writeJson,
@@ -73,49 +72,38 @@ function ensureGitRepository() {
   }
 }
 
-function capabilityInstance(manifestId) {
-  const capabilities = run(['evidence', 'capability', 'list', '--json']);
-  const capabilityObject = capabilities.object ?? capabilities;
-  const probe = capabilityObject.registry.probes.find((entry) => entry.manifest_id === manifestId);
-  const instance = capabilityObject.instances.find((entry) => entry.id === probe?.instance_id);
-  assert.ok(instance, `missing capability instance for ${manifestId}`);
-  return instance;
-}
-
 const definition = SCENARIOS[scenario];
 const spec = scenarioSpec(scenario, { apiUrl });
 ensureGitRepository();
-const policyDigest = await writeEvidencePolicy(process.cwd(), [spec], { policyId: definition.policyId });
+await writeEvidencePolicy(process.cwd(), [spec], { policyId: definition.policyId });
 const plan = run(['plan', 'new', definition.planTitle, '--json']);
-const instance = capabilityInstance(spec.id);
 const obligationPayload = obligation({
   id: definition.obligationId,
   planId: plan.plan.id,
-  policyDigest,
   spec,
   expected: definition.expected,
-  environment: instance.capability.environment,
-  configDigest: definition.configDigest,
 });
 
 await writeJson(definition.files[3], obligationPayload);
 run(['evidence', 'obligation', 'add', '--input', definition.files[3], '--json']);
-await writeJson(
-  definition.files[4],
-  scenarioRunInput({
-    obligationId: definition.obligationId,
-    capabilityInstanceId: instance.id,
-    target: spec.target,
-  }),
-);
+const readiness = run([
+  'evidence',
+  'readiness',
+  '--scope',
+  'obligation',
+  '--id',
+  definition.obligationId,
+  '--json',
+]);
+const runIndexPath = (readiness.object ?? readiness).run_index.repository_path;
 
 console.log(
   JSON.stringify(
     {
       scenario,
-      files: definition.files,
+      files: [...definition.files, runIndexPath],
       commands: [
-        `planr evidence run --input ${definition.files[4]} --json`,
+        `planr evidence run --input ${runIndexPath} --json`,
         `planr evidence coverage --scope obligation --id ${definition.obligationId} --json`,
       ],
     },

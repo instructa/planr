@@ -64,9 +64,9 @@ Before public release:
 - Claude Code MCP config smoke test.
 - Cursor MCP config smoke test.
 - Concurrent pick test.
-- Review/fix loop test.
+- ReviewGate findings/resolution/re-review test.
 - Recovery sweep test.
-- Local browser review workspace smoke test.
+- Final ReviewGate cross-surface projection test.
 - Git/PR review evidence test.
 - Export/import roundtrip test.
 - Template package import preview and confirm test.

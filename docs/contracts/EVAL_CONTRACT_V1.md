@@ -1586,7 +1586,7 @@ Required fields:
 - `evidence_ref` string.
 - `target_kind` string enum: `run | comparison`.
 - `target_id` string.
-- `planr_attachment_kind` string enum: `log | review | artifact`.
+- `planr_attachment_kind` string enum: `log | artifact`.
 - `planr_attachment_id` string.
 - `item_id` string.
 - `created_at` RFC 3339 timestamp.

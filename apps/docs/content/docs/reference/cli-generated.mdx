@@ -24,14 +24,15 @@ Commands:
   map
   item
   link
+  run
   pick
   approval
   log
   close
-  done      Log evidence and finish the step in one command: completion log, then review request (--review) or close, optionally pick the next item
+  done      Log evidence and finish the step in one command: completion log, then canonical settlement, optionally opening a structured ReviewGate
   review
   eval      Evaluate stored run evidence: suite check, run, show, compare, gate, invalidate, and rescore through the shared eval services
-  evidence  Manage trusted Evidence policy, obligations, readiness, migrations, versioned rebinds, capabilities, runs, receipts, coverage, and explanations
+  evidence  Manage trusted Evidence policy, obligations, readiness, migrations, capabilities, runs, receipts, coverage, and explanations
   context
   note
   search
@@ -150,10 +151,11 @@ Options:
 Usage: planr policy [OPTIONS] <COMMAND>
 
 Commands:
-  show   Show the parsed repository usage policy
-  check  Validate the repository usage policy
-  admit  Evaluate an execution request against the repository usage policy
-  help   Print this message or the help of the given subcommand(s)
+  show     Show the parsed repository usage policy
+  check    Validate the repository usage policy
+  upgrade  Preview or atomically apply a supported pre-release policy upgrade
+  admit    Evaluate an execution request against the repository usage policy
+  help     Print this message or the help of the given subcommand(s)
 
 Options:
       --db <DB>   Path to Planr SQLite database
@@ -190,6 +192,21 @@ Options:
   -h, --help      Print help
 ```
 
+#### `planr policy upgrade`
+
+```text
+Preview or atomically apply a supported pre-release policy upgrade
+
+Usage: planr policy upgrade [OPTIONS]
+
+Options:
+      --apply     Atomically replace the legacy policy with the exact previewed canonical policy
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
 #### `planr policy admit`
 
 ```text
@@ -216,8 +233,9 @@ Commands:
   init
   show
   list
+  relocate  Preview or atomically apply canonical project path relocation
   delete
-  help    Print this message or the help of the given subcommand(s)
+  help      Print this message or the help of the given subcommand(s)
 
 Options:
       --db <DB>   Path to Planr SQLite database
@@ -267,6 +285,25 @@ Options:
   -h, --help      Print help
 ```
 
+#### `planr project relocate`
+
+```text
+Preview or atomically apply canonical project path relocation
+
+Usage: planr project relocate [OPTIONS] --destination <DESTINATION> <PROJECT_ID>
+
+Arguments:
+  <PROJECT_ID>
+
+Options:
+      --db <DB>                    Path to Planr SQLite database
+      --destination <DESTINATION>
+      --apply                      Apply the validated relocation. Without this flag the command is read-only
+      --json                       Emit JSON output
+      --no-color                   Disable color in human output
+  -h, --help                       Print help
+```
+
 #### `planr project delete`
 
 ```text
@@ -295,10 +332,11 @@ Commands:
   split
   check
   audit
+  final-review  Create or show the one plan-scoped final product review
   show
   list
   archive
-  help     Print this message or the help of the given subcommand(s)
+  help          Print this message or the help of the given subcommand(s)
 
 Options:
       --db <DB>   Path to Planr SQLite database
@@ -376,6 +414,23 @@ Options:
 
 ```text
 Usage: planr plan audit [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr plan final-review`
+
+```text
+Create or show the one plan-scoped final product review
+
+Usage: planr plan final-review [OPTIONS] <ID>
 
 Arguments:
   <ID>
@@ -866,6 +921,78 @@ Options:
   -h, --help         Print help
 ```
 
+### `planr run`
+
+```text
+Usage: planr run [OPTIONS] <COMMAND>
+
+Commands:
+  batch
+  help   Print this message or the help of the given subcommand(s)
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+#### `planr run batch`
+
+```text
+Usage: planr run batch [OPTIONS] <COMMAND>
+
+Commands:
+  roll
+  replace
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+      --db <DB>   Path to Planr SQLite database
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
+```
+
+##### `planr run batch roll`
+
+```text
+Usage: planr run batch roll [OPTIONS] --plan <PLAN>
+
+Options:
+      --db <DB>      Path to Planr SQLite database
+      --plan <PLAN>
+      --json         Emit JSON output
+      --no-color     Disable color in human output
+  -h, --help         Print help
+```
+
+##### `planr run batch replace`
+
+```text
+Usage: planr run batch replace [OPTIONS] --plan <PLAN> --successor-maker <SUCCESSOR_MAKER> --reason <REASON> --reference <REFERENCE> --explanation <EXPLANATION>
+
+Options:
+      --db <DB>
+          Path to Planr SQLite database
+      --plan <PLAN>
+
+      --json
+          Emit JSON output
+      --successor-maker <SUCCESSOR_MAKER>
+
+      --no-color
+          Disable color in human output
+      --reason <REASON>
+          [possible values: unavailable, context-lost, ownership-incompatible, batch-cap-reached]
+      --reference <REFERENCE>
+
+      --explanation <EXPLANATION>
+
+  -h, --help
+          Print help
+```
+
 ### `planr pick`
 
 ```text
@@ -884,7 +1011,7 @@ Options:
       --db <DB>                Path to Planr SQLite database
       --json                   Emit JSON output
       --no-color               Disable color in human output
-      --work-type <WORK_TYPE>  Only lease items of this work type (e.g. `review` for checker agents, `code` for makers)
+      --work-type <WORK_TYPE>  Lease canonical `code`, `review`, or `verification` work
       --plan <PLAN>            Only lease items belonging to this plan (plan id), so plan-scoped goal runs never pick work outside their contract
       --peek                   Read the next work packet (incl. its routing block) without leasing it — for drivers that dispatch; the worker takes the lease
   -h, --help                   Print help
@@ -1151,7 +1278,7 @@ Options:
 ### `planr done`
 
 ```text
-Log evidence and finish the step in one command: completion log, then review request (--review) or close, optionally pick the next item
+Log evidence and finish the step in one command: completion log, then canonical settlement, optionally opening a structured ReviewGate
 
 Usage: planr done [OPTIONS] --summary <SUMMARY> [ITEM_ID]
 
@@ -1159,18 +1286,34 @@ Arguments:
   [ITEM_ID]
 
 Options:
-      --db <DB>             Path to Planr SQLite database
+      --db <DB>
+          Path to Planr SQLite database
       --summary <SUMMARY>
-      --files <FILES>       Changed file; repeat the flag or pass a comma-separated list
-      --json                Emit JSON output
+
+      --files <FILES>
+          Changed file; repeat the flag or pass a comma-separated list
+      --json
+          Emit JSON output
       --cmd <CMD>
-      --no-color            Disable color in human output
+
+      --no-color
+          Disable color in human output
       --tests <TESTS>
-      --review              Request a review instead of closing the item directly
-      --next                Pick the next ready item after finishing this step
+
+      --escalate <ESCALATE>
+          Open a checkpoint through one allowed structured escalation reason [possible values: user-requested, policy-required, protected-risk-discovered, external-side-effect, data-integrity-risk]
+      --escalation-ref <ESCALATION_REF>
+          Stable user, policy, finding, or external-side-effect reference
+      --escalation-explanation <ESCALATION_EXPLANATION>
+          Why the referenced condition requires an interrupting checkpoint
+      --next
+          Pick the next ready item after finishing this step
       --profile <PROFILE>
+
       --route-audit <PATH>
-  -h, --help                Print help
+
+  -h, --help
+          Print help
 ```
 
 ### `planr review`
@@ -1179,30 +1322,14 @@ Options:
 Usage: planr review [OPTIONS] <COMMAND>
 
 Commands:
-  request
   annotate
   ingest
-  artifact
   evidence
   close
+  findings
   list
   show
   help      Print this message or the help of the given subcommand(s)
-
-Options:
-      --db <DB>   Path to Planr SQLite database
-      --json      Emit JSON output
-      --no-color  Disable color in human output
-  -h, --help      Print help
-```
-
-#### `planr review request`
-
-```text
-Usage: planr review request [OPTIONS] <ITEM_ID>
-
-Arguments:
-  <ITEM_ID>
 
 Options:
       --db <DB>   Path to Planr SQLite database
@@ -1248,22 +1375,6 @@ Options:
   -h, --help         Print help
 ```
 
-#### `planr review artifact`
-
-```text
-Usage: planr review artifact [OPTIONS] <REVIEW_ITEM_ID>
-
-Arguments:
-  <REVIEW_ITEM_ID>
-
-Options:
-      --db <DB>    Path to Planr SQLite database
-      --out <OUT>
-      --json       Emit JSON output
-      --no-color   Disable color in human output
-  -h, --help       Print help
-```
-
 #### `planr review evidence`
 
 ```text
@@ -1283,10 +1394,10 @@ Options:
 #### `planr review close`
 
 ```text
-Usage: planr review close [OPTIONS] --verdict <VERDICT> <REVIEW_ITEM_ID>
+Usage: planr review close [OPTIONS] --verdict <VERDICT> <REVIEW_GATE_ID>
 
 Arguments:
-  <REVIEW_ITEM_ID>
+  <REVIEW_GATE_ID>
 
 Options:
       --db <DB>              Path to Planr SQLite database
@@ -1294,9 +1405,24 @@ Options:
       --findings <FINDINGS>
       --json                 Emit JSON output
       --no-color             Disable color in human output
-      --reviewer <REVIEWER>  Reviewer identity recorded on the review log, artifact, and event. Defaults to this process's worker id
-      --close-target         On a complete verdict, also close the reviewed item when it already has a completion log
+      --reviewer <REVIEWER>  Independent reviewer identity recorded on the durable attempt. Defaults to this process's worker id
   -h, --help                 Print help
+```
+
+#### `planr review findings`
+
+```text
+Usage: planr review findings [OPTIONS] --resolve <RESOLVE> <REVIEW_GATE_ID>
+
+Arguments:
+  <REVIEW_GATE_ID>
+
+Options:
+      --db <DB>            Path to Planr SQLite database
+      --resolve <RESOLVE>  Finding id repaired by the responsible maker; repeat for all open findings
+      --json               Emit JSON output
+      --no-color           Disable color in human output
+  -h, --help               Print help
 ```
 
 #### `planr review list`
@@ -1342,7 +1468,7 @@ Commands:
   gate          Gate on a stored comparison verdict
   invalidate    Invalidate a run or comparison
   rescore       Start a rescore run from an existing run
-  evidence-ref  Attach an eval run/comparison to an existing Planr log, review, or artifact
+  evidence-ref  Attach an eval run/comparison to an existing Planr log or artifact
   help          Print this message or the help of the given subcommand(s)
 
 Options:
@@ -1480,14 +1606,14 @@ Options:
 #### `planr eval evidence-ref`
 
 ```text
-Attach an eval run/comparison to an existing Planr log, review, or artifact
+Attach an eval run/comparison to an existing Planr log or artifact
 
 Usage: planr eval evidence-ref [OPTIONS] --item <ITEM> <TARGET_KIND> <TARGET_ID> <ATTACHMENT_KIND> <ATTACHMENT_ID>
 
 Arguments:
   <TARGET_KIND>      [possible values: run, comparison]
   <TARGET_ID>
-  <ATTACHMENT_KIND>  [possible values: log, review, artifact]
+  <ATTACHMENT_KIND>  [possible values: log, artifact]
   <ATTACHMENT_ID>
 
 Options:
@@ -1501,7 +1627,7 @@ Options:
 ### `planr evidence`
 
 ```text
-Manage trusted Evidence policy, obligations, readiness, migrations, versioned rebinds, capabilities, runs, receipts, coverage, and explanations
+Manage trusted Evidence policy, obligations, readiness, migrations, capabilities, runs, receipts, coverage, and explanations
 
 Usage: planr evidence [OPTIONS] <COMMAND>
 
@@ -1518,7 +1644,6 @@ Commands:
   explain          Explain coverage, candidates, and durable records for an Evidence scope
   readiness        Check that active obligations have compatible schemas and available capabilities before goal work
   migrate          Preview or apply explicit pre-Evidence plan migration into binding Evidence obligations
-  rebind           Preview or apply an immutable versioned capability/obligation rebind
   classifications  Show canonical Evidence gap classifications and legacy/operator aliases
   help             Print this message or the help of the given subcommand(s)
 
@@ -1662,7 +1787,7 @@ Usage: planr evidence run [OPTIONS] --input <INPUT>
 
 Options:
       --db <DB>        Path to Planr SQLite database
-      --input <INPUT>  JSON file containing obligation_id, capability_instance_id, target, environment, execution_contract, and optional env
+      --input <INPUT>  Sealed readiness run-index JSON, or one configured run input for diagnostics
       --json           Emit JSON output
       --no-color       Disable color in human output
   -h, --help           Print help
@@ -1815,22 +1940,6 @@ Options:
 Preview or apply explicit pre-Evidence plan migration into binding Evidence obligations
 
 Usage: planr evidence migrate [OPTIONS] --input <INPUT>
-
-Options:
-      --db <DB>        Path to Planr SQLite database
-      --input <INPUT>  JSON file containing a planr.evidence.migration.v1 payload
-      --apply          Apply the migration. Omit for dry-run preview
-      --json           Emit JSON output
-      --no-color       Disable color in human output
-  -h, --help           Print help
-```
-
-#### `planr evidence rebind`
-
-```text
-Preview or apply an immutable versioned capability/obligation rebind
-
-Usage: planr evidence rebind [OPTIONS] --input <INPUT>
 
 Options:
       --db <DB>        Path to Planr SQLite database

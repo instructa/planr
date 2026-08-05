@@ -1,16 +1,14 @@
 ---
 title: Local HTTP API
-description: Complete localhost review workspace, JSON endpoint, SSE, request, and security contract.
+description: Complete localhost FeatureRun, ReviewGate, JSON endpoint, SSE, request, and security contract.
 ---
 
 Start the server with `planr serve --port 7526`. It binds only `127.0.0.1`; there is no remote bind option or authentication layer. Do not expose it through a proxy or tunnel without adding your own access control.
 
-## UI and stream
+## Stream and health
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/review` | Local review workspace HTML |
-| GET | `/v1/review-workspace` | Review queue and evidence payload |
 | GET | `/v1/events/stream` | Server-Sent Events; recent replay then live events and heartbeats |
 | Any non-OPTIONS method | `/health` | Returns `{ "ok": true }`; use GET for conventional health checks |
 
@@ -34,26 +32,28 @@ Start the server with `planr serve --port 7526`. It binds only `127.0.0.1`; ther
 | POST | `/v1/pick` |
 | POST | `/v1/items/{id}/heartbeat`, `/v1/items/{id}/progress`, `/v1/items/{id}/pause`, `/v1/items/{id}/resume` |
 | POST | `/v1/items/{id}/log`, `/v1/items/{id}/close`, `/v1/items/{id}/reviews` |
+| GET | `/v1/plans/{id}/audit`, `/v1/plans/{id}/final-product-review` |
+| POST | `/v1/plans/{id}/final-product-review` |
 | POST | `/v1/items/{id}/approval/request`, `/v1/items/{id}/approval/approve`, `/v1/items/{id}/approval/deny` |
 | GET | `/v1/approvals?open=true` |
 | GET, POST | `/v1/items/{id}/review-evidence` |
 | GET | `/v1/evidence/policy` |
 | GET, POST | `/v1/evidence/obligations` |
 | GET | `/v1/evidence/obligations/{id}` |
+| POST | `/v1/evidence/readiness` |
 | GET | `/v1/evidence/capabilities` |
 | GET | `/v1/evidence/capabilities/{id}` |
 | POST | `/v1/evidence/run` |
 | POST | `/v1/evidence/import` |
 | POST | `/v1/evidence/migrate` |
-| POST | `/v1/evidence/rebind` |
 | GET | `/v1/evidence/classifications` |
 | POST | `/v1/evidence/host-capture/import`, `/v1/evidence/host-capture/run` |
 | GET | `/v1/evidence/attempts`, `/v1/evidence/attempts/{id}` |
 | GET | `/v1/evidence/receipts`, `/v1/evidence/receipts/{id}` |
 | POST | `/v1/evidence/coverage`, `/v1/evidence/explain` |
 | POST | `/v1/items/{id}/review-annotations`, `/v1/items/{id}/review-feedback` |
-| POST | `/v1/reviews/{id}/close` |
-| GET, POST | `/v1/reviews/{id}/artifact` |
+| POST | `/v1/review-gates/{id}/close` |
+| POST | `/v1/review-gates/{id}/findings/resolve` |
 | POST | `/v1/recover/sweep`, `/v1/policy/admit` |
 
 ## Context, artifacts, events, and search

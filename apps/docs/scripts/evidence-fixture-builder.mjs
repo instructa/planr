@@ -10,13 +10,11 @@ export const SCENARIOS = {
     planTitle: 'Evidence docs API',
     obligationId: 'pob-docs-api-http',
     expected: { status: 'ok' },
-    configDigest: 'sha256:1010101010101010101010101010101010101010101010101010101010101010',
     files: [
       '.planr/evidence/schemas/com.example.http.status.schema.json',
       '.planr/evidence/adapters/verifier-http-curl-v1.manifest.json',
       '.planr/evidence.yaml',
       'pob-docs-api-http.obligation.json',
-      'pob-docs-api-http.run.json',
     ],
   },
   'repository-custom-extension': {
@@ -24,13 +22,11 @@ export const SCENARIOS = {
     planTitle: 'Evidence docs custom extension',
     obligationId: 'pob-docs-queue-depth',
     expected: { status: 'drained' },
-    configDigest: 'sha256:2020202020202020202020202020202020202020202020202020202020202020',
     files: [
       '.planr/evidence/schemas/com.example.queue.depth.v2.schema.json',
       '.planr/evidence/adapters/verifier-queue-depth-v2.manifest.json',
       '.planr/evidence.yaml',
       'pob-docs-queue-depth.obligation.json',
-      'pob-docs-queue-depth.run.json',
     ],
   },
 };
@@ -232,12 +228,6 @@ export function buildEvidencePolicy(specs, { policyId = 'epolicy-docs-v1', unava
               ? { status: spec.schema.json_schema.properties.status.const }
               : { visible: true },
             target: spec.target,
-            environment: {
-              kind: 'local',
-              id: 'placeholder',
-              digest: 'sha256:5555555555555555555555555555555555555555555555555555555555555555',
-            },
-            runtime_target: spec.runtimeTarget,
           },
         ],
       };
@@ -305,11 +295,8 @@ export function buildEvidencePolicy(specs, { policyId = 'epolicy-docs-v1', unava
 export function obligation({
   id,
   planId,
-  policyDigest,
   spec,
   expected,
-  environment,
-  configDigest,
   invalidateOn = ['policy_change', 'adapter_schema_change'],
 }) {
   return {
@@ -326,24 +313,11 @@ export function obligation({
         subject: `docs fixture ${spec.observationType}`,
         expected,
         target: spec.target,
-        environment,
-        runtime_target: spec.runtimeTarget,
         payload_schema: { schema_ref: spec.payloadSchema.schema_ref },
       },
     ],
     fixture_policy: { fixtures_allowed: false, mocks_allowed: false, disclosure_required: true },
     freshness_policy: { invalidate_on: invalidateOn },
     assurance_policy: {},
-    policy_digest: policyDigest,
-    config_digest: configDigest,
-    created_at: '2026-07-29T00:00:00Z',
-  };
-}
-
-export function scenarioRunInput({ obligationId, capabilityInstanceId, target }) {
-  return {
-    obligation_id: obligationId,
-    capability_instance_id: capabilityInstanceId,
-    target,
   };
 }

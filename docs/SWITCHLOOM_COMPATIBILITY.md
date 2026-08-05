@@ -35,7 +35,7 @@ Future Switchloom work, including thread `019f8a71-5b6c-7c41-9850-7050516fcee4`,
 
 The stable compatibility promise is limited to Planr's boundary: consume provider-neutral declarations when present, keep requested values separate from effective evidence, reject requested-only metadata as proof, avoid owning external lifecycle, and continue operating when routing files are absent.
 
-Any future mismatch in package identity, generated artifacts, Planr declaration parsing, route-audit semantics, host evidence, source-worktree mutation, or security posture should become a new finding or fix item rather than an optimistic compatibility claim.
+Any future mismatch in package identity, generated artifacts, Planr declaration parsing, route-audit semantics, host evidence, source-worktree mutation, or security posture should become a new finding and responsible-maker repair rather than an optimistic compatibility claim.
 
 ## Verification Notes
 

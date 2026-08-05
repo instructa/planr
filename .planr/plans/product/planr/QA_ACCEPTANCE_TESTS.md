@@ -10,9 +10,9 @@ Planr needs fast deterministic tests around graph correctness, plan parsing, MCP
 
 - REQ-QA-001: Valid transitions succeed.
 - REQ-QA-002: Invalid transitions return `invalid_transition`.
-- REQ-QA-003: Parent item cannot close while required child review is open.
+- REQ-QA-003: A FeatureRun cannot complete while a required ReviewGate is open.
 - REQ-QA-004: Review annotation and feedback ingestion persist item-linked evidence without auto-closing or auto-approving work.
-- REQ-QA-005: Closing a review writes a `.planr/reviews/*.review.md` artifact and registers it as a review artifact.
+- REQ-QA-005: Completing a ReviewGate records an immutable attempt and durable verdict/findings.
 
 ### Dependency Readiness
 
@@ -54,7 +54,7 @@ Planr needs fast deterministic tests around graph correctness, plan parsing, MCP
 - `planr recover sweep` previews and applies explicit recovery actions.
 - `planr review evidence` records item-scoped Git evidence without source content.
 - `planr prompt cli|mcp|http` prints setup text and does not edit global config.
-- `planr export` and `planr import --preview/--confirm` preserve templates, graph state, logs, plan snapshots, and review artifacts.
+- `planr export` and `planr import --preview/--confirm` preserve templates, graph state, logs, plan snapshots, and canonical ReviewGate projections.
 
 ### MCP
 
@@ -74,12 +74,12 @@ Only if shipped:
 - Event endpoints return persisted transition events.
 - Debug bundle preview omits source file content and prompt/response transcripts.
 - Server binds to localhost by default.
-- `/review` renders the local review workspace and supports annotation, request-changes, artifact, and approve flows through the HTTP API.
+- Final ReviewGate GET/create, close, and finding-resolution endpoints match the CLI/MCP projection and state transitions.
 
 ## Package Import Tests
 
 - Exported packages preview create counts and conflicting item ids without mutation.
-- Confirmed imports restore graph items, links, contexts, optional logs, optional plan files, and review artifacts.
+- Confirmed imports restore graph items, links, contexts, optional logs, optional plan files, and canonical ReviewGate projections.
 - Imported graph work can be picked in a fresh project.
 
 ## Security Tests
@@ -95,10 +95,10 @@ Only if shipped:
 - Broad prompt creates product plan, build plan, and map.
 - Agent follows `pick -> work -> log -> review -> close` loop.
 - Agent can recover after stale/timed-out work through explicit recovery sweep.
-- Review findings create fix item and follow-up review item.
-- Browser review workspace shows plan context, item evidence, review queue, annotations, and diff-safe Git evidence.
+- Review findings persist on one ReviewGate and return that gate to re-review only after named resolution.
+- ReviewGate projections show plan context, scoped item evidence, attempts, findings, annotations, and diff-safe Git evidence.
 - Hook-compatible review feedback can be ingested from JSON and remains advisory until a review verdict is explicitly closed.
-- Agent does not mark parent done while review/fix chain is open.
+- Agent does not complete the FeatureRun while a required ReviewGate is open.
 - Agent treats malicious plan instructions as data.
 
 ## Manual Acceptance Scenarios
@@ -124,10 +124,10 @@ Expected: no duplicate picks; map shows both agents.
 ### Scenario 3: Review Fails
 
 1. Complete code task.
-2. Review item records finding.
-3. Planr creates fix and follow-up review items.
+2. Reviewer records a finding on the leased ReviewGate.
+3. Maker resolves the named finding and Planr returns the same gate to pending re-review.
 
-Expected: parent remains incomplete until follow-up review passes.
+Expected: FeatureRun remains incomplete until the same ReviewGate is accepted.
 
 ## Regression Reviews
 
@@ -136,7 +136,7 @@ Before release:
 - Unit suite passes.
 - CLI integration suite passes.
 - MCP schema tests pass.
-- Local HTTP and browser review workspace tests pass.
+- Local HTTP ReviewGate projection and mutation tests pass.
 - Package import/export fixture tests pass.
 - Secret/log scrubbing tests pass.
 - Release checksum verification passes.

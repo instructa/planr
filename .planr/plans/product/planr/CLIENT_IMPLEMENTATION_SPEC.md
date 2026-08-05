@@ -94,7 +94,7 @@ If implemented:
 - live event updates;
 - local-only server.
 
-The implemented local browser review workspace is served at `/review` with data from `/v1/review-workspace`.
+Review clients use the canonical plan final-review and ReviewGate HTTP endpoints for projection, leasing, attempt completion, and finding resolution.
 
 ## Offline Behavior
 

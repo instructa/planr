@@ -14,7 +14,7 @@ planr map status --json
 planr pick --plan <plan-id> --work-type code --json
 ```
 
-Read the returned item, linked plan, upstream handoffs, conditions, recovery policy, and remaining snapshot. Stop if the item is not the work you are authorized to perform.
+Continue only from `work_packet.kind: "outcome"`. Read lifecycle state from `work_packet.execution_state`, plus the returned item, linked plan, upstream handoffs, conditions, recovery policy, and remaining snapshot. Stop if the packet is not the work you are authorized to perform. A `mode: "finding_repair"` packet has no synthetic fix item; follow the named findings on its existing ReviewGate.
 
 ## While working
 
@@ -27,6 +27,23 @@ planr context add "Confirmed upstream API returns opaque IDs" --item <item-id> -
 
 Run the verification required by the plan. Record exact commands and meaningful results, not aspirational checks.
 
+## Outcome batching
+
+When the dispatch asks for a compatible same-plan maker run, keep the same worker identity and settle one picked item at a time with `planr done --next`. Planr atomically rolls each internal three-outcome ExecutionBatch for the same maker and leases only compatible code work from the same plan. Stop when settlement opens a material ReviewGate, ownership or scope becomes incompatible, work blocks, the pick is empty, or a budget boundary is reached. Record a compact durable handoff only at that genuine stop, with settled item ids, changed files, commands/tests, pending source-freeze blockers, and the next compatible pick command.
+
+```bash
+export PLANR_WORKER_ID="maker-outcomes-1"
+planr pick --plan <plan-id> --work-type code --json
+planr done <first-item-id> --summary "Docs outcome settled." \
+  --files docs/guide.md --cmd "node scripts/check-docs.mjs" --next --json
+planr done <next-item-id> --summary "Second non-material outcome settled." \
+  --files docs/reference.md --cmd "node scripts/check-docs.mjs" --next --json
+```
+
+If settlement returns `work_packet.transition: "review_gate"` or `materiality.effective_review.required: true`, stop and let a checker pick that ReviewGate. A `work_packet.kind: "hold"` is also a stop. Do not pick review work under the maker identity.
+
+After the coordinator establishes source freeze, dispatch a fresh verification-only worker whose first action is `planr pick --plan <plan-id> --work-type verification --json`. Under that same verifier identity, rerun readiness and execute only `readiness.run_index.repository_path`. Product source is read-only by the canonical Evidence `SOURCE_PATHS` source digest. `planr evidence run` checks the frozen source inside the Evidence transaction before trusted receipt commit; source mismatch records a failed non-covering attempt and zero new trusted receipts. The verifier writes Planr runtime receipts/artifacts, routes product findings back to the responsible maker, and after repair waits for coordinator re-freeze before leased readiness and selective replay. Preserve exactly one final independent product review.
+
 ## Finish
 
 ```bash
@@ -35,14 +52,13 @@ planr done <item-id> \
   --files src/api.rs,tests/api.rs \
   --cmd "cargo test api" \
   --tests "API tests passed" \
-  --review \
   --json
 ```
 
-The target moves to `in_review`; a checker can pick the review. For low-risk work where the plan does not require review, omit `--review` and close directly with evidence.
+Plain `done` is the standard maker settlement path. It closes the outcome item and lets FeatureRun materiality decide whether a durable ReviewGate is required. An intentional checkpoint uses `--escalate <reason>` with a stable reference and explanation.
 
 ## Know when to stop
 
-Stop after submitting review. Do not pick your own review under the maker identity. If the pick result is null, inspect its `reason`; never silently widen a plan or work-type filter.
+Stop when settlement opens a ReviewGate. Do not pick your own gate under the maker identity. If the pick result is null, inspect its `reason`; never silently widen a plan or work-type filter.
 
 Next: [Review and Fix Loops](/docs/guides/review-and-fix-loops).

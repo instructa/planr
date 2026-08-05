@@ -8,7 +8,7 @@ Eval Contract v1, including the additive v1.1 efficiency-evidence amendment, is 
 - `.planr/project/*.md`: durable project context pack.
 - `.planr/plans/product/<slug>/`: product specification packages.
 - `.planr/plans/build/*.plan.md`: Markdown implementation plans.
-- `.planr/reviews/*.review.md`: optional saved review artifacts.
+- SQLite ReviewGate tables: authoritative review attempts, findings, leases, and final product review state.
 - Git: source diffs, commits, branches, and worktrees.
 
 ## Core Tables
@@ -106,7 +106,7 @@ Link kinds:
 
 - blocks: upstream must complete before downstream is ready.
 - hands_to: upstream result is included in downstream handoff.
-- reviews: review item blocks parent/target closure.
+- reviews: historical read-only relationship; new review authority lives only in ReviewGate state.
 - relates_to: non-blocking context relationship.
 
 ### plans
@@ -375,14 +375,14 @@ planr artifact list [--item <item-id>]
 planr event list [--item <item-id>] [--limit 50]
 planr debug bundle [--item <item-id>] --preview
 planr log add --item <item-id> --summary "..." [--files a,b] [--cmd "..."]
-planr review request <item-id>
 planr review annotate <item-id> --message "..." [--severity info|warning|blocking] [--file path] [--line N] [--author "..."]
 planr review ingest <item-id> (--from feedback.json|--stdin)
-planr review artifact <review-item-id> [--out path]
 planr review evidence <item-id> [--pr-url https://...]
-planr review close <review-item-id> --verdict complete|not-complete|unclear [--close-target]
+planr review close <review-gate-id> --verdict complete|not-complete|unclear [--findings "..."]
+planr review findings <review-gate-id> --resolve <finding-id>
+planr plan final-review <plan-id>
 planr close [item-id] --summary "..." [--next]
-planr done [item-id] --summary "..." [--files a --files b] [--cmd "..."] [--tests "..."] [--review] [--next]
+planr done [item-id] --summary "..." [--files a --files b] [--cmd "..."] [--tests "..."] [--escalate user-requested|policy-required|protected-risk-discovered|external-side-effect|data-integrity-risk --escalation-ref <id> --escalation-explanation "..."] [--next]
 planr map lane --critical
 planr map pressure
 ```
@@ -399,6 +399,8 @@ planr map pressure
 - `planr_plan_refine`
 - `planr_plan_split`
 - `planr_plan_check`
+- `planr_plan_audit`
+- `planr_plan_final_review`
 - `planr_plan_link`
 - `planr_map_build`
 - `planr_item_create`
@@ -425,9 +427,9 @@ planr map pressure
 - `planr_log_add`
 - `planr_review_annotate`
 - `planr_review_ingest`
-- `planr_review_artifact`
 - `planr_review_evidence`
-- `planr_review_close`
+- `planr_review_gate_close`
+- `planr_review_findings_resolve`
 - `planr_close_item`
 - `planr_context_create`
 - `planr_search`
@@ -491,8 +493,6 @@ that `pi-subagents` is installed. Pi remains outside the legacy
 HTTP is optional in V1 and localhost-only by default.
 
 ```text
-GET    /review
-GET    /v1/review-workspace
 GET    /v1/projects
 POST   /v1/projects
 GET    /v1/projects/:id/map
@@ -503,6 +503,11 @@ POST   /v1/items/:id/heartbeat
 POST   /v1/items/:id/progress
 POST   /v1/items/:id/pause
 POST   /v1/items/:id/resume
+GET    /v1/plans/:id/audit
+GET    /v1/plans/:id/final-product-review
+POST   /v1/plans/:id/final-product-review
+POST   /v1/review-gates/:id/close
+POST   /v1/review-gates/:id/findings/resolve
 POST   /v1/items/:id/approval/request
 POST   /v1/items/:id/approval/approve
 POST   /v1/items/:id/approval/deny

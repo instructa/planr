@@ -46,7 +46,7 @@ Continue using normal Planr commands:
 
 ```bash
 planr pick --json
-planr done <item-id> --summary "Implemented; reported requested profile model_routing_terra_high" --profile model_routing_terra_high --review
+planr done <item-id> --summary "Implemented; reported requested profile model_routing_terra_high" --profile model_routing_terra_high
 ```
 
 `--profile` records the profile the worker reports for the run. It is requested or claimed routing metadata, not proof that a host actually used that profile, model, effort, role, fallback, or context fork.
@@ -54,7 +54,7 @@ planr done <item-id> --summary "Implemented; reported requested profile model_ro
 For genuine runtime proof, attach route-audit evidence that separates requested, host-resolved, and effective execution values:
 
 ```bash
-planr done <item-id> --summary "Implemented with route-audit evidence" --route-audit .planr/artifacts/route-audit.json --review
+planr done <item-id> --summary "Implemented with route-audit evidence" --route-audit .planr/artifacts/route-audit.json
 ```
 
 Requested-only routing metadata is not effective execution proof. If the host cannot provide effective runtime evidence, keep that field unavailable rather than inferring it from `.planr/agents.toml`, `.planr/policy.toml`, or `--profile`.

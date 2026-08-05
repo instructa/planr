@@ -19,14 +19,14 @@ Use a direct skill only when you deliberately want its narrower boundary.
 | `$planr-goal` | You want to compile a broad, long-running outcome into an autonomous board. | Preparation-only; prints a plan-bound loop handoff and stops. |
 | `$planr-loop` | You already have a bounded plan/goal contract and want its execution protocol. | Iterates one scoped item, verification, and independent review until audit holds or budget ends. |
 | `$planr-task-graph` | A checked plan needs items, links, dependencies, or map repair. | Changes task-graph structure, not product code. |
-| `$planr-work` | You intentionally own one picked implementation item. | Implements one item and records evidence before review. |
-| `$planr-review` | You are the independent checker for a ready review item. | Findings-first; never substitutes the maker's self-assessment. |
+| `$planr-work` | You own a typed outcome or finding-repair packet. | Settles ordinary outcomes with `done`; repairs named findings on the same ReviewGate without a fix item. |
+| `$planr-review` | You are the independent checker for a `review_gate` packet. | Findings-first; records one immutable attempt and never substitutes the maker's self-assessment. |
 | `$planr-status` | You require an explicitly read-only state or goal-contract verdict. | Reports map evidence without implementing. |
 | `$planr-summary` | Work is complete or paused and needs an evidence-backed handoff. | Summarizes recorded changes, verification, and remaining state. |
 
 ## Cost tiering
 
-An autonomous run has distinct roles with different intelligence needs. The loop driver plans and decides; a worker executes one item whose scope is already bounded by its pick packet. That bound is what makes a cheaper model tier safe for the installed `planr-worker` and `planr-reviewer` roles, which is where you set it.
+An autonomous run has distinct roles with different intelligence needs. The loop driver plans and decides; a worker executes one typed packet whose scope is already bounded by `work_packet.kind`, optional `mode`, and canonical `execution_state`. That bound is what makes a cheaper model tier safe for the installed `planr-worker` role. The independent `planr-reviewer` remains the truth gate and should not be weakened merely because maker work is bounded.
 
 Planr represents those decisions as opaque profiles and routes. It does not choose providers, models, effort levels, fallback chains, or host-native role names. An optional external routing tool can map planning, exploration, implementation, mechanical work, and independent review onto different cost or quality tiers; see [Switchloom](/docs/plugins/switchloom). Declarations alone are not proof that a tier ran, so verify effective child metadata instead of trusting requested values.
 

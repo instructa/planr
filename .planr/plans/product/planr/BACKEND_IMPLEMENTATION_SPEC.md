@@ -152,7 +152,7 @@ REQ-BE-060: Import must consume Planr JSON packages created by `planr export`.
 
 REQ-BE-061: Import preview must report package metadata, create counts, and conflicting item ids without mutating state.
 
-REQ-BE-062: Confirmed import must restore package graph items, links, contexts, optional logs, optional plan file snapshots, and review artifacts.
+REQ-BE-062: Confirmed import must restore package graph items, links, contexts, optional logs, optional plan file snapshots, and canonical ReviewGate projections.
 
 ## Agent Runners
 

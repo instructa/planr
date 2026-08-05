@@ -153,7 +153,7 @@ planr done <first-item-id> \
 
 The completion log is durable evidence. Closing the first item unlocks the second.
 
-## 5. Verify and request review
+## 5. Verify and settle
 
 ```bash
 planr pick --plan <build-plan-id> --work-type code --json
@@ -166,7 +166,7 @@ The command must print:
 hello from planr
 ```
 
-Submit the second item for review instead of closing it directly:
+Settle the second item with the verification evidence. Planr materiality decides whether it closes or returns a review gate:
 
 ```bash
 planr done <second-item-id> \
@@ -174,11 +174,10 @@ planr done <second-item-id> \
   --files hello.sh \
   --cmd "./hello.sh" \
   --tests "stdout equals hello from planr" \
-  --review \
   --json
 ```
 
-The target moves to `in_review`, and a ready review item appears.
+If settlement opens a ReviewGate, lease the returned gate in the checker step. If no gate is required, skip directly to recovery/export and final map inspection.
 
 ## 6. Preview recovery and export evidence
 
@@ -201,19 +200,18 @@ export PLANR_WORKER_ID="onboarding-reviewer"
 planr pick --plan <build-plan-id> --work-type review --json
 ```
 
-Inspect the target, its plan, `hello.sh`, and its completion log. If they match, close the returned review item:
+Inspect the target, its plan, `hello.sh`, and its completion log. If they match, complete the leased ReviewGate:
 
 ```bash
-planr review close <review-item-id> \
+planr review close <review-gate-id> \
   --verdict complete \
   --findings "Command, output, executable bit, and evidence match the plan." \
   --reviewer onboarding-reviewer \
-  --close-target \
   --json
 planr map show --plan <build-plan-id> --json
 ```
 
-The final map has three closed items: two implementation items and their review. `settled` equals `total`, with no picked, pending, ready, or in-review work.
+The final map has two closed implementation items and no review/fix map rows. The accepted gate remains durable in ReviewGate state; `settled` equals `total`.
 
 ## Where to go next
 

@@ -10,7 +10,6 @@ import {
   SCENARIOS,
   buildEvidencePolicy,
   obligation,
-  scenarioRunInput,
   scenarioSpec,
 } from './evidence-fixture-builder.mjs';
 
@@ -79,13 +78,18 @@ async function runScenario({ scenario, projectTitle, obligationId, apiUrl }) {
     const helperArgs = [helperPath, '--scenario', scenario];
     if (apiUrl) helperArgs.push('--api-url', apiUrl);
     const helper = run(process.execPath, helperArgs, { cwd: workspace });
-    assert.deepEqual(helper.files, definition.files, `${scenario} helper must report shared documented files`);
+    assert.deepEqual(
+      helper.files.slice(0, definition.files.length),
+      definition.files,
+      `${scenario} helper must report shared documented files`,
+    );
 
     const schema = JSON.parse(await readFile(path.join(workspace, definition.files[0]), 'utf8'));
     const manifest = JSON.parse(await readFile(path.join(workspace, definition.files[1]), 'utf8'));
     const policy = JSON.parse(await readFile(path.join(workspace, definition.files[2]), 'utf8'));
     const obligationPayload = JSON.parse(await readFile(path.join(workspace, definition.files[3]), 'utf8'));
-    const runInput = JSON.parse(await readFile(path.join(workspace, definition.files[4]), 'utf8'));
+    const runIndexPath = helper.files.at(-1);
+    const runInput = JSON.parse(await readFile(path.join(workspace, runIndexPath), 'utf8'));
 
     assert.deepEqual(schema, spec.schema, `${scenario} schema must come from shared builder`);
     assert.deepEqual(manifest, spec.manifest, `${scenario} manifest must come from shared builder`);
@@ -95,31 +99,25 @@ async function runScenario({ scenario, projectTitle, obligationId, apiUrl }) {
       `${scenario} policy must come from shared builder`,
     );
 
-    const evidenceRun = run(planrBin, ['evidence', 'run', '--input', `${obligationId}.run.json`, '--json'], {
+    const evidenceRun = run(planrBin, ['evidence', 'run', '--input', runIndexPath, '--json'], {
       cwd: workspace,
     });
     assert.equal(evidenceRun.ok, true, `${scenario} evidence run must succeed`);
-    assert.equal(evidenceRun.object?.receipt?.receipt_status, 'trusted', `${scenario} receipt must be trusted`);
+    assert.equal(
+      evidenceRun.object?.results?.[0]?.receipt?.receipt_status,
+      'trusted',
+      `${scenario} receipt must be trusted`,
+    );
 
     const expectedObligation = obligation({
       id: obligationId,
       planId: obligationPayload.plan_id,
-      policyDigest: policy.policy_digest,
       spec,
       expected: definition.expected,
-      environment: obligationPayload.observations[0].environment,
-      configDigest: definition.configDigest,
     });
     assert.deepEqual(obligationPayload, expectedObligation, `${scenario} obligation must come from shared builder`);
-    assert.deepEqual(
-      runInput,
-      scenarioRunInput({
-        obligationId,
-        capabilityInstanceId: runInput.capability_instance_id,
-        target: spec.target,
-      }),
-      `${scenario} run input must come from shared builder`,
-    );
+    assert.equal(runInput.schema_version, 'planr.evidence.run-index.v1');
+    assert.equal(runInput.runs[0].input.obligation_id, obligationId);
 
     const coverage = run(
       planrBin,

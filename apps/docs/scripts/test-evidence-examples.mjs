@@ -42,10 +42,12 @@ for (const id of [
 
 assert.equal(byId.get('api-only-success').exit_code, 0);
 assert.equal(byId.get('api-only-success').output.run.object.verdict, 'passed');
-assert.equal(byId.get('api-only-success').output.run.object.receipt.receipt_status, 'trusted');
+assert.equal(byId.get('api-only-success').output.run.object.schema_version, 'planr.evidence.run-index.result.v1');
+const apiReceipt = byId.get('api-only-success').output.run.object.results[0].receipt;
+assert.equal(apiReceipt.receipt_status, 'trusted');
 assert.equal(byId.get('api-only-success').output.coverage.object.verdict, 'satisfied');
 assert.equal(
-  byId.get('api-only-success').output.run.object.receipt.vantage_point.identity,
+  apiReceipt.vantage_point.identity,
   'verifier-http-curl-v1',
 );
 
@@ -54,7 +56,7 @@ assert.equal(custom.exit_code, 0);
 assert.equal(custom.output.run.object.verdict, 'passed');
 assert.equal(custom.output.coverage.object.verdict, 'satisfied');
 assert.ok(
-  custom.output.run.object.receipt.observations.some(
+  custom.output.run.object.results[0].receipt.observations.some(
     (observation) => observation.type === 'com.example.queue.depth.v2' && observation.outcome === 'passed',
   ),
   'repository custom example must execute and cover its namespaced observation',

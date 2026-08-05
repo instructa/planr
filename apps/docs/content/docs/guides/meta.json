@@ -1,5 +1,5 @@
 {
   "title": "Guides",
   "description": "Apply Planr to real product and repository work.",
-  "pages": ["index", "daily-worker-loop", "parallel-coordination", "handoff-and-resume", "review-and-fix-loops", "recover-interrupted-work", "packages-and-reuse", "evidence-scenarios", "recipes"]
+  "pages": ["index", "daily-worker-loop", "feature-run-work-packets", "parallel-coordination", "handoff-and-resume", "review-and-fix-loops", "recover-interrupted-work", "packages-and-reuse", "evidence-scenarios", "recipes"]
 }

@@ -1,56 +1,50 @@
 ---
 name: planr-verify-web
-description: Live verification for web features. Use when a web map item needs proof it actually runs in a browser before review, including planr-loop step 4. Discovers the host's existing browser capability, runs the changed flow against the dev server, and logs replayable evidence. Ships no browser tooling of its own.
+description: Frozen-source live verification for a web FeatureRun. Consumes a canonical verification work packet, uses the configured Evidence capability, and records trusted proof without editing product source.
 ---
 
 # Planr Verify Web
 
-Prove the feature runs. Planr owns the evidence contract; the host owns the browser tooling. Never install or configure browser infrastructure on behalf of this skill.
+Prove the frozen feature runs. Planr owns the evidence contract and capability selection; the host executes the configured method. Never install or configure browser infrastructure on behalf of this skill.
 
-## Capability Discovery
+## Lease The Typed Verification Packet
 
-Check project memory first:
-
-```bash
-planr context list
-```
-
-If a `capability`-tagged entry records a web verification tool, use it. Otherwise discover what the host has, strongest first:
-
-1. A browser skill the host already provides (for example browser-harness): drive the real flow, screenshot the result.
-2. A browser MCP already configured (Playwright, chrome-devtools, native browser tools): same.
-3. The system browser over CDP: launch the installed Chrome/Chromium with `--remote-debugging-port=<port> --user-data-dir=<tmp>` and drive it via the DevTools protocol. This is the standard rescue when a browser tool exists but its bundled browser is missing — the tool's download step is not a dependency, the protocol is.
-4. A scriptable fallback when Node is available: a one-off headless check via `npx playwright` whose exit code is the signal.
-5. HTTP-level checks (`curl` against rendered routes or endpoints): weakest tier, only for SSR/API-shaped changes, and the log must say "HTTP-level only, not browser-verified".
-
-If a tier fails for an environmental reason (missing download, sandbox restriction), drop to the next tier and record what actually worked — do not log the environmental failure as item evidence.
-
-Record the decision once so later iterations and other agents reuse it instead of re-discovering:
+Use a fresh verifier identity distinct from the responsible maker:
 
 ```bash
-planr context add "web verification: <tool>, invoke via <how>" --tag capability
+export PLANR_WORKER_ID="verifier-web-1"
+planr pick --plan <plan-id> --work-type verification --json
 ```
 
-A human may pin the capability upfront with the same command; a pinned context always wins over discovery.
+This typed pick is the verifier's first action. Continue only when `work_packet.kind` is `verification`. Treat its `execution_state`, `source_freeze`, and `verification_lease` as the complete runtime contract. Product source is read-only for this pass; only Planr runtime state, receipts, logs, and artifacts may be written.
+
+Run readiness before starting the configured method:
+
+```bash
+planr evidence readiness --scope plan --id <plan-id> --json
+```
+
+Read the returned `readiness.run_index.repository_path` and preserve it exactly. It is the only executable Evidence input; do not derive a path from the digest or substitute a repository-authored obligation, declarative index, or remembered filename.
+
+If readiness is blocked, do not choose a different unregistered tool or downgrade the observation. The FeatureRun enters a capability hold; report the returned gap and `next_action`, then stop. Repairing policy, schema, adapter digest, runtime registration, or permissions and rerunning the same readiness command is the only resume path.
 
 ## Dev Server
 
-Detect a running dev server before anything else and use it. Never start a second instance. Only start one (in the background, and stop it afterwards) when none is running and the loop is unattended.
+After the typed pick and leased readiness, detect a running dev server and use it. Never start a second instance. Only start one (in the background, and stop it afterwards) when none is running and the loop is unattended.
 
 ## Run The Verification
 
 Exercise the flow the item changed — not the homepage. Interact, assert on rendered output, capture a screenshot when the tier supports it.
 
-Use the repository's configured web capability to create trusted Evidence, then evaluate coverage:
+Use only the repository capability selected by the active obligation to create trusted Evidence, then evaluate coverage:
 
 ```bash
-planr evidence readiness --scope criterion --id <criterion-id>
-planr evidence run --input <run-file-for-the-configured-web-method>
+planr evidence run --input <exact-readiness.run_index.repository_path>
 planr evidence coverage --scope criterion --id <criterion-id>
 planr evidence explain --scope criterion --id <criterion-id>
 ```
 
-The observation contract decides what must be proved. Native Browser, CDP, Playwright, Computer Use, and HTTP probes are configurable methods, not a universal ranking. HTTP can fully prove an HTTP criterion but cannot satisfy rendered interaction, persistence, accessibility, console, or visual observations it never captured.
+The observation contract decides what must be proved. Native Browser, CDP, Playwright, Computer Use, and HTTP probes are configurable methods, not interchangeable fallbacks. HTTP can fully prove an HTTP criterion but cannot satisfy rendered interaction, persistence, accessibility, console, or visual observations it never captured. `planr evidence run` checks the canonical `SOURCE_PATHS` digest inside the transaction; a mismatch records a failed non-covering attempt and commits zero trusted receipts.
 
 Attach screenshots or traces as artifacts on the item:
 
@@ -59,22 +53,23 @@ planr artifact add "verify-web screenshot" --item <item-id> --path <screenshot-p
 planr artifact add "verify-web recording" --item <item-id> --path <recording.mp4> --kind video
 ```
 
-The replay contract and trusted method identity are mandatory. The reviewer validates the receipt and reruns it only when it is cheap, missing, failing, or explicitly high-risk; a verification that cannot be replayed when needed is not evidence. A successful bounded live smoke joins the existing coherent review boundary and does not automatically trigger another full build or reviewer replay.
+The replay contract and trusted method identity are mandatory. The reviewer validates the receipt and reruns it only when it is cheap, missing, failing, or explicitly high-risk; a verification that cannot be replayed when needed is not evidence. A successful bounded live smoke joins the existing coherent FeatureRun/ReviewGate boundary and does not automatically trigger another full build or gate replay.
 
 For a deployment oracle, require an approved deployment decision before the deploy begins. After deployment, keep the live check bounded to the changed routes, content, or interaction and record the deployed source/receipt identity in the summary.
 
 ## When Verification Is Impossible
 
-No capability, no Node, no reachable server: do not fake it and do not downgrade silently.
+No configured capability or unreachable runtime: do not fake it and do not downgrade silently. Readiness records the capability hold; preserve that exact classification.
 
 ```bash
-planr context add "live verification blocked: <missing capability>" --item <item-id> --tag blocker
-planr approval request <item-id> --reason "manual live verification required"
+planr evidence readiness --scope plan --id <plan-id> --json
+planr context add "verification hold: <readiness gap code and capability>" --tag blocker
 ```
 
-Then pause (or let `planr-loop` pause) until a human resolves it.
+Then stop until the reported capability contract is repaired. A manual approval cannot convert a missing capability into trusted Evidence.
 
 ## Outcome
 
-- Pass: evidence logged, proceed to `planr review request <item-id>`.
-- Fail: the feature does not work — log the failing command and observed behavior, then fix under the same item before requesting review. A failed live run is a finding against the implementation, never a reason to weaken the check.
+- Pass: trusted receipts satisfy coverage and the FeatureRun advances toward its single final independent ReviewGate. Do not call `planr done`; the implementation outcome was already settled before source freeze.
+- Product failure: Planr routes a product finding back to the responsible maker. The maker receives an outcome repair packet, fixes only the finding, then readiness re-freezes the source and the verifier selectively reruns only invalidated Evidence.
+- Verifier or environment failure: record the non-covering attempt and stop. It is not protected product risk and must not open an ad hoc ReviewGate.
