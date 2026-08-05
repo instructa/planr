@@ -1778,6 +1778,95 @@ mod tests {
         sha256_prefixed_bytes(content.as_bytes())
     }
 
+    fn repository_policy_yaml() -> String {
+        let payload_schema = json!({
+            "type": "example.import.validator",
+            "schema_ref": "example.import.validator@v1",
+            "schema_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+        });
+        let mut policy = json!({
+            "id": "epolicy-import-validator-v1",
+            "schema_version": "evidence.contract.v1",
+            "policy_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "defaults": {
+                "preset_id": "import-validator",
+                "binding": true,
+                "assurance_level": "standard"
+            },
+            "named_presets": [{
+                "id": "import-validator",
+                "schema_version": "evidence.contract.v1",
+                "namespace": "example.import.validator",
+                "observations": [{
+                    "id": "validator-passed",
+                    "type": "example.import.validator",
+                    "subject": "generic import validator",
+                    "expected": {"status": "passed"},
+                    "target": {"kind": "process", "uri": "local://generic-validator"}
+                }]
+            }],
+            "observation_schema_registrations": [{
+                "type": "example.import.validator",
+                "schema_ref": "example.import.validator@v1",
+                "schema_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+                "owning_namespace": "example.import.validator"
+            }],
+            "adapter_registrations": [{
+                "manifest_id": "vcap-import-validator-v1",
+                "manifest_path": ".planr/evidence/adapters/import-validator.manifest.json",
+                "manifest_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "observation_types": ["example.import.validator"],
+                "payload_schemas": [payload_schema.clone()],
+                "provenance_path": "planr_observed_execution",
+                "execution_contract": {
+                    "kind": "process",
+                    "executable": "node",
+                    "args": ["generic-validator.mjs"],
+                    "working_directory": ".",
+                    "timeout_ms": 5000,
+                    "stdout_limit_bytes": 4096,
+                    "stderr_limit_bytes": 4096,
+                    "payload_schema": payload_schema
+                }
+            }],
+            "extension_namespaces": ["example.import.validator"],
+            "trust_policy": {
+                "accepted_provenance": ["planr_observed_execution"],
+                "min_receipt_status": "trusted",
+                "allow_user_attestation": false
+            },
+            "freshness_policy": {
+                "max_age_seconds": 3600,
+                "invalidate_on": ["source_change", "target_change", "policy_change"]
+            },
+            "fixture_policy": {
+                "fixtures_allowed": false,
+                "mocks_allowed": false,
+                "disclosure_required": true
+            },
+            "completion_policy": {
+                "require_satisfied_or_waived": true,
+                "allow_inconclusive_completion": false,
+                "require_review_evidence": true
+            },
+            "layering_policy": {
+                "mode": "monotonic_strengthening",
+                "weakening_requires_waiver": true,
+                "layers": [{
+                    "scope": {"kind": "plan", "id": "pln-evidence"},
+                    "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }]
+            }
+        });
+        let policy_digest = crate::canonical_json::sha256_json_digest_without_top_level_field(
+            &policy,
+            "policy_digest",
+        )
+        .unwrap();
+        policy["policy_digest"] = json!(policy_digest);
+        serde_yaml::to_string(&policy).unwrap()
+    }
+
     #[test]
     fn generic_validator_stdout_accepts_optional_planr_schema_binding_only() {
         let result = json!({
@@ -1876,6 +1965,12 @@ mod tests {
 
     fn fixture_root() -> TempDir {
         let temp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(temp.path().join(".planr")).unwrap();
+        fs::write(
+            temp.path().join(".planr/evidence.yaml"),
+            repository_policy_yaml(),
+        )
+        .unwrap();
         fs::write(
             temp.path().join("health-output.json"),
             br#"{"status":"ok"}"#,

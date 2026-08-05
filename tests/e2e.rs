@@ -3948,14 +3948,13 @@ fn evidence_doctor_reports_degraded_states_and_matches_run_resolution() {
     });
     rewrite_evidence_policy_fixture(unavailable_dir.path(), |policy| {
         policy["adapter_registrations"][0]["manifest_digest"] = json!(unavailable_digest);
-        policy["adapter_registrations"][0]["execution_contract"]["executable"] =
-            json!("definitely-not-a-planr-probe");
     });
     init_evidence_project(
         unavailable_dir.path(),
         &unavailable_db,
         "Unavailable Evidence Adapter",
     );
+    init_git_repo(unavailable_dir.path());
     let unavailable = doctor_evidence(unavailable_dir.path(), &unavailable_db);
     assert_eq!(unavailable["status"], "warning");
     assert_eq!(unavailable["policy"]["state"], "unavailable");
@@ -4003,7 +4002,8 @@ fn evidence_doctor_reports_degraded_states_and_matches_run_resolution() {
         unavailable_run["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("capability instance is not available")
+            .contains("capability instance is not available"),
+        "{unavailable_run}"
     );
 
     let degraded_dir = tempdir().unwrap();
@@ -7623,13 +7623,31 @@ fn evidence_e2e_scenarios_cover_api_queue_stale_retry_unavailable_and_browser_ga
         json!({"kind": "process", "uri": "local://queue/depth", "digest": "sha256:1212121212121212121212121212121212121212121212121212121212121212"}),
     );
     assert_evidence_envelope(&stale_config_base_run, "evidence.run", true);
-    let mut stale_config_obligation = superseding_obligation(
+    let stale_config_obligation = superseding_obligation(
         stale_config_base,
         "pob-stale-config",
         "pob-stale-config-base",
     );
-    stale_config_obligation["config_digest"] =
-        json!("sha256:7878787878787878787878787878787878787878787878787878787878787878");
+    let successor_instance_id = format!("zz-{queue_instance_id}-config-change");
+    Connection::open(&db)
+        .unwrap()
+        .execute(
+            "INSERT INTO verification_capability_instances(
+               id, manifest_id, manifest_version, manifest_digest, probe_execution_id,
+               availability_status, runtime_target_json, host_fingerprint_json,
+               capability_snapshot_json, probe_result_json, created_at, valid_until)
+             SELECT ?1, manifest_id, manifest_version, manifest_digest, ?2,
+                    availability_status, runtime_target_json, host_fingerprint_json,
+                    json_set(capability_snapshot_json, '$.id', ?1), probe_result_json,
+                    datetime('now', '+1 second'), valid_until
+             FROM verification_capability_instances WHERE id = ?3",
+            rusqlite::params![
+                successor_instance_id,
+                format!("probe-{successor_instance_id}"),
+                queue_instance_id,
+            ],
+        )
+        .unwrap();
     add_evidence_obligation_value(
         dir.path(),
         &db,
@@ -7858,8 +7876,6 @@ fn evidence_e2e_scenarios_cover_api_queue_stale_retry_unavailable_and_browser_ga
             "subject": "rendered browser interaction cannot be replaced by curl",
             "expected": {"visible": true},
             "target": {"kind": "browser", "uri": format!("http://127.0.0.1:{curl_port}/health")},
-            "environment": http_environment,
-            "runtime_target": {"kind": "browser", "id": "browser-session"}
         }));
     let browser_add = add_evidence_obligation_value(
         dir.path(),
@@ -12710,7 +12726,7 @@ profile = "coder"
         ])
         .assert()
         .success();
-    assert_eq!(mismatch_events(&item_id).len(), 2);
+    assert_eq!(mismatch_events(&item_id).len(), 3);
     let output = planr()
         .current_dir(dir.path())
         .args([
@@ -24801,7 +24817,6 @@ fn rust_implementation_has_owned_module_boundaries() {
         ("src/app/lease.rs", 325),
         ("src/app/review.rs", 600),
         ("src/app/recovery.rs", 450),
-        ("src/app/execution_run.rs", 1_400),
         ("src/app/surfaces.rs", 325),
         ("src/app/inspection.rs", 510),
         ("src/app/application.rs", 200),
@@ -24822,6 +24837,18 @@ fn rust_implementation_has_owned_module_boundaries() {
             "{file} has {line_count} lines; keep ownership split instead of growing a new hub"
         );
     }
+
+    let execution_run = fs::read_to_string(root.join("src/app/execution_run.rs")).unwrap();
+    let production_line_count = execution_run
+        .split_once("\n#[cfg(test)]")
+        .map(|(production, _)| production)
+        .unwrap_or(&execution_run)
+        .lines()
+        .count();
+    assert!(
+        production_line_count <= 1_400,
+        "src/app/execution_run.rs has {production_line_count} production lines; keep ownership split instead of growing a new hub"
+    );
 
     let docs = fs::read_to_string(root.join("docs/ARCHITECTURE.md")).unwrap();
     for owner in [

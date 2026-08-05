@@ -3,7 +3,7 @@ use super::{App, ReviewAnnotationInput};
 use crate::cli::{
     ApprovalCommand, ClientArg, CloseArgs, ContextCommand, DoctorArgs, ImportArgs, InstallCommand,
     ItemCommand, LinkCommand, LogCommand, MapCommand, PickCommand, PlanCommand, ProjectCommand,
-    ReviewCommand, RunBatchCommand, RunCommand, SearchArgs,
+    ReviewCommand, SearchArgs,
 };
 use crate::integrations::{cursor_deeplink, install_snippet, mcp_json_config};
 use crate::model::LinkKind;
@@ -24,41 +24,6 @@ use std::io::{self, Read};
 use std::path::PathBuf;
 
 impl App {
-    pub(crate) fn execution_run(&self, command: RunCommand) -> Result<()> {
-        match command {
-            RunCommand::Batch(args) => match args.command {
-                RunBatchCommand::Roll(args) => {
-                    let value = self.roll_feature_run_batch_value(&args.plan, &worker_id())?;
-                    self.emit(value, "feature run batch rolled for same maker".to_string())
-                }
-                RunBatchCommand::Replace(args) => {
-                    let reason = match args.reason {
-                        crate::cli::MakerReplacementReasonArg::Unavailable => {
-                            crate::execution_run::MakerReplacementReason::Unavailable
-                        }
-                        crate::cli::MakerReplacementReasonArg::ContextLost => {
-                            crate::execution_run::MakerReplacementReason::ContextLost
-                        }
-                        crate::cli::MakerReplacementReasonArg::OwnershipIncompatible => {
-                            crate::execution_run::MakerReplacementReason::OwnershipIncompatible
-                        }
-                        crate::cli::MakerReplacementReasonArg::BatchCapReached => {
-                            crate::execution_run::MakerReplacementReason::BatchCapReached
-                        }
-                    };
-                    let value = self.replace_feature_run_maker_value(
-                        &args.plan,
-                        &args.successor_maker,
-                        reason,
-                        &args.reference,
-                        &args.explanation,
-                    )?;
-                    self.emit(value, "feature run maker replaced".to_string())
-                }
-            },
-        }
-    }
-
     pub(crate) fn project(&self, command: ProjectCommand) -> Result<()> {
         match command {
             ProjectCommand::Init(args) => {

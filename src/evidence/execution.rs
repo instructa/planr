@@ -2776,9 +2776,7 @@ mod tests {
                     "type": "example.process.stdout",
                     "subject": "process stdout",
                     "expected": {"contains": "ready"},
-                    "target": {"kind": "process", "uri": "local://process"},
-                    "environment": {"kind": "local", "id": "dev-shell", "digest": DIGEST_B},
-                    "runtime_target": {"kind": "process", "id": "test"}
+                    "target": {"kind": "process", "uri": "local://process"}
                 }]
             }],
             "observation_schema_registrations": [{
@@ -2876,6 +2874,10 @@ mod tests {
             return;
         }
         fs::create_dir_all(root.join(".planr")).unwrap();
+        let policy_path = root.join(".planr/evidence.yaml");
+        if !policy_path.exists() {
+            fs::write(policy_path, repository_policy_yaml()).unwrap();
+        }
         fs::write(root.join(".planr/repository-snapshot-anchor"), "snapshot\n").unwrap();
         fs::write(root.join(".gitignore"), "*.marker\n").unwrap();
         git(root, &["init"]);
@@ -4027,18 +4029,14 @@ mod tests {
                 "type": "example.process.stdout",
                 "subject": "visible",
                 "expected": {"visible": true},
-                "target": {"kind": "process", "uri": "local://process"},
-                "environment": {"kind": "local", "id": "dev-shell", "digest": DIGEST_B},
-                "runtime_target": {"kind": "process", "id": "test"}
+                "target": {"kind": "process", "uri": "local://process"}
             },
             {
                 "id": "obs-console",
                 "type": "example.process.stdout",
                 "subject": "console",
                 "expected": {"error_count": 0},
-                "target": {"kind": "process", "uri": "local://process"},
-                "environment": {"kind": "local", "id": "dev-shell", "digest": DIGEST_B},
-                "runtime_target": {"kind": "process", "id": "test"}
+                "target": {"kind": "process", "uri": "local://process"}
             }
         ]))
         .unwrap();
@@ -4252,8 +4250,6 @@ mod tests {
             "subject": "visible",
             "expected": {"visible": true},
             "target": {"kind": "process", "uri": "local://process"},
-            "environment": {"kind": "local", "id": "dev-shell", "digest": DIGEST_B},
-            "runtime_target": {"kind": "process", "id": "test"},
             "payload_schema": {"schema_ref": "example.visible.result@v1"}
         }]))
         .unwrap();

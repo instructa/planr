@@ -6,6 +6,7 @@ use super::repository::execution_run::{
     ReviewScopeKind, ReviewVerdict, RunOutcomeRecord,
 };
 use crate::canonical_json::sha256_json_digest;
+use crate::cli::{RunBatchCommand, RunCommand};
 use crate::execution_run::{
     DEFAULT_BATCH_OUTCOME_CAP, ExecutionBatch, ExecutionBatchStatus, FeatureRun, FeatureRunPhase,
     FeatureRunStatus, MakerReplacement, MakerReplacementReason, PhaseTransition,
@@ -29,6 +30,41 @@ pub(crate) struct OutcomeSettlement<'a> {
 }
 
 impl App {
+    pub(crate) fn execution_run(&self, command: RunCommand) -> Result<()> {
+        match command {
+            RunCommand::Batch(args) => match args.command {
+                RunBatchCommand::Roll(args) => {
+                    let value = self.roll_feature_run_batch_value(&args.plan, &worker_id())?;
+                    self.emit(value, "feature run batch rolled for same maker".to_string())
+                }
+                RunBatchCommand::Replace(args) => {
+                    let reason = match args.reason {
+                        crate::cli::MakerReplacementReasonArg::Unavailable => {
+                            MakerReplacementReason::Unavailable
+                        }
+                        crate::cli::MakerReplacementReasonArg::ContextLost => {
+                            MakerReplacementReason::ContextLost
+                        }
+                        crate::cli::MakerReplacementReasonArg::OwnershipIncompatible => {
+                            MakerReplacementReason::OwnershipIncompatible
+                        }
+                        crate::cli::MakerReplacementReasonArg::BatchCapReached => {
+                            MakerReplacementReason::BatchCapReached
+                        }
+                    };
+                    let value = self.replace_feature_run_maker_value(
+                        &args.plan,
+                        &args.successor_maker,
+                        reason,
+                        &args.reference,
+                        &args.explanation,
+                    )?;
+                    self.emit(value, "feature run maker replaced".to_string())
+                }
+            },
+        }
+    }
+
     pub(crate) fn review_gate_projection_value(&self, gate: &ReviewGateRecord) -> Result<Value> {
         let mut state = self.canonical_execution_state_value(&gate.run_id, Some(&gate.id))?;
         let latest = state["review_attempts"]

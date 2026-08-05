@@ -1720,13 +1720,7 @@ mod tests {
                     "type": "example.queue.job.processed",
                     "subject": "queue job processed",
                     "expected": {"status": "processed"},
-                    "target": {"kind": "queue", "id": "jobs"},
-                    "environment": {
-                        "kind": "local",
-                        "id": "disposable-repo",
-                        "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
-                    },
-                    "runtime_target": {"kind": "process", "id": "queue-worker"}
+                    "target": {"kind": "queue", "id": "jobs"}
                 }]
             }],
             "observation_schema_registrations": [{

@@ -1122,7 +1122,7 @@ impl App {
         let closed_value = json!(item_id);
         self.emit(
             json!({
-                "item": item,
+                "item": self.get_item(&item_id)?,
                 "log_id": log_id,
                 "work_packet": run_transition,
                 "closed": closed_value,
