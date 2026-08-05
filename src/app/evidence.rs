@@ -1,4 +1,5 @@
 use super::App;
+use super::feature_run_evidence::{FeatureRunBudgetAdmission, FeatureRunBudgetReservation};
 use crate::cli::{
     EvidenceCapabilityCommand, EvidenceCommand, EvidenceCoverageScope, EvidenceHostCaptureCommand,
     EvidenceObligationCommand,
@@ -20,7 +21,8 @@ use crate::evidence::{
     },
     execution::{
         ConfiguredProcessRunInput, TrustedEvidencePersistenceInput, ensure_process_adapter_digest,
-        persist_trusted_evidence_atomically, resolve_process_run, run_configured_process_adapter,
+        persist_trusted_evidence_atomically, resolve_process_run,
+        run_configured_process_adapter_guarded, run_repository_snapshot_pre_commit_test_hook,
         run_resolved_process,
     },
     parse_validated_artifact_import,
@@ -28,7 +30,7 @@ use crate::evidence::{
         capture_repository_snapshot, load_repository_observation_schema, parse_evidence_policy_yaml,
     },
 };
-use crate::execution::CancellationToken;
+use crate::execution::{BoundedProcessInput, CancellationToken, run_bounded_process};
 use anyhow::{Context, Result, anyhow, bail};
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
@@ -37,7 +39,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
-    process::Command,
+    time::{Duration, Instant},
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -45,6 +47,55 @@ pub(crate) const EVIDENCE_OK: i32 = 0;
 pub(crate) const EVIDENCE_UNSATISFIED: i32 = 2;
 pub(crate) const EVIDENCE_BLOCKED: i32 = 3;
 pub(crate) const EVIDENCE_ERROR: i32 = 1;
+const HOST_CAPTURE_VALIDATOR_TIMEOUT_MS: u64 = 30_000;
+
+struct HermeticReuseBinding {
+    key: String,
+    execution_contract_digest: String,
+    source_tree_digest: String,
+    toolchain_lock_digest: String,
+}
+
+struct HermeticReuseInput<'a> {
+    obligation: &'a ProofObligation,
+    instance: &'a VerificationCapabilityInstance,
+    execution_contract: &'a ProcessExecutionContract,
+    target: &'a TargetBinding,
+    environment: &'a EnvironmentBinding,
+    fixture_disclosure: &'a FixtureDisclosure,
+    env: &'a BTreeMap<String, String>,
+}
+
+fn is_hermetic_reuse_candidate(
+    manifest: &VerificationCapabilityManifest,
+    target: &TargetBinding,
+    fixture_disclosure: &FixtureDisclosure,
+    env: &BTreeMap<String, String>,
+) -> Result<bool> {
+    if fixture_disclosure.fixtures_used
+        || fixture_disclosure.mocks_used
+        || fixture_disclosure.fixture_refs.is_some()
+        || fixture_disclosure.mock_refs.is_some()
+        || !env.is_empty()
+    {
+        return Ok(false);
+    }
+    let network_is_none =
+        manifest.permissions.get("network").and_then(Value::as_str) == Some("none");
+    let deterministic =
+        manifest.determinism == "deterministic" && manifest.repeatability == "repeatable";
+    let runtime_words = serde_json::to_string(&json!({
+        "surfaces": manifest.supported_surfaces,
+        "interactions": manifest.supported_interactions,
+        "targets": manifest.runtime_targets,
+        "target": target,
+    }))?
+    .to_ascii_lowercase();
+    let forbidden_runtime = ["browser", "http", "network", "live", "websocket"]
+        .iter()
+        .any(|word| runtime_words.contains(word));
+    Ok(network_is_none && deterministic && !forbidden_runtime)
+}
 
 #[derive(Debug)]
 pub(crate) struct EvidenceCliExit {
@@ -243,18 +294,6 @@ impl App {
                     },
                 )
             }
-            EvidenceCommand::Rebind(args) => {
-                let value = read_json_file(&args.input)?;
-                (
-                    "evidence.rebind",
-                    self.evidence_rebind_value(value, args.apply),
-                    if args.apply {
-                        "evidence rebind applied".to_string()
-                    } else {
-                        "evidence rebind preview".to_string()
-                    },
-                )
-            }
             EvidenceCommand::Classifications => (
                 "evidence.classifications",
                 Ok(evidence_classifications_value()),
@@ -431,14 +470,15 @@ impl App {
         let project = self.default_project()?;
         let obligation_id = obligation.id.clone();
         let obligation_version = self.next_obligation_version(&project.id, &obligation)?;
-        let source_digest = self.source_digest_for_obligation(&obligation)?;
+        let semantic_digest =
+            crate::canonical_json::sha256_json_digest(&serde_json::to_value(&obligation)?)?;
         self.conn.execute(
             "INSERT INTO proof_obligations(
               id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
               binding, observation_requirements_json, fixture_policy_json, freshness_policy_json,
               assurance_policy_json, retry_aggregation, policy_digest, config_digest,
-              source_digest, supersedes_obligation_id, created_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+              source_digest, supersedes_obligation_id, created_at, obligation_shape
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14, NULL, ?15, datetime('now'), 'semantic_v1')",
             params![
                 obligation.id.as_str(),
                 project.id,
@@ -453,11 +493,8 @@ impl App {
                 obligation.freshness_policy.to_string(),
                 obligation.assurance_policy.to_string(),
                 obligation_retry_aggregation(&obligation)?,
-                obligation.policy_digest.as_str(),
-                obligation.config_digest.as_str(),
-                source_digest,
+                semantic_digest,
                 obligation.supersedes.as_ref().map(|id| id.as_str()),
-                obligation.created_at,
             ],
         )?;
         Ok(json!({
@@ -587,7 +624,7 @@ impl App {
                     "SELECT id, project_id, plan_id, item_id, criterion_id, title, binding,
                             observation_requirements_json, fixture_policy_json, freshness_policy_json,
                             assurance_policy_json, retry_aggregation, policy_digest, config_digest, source_digest,
-                            supersedes_obligation_id, obligation_version, created_at
+                            supersedes_obligation_id, obligation_version, created_at, obligation_shape
                      FROM proof_obligations WHERE id = ?1",
                     params![obligation.id.as_str()],
                     obligation_row,
@@ -739,283 +776,6 @@ impl App {
         }))
     }
 
-    pub(crate) fn evidence_rebind_value(&self, value: Value, apply: bool) -> Result<Value> {
-        self.conn
-            .execute_batch("BEGIN IMMEDIATE; SAVEPOINT evidence_rebind")?;
-        let result = self.evidence_rebind_value_inner(value, apply);
-        match result {
-            Ok(value) => {
-                self.conn.execute_batch("RELEASE evidence_rebind; COMMIT")?;
-                Ok(value)
-            }
-            Err(error) => {
-                let _ = self
-                    .conn
-                    .execute_batch("ROLLBACK TO evidence_rebind; RELEASE evidence_rebind; COMMIT");
-                Err(error)
-            }
-        }
-    }
-
-    fn evidence_rebind_value_inner(&self, value: Value, apply: bool) -> Result<Value> {
-        let object = value.as_object().ok_or_else(|| {
-            EvidenceCommandError::bad_request("evidence rebind input must be a JSON object")
-        })?;
-        let allowed = BTreeSet::from([
-            "schema_version",
-            "plan_id",
-            "manifest_id",
-            "obligations",
-            "preview_digest",
-        ]);
-        let unknown = object
-            .keys()
-            .filter(|key| !allowed.contains(key.as_str()))
-            .cloned()
-            .collect::<Vec<_>>();
-        if !unknown.is_empty() {
-            return Err(EvidenceCommandError::bad_request(format!(
-                "evidence rebind input has unknown fields: {}",
-                unknown.join(",")
-            ))
-            .into());
-        }
-        if object.get("schema_version").and_then(Value::as_str) != Some("planr.evidence.rebind.v1")
-        {
-            return Err(EvidenceCommandError::bad_request(
-                "evidence rebind schema_version must be planr.evidence.rebind.v1",
-            )
-            .into());
-        }
-        let plan_id = string_field(&value, "plan_id")?;
-        let manifest_id = string_field(&value, "manifest_id")?;
-        let plan = self.get_plan(&plan_id)?;
-        let project = self.default_project()?;
-        if plan.project_id != project.id {
-            return Err(EvidenceCommandError::bad_request(
-                "evidence rebind plan does not belong to current project",
-            )
-            .into());
-        }
-        let document = self.evidence_policy_document()?.ok_or_else(|| {
-            EvidenceCommandError::bad_request("evidence rebind requires .planr/evidence.yaml")
-        })?;
-        let mut registry = self.evidence_registry_from_policy(&document)?;
-        if !registry.diagnostics().is_empty() {
-            return Err(EvidenceCommandError::bad_request(format!(
-                "evidence rebind policy registry is invalid: {}",
-                serde_json::to_string(&registry_diagnostics_value(registry.diagnostics()))?
-            ))
-            .into());
-        }
-        let proposed_registered_capability = registry
-            .capabilities()
-            .find(|capability| capability.manifest.id.as_str() == manifest_id)
-            .cloned()
-            .ok_or_else(|| {
-                EvidenceCommandError::bad_request(format!(
-                    "evidence rebind manifest is not registered by current policy: {manifest_id}"
-                ))
-            })?;
-        let proposed_capability = json!({
-            "manifest_id": proposed_registered_capability.manifest.id.as_str(),
-            "version": proposed_registered_capability.manifest.version,
-            "manifest_digest": proposed_registered_capability.manifest_digest,
-            "adapter_digest": proposed_registered_capability.manifest.adapter_digest.as_str(),
-        });
-
-        let raw_obligations = object
-            .get("obligations")
-            .and_then(Value::as_array)
-            .filter(|values| !values.is_empty())
-            .ok_or_else(|| {
-                EvidenceCommandError::bad_request(
-                    "evidence rebind input requires at least one obligation",
-                )
-            })?;
-        let mut parsed = Vec::new();
-        let mut entries = Vec::new();
-        let mut affected_criteria = BTreeSet::new();
-        let mut current_capabilities = BTreeMap::new();
-        let mut seen_old = BTreeSet::new();
-        let mut seen_new = BTreeSet::new();
-        for raw in raw_obligations {
-            let obligation: ProofObligation =
-                serde_json::from_value(raw.clone()).map_err(|error| {
-                    EvidenceCommandError::bad_request(format!(
-                        "evidence rebind obligation is invalid: {error}"
-                    ))
-                })?;
-            self.validate_migration_obligation(&plan, &obligation)
-                .map_err(|error| EvidenceCommandError::bad_request(error.to_string()))?;
-            validate_rebind_capability_support(
-                &proposed_registered_capability.manifest,
-                &obligation,
-            )?;
-            let old_id = obligation.supersedes.as_ref().ok_or_else(|| {
-                EvidenceCommandError::bad_request(format!(
-                    "rebind obligation {} must supersede the active obligation",
-                    obligation.id.as_str()
-                ))
-            })?;
-            if !seen_old.insert(old_id.as_str().to_string())
-                || !seen_new.insert(obligation.id.as_str().to_string())
-            {
-                return Err(EvidenceCommandError::bad_request(
-                    "evidence rebind obligation ids and superseded ids must be unique",
-                )
-                .into());
-            }
-            let existing = self.evidence_obligation_record_value(old_id.as_str())?;
-            let is_active: bool = self.conn.query_row(
-                "SELECT NOT EXISTS(
-                   SELECT 1 FROM proof_obligations newer
-                   WHERE newer.project_id = proof_obligations.project_id
-                     AND newer.supersedes_obligation_id = proof_obligations.id
-                 ) FROM proof_obligations WHERE project_id = ?1 AND id = ?2 AND binding = 1",
-                params![project.id, old_id.as_str()],
-                |row| row.get(0),
-            )?;
-            if !is_active {
-                return Err(EvidenceCommandError::conflict(format!(
-                    "evidence rebind source obligation is not active: {}",
-                    old_id.as_str()
-                ))
-                .into());
-            }
-            validate_rebind_semantics(&existing, &obligation)?;
-            if obligation.policy_digest.as_str() != document.digest {
-                return Err(EvidenceCommandError::bad_request(format!(
-                    "rebind obligation {} policy_digest must match current repository policy {}",
-                    obligation.id.as_str(),
-                    document.digest
-                ))
-                .into());
-            }
-            let version = self.next_obligation_version(&project.id, &obligation)?;
-            affected_criteria.insert(obligation.criterion_id.as_str().to_string());
-            for capability in self.capability_versions_for_obligation(old_id.as_str())? {
-                current_capabilities.insert(capability.to_string(), capability);
-            }
-            let mut invalidation = Vec::new();
-            if existing["policy_digest"].as_str() != Some(obligation.policy_digest.as_str()) {
-                invalidation.push("policy_change");
-            }
-            if existing["config_digest"].as_str() != Some(obligation.config_digest.as_str()) {
-                invalidation.push("configuration_change");
-            }
-            let proposed_obligation_digest =
-                crate::canonical_json::sha256_json_digest(&serde_json::to_value(&obligation)?)?;
-            entries.push(json!({
-                "current_obligation_id": old_id.as_str(),
-                "proposed_obligation_id": obligation.id.as_str(),
-                "proposed_obligation_digest": proposed_obligation_digest,
-                "criterion_id": obligation.criterion_id.as_str(),
-                "current_version": existing["obligation_version"],
-                "proposed_version": version,
-                "semantic_dimensions": "unchanged",
-                "freshness_invalidation": invalidation,
-                "refresh_command": format!(
-                    "planr evidence run --input <run-file-for-{}>",
-                    obligation.id.as_str()
-                ),
-            }));
-            parsed.push(obligation);
-        }
-        let mut preview = json!({
-            "schema_version": "planr.evidence.rebind.preview.v1",
-            "plan_id": plan_id,
-            "proposed_capability": proposed_capability,
-            "current_capabilities": current_capabilities.into_values().collect::<Vec<_>>(),
-            "affected_criteria": affected_criteria.into_iter().collect::<Vec<_>>(),
-            "obligations": entries,
-        });
-        let preview_digest = crate::canonical_json::sha256_json_digest(&preview)?;
-        preview["preview_digest"] = json!(preview_digest);
-
-        let expected_digest = object.get("preview_digest").and_then(Value::as_str);
-        if apply && expected_digest != Some(preview_digest.as_str()) {
-            return Err(EvidenceCommandError::conflict(format!(
-                "evidence rebind apply requires current preview_digest {preview_digest}"
-            ))
-            .into());
-        }
-        let mut created = Vec::new();
-        let mut capability_instance = Value::Null;
-        if apply {
-            let resolution = registry.current_or_probe_and_store(
-                &self.conn,
-                &self.root,
-                &manifest_id,
-                self.default_capability_runtime(),
-            )?;
-            if resolution.instance.availability.status.as_str() != "available" {
-                return Err(EvidenceCommandError::conflict(format!(
-                    "evidence rebind capability is not available: {}",
-                    resolution.instance.availability.status.as_str()
-                ))
-                .into());
-            }
-            validate_rebind_environment(&parsed, &resolution.instance.environment)?;
-            capability_instance = json!({
-                "id": resolution.instance.id.as_str(),
-                "manifest_id": resolution.instance.manifest_id.as_str(),
-                "manifest_version": resolution.instance.adapter_version,
-                "manifest_digest": resolution.instance.manifest_digest.as_str(),
-            });
-            let fail_after = std::env::var("PLANR_EVIDENCE_REBIND_FAIL_AFTER_CREATES")
-                .ok()
-                .and_then(|value| value.parse::<usize>().ok());
-            for obligation in parsed {
-                created.push(
-                    self.evidence_obligation_add_value(serde_json::to_value(&obligation)?)?
-                        ["obligation"]
-                        .clone(),
-                );
-                if fail_after == Some(created.len()) {
-                    return Err(EvidenceCommandError::internal(format!(
-                        "injected evidence rebind failure after {} create(s)",
-                        created.len()
-                    ))
-                    .into());
-                }
-            }
-        }
-        Ok(json!({
-            "schema_version": "planr.evidence.rebind.v1",
-            "status": if apply { "applied" } else { "preview" },
-            "verdict": "valid",
-            "dry_run": !apply,
-            "preview": preview,
-            "capability_instance": capability_instance,
-            "created": created,
-            "next_action": if apply {
-                format!("run planr evidence readiness --scope plan --id {plan_id}, then refresh only invalidated criteria")
-            } else {
-                "copy preview.preview_digest into the input and rerun with --apply".to_string()
-            },
-        }))
-    }
-
-    fn capability_versions_for_obligation(&self, obligation_id: &str) -> Result<Vec<Value>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT instances.manifest_id, instances.manifest_version, instances.manifest_digest
-             FROM evidence_attempts attempts
-             JOIN verification_capability_instances instances
-               ON instances.id = attempts.capability_instance_id
-             WHERE attempts.obligation_id = ?1
-             ORDER BY instances.manifest_id, instances.manifest_version, instances.manifest_digest",
-        )?;
-        let rows = stmt.query_map(params![obligation_id], |row| {
-            Ok(json!({
-                "manifest_id": row.get::<_, String>(0)?,
-                "version": row.get::<_, String>(1)?,
-                "manifest_digest": row.get::<_, String>(2)?,
-            }))
-        })?;
-        crate::util::collect_rows(rows)
-    }
-
     fn validate_migration_obligation(
         &self,
         plan: &crate::model::Plan,
@@ -1062,7 +822,7 @@ impl App {
                 "SELECT id, project_id, plan_id, item_id, criterion_id, title, binding,
                         observation_requirements_json, fixture_policy_json, freshness_policy_json,
                         assurance_policy_json, retry_aggregation, policy_digest, config_digest, source_digest,
-                        supersedes_obligation_id, obligation_version, created_at
+                        supersedes_obligation_id, obligation_version, created_at, obligation_shape
                  FROM proof_obligations
                  WHERE project_id = ?1 AND plan_id = ?2 AND criterion_id = ?3 AND obligation_version = ?4",
                 params![project_id, plan_id, criterion_id, obligation_version],
@@ -1123,22 +883,6 @@ impl App {
             .ok_or_else(|| anyhow!("superseded evidence obligation not found or mismatched"))
     }
 
-    fn source_digest_for_obligation(&self, obligation: &ProofObligation) -> Result<Option<String>> {
-        let invalidate_source = obligation
-            .freshness_policy
-            .get("invalidate_on")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .any(|value| value.as_str() == Some("source_change"));
-        if !invalidate_source {
-            return Ok(None);
-        }
-        let snapshot = capture_repository_snapshot(&self.root)
-            .map_err(|err| anyhow!("capturing evidence source binding: {err}"))?;
-        Ok(Some(snapshot.source.tree_digest.as_str().to_string()))
-    }
-
     pub(crate) fn evidence_obligations_value(
         &self,
         plan: Option<&str>,
@@ -1165,7 +909,7 @@ impl App {
             "SELECT id, project_id, plan_id, item_id, criterion_id, title, binding,
                     observation_requirements_json, fixture_policy_json, freshness_policy_json,
                     assurance_policy_json, retry_aggregation, policy_digest, config_digest, source_digest,
-                    supersedes_obligation_id, obligation_version, created_at
+                    supersedes_obligation_id, obligation_version, created_at, obligation_shape
              FROM proof_obligations{where_clause} ORDER BY created_at, id"
         );
         let mut stmt = self.conn.prepare(&sql)?;
@@ -1229,6 +973,24 @@ impl App {
         scope: EvidenceCoverageScope,
         id: &str,
     ) -> Result<Value> {
+        let feature_run_freeze = if matches!(scope, EvidenceCoverageScope::Plan) {
+            self.freeze_feature_run_source_value(id)?
+        } else {
+            None
+        };
+        if feature_run_freeze
+            .as_ref()
+            .is_some_and(|value| value["work_packet"]["kind"] == "hold")
+        {
+            return Ok(feature_run_freeze.expect("budget hold checked"));
+        }
+        // A plan-scoped readiness call may establish the canonical source freeze, but once the
+        // FeatureRun is frozen nothing beyond that boundary may probe capabilities, parse policy,
+        // or create an executable run index until the current worker owns the verifier lease.
+        // Non-FeatureRun plans retain the ordinary readiness path.
+        if matches!(scope, EvidenceCoverageScope::Plan) {
+            self.resolve_feature_run_evidence_lease(&self.default_project()?.id, id)?;
+        }
         let document = self.evidence_policy_document()?.ok_or_else(|| {
             EvidenceCommandError::bad_request("evidence readiness requires .planr/evidence.yaml")
         })?;
@@ -1260,7 +1022,7 @@ impl App {
                 .into_iter()
                 .collect::<BTreeSet<_>>()
         };
-        let active = obligation_rows
+        let mut active = obligation_rows
             .iter()
             .filter(|row| row["binding"].as_bool() == Some(true))
             .filter(|row| {
@@ -1269,6 +1031,7 @@ impl App {
                     .is_some_and(|obligation_id| !superseded_ids.contains(obligation_id))
             })
             .collect::<Vec<_>>();
+        active.sort_by_key(|row| row["id"].as_str().unwrap_or_default());
         // The registry projection retains every repository diagnostic, but
         // readiness blocks only on capabilities needed by this active scope.
         let mut gaps = Vec::new();
@@ -1321,9 +1084,6 @@ impl App {
                 let matching = registry
                     .capabilities()
                     .filter(|capability| {
-                        let runtime_targets =
-                            serde_json::to_value(&capability.manifest.runtime_targets)
-                                .unwrap_or_else(|_| Value::Array(Vec::new()));
                         capability
                             .manifest
                             .supported_observations
@@ -1331,9 +1091,6 @@ impl App {
                             .any(|binding| {
                                 binding.observation_type == observation.observation_type
                                     && binding.schema_ref == payload_schema.schema_ref
-                            })
-                            && runtime_targets.as_array().is_some_and(|targets| {
-                                targets.contains(&observation.runtime_target)
                             })
                     })
                     .collect::<Vec<_>>();
@@ -1344,8 +1101,7 @@ impl App {
                         "requirement_id": observation.id.as_str(),
                         "observation_type": observation.observation_type.as_str(),
                         "schema_ref": payload_schema.schema_ref,
-                        "runtime_target": observation.runtime_target,
-                        "message": "no registered capability supports the observation type, payload schema, and runtime target"
+                        "message": "no registered capability supports the observation type and payload schema"
                     }));
                     continue;
                 }
@@ -1406,23 +1162,399 @@ impl App {
         }
         gaps.sort_by_key(|gap| gap.to_string());
         gaps.dedup();
+        let feature_run_readiness = if matches!(scope, EvidenceCoverageScope::Plan) {
+            self.classify_feature_run_readiness_value(id, !gaps.is_empty())?
+        } else {
+            None
+        };
+        let run_index = if gaps.is_empty() {
+            Some(self.build_readiness_run_index(
+                scope,
+                id,
+                &active,
+                &registry,
+                &probe,
+                &document.digest,
+            )?)
+        } else {
+            None
+        };
         Ok(json!({
             "status": if gaps.is_empty() { "passed" } else { "blocked" },
             "scope": {"kind": scope.as_str(), "id": id},
             "active_obligation_ids": active.iter().filter_map(|row| row["id"].as_str()).collect::<Vec<_>>(),
             "observation_types": observation_types,
             "registry": probe,
+            "feature_run_freeze": feature_run_freeze,
+            "feature_run_readiness": feature_run_readiness,
+            "run_index": run_index,
             "gaps": gaps,
             "next_action": if gaps.is_empty() {
-                "run configured evidence"
+                "run planr evidence run --input <exact-readiness.run_index.repository_path>"
             } else {
                 "repair the reported Evidence policy, schema, capability, or runtime gap"
             }
         }))
     }
 
+    fn build_readiness_run_index(
+        &self,
+        scope: EvidenceCoverageScope,
+        scope_id: &str,
+        active: &[&Value],
+        registry: &CapabilityRegistry,
+        probe: &Value,
+        policy_digest: &str,
+    ) -> Result<Value> {
+        let available_instances = probe["probes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|entry| entry["availability_status"] == "available")
+            .filter_map(|entry| {
+                Some((
+                    entry["manifest_id"].as_str()?.to_string(),
+                    entry["instance_id"].as_str()?.to_string(),
+                ))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut runs = Vec::new();
+        for row in active {
+            let obligation_id = row["id"]
+                .as_str()
+                .ok_or_else(|| anyhow!("readiness obligation is missing id"))?;
+            let observations: Vec<crate::evidence::model::ObservationRequirement> =
+                serde_json::from_value(row["observations"].clone())?;
+            let capability = registry
+                .capabilities()
+                .find(|capability| {
+                    available_instances.contains_key(capability.manifest.id.as_str())
+                        && observations.iter().all(|observation| {
+                            observation.payload_schema.as_ref().is_some_and(|schema| {
+                                capability.manifest.supported_observations.iter().any(|binding| {
+                                    binding.observation_type == observation.observation_type
+                                        && binding.schema_ref == schema.schema_ref
+                                })
+                            })
+                        })
+                })
+                .ok_or_else(|| {
+                    anyhow!(
+                        "no single available capability can execute every observation for {obligation_id}"
+                    )
+                })?;
+            let instance_id = available_instances
+                .get(capability.manifest.id.as_str())
+                .expect("available capability has probed instance");
+            let instance = self.load_capability_instance(instance_id)?;
+            let execution_contract = capability
+                .repository_execution_contract
+                .as_ref()
+                .unwrap_or(&capability.manifest.availability_probe.execution);
+            let target = observations
+                .first()
+                .ok_or_else(|| anyhow!("proof obligation {obligation_id} has no observations"))?
+                .target
+                .clone();
+            runs.push(json!({
+                "index": runs.len(),
+                "capability": {
+                    "instance_id": instance.id.as_str(),
+                    "manifest_id": instance.manifest_id.as_str(),
+                    "manifest_digest": instance.manifest_digest.as_str(),
+                    "manifest_version": instance.adapter_version,
+                },
+                "input": {
+                    "obligation_id": obligation_id,
+                    "capability_instance_id": instance_id,
+                    "target": target,
+                    "environment": instance.environment,
+                    "execution_contract": execution_contract,
+                    "fixture_disclosure": {
+                        "fixtures_used": false,
+                        "mocks_used": false
+                    }
+                }
+            }));
+        }
+        let snapshot = capture_repository_snapshot(&self.root)
+            .map_err(|error| anyhow!("capturing readiness run-index source: {error}"))?;
+        let mut run_index = json!({
+            "schema_version": "planr.evidence.run-index.v1",
+            "scope": {"kind": scope.as_str(), "id": scope_id},
+            "source": snapshot.source,
+            "policy_digest": policy_digest,
+            "runs": runs,
+        });
+        let digest = crate::canonical_json::sha256_json_digest(&run_index)?;
+        let relative_path = format!(
+            ".planr/evidence/runs/{}.json",
+            digest.strip_prefix("sha256:").unwrap_or(&digest)
+        );
+        run_index["repository_path"] = json!(relative_path);
+        let sealed_digest = crate::canonical_json::sha256_json_digest(&run_index)?;
+        run_index["run_index_digest"] = json!(sealed_digest);
+        let path = self.root.join(&relative_path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&path, serde_json::to_vec_pretty(&run_index)?)?;
+        Ok(run_index)
+    }
+
+    fn evidence_run_index_value(&self, value: Value) -> Result<Value> {
+        let object = value.as_object().ok_or_else(|| {
+            EvidenceCommandError::bad_request("evidence run-index input must be an object")
+        })?;
+        let allowed = BTreeSet::from([
+            "schema_version",
+            "scope",
+            "source",
+            "policy_digest",
+            "runs",
+            "repository_path",
+            "run_index_digest",
+        ]);
+        let unknown = object
+            .keys()
+            .filter(|key| !allowed.contains(key.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !unknown.is_empty() {
+            return Err(EvidenceCommandError::bad_request(format!(
+                "evidence run-index input has unknown fields: {}",
+                unknown.join(",")
+            ))
+            .into());
+        }
+        let declared_digest = string_field(&value, "run_index_digest")?;
+        let actual_digest = crate::canonical_json::sha256_json_digest_without_top_level_field(
+            &value,
+            "run_index_digest",
+        )?;
+        if declared_digest != actual_digest {
+            return Err(
+                EvidenceCommandError::conflict("evidence run-index seal is invalid").into(),
+            );
+        }
+        let snapshot = capture_repository_snapshot(&self.root)
+            .map_err(|error| anyhow!("checking evidence run-index source: {error}"))?;
+        if value["source"] != serde_json::to_value(&snapshot.source)? {
+            return Err(
+                EvidenceCommandError::conflict("evidence run-index source is stale").into(),
+            );
+        }
+        let document = self.evidence_policy_document()?.ok_or_else(|| {
+            EvidenceCommandError::conflict("evidence run-index policy is unavailable")
+        })?;
+        if value["policy_digest"].as_str() != Some(document.digest.as_str()) {
+            return Err(
+                EvidenceCommandError::conflict("evidence run-index policy is stale").into(),
+            );
+        }
+        let runs = value["runs"]
+            .as_array()
+            .filter(|runs| !runs.is_empty())
+            .ok_or_else(|| EvidenceCommandError::bad_request("evidence run-index has no runs"))?;
+        let mut results = Vec::with_capacity(runs.len());
+        for (expected_index, run) in runs.iter().enumerate() {
+            if run["index"].as_u64() != Some(expected_index as u64) {
+                return Err(EvidenceCommandError::bad_request(
+                    "evidence run-index entries must use contiguous indexes",
+                )
+                .into());
+            }
+            let input = run.get("input").cloned().ok_or_else(|| {
+                EvidenceCommandError::bad_request("evidence run-index entry requires input")
+            })?;
+            results.push(self.evidence_run_single_value(input)?);
+        }
+        Ok(json!({
+            "schema_version": "planr.evidence.run-index.result.v1",
+            "run_index_digest": declared_digest,
+            "status": "passed",
+            "verdict": "passed",
+            "results": results,
+        }))
+    }
+
+    fn hermetic_reuse_binding(
+        &self,
+        input: HermeticReuseInput<'_>,
+    ) -> Result<Option<HermeticReuseBinding>> {
+        if std::env::var_os("PLANR_TEST_EVIDENCE_PRE_COMMIT_MUTATE_SOURCE_PATH").is_some() {
+            return Ok(None);
+        }
+        let manifest_json: String = self.conn.query_row(
+            "SELECT manifests.manifest_json
+             FROM verification_capability_instances AS instances
+             JOIN verification_capability_manifests AS manifests
+               ON manifests.id = instances.manifest_id
+              AND manifests.version = instances.manifest_version
+             WHERE instances.id = ?1",
+            params![input.instance.id.as_str()],
+            |row| row.get(0),
+        )?;
+        let manifest: VerificationCapabilityManifest = serde_json::from_str(&manifest_json)?;
+        let manifest_value = serde_json::to_value(&manifest)?;
+        if !is_hermetic_reuse_candidate(
+            &manifest,
+            input.target,
+            input.fixture_disclosure,
+            input.env,
+        )? {
+            return Ok(None);
+        }
+        let snapshot = capture_repository_snapshot(&self.root)
+            .map_err(|error| anyhow!("capturing hermetic reuse source: {error}"))?;
+        let execution_contract_digest = crate::canonical_json::sha256_json_digest(
+            &serde_json::to_value(input.execution_contract)?,
+        )?;
+        let toolchain_lock_digest = self.toolchain_lock_digest()?;
+        let policy_digest = self
+            .evidence_policy_document()?
+            .ok_or_else(|| anyhow!("hermetic reuse requires current Evidence policy"))?
+            .digest;
+        let key = crate::canonical_json::sha256_json_digest(&json!({
+            "schema_version": "planr.evidence.hermetic-reuse-key.v1",
+            "obligation": input.obligation,
+            "execution_contract_digest": execution_contract_digest,
+            "source_tree_digest": snapshot.source.tree_digest,
+            "toolchain_lock_digest": toolchain_lock_digest,
+            "policy_digest": policy_digest,
+            "capability_manifest": manifest_value,
+            "capability_instance": input.instance,
+            "target": input.target,
+            "environment": input.environment,
+        }))?;
+        Ok(Some(HermeticReuseBinding {
+            key,
+            execution_contract_digest,
+            source_tree_digest: snapshot.source.tree_digest.as_str().to_string(),
+            toolchain_lock_digest,
+        }))
+    }
+
+    fn toolchain_lock_digest(&self) -> Result<String> {
+        let mut bindings = Vec::new();
+        for relative in [
+            "Cargo.lock",
+            "pnpm-lock.yaml",
+            "package-lock.json",
+            "yarn.lock",
+            "bun.lock",
+            "bun.lockb",
+            "rust-toolchain",
+            "rust-toolchain.toml",
+            ".tool-versions",
+        ] {
+            let path = self.root.join(relative);
+            if path.is_file() {
+                bindings.push(json!({
+                    "path": relative,
+                    "digest": crate::canonical_json::sha256_prefixed_bytes(&fs::read(path)?),
+                }));
+            }
+        }
+        crate::canonical_json::sha256_json_digest(&json!(bindings))
+    }
+
+    fn reusable_hermetic_result(
+        &self,
+        project_id: &str,
+        obligation_id: &str,
+        binding: &HermeticReuseBinding,
+    ) -> Result<Option<Value>> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT attempts.attempt_json, receipts.receipt_json, receipts.receipt_digest
+                 FROM evidence_hermetic_check_cache AS cache
+                 JOIN evidence_attempts AS attempts ON attempts.id = cache.attempt_id
+                 JOIN evidence_receipts AS receipts ON receipts.id = cache.receipt_id
+                 WHERE cache.reuse_key = ?1
+                   AND cache.project_id = ?2
+                   AND cache.obligation_id = ?3
+                   AND attempts.attempt_status = 'passed'
+                   AND receipts.receipt_status = 'trusted'
+                   AND NOT EXISTS (
+                     SELECT 1
+                     FROM feature_run_evidence_invalidations AS invalidations
+                     JOIN feature_runs AS runs ON runs.id = invalidations.run_id
+                     JOIN json_each(invalidations.affected_evidence_ids_json) AS affected
+                     WHERE runs.project_id = cache.project_id
+                       AND affected.value = receipts.id
+                   )
+                 LIMIT 1",
+                params![binding.key, project_id, obligation_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        row.map(|(attempt, receipt, receipt_digest)| {
+            Ok(json!({
+                "attempt": serde_json::from_str::<Value>(&attempt)?,
+                "receipt": serde_json::from_str::<Value>(&receipt)?,
+                "receipt_digest": receipt_digest,
+                "verdict": "passed",
+                "reused": true,
+                "reuse_key": binding.key,
+                "product_finding": Value::Null,
+                "feature_run_lease": Value::Null,
+            }))
+        })
+        .transpose()
+    }
+
+    fn store_hermetic_reuse(
+        &self,
+        project_id: &str,
+        obligation_id: &str,
+        attempt_id: &str,
+        receipt_id: &str,
+        binding: &HermeticReuseBinding,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO evidence_hermetic_check_cache(
+               reuse_key, project_id, obligation_id, attempt_id, receipt_id,
+               execution_contract_digest, source_tree_digest, toolchain_lock_digest, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'))",
+            params![
+                binding.key,
+                project_id,
+                obligation_id,
+                attempt_id,
+                receipt_id,
+                binding.execution_contract_digest,
+                binding.source_tree_digest,
+                binding.toolchain_lock_digest,
+            ],
+        )?;
+        Ok(())
+    }
+
     pub(crate) fn evidence_run_value(&self, value: Value) -> Result<Value> {
+        if value.get("schema_version").and_then(Value::as_str)
+            == Some("planr.evidence.run-index.v1")
+        {
+            return self.evidence_run_index_value(value);
+        }
+        self.evidence_run_single_value(value)
+    }
+
+    fn evidence_run_single_value(&self, value: Value) -> Result<Value> {
         reject_trusted_receipt_input(&value)?;
+        if value.get("feature_run_binding").is_some() {
+            return Err(EvidenceCommandError::bad_request(
+                "feature_run_binding is server-owned and must not be supplied",
+            )
+            .into());
+        }
         let project = self.default_project()?;
         let obligation_id = string_field(&value, "obligation_id")?;
         let instance_id = match value.get("capability_instance_id").and_then(Value::as_str) {
@@ -1529,8 +1661,67 @@ impl App {
             .and_then(Value::as_str)
             .map(EvidenceId::parse)
             .transpose()?;
+        let attempt_index = value
+            .get("attempt_index")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u32;
+        let max_attempts = value
+            .get("max_attempts")
+            .and_then(Value::as_u64)
+            .unwrap_or(3) as u32;
+        let hermetic_reuse = if retry_of.is_none() && attempt_index == 0 {
+            self.hermetic_reuse_binding(HermeticReuseInput {
+                obligation: &obligation,
+                instance: &instance,
+                execution_contract: &execution_contract,
+                target: &target,
+                environment: &environment,
+                fixture_disclosure: &fixture_disclosure,
+                env: &env,
+            })?
+        } else {
+            None
+        };
         let cancellation = crate::execution::CancellationToken::new();
-        let output = run_configured_process_adapter(
+        let lease =
+            self.resolve_feature_run_evidence_lease(&project.id, obligation.plan_id.as_str())?;
+        if let Some(binding) = hermetic_reuse.as_ref() {
+            if let Some(lease) = lease.as_ref() {
+                self.validate_feature_run_evidence_lease(&self.conn, lease)?;
+            }
+            if let Some(reused) =
+                self.reusable_hermetic_result(&project.id, &obligation_id, binding)?
+            {
+                return Ok(reused);
+            }
+        }
+        let projected_wall_seconds = execution_contract.timeout_ms.saturating_add(999) / 1000;
+        let budget_reservation = if let Some(lease) = lease.as_ref() {
+            let run =
+                crate::app::repository::execution_run::ExecutionRunRepository::new(&self.conn)
+                    .feature_run(&lease.run_id)?;
+            match self.admit_feature_run_budget(
+                &run,
+                crate::usage_policy::BudgetPhase::Verification,
+                &format!("evidence.process:{}", crate::util::short_id("boundary")),
+                Some(projected_wall_seconds.max(1)),
+                Some(1),
+                false,
+                "evidence.process_adapter",
+            )? {
+                FeatureRunBudgetAdmission::Held(hold) => return Ok(hold),
+                FeatureRunBudgetAdmission::Reserved(reservation) => Some(reservation),
+            }
+        } else {
+            None
+        };
+        let guard = |conn: &rusqlite::Connection| -> Result<()> {
+            let Some(lease) = lease.as_ref() else {
+                return Ok(());
+            };
+            self.validate_feature_run_evidence_lease(conn, lease)
+        };
+        let output = run_configured_process_adapter_guarded(
             &self.conn,
             ConfiguredProcessRunInput {
                 repository_root: &self.root,
@@ -1545,27 +1736,64 @@ impl App {
                 fixture_disclosure,
                 env,
                 retry_of,
-                attempt_index: value
-                    .get("attempt_index")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0) as u32,
-                max_attempts: value
-                    .get("max_attempts")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(3) as u32,
+                attempt_index,
+                max_attempts,
                 cancellation: &cancellation,
             },
-        )?;
+            &guard,
+        );
+        if let Some(reservation) = budget_reservation.as_ref() {
+            self.reconcile_feature_run_budget(reservation, Some(1))?;
+        }
+        let output = output?;
         let verdict = evidence_run_verdict(
             output.attempt.status,
             &output.attempt.exit,
             &output.attempt.raw_result,
         );
+        if verdict == "passed"
+            && let Some(binding) = hermetic_reuse.as_ref()
+            && let Some(receipt_id) = output.receipt_value["id"].as_str()
+        {
+            self.store_hermetic_reuse(
+                &project.id,
+                &obligation_id,
+                output.attempt.id.as_str(),
+                receipt_id,
+                binding,
+            )?;
+        }
+        let product_failed = output.receipt_value["proof_gaps"]
+            .as_array()
+            .is_some_and(|gaps| {
+                gaps.iter().any(|gap| {
+                    gap.as_str() == Some("product_failed")
+                        || gap.get("reason").and_then(Value::as_str) == Some("product_failed")
+                })
+            });
+        let product_finding = if product_failed {
+            lease
+                .as_ref()
+                .map(|lease| {
+                    self.route_evidence_product_finding_value(
+                        &lease.run_id,
+                        &lease.freeze_id,
+                        obligation_id.as_str(),
+                    )
+                })
+                .transpose()?
+        } else {
+            None
+        };
         Ok(json!({
             "attempt": output.attempt,
             "receipt": output.receipt_value,
             "receipt_digest": output.receipt_digest,
             "verdict": verdict,
+            "reused": false,
+            "reuse_key": hermetic_reuse.as_ref().map(|binding| binding.key.as_str()),
+            "product_finding": product_finding,
+            "feature_run_lease": lease,
         }))
     }
 
@@ -1601,7 +1829,7 @@ impl App {
     }
 
     pub(crate) fn evidence_host_capture_import_value(&self, value: Value) -> Result<Value> {
-        self.evidence_host_capture_import_value_with_observed_run(value, None)
+        self.evidence_host_capture_import_value_with_observed_run(value, None, None, None)
     }
 
     pub(crate) fn evidence_host_capture_run_value(&self, value: Value) -> Result<Value> {
@@ -1636,7 +1864,48 @@ impl App {
             ))
             .into());
         }
-        let observed_run = run_planr_observed_host_capture(self, &value)?;
+        let project = self.default_project()?;
+        let obligation = self.load_proof_obligation(&string_field(&value, "obligation_id")?)?;
+        let lease =
+            self.resolve_feature_run_evidence_lease(&project.id, obligation.plan_id.as_str())?;
+        let mut budget_reservation = None;
+        let mut budget_hold = None;
+        let workflow_started_at = Instant::now();
+        let observed_run = match run_planr_observed_host_capture(self, &value, |timeout_ms| {
+            let Some(lease) = lease.as_ref() else {
+                return Ok(true);
+            };
+            let run =
+                crate::app::repository::execution_run::ExecutionRunRepository::new(&self.conn)
+                    .feature_run(&lease.run_id)?;
+            match self.admit_feature_run_budget(
+                &run,
+                crate::usage_policy::BudgetPhase::Verification,
+                &format!("evidence.host:{}", crate::util::short_id("boundary")),
+                Some(timeout_ms.saturating_add(999) / 1000),
+                Some(1),
+                false,
+                "evidence.host_capture",
+            )? {
+                FeatureRunBudgetAdmission::Held(hold) => budget_hold = Some(hold),
+                FeatureRunBudgetAdmission::Reserved(reservation) => {
+                    budget_reservation = Some(reservation)
+                }
+            }
+            Ok(budget_hold.is_none())
+        }) {
+            Ok(run) => run,
+            Err(error) => {
+                if let Some(hold) = budget_hold {
+                    return Ok(hold);
+                }
+                if let Some(reservation) = budget_reservation.as_ref() {
+                    self.reconcile_feature_run_budget(reservation, Some(1))?;
+                }
+                return Err(error);
+            }
+        };
+        let workflow_timeout_ms = observed_run.workflow_timeout_ms;
         let mut import_input = json!({
             "schema_version": "planr.evidence.host_capture.import.v1",
             "obligation_id": string_field(&value, "obligation_id")?,
@@ -1651,13 +1920,20 @@ impl App {
         if let Some(environment) = value.get("environment").cloned() {
             import_input["environment"] = environment;
         }
-        self.evidence_host_capture_import_value_with_observed_run(import_input, Some(observed_run))
+        self.evidence_host_capture_import_value_with_observed_run(
+            import_input,
+            Some(observed_run),
+            budget_reservation,
+            Some((workflow_started_at, workflow_timeout_ms)),
+        )
     }
 
     fn evidence_host_capture_import_value_with_observed_run(
         &self,
         value: Value,
         observed_run: Option<ObservedHostCaptureRun>,
+        supplied_budget_reservation: Option<FeatureRunBudgetReservation>,
+        workflow_deadline: Option<(Instant, u64)>,
     ) -> Result<Value> {
         reject_trusted_receipt_input(&value)?;
         let object = value.as_object().ok_or_else(|| {
@@ -1691,185 +1967,235 @@ impl App {
             .into());
         }
         let obligation_id = string_field(&value, "obligation_id")?;
-        let import_root =
-            resolve_evidence_input_path(&self.root, &string_field(&value, "import_root")?);
-        let experiment_id = value
-            .get("experiment_id")
-            .and_then(Value::as_str)
-            .unwrap_or("exp-chrome-browser-client");
-        if experiment_id != "exp-chrome-browser-client" {
-            return Err(EvidenceCommandError::bad_request(
+        let project = self.default_project()?;
+        let obligation = self.load_proof_obligation(&obligation_id)?;
+        let lease =
+            self.resolve_feature_run_evidence_lease(&project.id, obligation.plan_id.as_str())?;
+        let budget_reservation = if supplied_budget_reservation.is_some() {
+            supplied_budget_reservation
+        } else if let Some(lease) = lease.as_ref() {
+            let run =
+                crate::app::repository::execution_run::ExecutionRunRepository::new(&self.conn)
+                    .feature_run(&lease.run_id)?;
+            match self.admit_feature_run_budget(
+                &run,
+                crate::usage_policy::BudgetPhase::Verification,
+                &format!("evidence.host:{}", crate::util::short_id("boundary")),
+                Some(30),
+                Some(1),
+                false,
+                "evidence.host_capture",
+            )? {
+                FeatureRunBudgetAdmission::Held(hold) => return Ok(hold),
+                FeatureRunBudgetAdmission::Reserved(reservation) => Some(reservation),
+            }
+        } else {
+            None
+        };
+        let result = (|| -> Result<Value> {
+            let import_root =
+                resolve_evidence_input_path(&self.root, &string_field(&value, "import_root")?);
+            let experiment_id = value
+                .get("experiment_id")
+                .and_then(Value::as_str)
+                .unwrap_or("exp-chrome-browser-client");
+            if experiment_id != "exp-chrome-browser-client" {
+                return Err(EvidenceCommandError::bad_request(
                 "only exp-chrome-browser-client host captures are supported by this import boundary",
             )
             .into());
-        }
+            }
 
-        let validated = validate_external_host_capture(&self.root, &import_root)?;
-        let captures =
-            crate::evidence::adapters::host::evaluate_phase1_host_fixture(&validated.root)
-                .map_err(|error| {
+            let validator_timeout_ms = workflow_deadline
+                .map(|(started, timeout_ms)| {
+                    timeout_ms.saturating_sub(started.elapsed().as_millis() as u64)
+                })
+                .unwrap_or(HOST_CAPTURE_VALIDATOR_TIMEOUT_MS);
+            let validated =
+                validate_external_host_capture(&self.root, &import_root, validator_timeout_ms)?;
+            let captures =
+                crate::evidence::adapters::host::evaluate_phase1_host_fixture(&validated.root)
+                    .map_err(|error| {
+                        EvidenceCommandError::bad_request(format!(
+                            "validated host capture bundle failed strict Evidence parsing: {error}"
+                        ))
+                    })?;
+            let capture = captures
+                .into_iter()
+                .find(|capture| capture.experiment_id == experiment_id)
+                .ok_or_else(|| {
                     EvidenceCommandError::bad_request(format!(
-                        "validated host capture bundle failed strict Evidence parsing: {error}"
+                        "validated host capture bundle is missing {experiment_id}"
                     ))
                 })?;
-        let capture = captures
-            .into_iter()
-            .find(|capture| capture.experiment_id == experiment_id)
-            .ok_or_else(|| {
-                EvidenceCommandError::bad_request(format!(
-                    "validated host capture bundle is missing {experiment_id}"
+            let adapter = if observed_run.is_some() {
+                crate::evidence::adapters::codex::enable_chrome_browser_client_from_planr_observed_execution(capture.clone())?
+            } else {
+                crate::evidence::adapters::codex::enable_chrome_browser_client(capture.clone())?
+            };
+            if !adapter.trusted_adapter_enabled {
+                return Err(EvidenceCommandError::bad_request(format!(
+                    "host capture is not enabled: {}",
+                    adapter.reason
                 ))
-            })?;
-        let adapter = if observed_run.is_some() {
-            crate::evidence::adapters::codex::enable_chrome_browser_client_from_planr_observed_execution(capture.clone())?
-        } else {
-            crate::evidence::adapters::codex::enable_chrome_browser_client(capture.clone())?
-        };
-        if !adapter.trusted_adapter_enabled {
-            return Err(EvidenceCommandError::bad_request(format!(
-                "host capture is not enabled: {}",
-                adapter.reason
-            ))
-            .into());
-        }
-        let manifest = adapter
-            .manifest
-            .ok_or_else(|| anyhow!("enabled host capture missing manifest"))?;
-        let mut instance_value = adapter
-            .instance
-            .ok_or_else(|| anyhow!("enabled host capture missing instance"))?;
-        let mut instance: VerificationCapabilityInstance =
-            serde_json::from_value(instance_value.clone())?;
-
-        let project = self.default_project()?;
-        let obligation = self.load_proof_obligation(&obligation_id)?;
-        if obligation.observations.is_empty() {
-            return Err(
-                EvidenceCommandError::bad_request("proof obligation has no observations").into(),
-            );
-        }
-        let first_observation = obligation.observations.first().ok_or_else(|| {
-            EvidenceCommandError::bad_request("proof obligation has no observations")
-        })?;
-        if !obligation
-            .observations
-            .iter()
-            .all(|observation| observation.target == first_observation.target)
-        {
-            return Err(EvidenceCommandError::bad_request(
-                "host capture import requires one target binding across all proof observations",
-            )
-            .into());
-        }
-        if let Some(run) = observed_run.as_ref() {
-            for observation in &obligation.observations {
-                ensure_host_capture_run_manifest_supports_observation(run, observation)?;
+                .into());
             }
-            instance.observed_payload_contract.observation_types = obligation
+            let manifest = adapter
+                .manifest
+                .ok_or_else(|| anyhow!("enabled host capture missing manifest"))?;
+            let mut instance_value = adapter
+                .instance
+                .ok_or_else(|| anyhow!("enabled host capture missing instance"))?;
+            let mut instance: VerificationCapabilityInstance =
+                serde_json::from_value(instance_value.clone())?;
+
+            if obligation.observations.is_empty() {
+                return Err(EvidenceCommandError::bad_request(
+                    "proof obligation has no observations",
+                )
+                .into());
+            }
+            let first_observation = obligation.observations.first().ok_or_else(|| {
+                EvidenceCommandError::bad_request("proof obligation has no observations")
+            })?;
+            if !obligation
                 .observations
                 .iter()
-                .map(|observation| observation.observation_type.clone())
-                .collect();
-            instance_value = serde_json::to_value(&instance)?;
-        }
-        let binding_instance = observed_run
-            .as_ref()
-            .map(|run| &run.producer_instance)
-            .unwrap_or(&instance);
-        let target: TargetBinding = match value.get("target").cloned() {
-            Some(value) => serde_json::from_value(value)?,
-            None => serde_json::from_value(first_observation.target.clone())?,
-        };
-        target.validate()?;
-        let environment: EnvironmentBinding = match value.get("environment").cloned() {
-            Some(value) => serde_json::from_value(value)?,
-            None => binding_instance.environment.clone(),
-        };
-        let fixture_disclosure = observed_run
-            .as_ref()
-            .map(|run| run.fixture_disclosure.clone())
-            .unwrap_or(FixtureDisclosure {
-                fixtures_used: false,
-                mocks_used: false,
-                fixture_refs: None,
-                mock_refs: None,
-            });
-        ensure_host_import_bindings(
-            &obligation,
-            binding_instance,
-            &target,
-            &environment,
-            &fixture_disclosure,
-        )?;
-        ensure_host_capture_target_matches(&target, &capture.final_event_payload)?;
-        for observation in &obligation.observations {
-            ensure_expected_predicate_matches_capture(
-                &observation.expected,
-                &capture.final_event_payload,
-            )?;
-        }
-        let (evidence_manifest, evidence_instance, evidence_instance_value) =
-            if let Some(run) = observed_run.as_ref() {
-                (
-                    run.producer_manifest.clone(),
-                    run.producer_instance.clone(),
-                    run.producer_instance_value.clone(),
+                .all(|observation| observation.target == first_observation.target)
+            {
+                return Err(EvidenceCommandError::bad_request(
+                    "host capture import requires one target binding across all proof observations",
                 )
-            } else {
-                (manifest, instance.clone(), instance_value.clone())
+                .into());
+            }
+            if let Some(run) = observed_run.as_ref() {
+                for observation in &obligation.observations {
+                    ensure_host_capture_run_manifest_supports_observation(run, observation)?;
+                }
+                instance.observed_payload_contract.observation_types = obligation
+                    .observations
+                    .iter()
+                    .map(|observation| observation.observation_type.clone())
+                    .collect();
+                instance_value = serde_json::to_value(&instance)?;
+            }
+            let binding_instance = observed_run
+                .as_ref()
+                .map(|run| &run.producer_instance)
+                .unwrap_or(&instance);
+            let target: TargetBinding = match value.get("target").cloned() {
+                Some(value) => serde_json::from_value(value)?,
+                None => serde_json::from_value(first_observation.target.clone())?,
             };
-        let valid_until = ensure_host_capture_fresh(&evidence_instance)?;
+            target.validate()?;
+            let environment: EnvironmentBinding = match value.get("environment").cloned() {
+                Some(value) => serde_json::from_value(value)?,
+                None => binding_instance.environment.clone(),
+            };
+            let fixture_disclosure = observed_run
+                .as_ref()
+                .map(|run| run.fixture_disclosure.clone())
+                .unwrap_or(FixtureDisclosure {
+                    fixtures_used: false,
+                    mocks_used: false,
+                    fixture_refs: None,
+                    mock_refs: None,
+                });
+            ensure_host_import_bindings(
+                &obligation,
+                binding_instance,
+                &target,
+                &environment,
+                &fixture_disclosure,
+            )?;
+            ensure_host_capture_target_matches(&target, &capture.final_event_payload)?;
+            for observation in &obligation.observations {
+                ensure_expected_predicate_matches_capture(
+                    &observation.expected,
+                    &capture.final_event_payload,
+                )?;
+            }
+            let (evidence_manifest, evidence_instance, evidence_instance_value) =
+                if let Some(run) = observed_run.as_ref() {
+                    (
+                        run.producer_manifest.clone(),
+                        run.producer_instance.clone(),
+                        run.producer_instance_value.clone(),
+                    )
+                } else {
+                    (manifest, instance.clone(), instance_value.clone())
+                };
+            let valid_until = ensure_host_capture_fresh(&evidence_instance)?;
 
-        let started_at = evidence_instance.captured_at.clone();
-        let ended_at = evidence_instance.captured_at.clone();
-        let attempt_id =
-            host_capture_attempt_id(&obligation.id, &evidence_instance.id, &capture.raw_digest)?;
-        let stdout_digest = crate::canonical_json::sha256_prefixed_bytes(&validated.stdout);
-        let stderr_digest = crate::canonical_json::sha256_prefixed_bytes(&validated.stderr);
-        let raw_result = json!({
-            "schema_version": "planr.evidence.host_capture.result.v1",
-            "validator": {
-                "path": validated.validator_path.to_string_lossy(),
-                "digest": validated.validator_digest.as_str(),
-            },
-            "normalized_root_digest": validated.normalized_root_digest,
-            "summary": validated.summary,
-            "capture": capture.final_event_payload,
-            "planr_observed_execution": observed_run.as_ref().map(|run| json!({
-                "manifest_id": run.producer_instance.manifest_id.as_str(),
-                "manifest_digest": run.producer_instance.manifest_digest.as_str(),
-                "instance_id": run.producer_instance.id.as_str(),
-                "provenance_source": run.provenance_source.as_str(),
-                "supported_observation_types": run.supported_observation_types,
-                "supported_artifacts": run.supported_artifacts,
-                "argv": run.argv,
-                "exit_code": run.exit_code,
-                "stdout_digest": run.stdout_digest.as_str(),
-                "stderr_digest": run.stderr_digest.as_str(),
-                "stdout_excerpt": run.stdout_excerpt.as_str(),
-                "stderr_excerpt": run.stderr_excerpt.as_str(),
-                "adapter_binding": run.adapter_binding.clone(),
-                "producer_fixture_disclosure_digest": run.fixture_disclosure_digest.as_str(),
-                "producer_fixture_disclosure": run.fixture_disclosure.clone(),
-            })),
-        });
-        let raw_result_digest = crate::canonical_json::sha256_json_digest(&raw_result)?;
-        let resolved_command = if let Some(run) = observed_run.as_ref() {
-            json!({
-                "kind": "host_capture_run",
-                "manifest_id": run.producer_instance.manifest_id.as_str(),
-                "manifest_digest": run.producer_instance.manifest_digest.as_str(),
-                "instance_id": run.producer_instance.id.as_str(),
-                "provenance_source": run.provenance_source.as_str(),
-                "supported_observation_types": run.supported_observation_types,
-                "supported_artifacts": run.supported_artifacts,
-                "argv": run.argv,
-                "command": run.resolved_command.clone(),
-                "adapter_binding": run.adapter_binding.clone(),
-                "producer_fixture_disclosure_digest": run.fixture_disclosure_digest.as_str(),
+            let started_at = evidence_instance.captured_at.clone();
+            let ended_at = evidence_instance.captured_at.clone();
+            let attempt_id = host_capture_attempt_id(
+                &obligation.id,
+                &evidence_instance.id,
+                &capture.raw_digest,
+            )?;
+            let stdout_digest = crate::canonical_json::sha256_prefixed_bytes(&validated.stdout);
+            let stderr_digest = crate::canonical_json::sha256_prefixed_bytes(&validated.stderr);
+            let raw_result = json!({
+                "schema_version": "planr.evidence.host_capture.result.v1",
                 "validator": {
                     "path": validated.validator_path.to_string_lossy(),
                     "digest": validated.validator_digest.as_str(),
+                },
+                "normalized_root_digest": validated.normalized_root_digest,
+                "summary": validated.summary,
+                "capture": capture.final_event_payload,
+                "planr_observed_execution": observed_run.as_ref().map(|run| json!({
+                    "manifest_id": run.producer_instance.manifest_id.as_str(),
+                    "manifest_digest": run.producer_instance.manifest_digest.as_str(),
+                    "instance_id": run.producer_instance.id.as_str(),
+                    "provenance_source": run.provenance_source.as_str(),
+                    "supported_observation_types": run.supported_observation_types,
+                    "supported_artifacts": run.supported_artifacts,
+                    "argv": run.argv,
+                    "exit_code": run.exit_code,
+                    "stdout_digest": run.stdout_digest.as_str(),
+                    "stderr_digest": run.stderr_digest.as_str(),
+                    "stdout_excerpt": run.stdout_excerpt.as_str(),
+                    "stderr_excerpt": run.stderr_excerpt.as_str(),
+                    "adapter_binding": run.adapter_binding.clone(),
+                    "producer_fixture_disclosure_digest": run.fixture_disclosure_digest.as_str(),
+                    "producer_fixture_disclosure": run.fixture_disclosure.clone(),
+                })),
+            });
+            let raw_result_digest = crate::canonical_json::sha256_json_digest(&raw_result)?;
+            let resolved_command = if let Some(run) = observed_run.as_ref() {
+                json!({
+                    "kind": "host_capture_run",
+                    "manifest_id": run.producer_instance.manifest_id.as_str(),
+                    "manifest_digest": run.producer_instance.manifest_digest.as_str(),
+                    "instance_id": run.producer_instance.id.as_str(),
+                    "provenance_source": run.provenance_source.as_str(),
+                    "supported_observation_types": run.supported_observation_types,
+                    "supported_artifacts": run.supported_artifacts,
+                    "argv": run.argv,
+                    "command": run.resolved_command.clone(),
+                    "adapter_binding": run.adapter_binding.clone(),
+                    "producer_fixture_disclosure_digest": run.fixture_disclosure_digest.as_str(),
+                    "validator": {
+                        "path": validated.validator_path.to_string_lossy(),
+                        "digest": validated.validator_digest.as_str(),
+                        "args": [
+                            "capture",
+                            "--out-dir",
+                            validated.root.to_string_lossy(),
+                            "--import-fixture-root",
+                            import_root.to_string_lossy()
+                        ],
+                    },
+                })
+            } else {
+                json!({
+                    "kind": "host_capture_import",
+                    "validator": {
+                        "path": validated.validator_path.to_string_lossy(),
+                        "digest": validated.validator_digest.as_str(),
+                    },
                     "args": [
                         "capture",
                         "--out-dir",
@@ -1877,224 +2203,238 @@ impl App {
                         "--import-fixture-root",
                         import_root.to_string_lossy()
                     ],
-                },
-            })
-        } else {
-            json!({
-                "kind": "host_capture_import",
-                "validator": {
-                    "path": validated.validator_path.to_string_lossy(),
-                    "digest": validated.validator_digest.as_str(),
-                },
-                "args": [
-                    "capture",
-                    "--out-dir",
-                    validated.root.to_string_lossy(),
-                    "--import-fixture-root",
-                    import_root.to_string_lossy()
-                ],
-            })
-        };
-        let artifact = capture
-            .artifact_refs
-            .iter()
-            .find(|artifact| artifact.kind == "cdp-json-result")
-            .ok_or_else(|| anyhow!("enabled host capture missing CDP artifact"))?;
-        let attempt = EvidenceAttempt {
-            id: EvidenceId::parse(attempt_id.clone()).map_err(|error| anyhow!(error))?,
-            schema_version: crate::evidence::SchemaVersion::v1(),
-            criterion_id: obligation.criterion_id.clone(),
-            obligation_id: obligation.id.clone(),
-            capability_instance_id: evidence_instance.id.clone(),
-            started_at: started_at.clone(),
-            ended_at: ended_at.clone(),
-            status: AttemptStatus::Passed,
-            resolved_command,
-            exit: json!({"exit_code": 0, "signal": null, "error": null}),
-            retry_lineage: json!({
-                "attempt_number": 1,
-                "max_attempts": 1,
-                "previous_attempt_ids": [],
-            }),
-            stdout_digest: Sha256Digest::parse(stdout_digest).map_err(|error| anyhow!(error))?,
-            stderr_digest: Sha256Digest::parse(stderr_digest).map_err(|error| anyhow!(error))?,
-            raw_result: raw_result.clone(),
-            artifacts: vec![json!({
-                "id": artifact.id,
-                "kind": artifact.kind,
-                "digest": artifact.digest,
-                "uri": format!("host-capture://{}/{}", validated.normalized_root_digest, artifact.path),
-            })],
-            output_bounds: json!({
-                "stdout_bytes": validated.stdout.len(),
-                "stderr_bytes": validated.stderr.len(),
-                "truncated": false,
-            }),
-        };
-        let repository_snapshot = capture_repository_snapshot(&self.root)
-            .map_err(|err| anyhow!("capturing repository evidence snapshot: {err}"))?;
-        let policy_binding = repository_snapshot.trusted_policy_binding(&obligation.policy_digest);
-        let instance_digest = crate::canonical_json::sha256_json_digest(&evidence_instance_value)?;
-        let config_digest = crate::canonical_json::sha256_json_digest(&json!({
-            "schema_version": schema_version,
-            "obligation_id": obligation.id,
-            "target": target,
-            "environment": environment,
-            "validated_capture_root_digest": validated.normalized_root_digest,
-            "raw_digest": capture.raw_digest,
-            "provenance_digest": capture.provenance_digest,
-                "artifact_digest": artifact.digest,
-            "producer_capability": observed_run.as_ref().map(|run| json!({
-                "manifest_id": run.producer_instance.manifest_id.as_str(),
-                "manifest_digest": run.producer_instance.manifest_digest.as_str(),
-                "instance_id": run.producer_instance.id.as_str(),
-                "provenance_source": run.provenance_source.as_str(),
-                "supported_observation_types": run.supported_observation_types,
-                "supported_artifacts": run.supported_artifacts,
-                "adapter_binding": run.adapter_binding.clone(),
-                "producer_fixture_disclosure_digest": run.fixture_disclosure_digest.as_str(),
-            })),
-            "fixture_disclosure": fixture_disclosure,
-        }))?;
-        let receipt = build_trusted_receipt(TrustedReceiptInput {
-            id: EvidenceId::parse(format!("erec-{}", short_digest(&attempt_id)))
-                .map_err(|error| anyhow!(error))?,
-            criterion_id: obligation.criterion_id.clone(),
-            obligation_id: obligation.id.clone(),
-            source: repository_snapshot.source,
-            target: target.clone(),
-            environment: environment.clone(),
-            vantage_point: VantagePoint {
-                kind: if observed_run.is_some() {
-                    "host_capture_run".to_string()
-                } else {
-                    "host_capture_import".to_string()
-                },
-                identity: observed_run
-                    .as_ref()
-                    .map(|run| format!("planr/{}", run.producer_instance.manifest_id.as_str()))
-                    .unwrap_or_else(|| "codex/chrome-browser-client".to_string()),
-            },
-            capability: CapabilityBinding {
-                manifest_id: evidence_instance.manifest_id.clone(),
-                manifest_digest: evidence_instance.manifest_digest.clone(),
-                instance_id: evidence_instance.id.clone(),
-                instance_digest: Sha256Digest::parse(instance_digest)
-                    .map_err(|error| anyhow!(error))?,
-            },
-            provenance: TrustedProvenance {
-                source: observed_run
-                    .as_ref()
-                    .map(|run| run.provenance_source)
-                    .unwrap_or(crate::evidence::ProvenanceSourceKind::VerifiedHostEvent),
-                assigned_by: "planr".to_string(),
-                execution_id: attempt_id.clone(),
-                tool_call_id: None,
-            },
-            observations: obligation
-                .observations
-                .iter()
-                .map(|observation| {
-                    Ok(ObservationResult {
-                        requirement_id: observation.id.clone(),
-                        observation_type: observation.observation_type.clone(),
-                        outcome: AttemptStatus::Passed,
-                        predicate: map_from_json_object(
-                            observation.expected.clone(),
-                            "observation.expected",
-                        )?,
-                        actual: map_from_json_object(
-                            json!({
-                                "final_event": capture.final_event_payload,
-                                "artifact_digest": artifact.digest,
-                                "availability_reason": capture.availability_reason,
-                            }),
-                            "host capture actual",
-                        )?,
-                    })
                 })
-                .collect::<Result<Vec<_>>>()?,
-            attempt_ids: vec![attempt.id.clone()],
-            retry_history: Vec::new(),
-            artifacts: vec![ArtifactRef {
-                id: EvidenceId::parse(artifact.id.clone()).map_err(|error| anyhow!(error))?,
-                kind: artifact.kind.clone(),
-                digest: Sha256Digest::parse(artifact.digest.clone())
+            };
+            let artifact = capture
+                .artifact_refs
+                .iter()
+                .find(|artifact| artifact.kind == "cdp-json-result")
+                .ok_or_else(|| anyhow!("enabled host capture missing CDP artifact"))?;
+            let attempt = EvidenceAttempt {
+                id: EvidenceId::parse(attempt_id.clone()).map_err(|error| anyhow!(error))?,
+                schema_version: crate::evidence::SchemaVersion::v1(),
+                criterion_id: obligation.criterion_id.clone(),
+                obligation_id: obligation.id.clone(),
+                capability_instance_id: evidence_instance.id.clone(),
+                started_at: started_at.clone(),
+                ended_at: ended_at.clone(),
+                status: AttemptStatus::Passed,
+                resolved_command,
+                exit: json!({"exit_code": 0, "signal": null, "error": null}),
+                retry_lineage: json!({
+                    "attempt_number": 1,
+                    "max_attempts": 1,
+                    "previous_attempt_ids": [],
+                }),
+                stdout_digest: Sha256Digest::parse(stdout_digest)
                     .map_err(|error| anyhow!(error))?,
-                uri: Some(format!(
-                    "host-capture://{}/{}",
-                    validated.normalized_root_digest, artifact.path
-                )),
-                extra: serde_json::Map::new(),
-            }],
-            raw_result: RawResultRef {
-                kind: "host_capability_observed_raw".to_string(),
-                digest: Sha256Digest::parse(raw_result_digest).map_err(|error| anyhow!(error))?,
-                artifact_id: None,
-                extra: serde_json::Map::new(),
-            },
-            config_digest: Sha256Digest::parse(config_digest.clone())
-                .map_err(|error| anyhow!(error))?,
-            fixture_disclosure: fixture_disclosure.clone(),
-            permissions: evidence_instance.permissions.clone(),
-            sandbox: SandboxState {
-                mode: if observed_run.is_some() {
-                    "host_capture_run".to_string()
-                } else {
-                    "host_capture_import".to_string()
+                stderr_digest: Sha256Digest::parse(stderr_digest)
+                    .map_err(|error| anyhow!(error))?,
+                raw_result: raw_result.clone(),
+                artifacts: vec![json!({
+                    "id": artifact.id,
+                    "kind": artifact.kind,
+                    "digest": artifact.digest,
+                    "uri": format!("host-capture://{}/{}", validated.normalized_root_digest, artifact.path),
+                })],
+                output_bounds: json!({
+                    "stdout_bytes": validated.stdout.len(),
+                    "stderr_bytes": validated.stderr.len(),
+                    "truncated": false,
+                }),
+            };
+            let repository_snapshot = capture_repository_snapshot(&self.root)
+                .map_err(|err| anyhow!("capturing repository evidence snapshot: {err}"))?;
+            let policy_binding = repository_snapshot.trusted_policy_binding()?;
+            let instance_digest =
+                crate::canonical_json::sha256_json_digest(&evidence_instance_value)?;
+            let config_digest = crate::canonical_json::sha256_json_digest(&json!({
+                "schema_version": schema_version,
+                "obligation_id": obligation.id,
+                "target": target,
+                "environment": environment,
+                "validated_capture_root_digest": validated.normalized_root_digest,
+                "raw_digest": capture.raw_digest,
+                "provenance_digest": capture.provenance_digest,
+                    "artifact_digest": artifact.digest,
+                "producer_capability": observed_run.as_ref().map(|run| json!({
+                    "manifest_id": run.producer_instance.manifest_id.as_str(),
+                    "manifest_digest": run.producer_instance.manifest_digest.as_str(),
+                    "instance_id": run.producer_instance.id.as_str(),
+                    "provenance_source": run.provenance_source.as_str(),
+                    "supported_observation_types": run.supported_observation_types,
+                    "supported_artifacts": run.supported_artifacts,
+                    "adapter_binding": run.adapter_binding.clone(),
+                    "producer_fixture_disclosure_digest": run.fixture_disclosure_digest.as_str(),
+                })),
+                "fixture_disclosure": fixture_disclosure,
+            }))?;
+            let receipt = build_trusted_receipt(TrustedReceiptInput {
+                id: EvidenceId::parse(format!("erec-{}", short_digest(&attempt_id)))
+                    .map_err(|error| anyhow!(error))?,
+                criterion_id: obligation.criterion_id.clone(),
+                obligation_id: obligation.id.clone(),
+                source: repository_snapshot.source.clone(),
+                target: target.clone(),
+                environment: environment.clone(),
+                vantage_point: VantagePoint {
+                    kind: if observed_run.is_some() {
+                        "host_capture_run".to_string()
+                    } else {
+                        "host_capture_import".to_string()
+                    },
+                    identity: observed_run
+                        .as_ref()
+                        .map(|run| format!("planr/{}", run.producer_instance.manifest_id.as_str()))
+                        .unwrap_or_else(|| "codex/chrome-browser-client".to_string()),
                 },
-                limits: SandboxLimits {
-                    timeout_ms: 30000,
-                    stdout_bytes: 1048576,
-                    stderr_bytes: 1048576,
+                capability: CapabilityBinding {
+                    manifest_id: evidence_instance.manifest_id.clone(),
+                    manifest_digest: evidence_instance.manifest_digest.clone(),
+                    instance_id: evidence_instance.id.clone(),
+                    instance_digest: Sha256Digest::parse(instance_digest)
+                        .map_err(|error| anyhow!(error))?,
                 },
-            },
-            proof_gaps: Vec::new(),
-            started_at,
-            ended_at,
-        })
-        .map_err(|error| anyhow!(error))?;
-        let receipt_value = serde_json::to_value(&receipt)?;
-        let receipt_digest = string_ref_field(&receipt_value, "receipt_digest")?.to_string();
-        let trusted_binding_value =
-            crate::evidence::policy::trusted_receipt_binding_value(&receipt, policy_binding)
-                .map_err(|error| anyhow!(error))?;
-        let mut registry =
-            CapabilityRegistry::from_manifests_and_adapter_registrations(&self.root, [], &[]);
-        persist_trusted_evidence_atomically(
-            &self.conn,
-            |conn| {
-                registry.store_verified_host_capture_instance_with_expiry(
-                    conn,
-                    evidence_manifest.clone(),
-                    evidence_instance.clone(),
-                    Some(&valid_until),
-                )?;
-                if std::env::var_os("PLANR_TEST_HOST_CAPTURE_FAIL_AFTER_CAPABILITY_STORE").is_some()
-                {
-                    bail!("test fault after host capture capability store");
-                }
-                Ok(())
-            },
-            TrustedEvidencePersistenceInput {
-                project_id: &project.id,
-                obligation_id: &obligation.id,
-                attempt: &attempt,
-                execution_contract_digest: &config_digest,
-                environment_digest: evidence_instance.environment.digest.as_str(),
-                retry_predecessor_attempt_id: None,
-                receipt_value: &receipt_value,
-                receipt_digest: &receipt_digest,
-                trusted_binding_value: &trusted_binding_value,
-            },
-        )?;
-        Ok(json!({
-            "attempt": attempt,
-            "receipt": receipt_value,
-            "receipt_digest": receipt_digest,
-            "capability": evidence_instance,
-            "verdict": "trusted",
-        }))
+                provenance: TrustedProvenance {
+                    source: observed_run
+                        .as_ref()
+                        .map(|run| run.provenance_source)
+                        .unwrap_or(crate::evidence::ProvenanceSourceKind::VerifiedHostEvent),
+                    assigned_by: "planr".to_string(),
+                    execution_id: attempt_id.clone(),
+                    tool_call_id: None,
+                },
+                observations: obligation
+                    .observations
+                    .iter()
+                    .map(|observation| {
+                        Ok(ObservationResult {
+                            requirement_id: observation.id.clone(),
+                            observation_type: observation.observation_type.clone(),
+                            outcome: AttemptStatus::Passed,
+                            predicate: map_from_json_object(
+                                observation.expected.clone(),
+                                "observation.expected",
+                            )?,
+                            actual: map_from_json_object(
+                                json!({
+                                    "final_event": capture.final_event_payload,
+                                    "artifact_digest": artifact.digest,
+                                    "availability_reason": capture.availability_reason,
+                                }),
+                                "host capture actual",
+                            )?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+                attempt_ids: vec![attempt.id.clone()],
+                retry_history: Vec::new(),
+                artifacts: vec![ArtifactRef {
+                    id: EvidenceId::parse(artifact.id.clone()).map_err(|error| anyhow!(error))?,
+                    kind: artifact.kind.clone(),
+                    digest: Sha256Digest::parse(artifact.digest.clone())
+                        .map_err(|error| anyhow!(error))?,
+                    uri: Some(format!(
+                        "host-capture://{}/{}",
+                        validated.normalized_root_digest, artifact.path
+                    )),
+                    extra: serde_json::Map::new(),
+                }],
+                raw_result: RawResultRef {
+                    kind: "host_capability_observed_raw".to_string(),
+                    digest: Sha256Digest::parse(raw_result_digest)
+                        .map_err(|error| anyhow!(error))?,
+                    artifact_id: None,
+                    extra: serde_json::Map::new(),
+                },
+                config_digest: Sha256Digest::parse(config_digest.clone())
+                    .map_err(|error| anyhow!(error))?,
+                fixture_disclosure: fixture_disclosure.clone(),
+                permissions: evidence_instance.permissions.clone(),
+                sandbox: SandboxState {
+                    mode: if observed_run.is_some() {
+                        "host_capture_run".to_string()
+                    } else {
+                        "host_capture_import".to_string()
+                    },
+                    limits: SandboxLimits {
+                        timeout_ms: 30000,
+                        stdout_bytes: 1048576,
+                        stderr_bytes: 1048576,
+                    },
+                },
+                proof_gaps: Vec::new(),
+                started_at,
+                ended_at,
+            })
+            .map_err(|error| anyhow!(error))?;
+            let receipt_value = serde_json::to_value(&receipt)?;
+            let receipt_digest = string_ref_field(&receipt_value, "receipt_digest")?.to_string();
+            let trusted_binding_value =
+                crate::evidence::policy::trusted_receipt_binding_value(&receipt, policy_binding)
+                    .map_err(|error| anyhow!(error))?;
+            let mut registry =
+                CapabilityRegistry::from_manifests_and_adapter_registrations(&self.root, [], &[]);
+            let persistence = persist_trusted_evidence_atomically(
+                &self.conn,
+                |conn| {
+                    if let Some(lease) = lease.as_ref() {
+                        self.validate_feature_run_evidence_lease(conn, lease)?;
+                    }
+                    registry.store_verified_host_capture_instance_with_expiry(
+                        conn,
+                        evidence_manifest.clone(),
+                        evidence_instance.clone(),
+                        Some(&valid_until),
+                    )?;
+                    if std::env::var_os("PLANR_TEST_HOST_CAPTURE_FAIL_AFTER_CAPABILITY_STORE")
+                        .is_some()
+                    {
+                        bail!("test fault after host capture capability store");
+                    }
+                    Ok(())
+                },
+                |conn| {
+                    run_repository_snapshot_pre_commit_test_hook(&self.root)?;
+                    let current = capture_repository_snapshot(&self.root).map_err(|error| {
+                        anyhow!("checking host-capture repository snapshot: {error}")
+                    })?;
+                    if current != repository_snapshot {
+                        bail!(
+                            "stale_source: repository changed before trusted host-capture receipt commit"
+                        );
+                    }
+                    if let Some(lease) = lease.as_ref() {
+                        self.validate_feature_run_evidence_lease(conn, lease)?;
+                    }
+                    Ok(())
+                },
+                TrustedEvidencePersistenceInput {
+                    project_id: &project.id,
+                    obligation_id: &obligation.id,
+                    attempt: &attempt,
+                    execution_contract_digest: &config_digest,
+                    environment_digest: evidence_instance.environment.digest.as_str(),
+                    retry_predecessor_attempt_id: None,
+                    receipt_value: &receipt_value,
+                    receipt_digest: &receipt_digest,
+                    trusted_binding_value: &trusted_binding_value,
+                },
+            );
+            persistence?;
+            Ok(json!({
+                "attempt": attempt,
+                "receipt": receipt_value,
+                "receipt_digest": receipt_digest,
+                "capability": evidence_instance,
+                "verdict": "trusted",
+                "feature_run_lease": lease,
+            }))
+        })();
+        if let Some(reservation) = budget_reservation.as_ref() {
+            self.reconcile_feature_run_budget(reservation, Some(1))?;
+        }
+        result
     }
 
     pub(crate) fn evidence_attempts_value(
@@ -2328,7 +2668,7 @@ impl App {
                 "SELECT id, project_id, plan_id, item_id, criterion_id, title, binding,
                         observation_requirements_json, fixture_policy_json, freshness_policy_json,
                         assurance_policy_json, retry_aggregation, policy_digest, config_digest, source_digest,
-                        supersedes_obligation_id, obligation_version, created_at
+                        supersedes_obligation_id, obligation_version, created_at, obligation_shape
                  FROM proof_obligations WHERE project_id = ?1 AND id = ?2",
                 params![self.default_project()?.id, id],
                 obligation_row,
@@ -2339,6 +2679,9 @@ impl App {
 
     fn load_proof_obligation(&self, id: &str) -> Result<ProofObligation> {
         let value = self.evidence_obligation_record_value(id)?;
+        if value["obligation_shape"] != "semantic_v1" {
+            bail!("legacy proof obligation is historical and cannot be executed: {id}");
+        }
         serde_json::from_value(json!({
             "id": value["id"],
             "schema_version": "evidence.contract.v1",
@@ -2351,9 +2694,6 @@ impl App {
             "fixture_policy": value["fixture_policy"],
             "freshness_policy": value["freshness_policy"],
             "assurance_policy": value["assurance_policy"],
-            "policy_digest": value["policy_digest"],
-            "config_digest": value["config_digest"],
-            "created_at": value["created_at"],
             "supersedes": value["supersedes_obligation_id"],
         }))
         .context("decoding stored proof obligation")
@@ -2652,50 +2992,6 @@ pub(crate) fn evidence_migration_request(value: &Value) -> Result<(Value, bool)>
     }
 }
 
-pub(crate) fn evidence_rebind_request(value: &Value) -> Result<(Value, bool)> {
-    let object = value.as_object().ok_or_else(|| {
-        EvidenceCommandError::bad_request("evidence rebind request must be a JSON object")
-    })?;
-    if object.contains_key("input") || object.contains_key("apply") {
-        let allowed = BTreeSet::from(["input", "apply"]);
-        let unknown = object
-            .keys()
-            .filter(|key| !allowed.contains(key.as_str()))
-            .cloned()
-            .collect::<Vec<_>>();
-        if !unknown.is_empty() {
-            return Err(EvidenceCommandError::bad_request(format!(
-                "evidence rebind request has unknown fields: {}",
-                unknown.join(",")
-            ))
-            .into());
-        }
-        let input = object.get("input").cloned().ok_or_else(|| {
-            EvidenceCommandError::bad_request("evidence rebind request requires input")
-        })?;
-        if !input.is_object() {
-            return Err(EvidenceCommandError::bad_request(
-                "evidence rebind request input must be a JSON object",
-            )
-            .into());
-        }
-        let apply = object
-            .get("apply")
-            .map(|value| {
-                value.as_bool().ok_or_else(|| {
-                    EvidenceCommandError::bad_request(
-                        "evidence rebind request apply must be a boolean",
-                    )
-                })
-            })
-            .transpose()?
-            .unwrap_or(false);
-        Ok((input, apply))
-    } else {
-        Ok((value.clone(), false))
-    }
-}
-
 pub(crate) fn evidence_envelope_exit_code(envelope: &Value) -> i32 {
     envelope["exit"]["code"].as_i64().unwrap_or(1) as i32
 }
@@ -2731,149 +3027,8 @@ fn existing_obligation_matches(existing: &Value, obligation: &ProofObligation) -
         && existing["assurance_policy"] == obligation.assurance_policy
         && existing["retry_aggregation"].as_str()
             == obligation_retry_aggregation(obligation).ok().as_deref()
-        && existing["policy_digest"].as_str() == Some(obligation.policy_digest.as_str())
-        && existing["config_digest"].as_str() == Some(obligation.config_digest.as_str())
         && existing["supersedes_obligation_id"].as_str()
             == obligation.supersedes.as_ref().map(|id| id.as_str())
-        && existing["created_at"].as_str() == Some(obligation.created_at.as_str())
-}
-
-fn validate_rebind_semantics(existing: &Value, obligation: &ProofObligation) -> Result<()> {
-    let current_observations = rebind_observation_semantics(&existing["observations"])?;
-    let proposed_observations =
-        rebind_observation_semantics(&serde_json::to_value(&obligation.observations)?)?;
-    let invariant_dimensions = [
-        (
-            "plan_id",
-            existing["plan_id"].clone(),
-            json!(obligation.plan_id.as_str()),
-        ),
-        (
-            "item_id",
-            existing["item_id"].clone(),
-            json!(obligation.item_id.as_ref().map(|id| id.as_str())),
-        ),
-        (
-            "criterion_id",
-            existing["criterion_id"].clone(),
-            json!(obligation.criterion_id.as_str()),
-        ),
-        ("title", existing["title"].clone(), json!(obligation.title)),
-        (
-            "binding",
-            existing["binding"].clone(),
-            json!(obligation.binding),
-        ),
-        ("observations", current_observations, proposed_observations),
-        (
-            "fixture_policy",
-            existing["fixture_policy"].clone(),
-            obligation.fixture_policy.clone(),
-        ),
-        (
-            "freshness_policy",
-            existing["freshness_policy"].clone(),
-            obligation.freshness_policy.clone(),
-        ),
-        (
-            "assurance_policy",
-            existing["assurance_policy"].clone(),
-            obligation.assurance_policy.clone(),
-        ),
-        (
-            "retry_aggregation",
-            existing["retry_aggregation"].clone(),
-            json!(obligation_retry_aggregation(obligation)?),
-        ),
-    ];
-    let changed = invariant_dimensions
-        .into_iter()
-        .filter_map(|(name, current, proposed)| (current != proposed).then_some(name))
-        .collect::<Vec<_>>();
-    if !changed.is_empty() {
-        return Err(EvidenceCommandError::conflict(format!(
-            "evidence rebind refuses semantic acceptance drift in {}; authorize a plan/criterion change instead",
-            changed.join(",")
-        ))
-        .into());
-    }
-    Ok(())
-}
-
-fn rebind_observation_semantics(observations: &Value) -> Result<Value> {
-    let mut observations = observations
-        .as_array()
-        .cloned()
-        .ok_or_else(|| EvidenceCommandError::bad_request("rebind observations must be an array"))?;
-    for observation in &mut observations {
-        observation
-            .as_object_mut()
-            .ok_or_else(|| {
-                EvidenceCommandError::bad_request("rebind observation must be an object")
-            })?
-            .remove("environment");
-    }
-    Ok(Value::Array(observations))
-}
-
-fn validate_rebind_capability_support(
-    manifest: &VerificationCapabilityManifest,
-    obligation: &ProofObligation,
-) -> Result<()> {
-    let runtime_targets = manifest
-        .runtime_targets
-        .iter()
-        .map(serde_json::to_value)
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    for observation in &obligation.observations {
-        let payload_schema = observation.payload_schema.as_ref().ok_or_else(|| {
-            EvidenceCommandError::bad_request(format!(
-                "rebind observation {} requires a payload schema",
-                observation.id.as_str()
-            ))
-        })?;
-        let supports_observation = manifest.supported_observations.iter().any(|binding| {
-            binding.observation_type == observation.observation_type
-                && binding.schema_ref == payload_schema.schema_ref
-        });
-        if !supports_observation {
-            return Err(EvidenceCommandError::conflict(format!(
-                "rebind capability {} does not support observation {} with schema {}",
-                manifest.id.as_str(),
-                observation.observation_type.as_str(),
-                payload_schema.schema_ref
-            ))
-            .into());
-        }
-        if !runtime_targets.contains(&observation.runtime_target) {
-            return Err(EvidenceCommandError::conflict(format!(
-                "rebind capability {} does not support runtime target for observation {}",
-                manifest.id.as_str(),
-                observation.id.as_str()
-            ))
-            .into());
-        }
-    }
-    Ok(())
-}
-
-fn validate_rebind_environment(
-    obligations: &[ProofObligation],
-    environment: &EnvironmentBinding,
-) -> Result<()> {
-    let expected = serde_json::to_value(environment)?;
-    for obligation in obligations {
-        for observation in &obligation.observations {
-            if observation.environment != expected {
-                return Err(EvidenceCommandError::conflict(format!(
-                    "rebind observation {} environment must match the current capability instance",
-                    observation.id.as_str()
-                ))
-                .into());
-            }
-        }
-    }
-    Ok(())
 }
 
 fn obligation_retry_aggregation(obligation: &ProofObligation) -> Result<String> {
@@ -2937,6 +3092,7 @@ struct ObservedHostCaptureRun {
     exit_code: i32,
     stdout_excerpt: String,
     stderr_excerpt: String,
+    workflow_timeout_ms: u64,
     _tempdir: HostCaptureTempDir,
 }
 
@@ -2969,6 +3125,17 @@ impl Drop for HostCaptureTempDir {
 fn validate_external_host_capture(
     repository_root: &Path,
     import_root: &Path,
+    timeout_ms: u64,
+) -> Result<ValidatedHostCapture> {
+    let script = host_capability_harness_path()?;
+    validate_external_host_capture_with_script(repository_root, import_root, timeout_ms, &script)
+}
+
+fn validate_external_host_capture_with_script(
+    repository_root: &Path,
+    import_root: &Path,
+    timeout_ms: u64,
+    script: &Path,
 ) -> Result<ValidatedHostCapture> {
     if !import_root.exists() || !import_root.is_dir() {
         return Err(EvidenceCommandError::bad_request(format!(
@@ -2979,31 +3146,62 @@ fn validate_external_host_capture(
     }
     let tempdir = HostCaptureTempDir::create()?;
     let out_dir = tempdir.path().join("normalized");
-    let script = host_capability_harness_path()?;
-    let output = Command::new("node")
-        .arg(&script)
-        .arg("capture")
-        .arg("--out-dir")
-        .arg(&out_dir)
-        .arg("--import-fixture-root")
-        .arg(import_root)
-        .current_dir(repository_root)
-        .output()
-        .with_context(|| {
-            format!(
-                "running host capability validator {}",
-                script.to_string_lossy()
-            )
-        })?;
-    if !output.status.success() {
+    if timeout_ms == 0 {
+        return Err(EvidenceCommandError::bad_request(
+            "host capture workflow exhausted its execution-contract timeout before validation",
+        )
+        .into());
+    }
+    let argv = vec![
+        resolve_path_executable("node")?
+            .to_string_lossy()
+            .to_string(),
+        script.to_string_lossy().to_string(),
+        "capture".to_string(),
+        "--out-dir".to_string(),
+        out_dir.to_string_lossy().to_string(),
+        "--import-fixture-root".to_string(),
+        import_root.to_string_lossy().to_string(),
+    ];
+    let cancellation = CancellationToken::new();
+    let output = run_bounded_process(BoundedProcessInput {
+        cwd: repository_root,
+        argv: &argv,
+        env: Vec::new(),
+        timeout: Duration::from_millis(timeout_ms),
+        output_limit_bytes: 1_048_576,
+        stdout_limit_bytes: Some(1_048_576),
+        stderr_limit_bytes: Some(1_048_576),
+        cancellation: &cancellation,
+    })
+    .with_context(|| {
+        format!(
+            "running bounded host capability validator {}",
+            script.to_string_lossy()
+        )
+    })?;
+    if output.timed_out {
+        return Err(EvidenceCommandError::bad_request(
+            "host capture validator exceeded its execution-contract timeout",
+        )
+        .into());
+    }
+    if output.interrupted {
+        return Err(
+            EvidenceCommandError::bad_request("host capture validator was interrupted").into(),
+        );
+    }
+    if output.exit_code != Some(0) {
         return Err(EvidenceCommandError::bad_request(format!(
             "host capture validation failed: {}",
-            String::from_utf8_lossy(&output.stderr)
+            output.stderr_excerpt
         ))
         .into());
     }
+    let stdout = output.stdout_excerpt.into_bytes();
+    let stderr = output.stderr_excerpt.into_bytes();
     let summary: Value =
-        serde_json::from_slice(&output.stdout).context("host capture validator stdout JSON")?;
+        serde_json::from_slice(&stdout).context("host capture validator stdout JSON")?;
     if summary["verdict"] != "pass" {
         return Err(
             EvidenceCommandError::bad_request("host capture validator did not pass").into(),
@@ -3011,7 +3209,7 @@ fn validate_external_host_capture(
     }
     let normalized_root_digest = digest_directory(&out_dir)?;
     let validator_digest =
-        crate::canonical_json::sha256_prefixed_bytes(&fs::read(&script).with_context(|| {
+        crate::canonical_json::sha256_prefixed_bytes(&fs::read(script).with_context(|| {
             format!(
                 "reading host capability validator {}",
                 script.to_string_lossy()
@@ -3019,17 +3217,37 @@ fn validate_external_host_capture(
         })?);
     Ok(ValidatedHostCapture {
         root: out_dir,
-        stdout: output.stdout,
-        stderr: output.stderr,
+        stdout,
+        stderr,
         summary,
         normalized_root_digest,
-        validator_path: script,
+        validator_path: script.to_path_buf(),
         validator_digest,
         _tempdir: tempdir,
     })
 }
 
-fn run_planr_observed_host_capture(app: &App, value: &Value) -> Result<ObservedHostCaptureRun> {
+fn resolve_path_executable(program: &str) -> Result<PathBuf> {
+    let path = std::env::var_os("PATH")
+        .ok_or_else(|| anyhow!("PATH is unavailable while resolving {program}"))?;
+    let candidates = std::env::split_paths(&path).flat_map(|directory| {
+        #[cfg(windows)]
+        let names = [program.to_string(), format!("{program}.exe")];
+        #[cfg(not(windows))]
+        let names = [program.to_string()];
+        names.into_iter().map(move |name| directory.join(name))
+    });
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+        .ok_or_else(|| anyhow!("{program} executable is not available on PATH"))
+}
+
+fn run_planr_observed_host_capture(
+    app: &App,
+    value: &Value,
+    before_run: impl FnOnce(u64) -> Result<bool>,
+) -> Result<ObservedHostCaptureRun> {
     let manifest_id = string_field(value, "manifest_id")?;
     let obligation_id = string_field(value, "obligation_id")?;
     let obligation_suffix = short_digest(&crate::canonical_json::sha256_prefixed_bytes(
@@ -3074,6 +3292,9 @@ fn run_planr_observed_host_capture(app: &App, value: &Value) -> Result<ObservedH
         .repository_execution_contract
         .as_ref()
         .unwrap_or(&capability.manifest.availability_probe.execution);
+    if !before_run(execution.timeout_ms)? {
+        bail!("host_capture_budget_hold");
+    }
 
     let tempdir = HostCaptureTempDir::create()?;
     let import_root = tempdir.path().join("capture");
@@ -3191,6 +3412,7 @@ fn run_planr_observed_host_capture(app: &App, value: &Value) -> Result<ObservedH
         exit_code,
         stdout_excerpt: output.stdout_excerpt,
         stderr_excerpt: output.stderr_excerpt,
+        workflow_timeout_ms: execution.timeout_ms,
         _tempdir: tempdir,
     })
 }
@@ -3525,17 +3747,10 @@ fn ensure_host_import_bindings(
         .into());
     }
     let target_value = serde_json::to_value(target)?;
-    let environment_value = serde_json::to_value(environment)?;
     for observation in &obligation.observations {
         if observation.target != target_value {
             return Err(EvidenceCommandError::bad_request(
                 "proof obligation target does not match host capture import target",
-            )
-            .into());
-        }
-        if observation.environment != environment_value {
-            return Err(EvidenceCommandError::bad_request(
-                "proof obligation environment does not match host capture import environment",
             )
             .into());
         }
@@ -3876,7 +4091,8 @@ fn parse_json(text: String) -> Value {
 }
 
 fn obligation_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
-    Ok(json!({
+    let obligation_shape = row.get::<_, String>(18)?;
+    let mut value = json!({
         "id": row.get::<_, String>(0)?,
         "project_id": row.get::<_, String>(1)?,
         "plan_id": row.get::<_, String>(2)?,
@@ -3895,7 +4111,17 @@ fn obligation_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
         "supersedes_obligation_id": row.get::<_, Option<String>>(15)?,
         "obligation_version": row.get::<_, i64>(16)?,
         "created_at": row.get::<_, String>(17)?,
-    }))
+        "obligation_shape": obligation_shape.as_str(),
+    });
+    if obligation_shape == "semantic_v1" {
+        let object = value
+            .as_object_mut()
+            .expect("obligation record is constructed as an object");
+        object.remove("policy_digest");
+        object.remove("config_digest");
+        object.remove("source_digest");
+    }
+    Ok(value)
 }
 
 fn manifest_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
@@ -4040,5 +4266,76 @@ mod tests {
             evidence_run_verdict(AttemptStatus::Failed, &exit, &json!({})),
             "failed"
         );
+    }
+
+    #[test]
+    fn hermetic_reuse_classification_excludes_network_browser_live_and_fixtures() {
+        let mut manifest_value: Value = serde_json::from_str(include_str!(
+            "../../docs/contracts/fixtures/evidence/v1/examples/verification-capability-manifest.json"
+        ))
+        .unwrap();
+        manifest_value["permissions"]["network"] = json!("none");
+        manifest_value["determinism"] = json!("deterministic");
+        manifest_value["repeatability"] = json!("repeatable");
+        manifest_value["supported_surfaces"] = json!(["local-process"]);
+        manifest_value["supported_interactions"] = json!(["command"]);
+        let manifest: VerificationCapabilityManifest =
+            serde_json::from_value(manifest_value.clone()).unwrap();
+        let target: TargetBinding =
+            serde_json::from_value(json!({"kind": "process", "uri": "local://check"})).unwrap();
+        let clean: FixtureDisclosure = serde_json::from_value(json!({
+            "fixtures_used": false,
+            "mocks_used": false
+        }))
+        .unwrap();
+        assert!(is_hermetic_reuse_candidate(&manifest, &target, &clean, &BTreeMap::new()).unwrap());
+
+        for (field, value) in [
+            ("supported_surfaces", json!(["browser"])),
+            ("supported_interactions", json!(["live-check"])),
+        ] {
+            let mut candidate = manifest_value.clone();
+            candidate[field] = value;
+            let candidate: VerificationCapabilityManifest =
+                serde_json::from_value(candidate).unwrap();
+            assert!(
+                !is_hermetic_reuse_candidate(&candidate, &target, &clean, &BTreeMap::new())
+                    .unwrap()
+            );
+        }
+        let mut network = manifest_value;
+        network["permissions"]["network"] = json!("loopback");
+        let network: VerificationCapabilityManifest = serde_json::from_value(network).unwrap();
+        assert!(!is_hermetic_reuse_candidate(&network, &target, &clean, &BTreeMap::new()).unwrap());
+        let fixture: FixtureDisclosure = serde_json::from_value(json!({
+            "fixtures_used": true,
+            "mocks_used": false,
+            "fixture_refs": ["planr-test-fixture:cache-disabled"]
+        }))
+        .unwrap();
+        assert!(
+            !is_hermetic_reuse_candidate(&manifest, &target, &fixture, &BTreeMap::new()).unwrap()
+        );
+    }
+
+    #[test]
+    fn hanging_host_validator_is_killed_at_the_reserved_deadline() {
+        let root = tempfile::tempdir().unwrap();
+        let import_root = root.path().join("capture");
+        fs::create_dir(&import_root).unwrap();
+        let script = root.path().join("hang.mjs");
+        fs::write(&script, "setInterval(() => {}, 1000);\n").unwrap();
+        let started = Instant::now();
+        let error = match validate_external_host_capture_with_script(
+            root.path(),
+            &import_root,
+            50,
+            &script,
+        ) {
+            Ok(_) => panic!("hanging validator unexpectedly completed"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("execution-contract timeout"));
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 }

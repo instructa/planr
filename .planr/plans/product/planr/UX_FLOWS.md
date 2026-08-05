@@ -10,7 +10,7 @@ Planr V1 is CLI-first with optional TUI/dashboard. Public commands use Planr-nat
 - `planr item`: item creation and detail.
 - `planr pick`: atomically pick the next ready item.
 - `planr log`: record files, commands, tests, and handoff proof.
-- `planr review`: review/fix/approval loop.
+- `planr review`: durable ReviewGate attempts, findings, resolution, and re-review.
 - `planr close`: close an item with log.
 - `planr doctor`: diagnostics.
 
@@ -83,11 +83,11 @@ Guard: required log and reviews are satisfied
 Side effects: close item, promote downstream items
 Failure behavior: keep item running/blocked with diagnostic
 
-ITEM_CLOSED -> REVIEW_READY
-Trigger: review policy requires review
-Guard: code item completed
-Side effects: create or unlock review item
-Failure behavior: parent stays incomplete
+OUTCOME_SETTLED -> REVIEW_GATE_PENDING
+Trigger: computed materiality or structured escalation requires review
+Guard: FeatureRun outcome settlement completed
+Side effects: create or reuse one durable ReviewGate
+Failure behavior: FeatureRun stays incomplete
 ```
 
 ## Onboarding Flow
@@ -151,7 +151,7 @@ Acceptance criteria:
 4. Agent records log.
 5. Agent closes the item when log and reviews allow it.
 6. Planr promotes downstream items.
-7. If review is required, a review item becomes ready.
+7. If review is required, a durable ReviewGate becomes ready for an independent lease.
 
 Acceptance criteria:
 
@@ -163,30 +163,30 @@ Acceptance criteria:
 
 1. User or agent creates a parent item for the material change.
 2. User or agent breaks the parent into implementation or test child work with `planr item breakdown`.
-3. User or agent requests review on the implementation or test child after evidence exists.
+3. The implementation or test child settles through its FeatureRun after evidence exists.
 4. Downstream top-level work depends on the parent gate when review cleanliness matters.
-5. Parent closes only after child work closes and review findings have either passed or been converted into fix/follow-up review work.
+5. Parent closes only after child work settles and every required ReviewGate is accepted.
 
 Acceptance criteria:
 
 - REQ-UX-025: Parent item detail must make clear whether open children or reviews block closure.
 - REQ-UX-026: Recovery views must show the child implementation, review, logs, and blockers needed to continue safely.
 
-## Review/Fix Flow
+## ReviewGate Findings Flow
 
-1. Review item is picked.
+1. An independent reviewer leases the ready ReviewGate.
 2. Reviewer inspects linked plan, log, and scoped Git diff.
 3. Reviewer returns verdict:
    - complete;
    - not complete with findings;
    - unclear/partially verified.
-4. Findings create fix item and follow-up review item.
-5. Parent closes only when review chain passes.
+4. Findings persist on the gate with stable identities and a responsible maker.
+5. The maker resolves named findings; the same gate returns to pending re-review and the FeatureRun completes only after acceptance.
 
 Acceptance criteria:
 
 - REQ-UX-030: Review findings must be visible in item detail and log detail.
-- REQ-UX-031: Parent completion must explain which review item blocks it.
+- REQ-UX-031: FeatureRun completion must explain which ReviewGate and findings block it.
 
 ## Handoff And Story Flow
 

@@ -154,10 +154,10 @@ try {
   assert.equal(hello.status, 0);
   check(hello.stdout === 'hello from planr\n', 'documented hello command prints the exact expected output');
   const submitted = run(
-    ['done', second.id, '--summary', 'Verified the documented command and exact output.', '--files', 'hello.sh', '--cmd', './hello.sh', '--tests', 'stdout equals hello from planr', '--review', '--json'],
+    ['done', second.id, '--summary', 'Verified the documented command and exact output.', '--files', 'hello.sh', '--cmd', './hello.sh', '--tests', 'stdout equals hello from planr', '--escalate', 'user-requested', '--escalation-ref', 'onboarding-independent-review', '--escalation-explanation', 'The onboarding flow demonstrates an explicit independent ReviewGate.', '--json'],
     { worker: 'onboarding-builder' },
   );
-  check(submitted.item.status === 'in_review', 'review-gated completion moves the target into review');
+  check(submitted.item.status === 'closed' && submitted.work_packet.transition === 'review_gate', 'canonical settlement closes the outcome and opens a ReviewGate');
 
   const recovery = run(['recover', 'sweep', '--json']);
   check(recovery.mode === 'preview' && recovery.stale.length === 0, 'recovery preview reports no stale work');
@@ -166,15 +166,17 @@ try {
   const exported = run(['export', '--out', '.planr/artifacts/onboarding-example', '--include-plans', '--include-logs', '--json']);
   check(exported.out === '.planr/artifacts/onboarding-example', 'export packages plans and logs at the documented path');
 
-  const review = run(['pick', '--plan', build.id, '--work-type', 'review', '--json'], { worker: 'onboarding-reviewer' }).item;
+  const reviewPacket = run(['pick', '--plan', build.id, '--work-type', 'review', '--json'], { worker: 'onboarding-reviewer' }).work_packet;
+  check(reviewPacket.kind === 'review_gate', 'review pick returns the canonical typed ReviewGate packet');
+  const review = reviewPacket.execution_state.review_gate;
   const reviewed = run(
-    ['review', 'close', review.id, '--verdict', 'complete', '--findings', 'Command, output, executable bit, and evidence match the plan.', '--reviewer', 'onboarding-reviewer', '--close-target', '--json'],
+    ['review', 'close', review.id, '--verdict', 'complete', '--reviewer', 'onboarding-reviewer', '--json'],
     { worker: 'onboarding-reviewer' },
   );
-  check(reviewed.closed_target.id === second.id, 'independent review closes the reviewed target');
+  check(reviewed.execution_state.review_gate.status === 'accepted', 'independent review accepts the durable ReviewGate');
 
   const finalMap = run(['map', 'show', '--plan', build.id, '--json']);
-  check(finalMap.counts.closed === 3 && finalMap.settled === finalMap.total, 'the tutorial ends with every map item settled and closed');
+  check(finalMap.counts.closed === 2 && finalMap.settled === finalMap.total, 'the tutorial ends with two settled outcome items and no review map item');
 
   for (const client of ['codex', 'claude', 'cursor']) {
     const preview = run(['install', client, '--dry-run'], { json: false });

@@ -173,7 +173,6 @@ impl App {
                 };
                 let attachment_kind = match args.attachment_kind {
                     EvalEvidenceAttachmentKind::Log => "log",
-                    EvalEvidenceAttachmentKind::Review => "review",
                     EvalEvidenceAttachmentKind::Artifact => "artifact",
                 };
                 let result = self.eval_evidence_ref_value(
@@ -695,18 +694,6 @@ impl App {
                 let log = self.get_log(attachment_id)?;
                 if log["item_id"].as_str() != Some(item_id) {
                     bail!("eval evidence log attachment must belong to item {item_id}");
-                }
-            }
-            "review" => {
-                let review = self.get_item(attachment_id)?;
-                if review.work_type != "review" {
-                    bail!("eval evidence review attachment must be a review item");
-                }
-                let target = self.review_target(attachment_id)?.ok_or_else(|| {
-                    anyhow!("eval evidence review attachment must review item {item_id}")
-                })?;
-                if target.id != item_id {
-                    bail!("eval evidence review attachment must review item {item_id}");
                 }
             }
             "artifact" => {

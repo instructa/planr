@@ -20,7 +20,7 @@ This file records the implemented route and navigation contract. Routes are publ
 
 ## Implemented route tree
 
-The 66 MDX files below are the current page tree and must agree with every `meta.json` file and `COVERAGE.md`.
+The 67 MDX files below are the current page tree and must agree with every `meta.json` file and `COVERAGE.md`.
 
 ```text
 /docs
@@ -53,6 +53,7 @@ The 66 MDX files below are the current page tree and must agree with every `meta
 │   └── recovery-packages-and-closure
 ├── guides
 │   ├── daily-worker-loop
+│   ├── feature-run-work-packets
 │   ├── parallel-coordination
 │   ├── handoff-and-resume
 │   ├── review-and-fix-loops
@@ -124,7 +125,6 @@ The inventory covers these retired route families:
 | `/docs/guides/review-and-fix-loop` | `/docs/guides/review-and-fix-loops` |
 | `/docs/guides/interruptions-and-recovery` | `/docs/guides/recover-interrupted-work` |
 | `/docs/guides/import-export-and-templates` | `/docs/guides/packages-and-reuse` |
-| `/docs/guides/local-review-workspace` | `/docs/guides/recipes` |
 | `/docs/guides/host-hooks` | `/docs/integrations` |
 | `/docs/guides/model-routing` | `/docs/reference/configuration-and-storage` |
 | `/docs/reference/cli/index` | `/docs/reference/cli` |

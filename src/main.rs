@@ -18,6 +18,7 @@ pub(crate) mod eval_runner;
 mod evidence;
 pub(crate) mod execution;
 pub mod execution_policy;
+pub mod execution_run;
 mod integrations;
 mod model;
 mod planpack;

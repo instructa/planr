@@ -15,7 +15,7 @@ Context:
 Supports every REQ-V11-* requirement in `V1_1_DIFFERENTIATION_CONTRACT.md`.
 
 Requirements:
-- Define graph intelligence, pick recall, recovery, local browser review, scoped Git review, distribution, templates, docs, and E2E acceptance criteria.
+- Define graph intelligence, pick recall, recovery, durable ReviewGates, scoped Git review, distribution, templates, docs, and E2E acceptance criteria.
 - Use Planr vocabulary only.
 - Keep the contract specific enough that coding agents can work each slice without hidden context.
 
@@ -85,7 +85,7 @@ Supports REQ-V11-RECALL-001 through REQ-V11-RECALL-005.
 
 Requirements:
 - Rank relevant contexts, plans, logs, and review summaries.
-- Include upstream handoffs, linked plan references, review/fix history, blockers, unlocks, possible file conflicts, and deeper-read commands.
+- Include upstream handoffs, linked plan references, ReviewGate history, blockers, unlocks, possible file conflicts, and deeper-read commands.
 - Keep responses size-bounded and privacy-safe.
 - Share behavior across CLI, MCP, and HTTP pick routes.
 
@@ -152,36 +152,36 @@ Dependencies:
 Do not do:
 - Do not silently mutate or reclaim active work by default.
 
-### TASK-V11-005: Build Local Browser Review Workspace
+### TASK-V11-005: Build Durable FeatureRun Review Gates
 
 Goal:
-Give reviewers a first-class local visual review workflow.
+Give reviewers one canonical durable review workflow across every surface.
 
 Context:
-Supports REQ-V11-REVIEW-UI-001 through REQ-V11-REVIEW-UI-005.
+Supports REQ-V11-REVIEW-001 through REQ-V11-REVIEW-005.
 
 Requirements:
-- Serve a local review workspace from Planr.
-- Show plan/package review, plan diff, item detail, review evidence, annotations, and approve/request-changes actions.
-- Use existing review APIs to write annotations, artifacts, and follow-up work.
-- Keep the workspace local-first with no hosted dependency.
+- Create or reuse ReviewGates only through canonical FeatureRun settlement and final product review services.
+- Record independent leases, immutable attempts, verdicts, and durable findings.
+- Resolve named findings on the same gate and return it to pending re-review.
+- Project final ReviewGate state consistently through CLI, MCP, HTTP, audit, status, package, and trace.
 
 Files or areas likely involved:
 - `src/app/http.rs`.
 - `src/app/review.rs`.
-- `src/app/surfaces.rs`.
+- `src/app/execution_run.rs`.
 - `docs/`.
 - `tests/e2e.rs`.
 
 Acceptance criteria:
-- Browser smoke opens the workspace and exercises annotation flow.
-- Review feedback creates map-native fix/follow-up review work.
-- Clean review can write an artifact and close according to gate rules.
+- A material outcome produces one independently leasable ReviewGate.
+- Findings persist until explicitly resolved, then the same gate is re-reviewed.
+- Final review acceptance satisfies plan audit without review/fix map items.
 
 Tests:
-- HTTP route tests.
-- Browser or HTML smoke tests.
-- Review artifact E2E tests.
+- Cross-surface FeatureRun settlement tests.
+- ReviewGate finding/re-review tests.
+- Final product review projection tests.
 
 Dependencies:
 - TASK-V11-001.
@@ -212,7 +212,7 @@ Files or areas likely involved:
 
 Acceptance criteria:
 - Unrelated dirty files do not become agent-owned evidence.
-- Review artifacts list considered and excluded files.
+- ReviewGate evidence lists considered and excluded files.
 - File and line annotations survive export/import.
 
 Tests:
@@ -274,9 +274,9 @@ Context:
 Supports REQ-V11-TEMPLATE-001 through REQ-V11-TEMPLATE-005.
 
 Requirements:
-- Export/import graph items, links, plans, contexts, logs, review artifacts, and metadata.
+- Export/import graph items, links, plans, contexts, logs, canonical ReviewGate projections, and metadata.
 - Add package requirements metadata and preview-before-import.
-- Preserve review annotations, findings, artifacts, and file references.
+- Preserve ReviewGate attempts, findings, annotations, and file references.
 - Define or implement a local-first encrypted bundle strategy.
 
 Files or areas likely involved:
@@ -346,7 +346,7 @@ Uses the End-To-End Verification Contract in `V1_1_DIFFERENTIATION_CONTRACT.md`.
 Requirements:
 - Run all required repository checks.
 - Run fresh consumer E2E in `~/projects/planr-test`.
-- Include MCP, HTTP/SSE, browser review workspace, package export/import, and docs examples.
+- Include MCP, HTTP/SSE ReviewGate routes, package export/import, and docs examples.
 - Convert any failure into fix and re-review tasks.
 
 Files or areas likely involved:
@@ -510,7 +510,7 @@ Requirements:
 - Centralize valid state transitions.
 - Promote ready items after link changes and item closure.
 - Implement atomic pick with pick token and automatically derived worker id.
-- Prevent parent closure while review/fix follow-ups remain open.
+- Prevent parent closure while required ReviewGates remain open.
 
 Files or areas likely involved:
 - `src/core/state_machine.rs`.
@@ -520,7 +520,7 @@ Files or areas likely involved:
 Acceptance criteria:
 - Two agents cannot pick the same item.
 - Closing upstream item unlocks downstream item.
-- Parent remains incomplete until required review items pass.
+- Parent remains incomplete until required ReviewGates are accepted.
 
 Tests:
 - Concurrent pick integration test.
@@ -607,9 +607,9 @@ Supports reusable decompositions, backups, and review packages created by `planr
 
 Requirements:
 - Parse Planr JSON package metadata.
-- Preview graph items, links, contexts, logs, plan file snapshots, review artifacts, and conflicts without mutation.
+- Preview graph items, links, contexts, logs, plan file snapshots, canonical ReviewGate projections, and conflicts without mutation.
 - Apply package graph and artifacts only when confirmed.
-- Preserve review annotations, findings, artifacts, and file references.
+- Preserve ReviewGate attempts, findings, annotations, and file references.
 
 Files or areas likely involved:
 - `src/app/packages.rs`.
@@ -731,36 +731,35 @@ Do not do:
 
 ## Review And Execution
 
-### TASK-AI-002: Implement Review/Fix Commands
+### TASK-AI-002: Implement ReviewGate Commands
 
 Goal:
-Make review findings a map-native workflow.
+Make review findings a durable ReviewGate workflow.
 
 Context:
 Implements ADR-004.
 
 Requirements:
-- `planr review request <item>`.
 - `planr review annotate <item> --message ...`.
 - `planr review ingest <item> --from ...` for hook-compatible JSON feedback.
-- `planr review artifact <review-item>` writes `.planr/reviews/*.review.md`.
-- `planr review close <item> --verdict ...`.
-- Create fix and follow-up review work from findings, linked to the reviewed target.
+- `planr review close <review-gate> --verdict ...` records an immutable attempt.
+- `planr review findings <review-gate> --resolve <finding>` repairs named findings.
+- Keep findings and re-review on the same durable gate.
 - Never auto-close or auto-approve work from ingested feedback alone.
-- Keep parent incomplete until review passes.
+- Keep FeatureRun completion gated until required reviews pass.
 
 Files or areas likely involved:
 - `src/app/review.rs`.
 - `src/app/commands.rs`.
 
 Acceptance criteria:
-- Review pass completes review item.
-- Review findings create fix/follow-up review chain.
-- Review close writes a review artifact and registers it in artifacts.
-- Parent remains blocked until clean review.
+- Review acceptance completes the durable gate.
+- Review findings persist with stable identities and return the same gate to re-review after resolution.
+- No review/fix/follow-up-review map items are produced.
+- FeatureRun remains blocked until clean review.
 
 Tests:
-- Review/fix loop integration tests.
+- ReviewGate findings/re-review integration tests.
 
 Dependencies:
 - TASK-DATA-002.

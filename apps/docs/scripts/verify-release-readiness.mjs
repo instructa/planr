@@ -86,7 +86,7 @@ function internalLinks(page) {
 
 const pages = await collectPages(contentRoot);
 const routeMap = new Map(pages.map((page) => [page.route, page]));
-assert.equal(routeMap.size, 66, 'release inventory must contain exactly 66 unique MDX routes');
+assert.equal(routeMap.size, 67, 'release inventory must contain exactly 67 unique MDX routes');
 const retiredBrowserVerifier = /docs:verify-shell|verify:shell|browser verifier|production browser verifier|shell verifiers|docs-shell|axe results/i;
 for (const page of pages) {
   assert.doesNotMatch(page.content, retiredBrowserVerifier, `${page.route} references the retired browser verifier`);

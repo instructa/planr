@@ -142,10 +142,6 @@ impl App {
         }
         let body_result: Result<String> = (|| {
             let body = match (method, path) {
-                ("GET", "/review") | ("GET", "/review/") => self.review_workspace_html(),
-                ("GET", "/v1/review-workspace") => {
-                    serde_json::to_string(&self.review_workspace_value()?)?
-                }
                 ("GET", "/v1/projects") => {
                     serde_json::to_string(&json!({"projects": self.list_projects()?}))?
                 }
@@ -179,6 +175,25 @@ impl App {
                         .find(|(key, _)| *key == "from")
                         .map(|(_, value)| crate::util::url_decode(value));
                     serde_json::to_string(&self.lookahead_value(from.as_deref(), 10)?)?
+                }
+                ("GET", p) if p.starts_with("/v1/plans/") && p.ends_with("/audit") => {
+                    let plan_id = path_plan_id(p, "audit")
+                        .ok_or_else(|| anyhow!("missing plan id in audit route"))?;
+                    serde_json::to_string(&self.plan_audit_value(plan_id)?)?
+                }
+                ("GET", p)
+                    if p.starts_with("/v1/plans/") && p.ends_with("/final-product-review") =>
+                {
+                    let plan_id = path_plan_id(p, "final-product-review")
+                        .ok_or_else(|| anyhow!("missing plan id in final product review route"))?;
+                    serde_json::to_string(&self.final_product_review_projection_value(plan_id)?)?
+                }
+                ("POST", p)
+                    if p.starts_with("/v1/plans/") && p.ends_with("/final-product-review") =>
+                {
+                    let plan_id = path_plan_id(p, "final-product-review")
+                        .ok_or_else(|| anyhow!("missing plan id in final product review route"))?;
+                    serde_json::to_string(&self.ensure_plan_final_product_review_value(plan_id)?)?
                 }
                 ("GET", p) if p.ends_with("/items") => {
                     serde_json::to_string(&json!({"items": self.all_items()?}))?
@@ -526,9 +541,9 @@ impl App {
                         route_observation: route_observation.as_ref(),
                     })?}))?
                 }
-                ("POST", p) if p.starts_with("/v1/reviews/") && p.ends_with("/close") => {
+                ("POST", p) if p.starts_with("/v1/review-gates/") && p.ends_with("/close") => {
                     let review_id = p
-                        .trim_start_matches("/v1/reviews/")
+                        .trim_start_matches("/v1/review-gates/")
                         .trim_end_matches("/close")
                         .trim_end_matches('/');
                     let verdict = body_json
@@ -546,50 +561,58 @@ impl App {
                                 .collect::<Vec<_>>()
                         })
                         .unwrap_or_default();
-                    serde_json::to_string(
-                        &self.close_review_item(
-                            review_id,
-                            verdict,
-                            findings,
-                            "http",
-                            body_json.get("reviewer").and_then(Value::as_str),
-                            body_json
-                                .get("close_target")
-                                .and_then(Value::as_bool)
-                                .unwrap_or(false),
-                        )?,
-                    )?
-                }
-                ("GET", p) if p.starts_with("/v1/reviews/") && p.ends_with("/artifact") => {
-                    let review_id = p
-                        .trim_start_matches("/v1/reviews/")
-                        .trim_end_matches("/artifact")
-                        .trim_end_matches('/');
-                    serde_json::to_string(&json!({"artifact": self.latest_review_artifact(
+                    serde_json::to_string(&self.complete_review_gate_surface_value(
                         review_id,
-                    )?}))?
+                        verdict,
+                        findings,
+                        "http",
+                        body_json.get("reviewer").and_then(Value::as_str),
+                    )?)?
                 }
-                ("POST", p) if p.starts_with("/v1/reviews/") && p.ends_with("/artifact") => {
-                    let review_id = p
-                        .trim_start_matches("/v1/reviews/")
-                        .trim_end_matches("/artifact")
+                ("POST", p)
+                    if p.starts_with("/v1/review-gates/") && p.ends_with("/findings/resolve") =>
+                {
+                    let gate_id = p
+                        .trim_start_matches("/v1/review-gates/")
+                        .trim_end_matches("/findings/resolve")
                         .trim_end_matches('/');
-                    serde_json::to_string(&json!({"artifact": self.write_review_artifact(
-                        crate::app::ReviewArtifactInput::bare(review_id),
-                    )?}))?
+                    let finding_ids = json_string_array(&body_json, "finding_ids");
+                    serde_json::to_string(
+                        &self.resolve_review_gate_findings_value(gate_id, &finding_ids)?,
+                    )?
                 }
                 ("POST", p) if p.ends_with("/close") => {
                     let item_id =
                         path_item_id(p).ok_or_else(|| anyhow!("missing item id in close route"))?;
-                    let mut value = self.close_item_value(item_id, "closed from http")?;
+                    let files = json_string_array(&body_json, "files");
+                    let commands = json_string_array(&body_json, "commands");
+                    let tests = json_string_array(&body_json, "tests");
+                    let mut value = self.settle_surface_completion_value(
+                        super::flow::SurfaceCompletionInput {
+                            item_id,
+                            summary: body_json
+                                .get("summary")
+                                .and_then(Value::as_str)
+                                .unwrap_or("closed from http"),
+                            files: &files,
+                            commands: &commands,
+                            tests: &tests,
+                            source: "http",
+                            profile: body_json.get("profile").and_then(Value::as_str),
+                            escalation_reason: body_json
+                                .get("escalation_reason")
+                                .and_then(Value::as_str),
+                            escalation_reference: body_json
+                                .get("escalation_reference")
+                                .and_then(Value::as_str),
+                            escalation_explanation: body_json
+                                .get("escalation_explanation")
+                                .and_then(Value::as_str),
+                            write_log: true,
+                        },
+                    )?;
                     value["map"] = self.map_value(None)?;
                     serde_json::to_string(&value)?
-                }
-                ("POST", p) if p.ends_with("/reviews") => {
-                    let item_id = path_item_id(p)
-                        .ok_or_else(|| anyhow!("missing item id in reviews route"))?;
-                    let review = self.request_review_for(item_id)?;
-                    serde_json::to_string(&json!({"review": review}))?
                 }
                 ("POST", p) if p.ends_with("/review-annotations") => {
                     let item_id = path_item_id(p)
@@ -828,4 +851,11 @@ fn json_string_array(value: &Value, name: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn path_plan_id<'a>(path: &'a str, suffix: &str) -> Option<&'a str> {
+    path.strip_prefix("/v1/plans/")
+        .and_then(|rest| rest.strip_suffix(suffix))
+        .map(|rest| rest.trim_end_matches('/'))
+        .filter(|value| !value.is_empty())
 }

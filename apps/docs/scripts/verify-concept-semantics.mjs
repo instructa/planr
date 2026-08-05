@@ -53,8 +53,8 @@ try {
   for (const phrase of [
     'Both link kinds block readiness',
     'A `cancelled` item counts as settled in aggregate progress, but it does **not** satisfy either readiness link',
-    'Evidence-backed `planr done` without `--review` closes directly',
-    '`in_review` → `closed` after the review gate completes',
+    'Evidence-backed `planr done` settles the outcome through its FeatureRun and closes the item',
+    'a separate durable ReviewGate becomes pending',
   ]) {
     check(conceptPage.includes(phrase), `concept page preserves semantic contract: ${phrase}`);
   }
@@ -77,7 +77,7 @@ try {
   map = run(['map', 'show', '--json']);
   check(itemStatus(map, handsDownstream.id) === 'pending', 'hands_to blocks downstream readiness while upstream is open');
   const handsDone = run(['done', handsUpstream.id, '--summary', 'Completed handoff source.', '--cmd', 'semantic replay', '--json']);
-  check(handsDone.item.status === 'closed' && handsDone.review === null, 'done without review closes the upstream directly');
+  check(handsDone.item.status === 'closed' && handsDone.work_packet.review_gate == null, 'done without a required gate settles the upstream directly');
   map = run(['map', 'show', '--json']);
   check(itemStatus(map, handsDownstream.id) === 'ready', 'closed hands_to upstream unlocks downstream');
 
@@ -88,16 +88,9 @@ try {
   map = run(['map', 'show', '--json']);
   check(itemStatus(map, cancelledHandsDownstream.id) === 'pending', 'cancelled hands_to upstream does not unlock downstream');
 
-  const reviewTarget = run(['item', 'create', 'Optional review target', '--description', 'review branch', '--json']).item;
-  const submitted = run([
-    'done', reviewTarget.id,
-    '--summary', 'Submitted optional review branch.',
-    '--cmd', 'semantic replay',
-    '--review',
-    '--json',
-  ]);
-  check(submitted.item.status === 'in_review', 'done with review moves target to in_review');
-  check(submitted.review?.status === 'ready', 'done with review creates a ready review item');
+  const outcome = run(['item', 'create', 'Unplanned outcome', '--description', 'no workflow-only review rows', '--json']).item;
+  const settled = run(['done', outcome.id, '--summary', 'Settled unplanned outcome.', '--cmd', 'semantic replay', '--json']);
+  check(settled.item.status === 'closed' && settled.work_packet.review_gate == null, 'unplanned settlement does not manufacture a review map item');
 
   console.log(JSON.stringify({ ok: true, planrBinary: planrBin, assertions }, null, 2));
 } finally {

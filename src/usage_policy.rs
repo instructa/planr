@@ -7,6 +7,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fmt;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 pub const POLICY_RELATIVE_PATH: &str = ".planr/policy.toml";
@@ -22,6 +23,60 @@ pub struct UsagePolicyV1 {
     pub transitions: TransitionPolicy,
     pub materiality: MaterialityPolicy,
     pub execution: crate::execution_policy::ExecutionPolicy,
+}
+
+pub const LEGACY_ALPHA2_POLICY_SHAPE: &str = "planr.policy.v1@v1.10.0-alpha.2";
+pub const CURRENT_POLICY_SHAPE: &str = "planr.policy.v1.current";
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PolicyUpgradePreview {
+    pub from_shape: String,
+    pub to_shape: String,
+    pub path: String,
+    pub changes: Vec<String>,
+    pub canonical_toml: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyAlpha2Policy {
+    schema_version: u32,
+    id: String,
+    version: String,
+    usage: LegacyAlpha2UsageLimits,
+    transitions: TransitionPolicy,
+    materiality: LegacyAlpha2MaterialityPolicy,
+    execution: crate::execution_policy::ExecutionPolicy,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyAlpha2UsageLimits {
+    max_active_agents: u32,
+    max_parallel_readers: u32,
+    max_parallel_writers: u32,
+    max_depth: u8,
+    max_attempts: u32,
+    #[serde(default)]
+    max_wall_time_seconds: Option<u64>,
+    #[serde(default)]
+    max_tool_calls: Option<u64>,
+    #[serde(default)]
+    max_tokens: Option<u64>,
+    #[serde(default)]
+    max_credits_micros: Option<u64>,
+    review_reserve_percent: u8,
+    budget_exhaustion: BudgetExhaustionBehavior,
+    metering: MeteringMode,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyAlpha2MaterialityPolicy {
+    #[serde(default)]
+    changed_files_threshold: Option<u32>,
+    #[serde(default)]
+    changed_lines_threshold: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -40,10 +95,44 @@ pub struct UsageLimits {
     pub max_tokens: Option<u64>,
     #[serde(default)]
     pub max_credits_micros: Option<u64>,
-    #[serde(default)]
-    pub review_reserve_percent: u8,
+    pub phase_reserves: PhaseBudgetReserves,
     pub budget_exhaustion: BudgetExhaustionBehavior,
     pub metering: MeteringMode,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PhaseBudgetReserves {
+    #[serde(default)]
+    pub verification_percent: u8,
+    #[serde(default)]
+    pub review_percent: u8,
+    #[serde(default)]
+    pub repair_percent: u8,
+}
+
+impl PhaseBudgetReserves {
+    pub const fn total_percent(self) -> u16 {
+        self.verification_percent as u16 + self.review_percent as u16 + self.repair_percent as u16
+    }
+
+    pub const fn protected_percent_for(self, phase: BudgetPhase) -> u16 {
+        match phase {
+            BudgetPhase::Implementation => self.total_percent(),
+            BudgetPhase::Verification => self.review_percent as u16 + self.repair_percent as u16,
+            BudgetPhase::Review => self.repair_percent as u16,
+            BudgetPhase::Repair => 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BudgetPhase {
+    Implementation,
+    Verification,
+    Review,
+    Repair,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -108,6 +197,7 @@ pub struct SafetyStopPolicy {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MaterialityPolicy {
+    pub protected_risks: BTreeSet<MaterialityTrigger>,
     #[serde(default)]
     pub changed_files_threshold: Option<u32>,
     #[serde(default)]
@@ -163,11 +253,19 @@ pub enum ReviewRequirement {
     IndependentHighSignal,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssuranceDepth {
+    Standard,
+    Expanded,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MaterialityDecision {
     pub material: bool,
     pub review: ReviewRequirement,
+    pub assurance_depth: AssuranceDepth,
     pub reasons: Vec<String>,
 }
 
@@ -179,7 +277,13 @@ pub fn classify_materiality(
     let mut reasons: Vec<String> = change
         .triggers
         .iter()
-        .map(|trigger| format!("material_trigger:{}", trigger.as_str()))
+        .map(|trigger| {
+            if policy.protected_risks.contains(trigger) {
+                format!("material_trigger:{}", trigger.as_str())
+            } else {
+                format!("assurance_trigger:{}", trigger.as_str())
+            }
+        })
         .collect();
 
     if change.risk >= RiskLevel::High {
@@ -198,7 +302,23 @@ pub fn classify_materiality(
         reasons.push(format!("changed_lines_threshold:{}", change.changed_lines));
     }
 
-    let material = !reasons.is_empty();
+    let protected_risk = change
+        .triggers
+        .iter()
+        .any(|trigger| policy.protected_risks.contains(trigger));
+    let material = protected_risk;
+    let expanded_assurance = material
+        || change.risk >= RiskLevel::High
+        || !change.triggers.is_empty()
+        || change
+            .triggers
+            .contains(&MaterialityTrigger::LargeDependencyChange)
+        || policy
+            .changed_files_threshold
+            .is_some_and(|limit| change.changed_files >= limit)
+        || policy
+            .changed_lines_threshold
+            .is_some_and(|limit| change.changed_lines >= limit);
     MaterialityDecision {
         material,
         review: if material {
@@ -206,7 +326,113 @@ pub fn classify_materiality(
         } else {
             ReviewRequirement::None
         },
+        assurance_depth: if expanded_assurance {
+            AssuranceDepth::Expanded
+        } else {
+            AssuranceDepth::Standard
+        },
         reasons,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewEscalationReason {
+    UserRequested,
+    PolicyRequired,
+    ProtectedRiskDiscovered,
+    ExternalSideEffect,
+    DataIntegrityRisk,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EscalationSource {
+    User,
+    Policy,
+    MakerFinding,
+    ReviewerFinding,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewEscalation {
+    pub reason: ReviewEscalationReason,
+    pub source: EscalationSource,
+    pub reference: String,
+    pub explanation: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OperationalGapReason {
+    MissingEvidence,
+    VerifierFailure,
+    AdapterDrift,
+    SandboxRestriction,
+    Uncertainty,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ReviewInterruptRequest {
+    StructuredEscalation {
+        escalation: ReviewEscalation,
+    },
+    OperationalGap {
+        reason: OperationalGapReason,
+    },
+    ChangeSize {
+        changed_files: u32,
+        changed_lines: u32,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewInterruptRejectionReason {
+    MissingReference,
+    MissingExplanation,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum ReviewInterruptDecision {
+    OpenCheckpoint {
+        escalation: ReviewEscalation,
+    },
+    ContinueWithExpandedAssurance,
+    Rejected {
+        reason: ReviewInterruptRejectionReason,
+    },
+    RejectedOperationalGap {
+        gap: OperationalGapReason,
+    },
+}
+
+pub fn admit_review_interrupt(request: &ReviewInterruptRequest) -> ReviewInterruptDecision {
+    match request {
+        ReviewInterruptRequest::StructuredEscalation { escalation } => {
+            if escalation.reference.trim().is_empty() {
+                return ReviewInterruptDecision::Rejected {
+                    reason: ReviewInterruptRejectionReason::MissingReference,
+                };
+            }
+            if escalation.explanation.trim().is_empty() {
+                return ReviewInterruptDecision::Rejected {
+                    reason: ReviewInterruptRejectionReason::MissingExplanation,
+                };
+            }
+            ReviewInterruptDecision::OpenCheckpoint {
+                escalation: escalation.clone(),
+            }
+        }
+        ReviewInterruptRequest::OperationalGap { reason } => {
+            ReviewInterruptDecision::RejectedOperationalGap { gap: *reason }
+        }
+        ReviewInterruptRequest::ChangeSize { .. } => {
+            ReviewInterruptDecision::ContinueWithExpandedAssurance
+        }
     }
 }
 
@@ -316,7 +542,7 @@ pub fn validate_task_contract(contract: &TaskContract) -> Vec<PolicyDiagnostic> 
 pub enum PolicyLoad {
     Missing,
     Invalid(PolicyDiagnostics),
-    Loaded(UsagePolicyV1),
+    Loaded(Box<UsagePolicyV1>),
 }
 
 pub fn policy_path(root: &Path) -> PathBuf {
@@ -329,7 +555,7 @@ pub fn load_policy(root: &Path) -> PolicyLoad {
     let path = policy_path(root);
     match std::fs::read_to_string(&path) {
         Ok(text) => match parse_policy(&text) {
-            Ok(policy) => PolicyLoad::Loaded(policy),
+            Ok(policy) => PolicyLoad::Loaded(Box::new(policy)),
             Err(diagnostics) => PolicyLoad::Invalid(diagnostics),
         },
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => PolicyLoad::Missing,
@@ -349,6 +575,157 @@ pub fn parse_policy(text: &str) -> Result<UsagePolicyV1, PolicyDiagnostics> {
     } else {
         Err(PolicyDiagnostics { diagnostics })
     }
+}
+
+pub fn preview_policy_upgrade(
+    root: &Path,
+) -> Result<Option<PolicyUpgradePreview>, PolicyDiagnostics> {
+    let path = policy_path(root);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(PolicyDiagnostics::single(PolicyDiagnostic::io(
+                path.display().to_string(),
+                error.to_string(),
+            )));
+        }
+    };
+    preview_policy_upgrade_text(&text, &path)
+}
+
+pub fn apply_policy_upgrade(root: &Path) -> Result<PolicyUpgradePreview, PolicyDiagnostics> {
+    let path = policy_path(root);
+    let preview = preview_policy_upgrade(root)?.ok_or_else(|| {
+        PolicyDiagnostics::single(PolicyDiagnostic::validation(
+            "policy",
+            "no supported legacy policy upgrade is available",
+        ))
+    })?;
+    parse_policy(&preview.canonical_toml)?;
+    let parent = path.parent().ok_or_else(|| {
+        PolicyDiagnostics::single(PolicyDiagnostic::io(
+            path.display().to_string(),
+            "policy path has no parent directory".to_string(),
+        ))
+    })?;
+    let temporary = parent.join(format!(
+        ".policy.toml.upgrade-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    let write_result = (|| -> std::io::Result<()> {
+        let mut file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)?;
+        file.write_all(preview.canonical_toml.as_bytes())?;
+        file.sync_all()?;
+        std::fs::rename(&temporary, &path)?;
+        Ok(())
+    })();
+    if let Err(error) = write_result {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(PolicyDiagnostics::single(PolicyDiagnostic::io(
+            path.display().to_string(),
+            error.to_string(),
+        )));
+    }
+    Ok(preview)
+}
+
+fn preview_policy_upgrade_text(
+    text: &str,
+    path: &Path,
+) -> Result<Option<PolicyUpgradePreview>, PolicyDiagnostics> {
+    if parse_policy(text).is_ok() {
+        return Ok(None);
+    }
+    let current_diagnostics = parse_policy(text).expect_err("current policy was already rejected");
+    let raw = toml::from_str::<toml::Value>(text)
+        .map_err(|error| PolicyDiagnostics::single(PolicyDiagnostic::parse(error.to_string())))?;
+    let usage = raw.get("usage").and_then(toml::Value::as_table);
+    let materiality = raw.get("materiality").and_then(toml::Value::as_table);
+    let has_legacy_reserve =
+        usage.is_some_and(|value| value.contains_key("review_reserve_percent"));
+    let has_current_reserves = usage.is_some_and(|value| value.contains_key("phase_reserves"));
+    let has_current_protected =
+        materiality.is_some_and(|value| value.contains_key("protected_risks"));
+    if has_legacy_reserve && (has_current_reserves || has_current_protected) {
+        return Err(PolicyDiagnostics::single(PolicyDiagnostic::validation(
+            "policy",
+            "ambiguous mixed legacy/current policy shape",
+        )));
+    }
+    if !has_legacy_reserve {
+        return Err(current_diagnostics);
+    }
+    let legacy = toml::from_str::<LegacyAlpha2Policy>(text).map_err(|error| {
+        PolicyDiagnostics::single(PolicyDiagnostic::parse(format!(
+            "unsupported or lossy alpha.2 policy: {error}"
+        )))
+    })?;
+    let policy = UsagePolicyV1 {
+        schema_version: legacy.schema_version,
+        id: legacy.id,
+        version: legacy.version,
+        usage: UsageLimits {
+            max_active_agents: legacy.usage.max_active_agents,
+            max_parallel_readers: legacy.usage.max_parallel_readers,
+            max_parallel_writers: legacy.usage.max_parallel_writers,
+            max_depth: legacy.usage.max_depth,
+            max_attempts: legacy.usage.max_attempts,
+            max_wall_time_seconds: legacy.usage.max_wall_time_seconds,
+            max_tool_calls: legacy.usage.max_tool_calls,
+            max_tokens: legacy.usage.max_tokens,
+            max_credits_micros: legacy.usage.max_credits_micros,
+            phase_reserves: PhaseBudgetReserves {
+                verification_percent: 0,
+                review_percent: legacy.usage.review_reserve_percent,
+                repair_percent: 0,
+            },
+            budget_exhaustion: legacy.usage.budget_exhaustion,
+            metering: legacy.usage.metering,
+        },
+        transitions: legacy.transitions,
+        materiality: MaterialityPolicy {
+            protected_risks: canonical_interrupting_risks(),
+            changed_files_threshold: legacy.materiality.changed_files_threshold,
+            changed_lines_threshold: legacy.materiality.changed_lines_threshold,
+        },
+        execution: legacy.execution,
+    };
+    let diagnostics = validate_policy(&policy);
+    if !diagnostics.is_empty() {
+        return Err(PolicyDiagnostics { diagnostics });
+    }
+    let canonical_toml = toml::to_string_pretty(&policy).map_err(|error| {
+        PolicyDiagnostics::single(PolicyDiagnostic::parse(format!(
+            "canonical policy serialization failed: {error}"
+        )))
+    })?;
+    parse_policy(&canonical_toml)?;
+    Ok(Some(PolicyUpgradePreview {
+        from_shape: LEGACY_ALPHA2_POLICY_SHAPE.to_string(),
+        to_shape: CURRENT_POLICY_SHAPE.to_string(),
+        path: path.display().to_string(),
+        changes: vec![
+            "usage.review_reserve_percent -> usage.phase_reserves.review_percent".to_string(),
+            "materiality.protected_risks -> canonical_interrupting_risks".to_string(),
+        ],
+        canonical_toml,
+    }))
+}
+
+fn canonical_interrupting_risks() -> BTreeSet<MaterialityTrigger> {
+    BTreeSet::from([
+        MaterialityTrigger::SecurityOrAuth,
+        MaterialityTrigger::SecretsOrCrypto,
+        MaterialityTrigger::SchemaOrMigration,
+        MaterialityTrigger::InfrastructureOrDeploy,
+        MaterialityTrigger::PublicApi,
+        MaterialityTrigger::Billing,
+        MaterialityTrigger::ConcurrencyOrTransaction,
+    ])
 }
 
 pub fn validate_policy(policy: &UsagePolicyV1) -> Vec<PolicyDiagnostic> {
@@ -394,10 +771,10 @@ pub fn validate_policy(policy: &UsagePolicyV1) -> Vec<PolicyDiagnostic> {
             "must be at least 1",
         ));
     }
-    if policy.usage.review_reserve_percent > 100 {
+    if policy.usage.phase_reserves.total_percent() > 100 {
         diagnostics.push(PolicyDiagnostic::validation(
-            "usage.review_reserve_percent",
-            "must be between 0 and 100",
+            "usage.phase_reserves",
+            "verification, review, and repair reserves must total at most 100 percent",
         ));
     }
     validate_optional_limit(
@@ -430,6 +807,16 @@ pub fn validate_policy(policy: &UsagePolicyV1) -> Vec<PolicyDiagnostic> {
         "materiality.changed_lines_threshold",
         policy.materiality.changed_lines_threshold,
     );
+    if policy
+        .materiality
+        .protected_risks
+        .contains(&MaterialityTrigger::LargeDependencyChange)
+    {
+        diagnostics.push(PolicyDiagnostic::validation(
+            "materiality.protected_risks",
+            "large_dependency_change is assurance-only and cannot be a protected interrupting risk",
+        ));
+    }
     for diagnostic in crate::execution_policy::validate_execution_policy(&policy.execution) {
         diagnostics.push(PolicyDiagnostic::validation(
             format!("execution.{}", diagnostic.field),
@@ -712,7 +1099,7 @@ pub struct TransitionState {
     pub usage: UsageObservation,
     pub risk: RiskLevel,
     pub material: bool,
-    pub review_work: bool,
+    pub budget_phase: BudgetPhase,
     #[serde(default)]
     pub pending_safety_stop: Option<SafetyTrigger>,
 }
@@ -780,7 +1167,7 @@ pub enum TransitionRejectionReason {
     ToolCallBudgetExhausted,
     TokenBudgetExhausted,
     CreditBudgetExhausted,
-    ReviewReserveProtected,
+    RequiredPhaseReserveProtected,
     RetryExhausted,
     AvailabilityFallbackExhausted,
     AvailabilityRetryRequired,
@@ -898,7 +1285,7 @@ pub fn resolve_transition(
                 budget,
             );
         }
-        if let Some((reason, message)) = first_exhausted_budget(&budget, state.review_work) {
+        if let Some((reason, message)) = first_exhausted_budget(&budget) {
             return rejected(kind, reason, message, budget);
         }
     }
@@ -1076,7 +1463,7 @@ fn rejected(
     }
 }
 
-fn assess_budgets(policy: &UsagePolicyV1, state: &TransitionState) -> Vec<BudgetAssessment> {
+pub fn assess_budgets(policy: &UsagePolicyV1, state: &TransitionState) -> Vec<BudgetAssessment> {
     let mut assessments = Vec::new();
     if let Some(limit) = policy.usage.max_wall_time_seconds {
         assessments.push(BudgetAssessment {
@@ -1084,8 +1471,8 @@ fn assess_budgets(policy: &UsagePolicyV1, state: &TransitionState) -> Vec<Budget
             metering: MeteringMode::Trusted,
             observed: Some(state.elapsed_seconds),
             configured_limit: limit,
-            effective_limit: reserved_limit(limit, policy, state.review_work),
-            exhausted: state.elapsed_seconds >= reserved_limit(limit, policy, state.review_work),
+            effective_limit: reserved_limit(limit, policy, state.budget_phase),
+            exhausted: state.elapsed_seconds >= reserved_limit(limit, policy, state.budget_phase),
         });
     }
     push_metered_assessment(
@@ -1133,7 +1520,7 @@ fn push_metered_assessment(
     } else {
         MeteringMode::Unavailable
     };
-    let effective_limit = reserved_limit(limit, policy, state.review_work);
+    let effective_limit = reserved_limit(limit, policy, state.budget_phase);
     assessments.push(BudgetAssessment {
         dimension,
         metering,
@@ -1145,22 +1532,22 @@ fn push_metered_assessment(
     });
 }
 
-fn reserved_limit(limit: u64, policy: &UsagePolicyV1, review_work: bool) -> u64 {
-    if review_work || policy.usage.review_reserve_percent == 0 {
-        limit
-    } else {
-        limit.saturating_mul(u64::from(100 - policy.usage.review_reserve_percent)) / 100
-    }
+pub fn phase_spend_limit(limit: u64, reserves: PhaseBudgetReserves, phase: BudgetPhase) -> u64 {
+    let protected = reserves.protected_percent_for(phase).min(100);
+    limit.saturating_mul(u64::from(100 - protected)) / 100
 }
 
-fn first_exhausted_budget(
+fn reserved_limit(limit: u64, policy: &UsagePolicyV1, phase: BudgetPhase) -> u64 {
+    phase_spend_limit(limit, policy.usage.phase_reserves, phase)
+}
+
+pub(crate) fn first_exhausted_budget(
     budget: &[BudgetAssessment],
-    review_work: bool,
 ) -> Option<(TransitionRejectionReason, String)> {
     let assessment = budget.iter().find(|assessment| assessment.exhausted)?;
-    let reserved = assessment.effective_limit < assessment.configured_limit && !review_work;
+    let reserved = assessment.effective_limit < assessment.configured_limit;
     let reason = if reserved {
-        TransitionRejectionReason::ReviewReserveProtected
+        TransitionRejectionReason::RequiredPhaseReserveProtected
     } else {
         match assessment.dimension {
             BudgetDimension::WallTime => TransitionRejectionReason::WallTimeBudgetExhausted,
@@ -1231,7 +1618,11 @@ mod tests {
                 max_tool_calls: Some(100),
                 max_tokens: Some(10_000),
                 max_credits_micros: Some(1_000_000),
-                review_reserve_percent: 20,
+                phase_reserves: PhaseBudgetReserves {
+                    verification_percent: 10,
+                    review_percent: 5,
+                    repair_percent: 5,
+                },
                 budget_exhaustion: BudgetExhaustionBehavior::DowngradeNoncritical,
                 metering: MeteringMode::Trusted,
             },
@@ -1255,6 +1646,15 @@ mod tests {
                 safety_stop: SafetyStopPolicy { enabled: true },
             },
             materiality: MaterialityPolicy {
+                protected_risks: BTreeSet::from([
+                    MaterialityTrigger::SecurityOrAuth,
+                    MaterialityTrigger::SecretsOrCrypto,
+                    MaterialityTrigger::SchemaOrMigration,
+                    MaterialityTrigger::InfrastructureOrDeploy,
+                    MaterialityTrigger::PublicApi,
+                    MaterialityTrigger::Billing,
+                    MaterialityTrigger::ConcurrencyOrTransaction,
+                ]),
                 changed_files_threshold: Some(10),
                 changed_lines_threshold: Some(500),
             },
@@ -1282,7 +1682,7 @@ mod tests {
             },
             risk: RiskLevel::Low,
             material: false,
-            review_work: false,
+            budget_phase: BudgetPhase::Implementation,
             pending_safety_stop: None,
         }
     }
@@ -1321,6 +1721,10 @@ mod tests {
             .quality_escalation
             .require_verification_evidence = false;
         value.transitions.safety_stop.enabled = false;
+        value
+            .materiality
+            .protected_risks
+            .insert(MaterialityTrigger::LargeDependencyChange);
         let fields: Vec<_> = validate_policy(&value)
             .into_iter()
             .filter_map(|diagnostic| diagnostic.field)
@@ -1331,6 +1735,7 @@ mod tests {
                 "usage.max_depth",
                 "usage.max_attempts",
                 "usage.max_tokens",
+                "materiality.protected_risks",
                 "transitions.retry.max_same_route_retries",
                 "transitions.availability_fallback.max_fallbacks",
                 "transitions.availability_fallback.require_same_capability_class",
@@ -1535,9 +1940,9 @@ mod tests {
         current.usage.tokens = Some(8_000);
         assert_eq!(
             resolve_transition(&value, &current, &request).rejection_reason(),
-            Some(TransitionRejectionReason::ReviewReserveProtected)
+            Some(TransitionRejectionReason::RequiredPhaseReserveProtected)
         );
-        current.review_work = true;
+        current.budget_phase = BudgetPhase::Repair;
         assert!(resolve_transition(&value, &current, &request).is_allowed());
         current.usage.tokens = Some(10_000);
         assert_eq!(
@@ -1639,7 +2044,7 @@ mod tests {
 
     #[test]
     fn materiality_matrix_is_deterministic_and_trivial_changes_stay_cheap() {
-        let value = policy();
+        let mut value = policy();
         for trigger in [
             MaterialityTrigger::SecurityOrAuth,
             MaterialityTrigger::SecretsOrCrypto,
@@ -1648,7 +2053,6 @@ mod tests {
             MaterialityTrigger::PublicApi,
             MaterialityTrigger::Billing,
             MaterialityTrigger::ConcurrencyOrTransaction,
-            MaterialityTrigger::LargeDependencyChange,
         ] {
             let decision = classify_materiality(
                 &value.materiality,
@@ -1662,7 +2066,38 @@ mod tests {
             );
             assert!(decision.material);
             assert_eq!(decision.review, ReviewRequirement::IndependentHighSignal);
+            assert_eq!(decision.assurance_depth, AssuranceDepth::Expanded);
         }
+
+        let same_trigger = MaterialityTrigger::SecurityOrAuth;
+        value.materiality.protected_risks.remove(&same_trigger);
+        let unconfigured = classify_materiality(
+            &value.materiality,
+            &ChangeSummary {
+                risk: RiskLevel::Critical,
+                triggers: BTreeSet::from([same_trigger]),
+                changed_files: 1,
+                changed_lines: 1,
+                kind: ChangeKind::Code,
+            },
+        );
+        assert!(!unconfigured.material);
+        assert_eq!(unconfigured.review, ReviewRequirement::None);
+        assert_eq!(unconfigured.assurance_depth, AssuranceDepth::Expanded);
+
+        let size_only = classify_materiality(
+            &value.materiality,
+            &ChangeSummary {
+                risk: RiskLevel::Low,
+                triggers: BTreeSet::from([MaterialityTrigger::LargeDependencyChange]),
+                changed_files: 100,
+                changed_lines: 10_000,
+                kind: ChangeKind::Code,
+            },
+        );
+        assert!(!size_only.material);
+        assert_eq!(size_only.review, ReviewRequirement::None);
+        assert_eq!(size_only.assurance_depth, AssuranceDepth::Expanded);
 
         for kind in [
             ChangeKind::Documentation,
@@ -1681,7 +2116,93 @@ mod tests {
             );
             assert!(!decision.material);
             assert_eq!(decision.review, ReviewRequirement::None);
+            assert_eq!(decision.assurance_depth, AssuranceDepth::Standard);
         }
+    }
+
+    #[test]
+    fn review_interrupt_requires_structured_allowed_provenance() {
+        let allowed = ReviewInterruptRequest::StructuredEscalation {
+            escalation: ReviewEscalation {
+                reason: ReviewEscalationReason::DataIntegrityRisk,
+                source: EscalationSource::MakerFinding,
+                reference: "finding-17".into(),
+                explanation: "transaction invariant may be violated".into(),
+            },
+        };
+        assert!(matches!(
+            admit_review_interrupt(&allowed),
+            ReviewInterruptDecision::OpenCheckpoint { .. }
+        ));
+
+        let no_reference = ReviewInterruptRequest::StructuredEscalation {
+            escalation: ReviewEscalation {
+                reason: ReviewEscalationReason::UserRequested,
+                source: EscalationSource::User,
+                reference: " ".into(),
+                explanation: "requested explicitly".into(),
+            },
+        };
+        assert_eq!(
+            admit_review_interrupt(&no_reference),
+            ReviewInterruptDecision::Rejected {
+                reason: ReviewInterruptRejectionReason::MissingReference
+            }
+        );
+    }
+
+    #[test]
+    fn operational_gaps_and_change_size_cannot_masquerade_as_escalation() {
+        for reason in [
+            OperationalGapReason::MissingEvidence,
+            OperationalGapReason::VerifierFailure,
+            OperationalGapReason::AdapterDrift,
+            OperationalGapReason::SandboxRestriction,
+            OperationalGapReason::Uncertainty,
+        ] {
+            let decision =
+                admit_review_interrupt(&ReviewInterruptRequest::OperationalGap { reason });
+            assert_eq!(
+                decision,
+                ReviewInterruptDecision::RejectedOperationalGap { gap: reason }
+            );
+            assert_eq!(
+                serde_json::to_value(&decision).expect("gap decision wire shape"),
+                serde_json::json!({
+                    "status": "rejected_operational_gap",
+                    "gap": reason,
+                })
+            );
+        }
+        assert_eq!(
+            admit_review_interrupt(&ReviewInterruptRequest::ChangeSize {
+                changed_files: u32::MAX,
+                changed_lines: u32::MAX,
+            }),
+            ReviewInterruptDecision::ContinueWithExpandedAssurance
+        );
+    }
+
+    #[test]
+    fn phase_budget_limits_release_only_the_current_and_prior_reserves() {
+        let reserves = PhaseBudgetReserves {
+            verification_percent: 20,
+            review_percent: 10,
+            repair_percent: 10,
+        };
+        assert_eq!(
+            phase_spend_limit(1_000, reserves, BudgetPhase::Implementation),
+            600
+        );
+        assert_eq!(
+            phase_spend_limit(1_000, reserves, BudgetPhase::Verification),
+            800
+        );
+        assert_eq!(phase_spend_limit(1_000, reserves, BudgetPhase::Review), 900);
+        assert_eq!(
+            phase_spend_limit(1_000, reserves, BudgetPhase::Repair),
+            1_000
+        );
     }
 
     #[test]

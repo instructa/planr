@@ -28,7 +28,7 @@ If any of those fields appears in `planr evidence run`, `planr_evidence_run`, or
 | Object | Owner | What it means |
 | --- | --- | --- |
 | `ProofObligation` | Reviewed plan or migration | A binding or advisory criterion-level proof requirement. |
-| `ObservationRequirement` | Obligation | One atomic fact: type, subject, expected value, target, environment, runtime target. |
+| `ObservationRequirement` | Obligation | One stable semantic fact: type, subject, expected value, target, payload contract, and assurance requirements. |
 | `VerificationCapabilityManifest` | Repository or host adapter | Static declaration of observation types, runtime targets, permissions, limits, probe contract, and blind spots. |
 | `VerificationCapabilityInstance` | Planr probe | Runtime availability snapshot for one exact manifest, environment, permission set, and host. |
 | `EvidenceAttempt` | Planr execution | Immutable record of a run, including command/tool identity, output bounds, digests, exit, and raw result. |
@@ -91,7 +91,7 @@ Authoring a custom adapter does not require Planr core changes:
 3. Register both in `.planr/evidence.yaml`.
 4. Add the namespace to `extension_namespaces`.
 5. Probe capabilities with `planr evidence capability list --json`.
-6. Run obligations with `planr evidence run --input run.json --json`.
+6. Run only the exact path returned as `readiness.run_index.repository_path` with `planr evidence run --input <exact-readiness.run_index.repository_path> --json`.
 
 Unknown or unregistered observation types remain uncovered. A weaker built-in proof cannot satisfy a custom obligation.
 

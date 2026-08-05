@@ -134,15 +134,7 @@ fn validate_observation_requirement(value: &Value, errors: &mut Vec<String>, lab
     required(
         value,
         errors,
-        &[
-            "id",
-            "type",
-            "subject",
-            "expected",
-            "target",
-            "environment",
-            "runtime_target",
-        ],
+        &["id", "type", "subject", "expected", "target"],
     );
     if !field(value, "type")
         .and_then(Value::as_str)
@@ -150,7 +142,7 @@ fn validate_observation_requirement(value: &Value, errors: &mut Vec<String>, lab
     {
         errors.push(format!("{label}.type must use an allowed namespace"));
     }
-    for object_field in ["expected", "target", "environment", "runtime_target"] {
+    for object_field in ["expected", "target"] {
         if !has_object(value, object_field) {
             errors.push(format!("{label}.{object_field} must be an object"));
         }
@@ -245,13 +237,9 @@ fn validate_proof_obligation(value: &Value, errors: &mut Vec<String>) {
             "fixture_policy",
             "freshness_policy",
             "assurance_policy",
-            "policy_digest",
-            "config_digest",
-            "created_at",
         ],
     );
     require_non_empty_array(value, errors, &["observations"]);
-    require_digest(value, errors, &["policy_digest", "config_digest"]);
     for observation in field(value, "observations")
         .and_then(Value::as_array)
         .into_iter()

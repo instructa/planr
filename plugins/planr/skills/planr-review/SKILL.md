@@ -16,22 +16,22 @@ export PLANR_WORKER_ID=checker-1
 planr --json pick --work-type review
 ```
 
-`--work-type review` leases only review items, so a checker never accidentally takes maker work. Add `--plan <plan-id>` when your dispatch names a plan so the lease stays inside that scope. The pick packet inlines the target item and its evidence logs under `target` — one command is enough to see what is being audited, its status (`in_review` while waiting on you), files, and verification commands. If you already hold a review id, `planr --json trace item <review-id>` returns the same packet. Use `planr log list --item <target-id>` or `planr map show --json` only for deeper reads.
+`--work-type review` leases only durable ReviewGates, so a checker never accidentally takes maker work. Continue only when `work_packet.kind` is `review_gate`; read the gate, FeatureRun, responsible maker, attempts, findings, phase, budget, and source revision from its canonical `execution_state`. Add `--plan <plan-id>` when your dispatch names a plan so the lease stays inside that scope. Use `planr review show <review-gate-id> --json`, `planr review evidence <scope-item-id> --json`, or `planr trace item <scope-item-id> --json` only for deeper reads.
 
 Inspect the actual changed files and acceptance criteria, then independently judge whether the evidence proves them. When the repository owns a versioned verification policy, verify the logged receipt against its exact source revision, policy digest, changed-file digest, selected gates, command results, and artifact digests. Use the repository's receipt validator (for this repository, `npm run verification:verify -- --receipt <path> --base <base-revision> --head <source-revision>`), not a visual read of JSON.
 
-Replay only evidence that is cheap, missing, failing, or explicitly high-risk. An already-green expensive gate bound to the reviewed source is normally validated from its receipt rather than rerun. Receipt validation does not replace judgment: inspect the diff for security, correctness, scope, and acceptance-criteria gaps, and record a finding when the policy selection or receipt is inadequate. Then close the review exactly once:
+Replay only evidence that is cheap, missing, failing, or explicitly high-risk. An already-green expensive check bound to the reviewed source is normally validated from its receipt rather than rerun. Receipt validation does not replace judgment: inspect the diff for security, correctness, scope, and acceptance-criteria gaps, and record a finding when the policy selection or receipt is inadequate. Then close the ReviewGate exactly once:
 
 ```bash
-planr review close <review-id> --verdict complete --reviewer <your-id> --close-target
+planr review close <review-gate-id> --verdict complete --reviewer <your-id>
 ```
 
-`--close-target` also closes the reviewed item when the verdict is complete and a completion log exists — the worker does not need a separate close round-trip. Omit it when the worker should close explicitly. `--reviewer` records your checker identity on the log, artifact, and event so maker and checker stay distinguishable in the audit trail. A second close of the same review fails with `already_closed` — never retry a close that succeeded.
+`--reviewer` records the independent checker identity on the immutable attempt and event. An accepted risk checkpoint resumes the responsible maker's FeatureRun; an accepted final product gate completes the FeatureRun. A second close without a fresh leased gate fails — never retry a close that succeeded.
 
 or:
 
 ```bash
-planr review close <review-id> --verdict not-complete --reviewer <your-id> --findings "specific actionable finding"
+planr review close <review-gate-id> --verdict not-complete --reviewer <your-id> --findings "specific actionable finding"
 ```
 
 ## Findings Rules
@@ -43,13 +43,11 @@ planr review close <review-id> --verdict not-complete --reviewer <your-id> --fin
 - If evidence is insufficient, use `--verdict unclear` rather than complete.
 - Deployment remains gated by explicit approval and a bounded live oracle where applicable. A successful live smoke does not by itself require another broad build or a second full review; replay it only under the same cheap/missing/failing/explicitly-high-risk rule.
 
-## Single-Agent Mode
+## Independent Identity
 
-When no independent reviewer instance is available (single-agent host), do not pretend a second instance reviewed the work. Re-read the diff, logs, and evidence with fresh eyes, then close normally. The review mode is recorded automatically: `review close` compares your identity against the maker's lease and stamps `review_mode: single_agent | independent | unattributed` on the close response, review log, artifact, and event. No extra context note is needed — honesty is derived from recorded identity.
-
-Identity honesty rule: one agent instance keeps one `PLANR_WORKER_ID` for its whole session. Never export a second identity (e.g. `maker-x` and `checker-x`) inside the same instance to make a review look independent — that stamps `independent` on a review that was not, which is worse than an honest `single_agent`. `independent` is only real when a separate agent process (a subagent, another terminal, another client) picks the review under its own identity — and only when that identity is explicitly set: a review closed under the anonymous fallback identity stamps `single_agent` even if the strings happen to differ, so always pass `--reviewer <id>` (shell exports do not survive between tool calls).
+ReviewGate closure requires a reviewer identity distinct from the responsible maker and matching the active reviewer lease. Keep one `PLANR_WORKER_ID` per agent instance and always pass `--reviewer <id>` when shell exports do not survive between tool calls. Never manufacture independence by changing identities inside one agent instance.
 
 ## Completion Rule
 
-The target item may close only after required review items are closed. Use the map as the source of truth.
+The FeatureRun may complete only after its required ReviewGates are accepted. Use the FeatureRun and ReviewGate projections as the source of truth.
 Pending or denied approval is also a close blocker; treat an attempted close through that gate as a finding, not as completion.

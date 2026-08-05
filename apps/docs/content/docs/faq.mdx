@@ -41,19 +41,19 @@ Use context for reusable decisions, discoveries, constraints, blockers, risks, a
 
 ## Are review and approval the same?
 
-No. Review is an evidence-based graph gate. Approval is an explicit human decision gate. A technically clean review does not authorize a destructive or external action.
+No. Review is an evidence-based ReviewGate on a FeatureRun. Approval is an explicit human decision gate. A technically clean review does not authorize a destructive or external action.
 
 ## Must every item have a review?
 
-No. Use review where independent checking carries signal or the plan requires it. A plain evidence-backed `done` can close low-risk work. Existing review items must still settle before their targets can close.
+No. Use review where independent checking carries signal or the plan requires it. A plain evidence-backed `done` can settle low-risk work. Required ReviewGates must be accepted before the FeatureRun completes.
 
 ## What does independent review mean?
 
-Planr compares the reviewer's recorded worker identity with the target's maker identity and derives `review_mode`. Use different identities for maker and checker; a note claiming independence is not proof.
+Planr compares the leased reviewer's worker identity with the gate's responsible maker identity and rejects self-review. Use different identities for maker and checker; a note claiming independence is not proof.
 
 ## What happens when review finds a bug?
 
-A `not-complete` verdict with actionable findings creates fix and follow-up review work. The original target remains `in_review` until the chain settles, keeping downstream work blocked.
+A `not-complete` verdict records an immutable attempt and durable findings on the same ReviewGate. The responsible maker resolves named findings, then an independent checker re-leases that gate. No review or fix map items are created.
 
 ## Can I pause work without releasing it?
 

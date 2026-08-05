@@ -1,6 +1,6 @@
 ---
 title: Generated MCP Tool Schemas
-description: Complete Planr 1.10.0-alpha.2 tools/list inventory with every property, type, description, required field, enum/default declaration, and additionalProperties rule.
+description: Complete Planr 1.10.0-alpha.3 tools/list inventory with every property, type, description, required field, enum/default declaration, and additionalProperties rule.
 ---
 
 <Callout type="info" title="Generated runtime contract">
@@ -237,6 +237,26 @@ Validate a plan record and path
 ## `planr_plan_audit`
 
 Audit a plan's goal contract: clause-by-clause pass/fail with evidence
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "description": "Plan id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_plan_final_review`
+
+Create or show the one plan-scoped final product review after outcome work and material item reviews settle
 
 ```json
 {
@@ -622,11 +642,11 @@ Atomically pick the next ready item
       "type": "boolean"
     },
     "plan": {
-      "description": "Only lease items belonging to this plan (plan id), so plan-scoped goal runs stay inside their contract",
+      "description": "Only lease work belonging to this plan id; ReviewGate and verification leases require it",
       "type": "string"
     },
     "work_type": {
-      "description": "Only lease items of this work type (e.g. review for checkers, code for makers)",
+      "description": "Lease code outcomes, ReviewGates (`review`), or verification work",
       "type": "string"
     }
   },
@@ -1086,30 +1106,6 @@ Preview or apply explicit plan-scoped migration from legacy verification claims 
 }
 ```
 
-## `planr_evidence_rebind`
-
-Preview or apply an immutable versioned capability and obligation rebind
-
-```json
-{
-  "additionalProperties": false,
-  "properties": {
-    "apply": {
-      "description": "Apply the rebind; omit or false for preview",
-      "type": "boolean"
-    },
-    "input": {
-      "description": "planr.evidence.rebind.v1 payload with plan_id, manifest_id, obligations[], and preview_digest for apply",
-      "type": "object"
-    }
-  },
-  "required": [
-    "input"
-  ],
-  "type": "object"
-}
-```
-
 ## `planr_evidence_classifications`
 
 Show canonical Evidence gap reasons and legacy/operator aliases
@@ -1545,7 +1541,7 @@ Start a rescore eval run from an existing run
 
 ## `planr_eval_evidence_ref`
 
-Attach an eval run or comparison to an existing Planr log, review, or artifact without closing work
+Attach an eval run or comparison to an existing Planr log or artifact without closing work
 
 ```json
 {
@@ -1556,7 +1552,7 @@ Attach an eval run or comparison to an existing Planr log, review, or artifact w
       "type": "string"
     },
     "attachment_kind": {
-      "description": "log, review, or artifact",
+      "description": "log or artifact",
       "type": "string"
     },
     "item_id": {
@@ -1710,26 +1706,6 @@ Ingest hook-compatible review feedback
 }
 ```
 
-## `planr_review_artifact`
-
-Write a review artifact
-
-```json
-{
-  "additionalProperties": false,
-  "properties": {
-    "review_item_id": {
-      "description": "Review item id",
-      "type": "string"
-    }
-  },
-  "required": [
-    "review_item_id"
-  ],
-  "type": "object"
-}
-```
-
 ## `planr_review_evidence`
 
 Collect scoped Git and PR evidence for an item
@@ -1754,18 +1730,14 @@ Collect scoped Git and PR evidence for an item
 }
 ```
 
-## `planr_review_close`
+## `planr_review_gate_close`
 
-Close a review item with verdict
+Complete a leased durable ReviewGate attempt
 
 ```json
 {
   "additionalProperties": false,
   "properties": {
-    "close_target": {
-      "description": "With verdict complete: also close the reviewed target item (requires a completion log on the target)",
-      "type": "boolean"
-    },
     "findings": {
       "description": "Findings discovered during review",
       "items": {
@@ -1773,21 +1745,49 @@ Close a review item with verdict
       },
       "type": "array"
     },
-    "review_item_id": {
-      "description": "Review item id",
+    "review_gate_id": {
+      "description": "ReviewGate id",
       "type": "string"
     },
     "reviewer": {
-      "description": "Reviewer identity recorded on the review log, artifact, and event (defaults to the worker id)",
+      "description": "Independent reviewer identity (defaults to the worker id)",
       "type": "string"
     },
     "verdict": {
-      "description": "Verdict: complete, partial, failed, or unclear",
+      "description": "Verdict: complete/accepted or changes-requested",
       "type": "string"
     }
   },
   "required": [
-    "review_item_id"
+    "review_gate_id"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_review_findings_resolve`
+
+Resolve durable ReviewGate findings and return the same gate to pending re-review
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "finding_ids": {
+      "description": "Finding ids resolved by the responsible maker",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "review_gate_id": {
+      "description": "ReviewGate id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "review_gate_id",
+    "finding_ids"
   ],
   "type": "object"
 }
@@ -1795,15 +1795,56 @@ Close a review item with verdict
 
 ## `planr_close_item`
 
-Close an item after checks
+Settle an outcome through the canonical FeatureRun service
 
 ```json
 {
   "additionalProperties": false,
   "properties": {
+    "commands": {
+      "description": "Commands run",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "escalation_explanation": {
+      "description": "Required escalation explanation",
+      "type": "string"
+    },
+    "escalation_reason": {
+      "description": "Structured escalation reason",
+      "type": "string"
+    },
+    "escalation_reference": {
+      "description": "Required durable escalation reference",
+      "type": "string"
+    },
+    "files": {
+      "description": "Changed files",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "item_id": {
       "description": "Item id",
       "type": "string"
+    },
+    "profile": {
+      "description": "Executed route profile",
+      "type": "string"
+    },
+    "summary": {
+      "description": "Completion summary",
+      "type": "string"
+    },
+    "tests": {
+      "description": "Tests run",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
     }
   },
   "required": [

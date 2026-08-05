@@ -6,7 +6,7 @@ Generated: 2026-06-09
 
 This contract defines the Planr-owned V1.1 acceptance baseline. It turns the remaining product gaps into implementation-ready requirements without relying on external product names, copied command vocabulary, or hidden context.
 
-V1.1 is complete only when Planr can prove these capabilities from its own CLI, MCP, HTTP, local review workspace, docs, tests, and real consumer usage.
+V1.1 is complete only when Planr can prove these capabilities from its own CLI, MCP, HTTP, durable FeatureRun/ReviewGate state, docs, tests, and real consumer usage.
 
 ## Product Outcome
 
@@ -38,7 +38,7 @@ Acceptance:
 ### Automatic Pick Recall
 
 - REQ-V11-RECALL-001: `planr pick` and `planr_pick_item` must return a compact task-start package.
-- REQ-V11-RECALL-002: The package must include ranked relevant project contexts, upstream logs or handoffs, linked plan references, active blockers or unlocks, review/fix history, and deeper-read commands.
+- REQ-V11-RECALL-002: The package must include ranked relevant project contexts, upstream logs or handoffs, linked plan references, active blockers or unlocks, ReviewGate history, and deeper-read commands.
 - REQ-V11-RECALL-003: Recall ranking must search item title, description, linked plan metadata, contexts, logs, and review summaries.
 - REQ-V11-RECALL-004: Pick recall must be size-bounded and avoid source file content, prompt transcripts, secret-looking values, and large artifacts by default.
 - REQ-V11-RECALL-005: Possible file conflicts must be surfaced from recent logs, artifacts, and active picked/running work when enough path evidence exists.
@@ -64,19 +64,19 @@ Acceptance:
 - A failed retryable item returns to ready only after the documented delay.
 - A postcondition appears in review and close-preview output before the item closes.
 
-### Local Browser Review Workspace
+### Durable FeatureRun Review Gates
 
-- REQ-V11-REVIEW-UI-001: Planr must ship a local browser workspace reachable from the local HTTP server or an explicit CLI command.
-- REQ-V11-REVIEW-UI-002: The workspace must support plan/package review, plan revision diff, item review detail, inline annotations, and approve/request-changes feedback.
-- REQ-V11-REVIEW-UI-003: When Git evidence is available, the workspace must show scoped file changes or a clear explanation of missing diff context.
-- REQ-V11-REVIEW-UI-004: Feedback must write Planr review annotations, review artifacts, and map-native fix/follow-up review items through existing review rules.
-- REQ-V11-REVIEW-UI-005: The workspace must remain local-first and must not require a hosted account or network service.
+- REQ-V11-REVIEW-001: FeatureRun settlement must create or reuse durable ReviewGates according to materiality and structured escalation policy.
+- REQ-V11-REVIEW-002: ReviewGate attempts must record independent reviewer identity, verdict, findings, and immutable attempt history.
+- REQ-V11-REVIEW-003: When Git evidence is available, review evidence must show scoped file changes or a clear explanation of missing diff context.
+- REQ-V11-REVIEW-004: Findings must pause settlement, remain durable on the gate, and return the same gate to pending re-review only after explicit resolution.
+- REQ-V11-REVIEW-005: Final product review must use exactly one accepted independent plan-scoped ReviewGate and project consistently through CLI, MCP, HTTP, audit, status, package, and trace surfaces.
 
 Acceptance:
 
-- A reviewer can open a local URL, annotate a plan or item, request changes, and see the map create follow-up work.
-- A clean review can write an artifact and close the review item through Planr state.
-- Browser smoke tests prove the workspace renders and can exercise the annotation flow.
+- A reviewer can lease a ReviewGate, inspect scoped evidence, and record either acceptance or durable findings.
+- A maker can resolve named findings and the same gate becomes available for independent re-review.
+- An accepted final ReviewGate makes the canonical plan audit clause pass without creating review/fix map items.
 
 ### Scoped Git And PR Review
 
@@ -89,8 +89,8 @@ Acceptance:
 Acceptance:
 
 - A dirty worktree with unrelated files does not let an agent claim broad ownership.
-- Review artifacts show which files were considered and which were excluded.
-- File and line annotations survive export/import.
+- ReviewGate attempts show which evidence was considered and which files were excluded.
+- Durable findings and file/line annotations survive package projection.
 
 ### Distribution And Client Setup
 
@@ -109,10 +109,10 @@ Acceptance:
 
 ### Templates And Review Packages
 
-- REQ-V11-TEMPLATE-001: Export/import must support map items, links, plans, contexts, logs, review artifacts, and metadata.
+- REQ-V11-TEMPLATE-001: Export/import must support map items, links, plans, contexts, logs, durable ReviewGate projections, and metadata.
 - REQ-V11-TEMPLATE-002: Templates must include package requirements metadata, Planr version, creation timestamp, source project name, and optional tags.
 - REQ-V11-TEMPLATE-003: Import must preview what will be created or skipped before mutating existing projects.
-- REQ-V11-TEMPLATE-004: Review packages must preserve annotations, findings, artifacts, and file references.
+- REQ-V11-TEMPLATE-004: Review packages must preserve ReviewGate attempts, findings, annotations, and file references.
 - REQ-V11-TEMPLATE-005: Encrypted local bundle sharing may be implemented without hosted infrastructure; if not implemented in V1.1, docs must capture the accepted local-first format and explicit future scope.
 
 Acceptance:
@@ -149,7 +149,7 @@ Required repository checks:
 - `scripts/ci-local.sh`
 - MCP stdio contract smoke
 - HTTP/SSE smoke
-- local browser review workspace smoke
+- durable ReviewGate cross-surface smoke
 - forbidden-reference scrub over public repo paths
 
 Required consumer checks in `~/projects/planr-test`:

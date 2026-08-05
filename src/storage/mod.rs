@@ -1,5 +1,6 @@
 mod eval_schema;
 mod evidence_schema;
+mod execution_run_schema;
 mod rows;
 mod schema;
 mod stop_schema;

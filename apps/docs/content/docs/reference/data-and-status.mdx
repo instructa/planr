@@ -12,6 +12,8 @@ description: Public objects, IDs, vocabularies, transitions, links, logs, packag
 | Item | `i-…` | parent, title, description, status, work type, priority, worker, plan path |
 | Context | `ctx-…` | item, worker, kind, content, tags |
 | Log | `log-…` | item, run, kind, summary, files, commands, tests, findings |
+| FeatureRun | `fr-…` | plan, phase, active batch, role leases, settled outcomes, revision |
+| ReviewGate | `rg-…` | run, outcome/plan scope, kind, status, independent lease, attempts, findings |
 | Artifact | `art-…` | item, name, kind, path/content, MIME type, size, metadata |
 | Event | integer | project, item, worker, event type, payload, timestamp |
 
@@ -23,11 +25,11 @@ IDs are opaque. Store and pass returned IDs; do not derive them from titles.
 
 `closed`, `closed_partial`, and `cancelled` count as settled for aggregate progress. For `blocks` and `hands_to` readiness, only `closed` and `closed_partial` satisfy the upstream dependency; cancellation remains blocking.
 
-Direct completion is `ready/picked/running → closed`. Optional review is `picked/running → in_review → closed`. Invalid transitions fail rather than coercing state.
+Outcome completion is settled through the canonical FeatureRun service. Required review is represented by a durable ReviewGate; invalid transitions fail rather than coercing state.
 
 ## Work and relationship vocabularies
 
-Built-in work types are `generic`, `research`, `plan`, `code`, `review`, `fix`, `test`, `shell`, and `release`; custom strings are allowed for routing use cases.
+Built-in executable work types include `generic`, `research`, `plan`, `code`, `test`, `shell`, and `release`; custom strings are allowed for routing use cases. Review is leased through ReviewGate packets, not map items.
 
 Link kinds are `blocks`, `hands_to`, `reviews`, and `relates_to`. Source relationships are `scopes`, `implements`, `verifies`, `reviews`, and `references`. Plan stages are `product`, `build`, and `review`.
 
@@ -35,8 +37,8 @@ Context kinds include `discovery`, `decision`, `constraint`, `pattern`, `blocker
 
 ## SQLite schema ownership
 
-Schema version 1 stores `projects`, `plans`, `items`, `links`, `source_links`, `contexts`, `runs`, `logs`, `artifacts`, `events`, `meta`, and the `search_index` FTS table. The database is authoritative for runtime state; direct SQL writes are unsupported because they bypass invariants, readiness promotion, events, and evidence rules.
+Schema version 1 stores `projects`, `plans`, `items`, `links`, `source_links`, `contexts`, `runs`, `logs`, `artifacts`, `events`, `meta`, and the `search_index` FTS table. FeatureRun schema extensions own durable runs, batches, role leases, ReviewGates, attempts, and findings. The database is authoritative for runtime state; direct SQL writes are unsupported because they bypass invariants, readiness promotion, events, and evidence rules.
 
 ## Packages
 
-Top-level `export` produces JSON packages with schema requirements, graph state, contexts, optional logs/plans, review artifacts, and optional registry snapshot. `import` previews by default and requires `--confirm` to mutate. Low-level `map export`/`map import` are graph serialization surfaces; use top-level packages for reusable handoff.
+Top-level `export` produces JSON packages with schema requirements, graph state, contexts, optional logs/plans, canonical ReviewGate projections, and optional registry snapshot. `import` previews by default and requires `--confirm` to mutate. Low-level `map export`/`map import` are graph serialization surfaces; use top-level packages for reusable handoff.

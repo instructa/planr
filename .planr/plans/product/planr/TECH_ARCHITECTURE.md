@@ -35,15 +35,15 @@ Optional dashboard
 
 - `core`: map graph operations, state machine, item readiness, worker runtime state, approval gates, log, reviews, contexts, search.
 - `storage`: SQLite schema, schema upgrades, transactions, FTS indexes.
-- `planpack`: `.planr` project pack, plan parsing, Markdown frontmatter, review artifacts.
+- `planpack`: `.planr` project pack, plan parsing, and Markdown frontmatter.
 - `cli`: user commands and deterministic output.
 - `mcp`: tools, resources, prompts, capability negotiation.
 - `server`: optional local REST/SSE API.
 - `agents`: integration helpers for Codex, Claude Code, Cursor, Grok Build, Pi, and generic clients.
 - `git`: worktree, branch, diff, and changed-file log.
 - `recovery`: stale-pick detection, timeout handling, retry policy, and manual condition reporting.
-- `review_workspace`: local browser review HTML and workspace JSON projection.
-- `packages`: reusable JSON export/import packages with plan snapshots, logs, contexts, and review artifacts.
+- `execution_run`: FeatureRun lifecycle, outcome batching, role leases, typed escalation, durable ReviewGate attempts/findings, and final product review projection.
+- `packages`: reusable JSON export/import packages with plan snapshots, logs, contexts, and durable ReviewGate projections.
 
 ## Client Architecture
 
@@ -59,7 +59,7 @@ V1 is a local backend packaged into the CLI binary:
 - SQLite database at `.planr/planr.sqlite` by default.
 - WAL mode enabled for concurrent readers and serialized writers.
 - Local service optional for dashboards and long-running agent orchestration.
-- Local review workspace is served from the same localhost HTTP boundary as the REST/SSE API.
+- Canonical FeatureRun and ReviewGate projections are served from the localhost REST/SSE boundary.
 - No cloud backend in V1.
 
 ## Data Architecture
@@ -132,7 +132,7 @@ Planr does not call model providers by default. It guides external agents throug
 - Missing MCP client support: print manual CLI instructions.
 - Agent run interrupted: keep item picked/running with heartbeat timeout and release/re-pick command.
 - Recovery sweep interrupted: preview is non-mutating; apply mutates only listed recoverable work and records events.
-- Review fails: create fix item chain instead of closing the parent.
+- Changes-requested verdict: persist findings on the same ReviewGate and return it to re-review after explicit resolution.
 - Package import cancelled: preview leaves database and `.planr` files unchanged.
 
 ## Scalability Assumptions

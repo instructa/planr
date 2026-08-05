@@ -33,8 +33,6 @@ pub(crate) enum EvidenceCommand {
     Readiness(EvidenceCoverageArgs),
     /// Preview or apply explicit pre-Evidence plan migration into binding Evidence obligations.
     Migrate(EvidenceMigrationArgs),
-    /// Preview or apply an immutable versioned capability/obligation rebind.
-    Rebind(EvidenceMigrationArgs),
     /// Show canonical Evidence gap classifications and legacy/operator aliases.
     Classifications,
 }
@@ -72,7 +70,7 @@ pub(crate) enum EvidenceCapabilityCommand {
 
 #[derive(Args, Debug)]
 pub(crate) struct EvidenceRunArgs {
-    /// JSON file containing obligation_id, capability_instance_id, target, environment, execution_contract, and optional env.
+    /// Sealed readiness run-index JSON, or one configured run input for diagnostics.
     #[arg(long)]
     pub(crate) input: PathBuf,
 }

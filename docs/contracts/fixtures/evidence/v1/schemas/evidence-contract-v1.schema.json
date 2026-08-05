@@ -687,10 +687,7 @@
         "observations",
         "fixture_policy",
         "freshness_policy",
-        "assurance_policy",
-        "policy_digest",
-        "config_digest",
-        "created_at"
+        "assurance_policy"
       ],
       "additionalProperties": false,
       "properties": {
@@ -739,15 +736,6 @@
         "assurance_policy": {
           "$ref": "#/$defs/JsonObject"
         },
-        "policy_digest": {
-          "$ref": "#/$defs/Digest"
-        },
-        "config_digest": {
-          "$ref": "#/$defs/Digest"
-        },
-        "created_at": {
-          "$ref": "#/$defs/Timestamp"
-        },
         "supersedes": {
           "anyOf": [
             {
@@ -767,9 +755,7 @@
         "type",
         "subject",
         "expected",
-        "target",
-        "environment",
-        "runtime_target"
+        "target"
       ],
       "additionalProperties": false,
       "properties": {
@@ -788,12 +774,6 @@
         },
         "target": {
           "$ref": "#/$defs/TargetBinding"
-        },
-        "environment": {
-          "$ref": "#/$defs/EnvironmentBinding"
-        },
-        "runtime_target": {
-          "$ref": "#/$defs/RuntimeTarget"
         },
         "payload_schema": {
           "$ref": "#/$defs/JsonObject"

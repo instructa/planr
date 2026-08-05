@@ -1,0 +1,53 @@
+schema_version = 1
+id = "alpha2-policy"
+version = "1.10.0-alpha.2"
+
+[usage]
+max_active_agents = 3
+max_parallel_readers = 2
+max_parallel_writers = 1
+max_depth = 1
+max_attempts = 4
+max_wall_time_seconds = 600
+max_tool_calls = 100
+max_tokens = 10000
+max_credits_micros = 1000000
+review_reserve_percent = 20
+budget_exhaustion = "downgrade_noncritical"
+metering = "trusted"
+
+[transitions.retry]
+max_same_route_retries = 1
+
+[transitions.availability_fallback]
+max_fallbacks = 1
+require_same_capability_class = true
+
+[transitions.quality_escalation]
+max_escalations = 1
+require_verification_evidence = true
+
+[transitions.quota_downgrade]
+enabled = true
+max_downgrades = 1
+noncritical_only = true
+
+[transitions.safety_stop]
+enabled = true
+
+[materiality]
+changed_files_threshold = 10
+changed_lines_threshold = 500
+
+[execution]
+max_read_scope_entries = 4
+max_write_scope_entries = 2
+
+[execution.roles.worker]
+tools = ["cargo"]
+commands = [{ program = "cargo", args = ["test"] }]
+
+[execution.roles.worker.filesystem]
+read_roots = ["src", "tests"]
+write_roots = ["src", "tests"]
+allow_overwrite = true

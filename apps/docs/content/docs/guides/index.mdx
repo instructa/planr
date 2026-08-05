@@ -3,7 +3,7 @@ title: Guides
 description: Task-oriented paths for planning, coordination, review, recovery, and autonomous goals.
 ---
 
-Guides start from an outcome and end with an observable verification signal. They cover new products, existing-project work, autonomous goals, multi-agent coordination, review/fix loops, interruption recovery, package import/export, host hooks, and model routing.
+Guides start from an outcome and end with an observable verification signal. They cover new products, existing-project work, autonomous goals, typed FeatureRun packets, multi-agent coordination, ReviewGate finding repair, interruption recovery, package import/export, host hooks, and model routing.
 
 <Callout type="info" title="Guides and reference have different jobs">
   Guides explain how to achieve an outcome. Reference pages enumerate the exact current CLI, MCP, HTTP, configuration, and data contracts used along the way.
@@ -11,9 +11,10 @@ Guides start from an outcome and end with an observable verification signal. The
 
 <Cards>
   <Card title="Daily worker loop" href="/docs/guides/daily-worker-loop" description="Pick one item, record evidence, and settle it honestly." />
+  <Card title="FeatureRun work packets" href="/docs/guides/feature-run-work-packets" description="Copy the canonical normal, risk, verification, repair, budget-hold, and capability-hold flows." />
   <Card title="Parallel coordination" href="/docs/guides/parallel-coordination" description="Run multiple makers and checkers without lease collisions." />
   <Card title="Handoff and resume" href="/docs/guides/handoff-and-resume" description="Transfer durable work across agents, clients, or sessions." />
-  <Card title="Review and fix loops" href="/docs/guides/review-and-fix-loops" description="Turn findings into gated fix and follow-up review work." />
+  <Card title="Review and fix loops" href="/docs/guides/review-and-fix-loops" description="Turn findings into durable review attempts and gated fixes." />
   <Card title="Recover interrupted work" href="/docs/guides/recover-interrupted-work" description="Preview stale, timed-out, and retryable state before repair." />
   <Card title="Packages and reuse" href="/docs/guides/packages-and-reuse" description="Export, inspect, import, and protect portable graph packages." />
   <Card title="Common recipes" href="/docs/guides/recipes" description="Copy focused patterns for blockers, pauses, handoffs, and closure." />

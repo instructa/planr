@@ -97,17 +97,17 @@ Expose Planr through MCP tools, resources, and prompts first. Add client-specifi
 - TASK-BE-003
 - TASK-AI-002
 
-## ADR-004: Review/Fix Loop Is A Product Primitive
+## ADR-004: Durable ReviewGate Loop Is A Product Primitive
 
 Status: Accepted
 
 ### Context
 
-Agent work needs scoped review, logs, and honest status. Map graphs can encode this as child items and reviews.
+Agent work needs scoped review, logs, and honest status. FeatureRuns and ReviewGates encode this without workflow-only map rows.
 
 ### Decision
 
-Every material change should be modelable as a parent gate with implementation or test child work and linked review, fix, and follow-up review work.
+Every material outcome settles through a FeatureRun. Materiality or structured escalation creates one durable ReviewGate whose attempts, findings, resolution, and re-review remain attached to that gate.
 
 ### Alternatives Considered
 
@@ -117,7 +117,7 @@ Every material change should be modelable as a parent gate with implementation o
 ### Consequences
 
 - Better completion quality.
-- More graph nodes, but they encode real work.
+- Durable review history without inflating the executable map.
 
 ### Risks
 

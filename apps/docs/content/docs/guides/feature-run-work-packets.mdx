@@ -1,0 +1,146 @@
+---
+title: FeatureRun Work Packets
+description: Run normal outcomes, protected review, frozen-source verification, finding repair, budget holds, and capability holds through Planr's canonical packets.
+---
+
+Planr has one live execution workflow. Map items describe implementation outcomes; a FeatureRun owns batches, role leases, ReviewGates, attempts, findings, source freeze, and budget. Agents branch on `work_packet.kind` and optional `work_packet.mode`, then read phase, owner, budget, unmet gate, and next action from `work_packet.execution_state`.
+
+Review and repair live only on durable ReviewGates. Plain `planr done` settles an outcome; structured escalation is the only intentional interrupt. Historical rows from older databases may remain readable after upgrade, but no current command produces their shape.
+
+## 1. Normal compatible outcome
+
+Use one stable maker identity. A code pick returns `kind: "outcome"` and the outcome item in the same packet:
+
+```bash
+export PLANR_WORKER_ID="maker-feature-1"
+planr pick --plan <plan-id> --work-type code --json
+planr done <item-id> \
+  --summary "Implemented the compatible outcome; focused test passed." \
+  --files src/feature.rs --files tests/feature.rs \
+  --cmd "cargo test feature_flow -- --exact" \
+  --tests "feature_flow passed" \
+  --json
+```
+
+For an ordinary compatible change, the settlement's `work_packet.transition` is `continue_batch`, `review_gate` is `null`, and materiality decides that no interrupt is required. Reuse the same maker and settle one picked outcome at a time with `planr done --next`. At the internal three-outcome cap, the same command atomically rolls the ExecutionBatch and returns the next plan-scoped code packet. Stop only at an incompatible pick, a hold, a budget boundary, an empty pick, or a ReviewGate.
+
+## 2. Protected-risk interrupt
+
+Change size, missing verification, uncertainty, and environment failure are not protected-risk reasons. When implementation discovers an actual allowed protected risk, settle once with structured provenance:
+
+```bash
+export PLANR_WORKER_ID="maker-feature-1"
+planr done <item-id> \
+  --summary "Implemented the outcome; authorization boundary needs independent review." \
+  --files src/auth.rs --files tests/auth.rs \
+  --cmd "cargo test authorization_boundary -- --exact" \
+  --tests "authorization_boundary passed" \
+  --escalate protected-risk-discovered \
+  --escalation-ref "risk:authorization-boundary" \
+  --escalation-explanation "The change modifies who may approve a protected operation." \
+  --json
+```
+
+The result has `work_packet.transition: "review_gate"`. The maker stops; it does not release itself or lease review work. A distinct checker leases the durable gate and closes one immutable attempt:
+
+```bash
+export PLANR_WORKER_ID="checker-feature-1"
+planr pick --plan <plan-id> --work-type review --json
+planr review close <review-gate-id> \
+  --verdict complete \
+  --reviewer checker-feature-1 \
+  --json
+```
+
+An accepted risk gate resumes the same maker and batch. Replacement is a separate, provenance-bearing operation for an actually unavailable, context-lost, ownership-incompatible, or batch-capped maker; review alone never replaces one.
+
+## 3. Frozen-source verification
+
+After the stable implementation batch is settled, the coordinator calls readiness once to freeze the canonical source:
+
+```bash
+planr evidence readiness --scope plan --id <plan-id> --json
+```
+
+For a frozen FeatureRun, readiness returns the exact verification-pick repair. Dispatch a fresh verifier identity, and make the typed pick its first action. Under that same lease, rerun readiness and execute only the returned `readiness.run_index.repository_path`:
+
+```bash
+export PLANR_WORKER_ID="verifier-feature-1"
+planr pick --plan <plan-id> --work-type verification --json
+planr evidence readiness --scope plan --id <plan-id> --json
+planr evidence run --input <exact-readiness.run_index.repository_path>
+planr evidence coverage --scope plan --id <plan-id> --json
+planr evidence explain --scope plan --id <plan-id> --json
+```
+
+Continue only from `work_packet.kind: "verification"`. Its `source_freeze` and `verification_lease` bind the pass. Product source is read-only; the verifier may write Planr receipts, logs, and artifacts. `planr evidence run` checks the canonical `SOURCE_PATHS` digest inside the transaction. A source mismatch creates a failed non-covering attempt and zero trusted receipts. Do not call `planr done` from this packet: the implementation outcomes were already settled.
+
+## 4. Finding and repair on one ReviewGate
+
+A checker records actionable findings on the leased gate:
+
+```bash
+export PLANR_WORKER_ID="checker-feature-1"
+planr review close <review-gate-id> \
+  --verdict not-complete \
+  --reviewer checker-feature-1 \
+  --findings "Empty input bypasses authorization; add a regression test." \
+  --json
+```
+
+The responsible maker's next code pick returns `kind: "outcome", mode: "finding_repair"`. It has no map item to complete; the existing gate's `execution_state.findings` names the repair:
+
+```bash
+export PLANR_WORKER_ID="maker-feature-1"
+planr pick --plan <plan-id> --work-type code --json
+# repair only the returned finding ids
+planr log add --item <review-gate-scope-item-id> \
+  --summary "Fixed empty-input authorization and added the regression." \
+  --files src/auth.rs --files tests/auth.rs \
+  --cmd "cargo test authorization_empty_input -- --exact" \
+  --tests "authorization_empty_input passed" \
+  --json
+planr review findings <review-gate-id> --resolve <finding-id> --json
+```
+
+Resolving all named findings returns that same gate to pending. A distinct checker leases it again and records the next attempt. The repair creates neither a separate map item nor a replacement gate.
+
+## 5. Budget hold
+
+Admission can return `work_packet.kind: "hold"`, `classification: "budget"`. Its canonical execution state reports `phase: "held"`, budget status, unmet gate, and next action.
+
+```bash
+planr pick --plan <plan-id> --work-type code --json
+planr map status --json
+planr plan audit <plan-id> --json
+```
+
+Stop at the hold. Do not keep executing, reset ownership, manufacture a replacement maker, or reinterpret missing metering as spare budget. Record the exact packet and ask the operator to correct the committed usage policy or budget state. The current CLI intentionally provides no generic “force resume” that bypasses admission.
+
+## 6. Missing verification capability
+
+Readiness is the capability oracle:
+
+```bash
+planr evidence readiness --scope plan --id <plan-id> --json
+```
+
+When it returns `status: "blocked"`, inspect `gaps` and `next_action`. For example, no registered capability supporting the required observation schema and runtime target yields a verifier contract gap; a matching capability with no available instance yields a permission or probe-availability gap. For a plan-scoped active run, readiness moves the FeatureRun to a capability hold.
+
+Do not swap in an unregistered tool, weaken a browser observation to HTTP, open a protected-risk gate, or claim a manual check as binding Evidence. Repair the reported policy, schema registration, adapter digest, runtime registration, or permission, then rerun the same readiness command. A passing rerun resolves the capability hold and permits the typed verification pick.
+
+## Driver and Stop behavior
+
+The driver reads `planr plan audit <plan-id> --json` and dispatches exactly the packet named by current state. The installed Codex Stop hook also delegates to that audit; it owns no lifecycle policy and cannot translate a hold or ReviewGate into a legacy map item. A plan is complete only when audit holds with settled outcomes, required gates accepted, approvals clear, and canonical Evidence coverage satisfied.
+
+Preview host installation before writing it, then diagnose the same client:
+
+```bash
+planr install cursor --dry-run --json
+planr install cursor --json
+planr doctor --client cursor --json
+```
+
+Substitute `claude`, `grok`, or `pi` for their repository-native role/skill installs. Codex obtains skills from the plugin and installs the plan-aware Stop hook; it does not receive a duplicate project role tree. All installed worker and reviewer bodies are compiled from the same `plugins/planr` sources and consume the packet shapes above. Host routing profiles are advisory requests until effective run evidence confirms them; they never rename packet kinds or create an alternate workflow.
+
+Next: [Daily Worker Loop](/docs/guides/daily-worker-loop) and [Review and Fix Loops](/docs/guides/review-and-fix-loops).

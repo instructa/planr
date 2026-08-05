@@ -31,7 +31,6 @@ impl App {
                     ".planr/project",
                     ".planr/plans/product",
                     ".planr/plans/build",
-                    ".planr/reviews",
                 ];
                 for dir in dirs {
                     fs::create_dir_all(self.root.join(dir))?;
@@ -94,6 +93,22 @@ impl App {
                 self.emit(
                     json!({"projects": projects}),
                     format!("{} project(s)", projects.len()),
+                )
+            }
+            ProjectCommand::Relocate(args) => {
+                let relocation = if args.apply {
+                    self.apply_project_relocation(&args.project_id, &args.destination)?
+                } else {
+                    self.preview_project_relocation(&args.project_id, &args.destination)?
+                };
+                let mode = if args.apply { "apply" } else { "preview" };
+                self.emit(
+                    json!({"mode": mode, "relocation": relocation}),
+                    format!(
+                        "{mode} project relocation: {} plan path(s), {} item reference(s)",
+                        relocation.plans.len(),
+                        relocation.items.len()
+                    ),
                 )
             }
             ProjectCommand::Delete(args) => {
@@ -209,6 +224,18 @@ impl App {
                 let human = Self::plan_audit_human(&value);
                 self.emit(value, human)
             }
+            PlanCommand::FinalReview(args) => {
+                let value = self.ensure_plan_final_product_review_value(&args.id)?;
+                let review_id = value["execution_state"]["review_gate"]["id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string();
+                let human = format!(
+                    "{}\nfinal product review ready: {review_id}",
+                    Self::canonical_execution_state_human(&value["execution_state"])
+                );
+                self.emit(value, human)
+            }
             PlanCommand::Show(args) => {
                 let plan = self.get_plan(&args.id)?;
                 self.emit(
@@ -294,7 +321,12 @@ impl App {
                 let status = self.map_status_value()?;
                 // The human view carries the actual summary — `prime`
                 // points here, so a bare "calculated" is not an answer.
-                let mut human = format!(
+                let mut human = status["execution_states"]
+                    .as_array()
+                    .and_then(|states| states.last())
+                    .map(|state| format!("{}\n", Self::canonical_execution_state_human(state)))
+                    .unwrap_or_default();
+                human.push_str(&format!(
                     "map: {}/{} settled | {} ready, {} picked, {} in_review, {} blocked",
                     status["settled"],
                     status["total"],
@@ -302,7 +334,7 @@ impl App {
                     status["counts"]["picked"],
                     status["counts"]["in_review"],
                     status["counts"]["blocked"],
-                );
+                ));
                 let list =
                     |human: &mut String, label: &str, entries: &Value, item_key: Option<&str>| {
                         for entry in entries.as_array().into_iter().flatten().take(5) {
@@ -403,6 +435,7 @@ impl App {
                 self.emit(json!({"item": item, "logs": logs}), format_item(&item))
             }
             ItemCommand::Update(args) => {
+                self.get_item(&args.id)?;
                 let mut changed = serde_json::Map::new();
                 if let Some(title) = args.title {
                     self.conn.execute(
@@ -417,6 +450,7 @@ impl App {
                 }
                 if let Some(work_type) = args.work_type {
                     let work_type = crate::model::WorkType::from(work_type);
+                    crate::app::repository::item::validate_map_item_work_type(work_type.as_str())?;
                     self.conn.execute(
                         "UPDATE items SET work_type = ?1, updated_at = datetime('now') WHERE id = ?2",
                         params![work_type.as_str(), args.id],
@@ -537,7 +571,7 @@ impl App {
                         item.worker_id
                     );
                 }
-                self.conn.execute("UPDATE items SET status = 'ready', worker_id = NULL, pick_token = NULL, last_heartbeat_at = NULL, paused_at = NULL, updated_at = datetime('now') WHERE id = ?1 AND status IN ('picked','running','in_review')", params![args.item_id])?;
+                self.conn.execute("UPDATE items SET status = 'ready', worker_id = NULL, pick_token = NULL, last_heartbeat_at = NULL, paused_at = NULL, updated_at = datetime('now') WHERE id = ?1 AND status IN ('ready','picked','running','in_review')", params![args.item_id])?;
                 self.record_event(
                     "pick_released",
                     Some(&args.item_id),
@@ -615,15 +649,53 @@ impl App {
                     self.next_pick_value(None, work_type.as_deref(), plan.as_deref())?
                 };
                 let human = match pick["item"]["id"].as_str() {
-                    Some(id) => format!(
-                        "{} {} {}",
+                    Some(id) => {
+                        let action = format!(
+                            "{} {} {}",
+                            if peek {
+                                "peeked (not leased)"
+                            } else {
+                                "picked"
+                            },
+                            id,
+                            pick["item"]["title"].as_str().unwrap_or_default()
+                        );
+                        match pick["work_packet"].get("execution_state") {
+                            Some(state) if !state.is_null() => format!(
+                                "{}\n{}",
+                                Self::canonical_execution_state_human(state),
+                                action
+                            ),
+                            _ => action,
+                        }
+                    }
+                    None if pick["work_packet"]["kind"] == "review_gate" => format!(
+                        "{}\n{} review gate {}",
+                        Self::canonical_execution_state_human(
+                            &pick["work_packet"]["execution_state"],
+                        ),
                         if peek {
                             "peeked (not leased)"
                         } else {
                             "picked"
                         },
-                        id,
-                        pick["item"]["title"].as_str().unwrap_or_default()
+                        pick["work_packet"]["execution_state"]["review_gate"]["id"]
+                            .as_str()
+                            .unwrap_or_default()
+                    ),
+                    None if pick["work_packet"]["kind"] == "verification" => format!(
+                        "{}\n{} verification for run {}",
+                        Self::canonical_execution_state_human(
+                            &pick["work_packet"]["execution_state"],
+                        ),
+                        if peek {
+                            "peeked (not leased)"
+                        } else {
+                            "picked"
+                        },
+                        pick["work_packet"]["execution_state"]["feature_run"]["id"]
+                            .as_str()
+                            .unwrap_or_default()
                     ),
                     None => {
                         let mut human = format!(
@@ -719,7 +791,7 @@ impl App {
                 .ok_or_else(|| anyhow!("no picked item for this worker"))?
         };
         let ready_before = self.ready_item_ids()?;
-        let log_id = self.close_item_core(&item_id, &args.summary, true)?;
+        let value = self.close_item_value(&item_id, &args.summary)?;
         let extras = self.settlement_extras(&item_id, &ready_before, false)?;
         let next = if args.next {
             Some(self.next_pick_value(None, None, None)?)
@@ -737,17 +809,13 @@ impl App {
         human.push_str(&Self::progress_human(&progress));
         human.push_str(&Self::settlement_extras_human(&extras));
         self.emit(
-            json!({"closed": item_id, "item": self.get_item(&item_id)?, "log_id": log_id, "unlocked": extras["unlocked"], "post_condition": extras["post_condition"], "hint": extras["hint"], "proof": extras["proof"], "next": next, "remaining": progress}),
+            json!({"closed": item_id, "item": self.get_item(&item_id)?, "log_id": Value::Null, "unlocked": value["unlocked"], "post_condition": extras["post_condition"], "hint": extras["hint"], "proof": value["proof"], "materiality": value["materiality"], "next": next, "remaining": progress}),
             human,
         )
     }
 
     pub(crate) fn review(&self, command: ReviewCommand) -> Result<()> {
         match command {
-            ReviewCommand::Request(args) => {
-                let review = self.request_review_for(&args.item_id)?;
-                self.emit(json!({"review": review}), "review requested".to_string())
-            }
             ReviewCommand::Annotate(args) => {
                 let annotation = self.add_review_annotation(ReviewAnnotationInput {
                     item_id: &args.item_id,
@@ -777,16 +845,6 @@ impl App {
                 let result = self.ingest_review_feedback(&args.item_id, feedback, "cli")?;
                 self.emit(result, "review feedback ingested".to_string())
             }
-            ReviewCommand::Artifact(args) => {
-                let artifact = self.write_review_artifact(super::ReviewArtifactInput {
-                    out: args.out,
-                    ..super::ReviewArtifactInput::bare(&args.review_item_id)
-                })?;
-                self.emit(
-                    json!({"artifact": artifact}),
-                    "review artifact written".to_string(),
-                )
-            }
             ReviewCommand::Evidence(args) => {
                 let pr_context = args
                     .pr_url
@@ -802,50 +860,52 @@ impl App {
                 )
             }
             ReviewCommand::Close(args) => {
-                let ready_before = self.ready_item_ids()?;
-                let mut result = self.close_review_item(
-                    &args.review_item_id,
-                    args.verdict.as_str(),
-                    args.findings,
-                    "cli",
-                    args.reviewer.as_deref(),
-                    args.close_target,
-                )?;
-                let unlocked = self.unlocked_since(&ready_before)?;
-                let mut human = "review closed".to_string();
-                if let Some(mode) = result["review_mode"].as_str() {
-                    human.push_str(&format!(" ({mode})"));
-                    if mode == "unattributed" {
-                        human.push_str(
-                            " — the target has no recorded lease, so no maker identity could be compared; this happens when work was never picked or its lease was released",
-                        );
+                let verdict = match args.verdict {
+                    crate::cli::ReviewVerdict::Complete => {
+                        super::repository::execution_run::ReviewVerdict::Accepted
                     }
-                }
-                if let Some(target_id) = result["closed_target"]["id"].as_str() {
-                    human.push_str(&format!("; closed target {target_id}"));
-                }
-                let progress = self.progress_value()?;
-                human.push_str(&Self::progress_human(&progress));
-                human.push_str(&Self::unlocked_human(&unlocked));
-                result["unlocked"] = json!(unlocked);
-                result["remaining"] = progress;
-                self.emit(result, human)
+                    crate::cli::ReviewVerdict::NotComplete => {
+                        super::repository::execution_run::ReviewVerdict::ChangesRequested
+                    }
+                    crate::cli::ReviewVerdict::Unclear => {
+                        super::repository::execution_run::ReviewVerdict::Blocked
+                    }
+                };
+                let result = self.complete_review_gate_value(
+                    &args.review_gate_id,
+                    verdict,
+                    &args.findings,
+                    args.reviewer.as_deref(),
+                )?;
+                self.emit(result, "review gate completed".to_string())
+            }
+            ReviewCommand::Findings(args) => {
+                let result =
+                    self.resolve_review_gate_findings_value(&args.review_gate_id, &args.resolve)?;
+                self.emit(result, "review findings resolved".to_string())
             }
             ReviewCommand::List(args) => {
-                let status_filter = if args.open { Some("closed") } else { None };
-                let reviews = self.list_items_by_type("review", status_filter)?;
-                self.emit(
-                    json!({"reviews": reviews}),
-                    format!("{} review item(s)", reviews.len()),
-                )
+                let project = self.default_project()?;
+                let reviews =
+                    super::repository::execution_run::ExecutionRunRepository::new(&self.conn)
+                        .review_gates_for_project(&project.id, args.open)?;
+                let states = reviews
+                    .iter()
+                    .map(|gate| self.canonical_execution_state_value(&gate.run_id, Some(&gate.id)))
+                    .collect::<Result<Vec<_>>>()?;
+                let human = states
+                    .first()
+                    .map(Self::canonical_execution_state_human)
+                    .unwrap_or_else(|| "no review gates".to_string());
+                self.emit(json!({"execution_states": states}), human)
             }
             ReviewCommand::Show(args) => {
-                let item = self.get_item(&args.id)?;
-                let logs = self.list_logs(Some(&args.id))?;
-                self.emit(
-                    json!({"review": item, "logs": logs}),
-                    "review detail".to_string(),
-                )
+                let repository =
+                    super::repository::execution_run::ExecutionRunRepository::new(&self.conn);
+                let gate = repository.review_gate(&args.id)?;
+                let state = self.canonical_execution_state_value(&gate.run_id, Some(&gate.id))?;
+                let human = Self::canonical_execution_state_human(&state);
+                self.emit(json!({"execution_state": state}), human)
             }
         }
     }

@@ -20,15 +20,6 @@
         "kind": "local_service",
         "uri": "http://127.0.0.1:4173/health"
       },
-      "environment": {
-        "kind": "local",
-        "id": "dev-shell",
-        "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
-      },
-      "runtime_target": {
-        "kind": "process",
-        "id": "planr-doc-fixture"
-      },
       "payload_schema": {
         "schema_ref": "planr.api.http.response@v1"
       },
@@ -60,8 +51,5 @@
     "min_receipt_status": "trusted",
     "allow_user_attestation": false
   },
-  "policy_digest": "sha256:c1a2a26ece3ee7a3cf3166cd849664d723fe2fffda2dc0773b2c92dc8d1ae8c1",
-  "config_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-  "created_at": "2026-07-28T12:00:00Z",
   "supersedes": null
 }

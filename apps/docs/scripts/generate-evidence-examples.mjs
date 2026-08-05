@@ -12,7 +12,6 @@ import {
   obligation,
   processAdapterDigest,
   queueSpec,
-  scenarioRunInput,
   sha256,
   sha256Json,
   sha256JsonWithoutField,
@@ -107,7 +106,7 @@ function redactVolatileEvidence(value) {
       } else if (key === 'receipt_digests' && Array.isArray(entry)) {
         result[key] = entry.map(() => '<sha256>');
       } else if (
-        (key === 'digest' || key.endsWith('_digest')) &&
+        (key === 'digest' || key.endsWith('_digest') || key.endsWith('_key')) &&
         typeof entry === 'string' &&
         entry.startsWith('sha256:')
       ) {
@@ -137,7 +136,9 @@ function redactVolatileEvidence(value) {
     if (value.startsWith('capinst-')) return '<capability-instance-id>';
     if (value.startsWith('pln-')) return '<plan-id>';
     if (value.startsWith('p-')) return '<project-id>';
-    return value.replace(/http:\/\/127\.0\.0\.1:\d+/g, 'http://127.0.0.1:<port>');
+    return value
+      .replace(/http:\/\/127\.0\.0\.1:\d+/g, 'http://127.0.0.1:<port>')
+      .replace(/\.planr\/evidence\/runs\/[0-9a-f]{64}\.json/g, '.planr/evidence/runs/<sealed-digest>.json');
   }
   return value;
 }
@@ -189,6 +190,11 @@ async function runEvidence(workspace, id, input) {
   return run(workspace, ['evidence', 'run', '--input', file, '--json']);
 }
 
+function runReadinessIndex(workspace, readiness) {
+  const repositoryPath = readiness.stdout.object.run_index.repository_path;
+  return run(workspace, ['evidence', 'run', '--input', path.join(workspace, repositoryPath), '--json']);
+}
+
 function capabilityInstance(capabilities, manifestId) {
   const probe = capabilities.stdout.object.registry.probes.find((entry) => entry.manifest_id === manifestId);
   const instance = capabilities.stdout.object.instances.find((entry) => entry.id === probe?.instance_id);
@@ -199,7 +205,7 @@ function capabilityInstance(capabilities, manifestId) {
   return instance;
 }
 
-function browserCdpObligation({ planId, policyDigest, spec, environment, configDigest }) {
+function browserCdpObligation({ planId, spec }) {
   const requirements = [
     ['visible', 'com.example.browser.rendered_visibility', 'rendered page content is visible', { visible: true }],
     ['interaction', 'com.example.browser.user_interaction', 'user-equivalent click mutates rendered state', { clicked: true }],
@@ -221,8 +227,6 @@ function browserCdpObligation({ planId, policyDigest, spec, environment, configD
       subject,
       expected,
       target: spec.target,
-      environment,
-      runtime_target: spec.runtimeTarget,
       payload_schema: {
         schema_ref: spec.payloadSchemas.find((schema) => schema.type === type).schema_ref,
       },
@@ -230,9 +234,6 @@ function browserCdpObligation({ planId, policyDigest, spec, environment, configD
     fixture_policy: { fixtures_allowed: true, mocks_allowed: false, disclosure_required: true },
     freshness_policy: { invalidate_on: ['policy_change', 'adapter_schema_change'] },
     assurance_policy: {},
-    policy_digest: policyDigest,
-    config_digest: configDigest,
-    created_at: '2026-07-29T00:00:00Z',
   };
 }
 
@@ -454,37 +455,22 @@ try {
   workspaces.push(api);
   const apiDefinition = SCENARIOS['api-only'];
   const apiSpec = httpSpec(`http://127.0.0.1:${apiPort}/health`);
-  const apiPolicyDigest = await writeEvidencePolicy(api, [apiSpec], { policyId: apiDefinition.policyId });
+  await writeEvidencePolicy(api, [apiSpec], { policyId: apiDefinition.policyId });
   const apiPlanId = await createPlan(api, apiDefinition.planTitle);
   const apiPolicy = requireSuccess(run(api, ['evidence', 'policy', '--json']));
-  const apiCapabilities = requireSuccess(run(api, ['evidence', 'capability', 'list', '--json']));
-  const apiInstance = capabilityInstance(apiCapabilities, apiSpec.id);
   await addObligation(
     api,
     obligation({
       id: apiDefinition.obligationId,
       planId: apiPlanId,
-      policyDigest: apiPolicyDigest,
       spec: apiSpec,
       expected: apiDefinition.expected,
-      environment: apiInstance.capability.environment,
-      configDigest: apiDefinition.configDigest,
     }),
   );
   const apiReadiness = requireSuccess(
     run(api, ['evidence', 'readiness', '--scope', 'plan', '--id', apiPlanId, '--json']),
   );
-  const apiRun = requireSuccess(
-    await runEvidence(
-      api,
-      apiDefinition.obligationId,
-      scenarioRunInput({
-        obligationId: apiDefinition.obligationId,
-        capabilityInstanceId: apiInstance.id,
-        target: apiSpec.target,
-      }),
-    ),
-  );
+  const apiRun = requireSuccess(runReadinessIndex(api, apiReadiness));
   const apiCoverage = requireSuccess(
     run(api, ['evidence', 'coverage', '--scope', 'obligation', '--id', apiDefinition.obligationId, '--json']),
   );
@@ -517,36 +503,21 @@ try {
   workspaces.push(custom);
   const customDefinition = SCENARIOS['repository-custom-extension'];
   const customSpec = queueSpec();
-  const customPolicyDigest = await writeEvidencePolicy(custom, [customSpec], { policyId: customDefinition.policyId });
+  await writeEvidencePolicy(custom, [customSpec], { policyId: customDefinition.policyId });
   const customPlanId = await createPlan(custom, customDefinition.planTitle);
-  const customCapabilities = requireSuccess(run(custom, ['evidence', 'capability', 'list', '--json']));
-  const customInstance = capabilityInstance(customCapabilities, customSpec.id);
   await addObligation(
     custom,
     obligation({
       id: customDefinition.obligationId,
       planId: customPlanId,
-      policyDigest: customPolicyDigest,
       spec: customSpec,
       expected: customDefinition.expected,
-      environment: customInstance.capability.environment,
-      configDigest: customDefinition.configDigest,
     }),
   );
   const customReadiness = requireSuccess(
     run(custom, ['evidence', 'readiness', '--scope', 'plan', '--id', customPlanId, '--json']),
   );
-  const customRun = requireSuccess(
-    await runEvidence(
-      custom,
-      customDefinition.obligationId,
-      scenarioRunInput({
-        obligationId: customDefinition.obligationId,
-        capabilityInstanceId: customInstance.id,
-        target: customSpec.target,
-      }),
-    ),
-  );
+  const customRun = requireSuccess(runReadinessIndex(custom, customReadiness));
   const customCoverage = requireSuccess(
     run(custom, ['evidence', 'coverage', '--scope', 'obligation', '--id', customDefinition.obligationId, '--json']),
   );
@@ -593,11 +564,8 @@ try {
     obligation({
       id: 'pob-docs-full-http',
       planId: fullPlanId,
-      policyDigest: fullPolicyDigest,
       spec: fullHttp,
       expected: { status: 'ok' },
-      environment: fullHttpInstance.capability.environment,
-      configDigest: 'sha256:3030303030303030303030303030303030303030303030303030303030303030',
     }),
   );
   const beforeFull = run(fullStack, [
@@ -613,10 +581,7 @@ try {
     fullStack,
     browserCdpObligation({
       planId: fullPlanId,
-      policyDigest: fullPolicyDigest,
       spec: fullBrowser,
-      environment: fullBrowserInstance.capability.environment,
-      configDigest: 'sha256:3131313131313131313131313131313131313131313131313131313131313131',
     }),
   );
   const fullReadiness = requireSuccess(
@@ -676,11 +641,8 @@ try {
     obligation({
       id: 'pob-docs-forged',
       planId: forgedPlanId,
-      policyDigest: forgedPolicyDigest,
       spec: forgedSpec,
       expected: { status: 'ok' },
-      environment: forgedInstance.capability.environment,
-      configDigest: 'sha256:4040404040404040404040404040404040404040404040404040404040404040',
     }),
   );
   const forgedRun = await runEvidence(forged, 'pob-docs-forged', {
@@ -719,11 +681,8 @@ try {
     obligation({
       id: 'pob-docs-stale-policy',
       planId: stalePlanId,
-      policyDigest: stalePolicyDigest,
       spec: staleSpec,
       expected: { status: 'ok' },
-      environment: staleInstance.capability.environment,
-      configDigest: 'sha256:5050505050505050505050505050505050505050505050505050505050505050',
       invalidateOn: ['policy_change'],
     }),
   );
@@ -773,11 +732,8 @@ try {
     obligation({
       id: 'pob-docs-missing-capability',
       planId: missingPlanId,
-      policyDigest: missingPolicyDigest,
       spec: missingSpec,
       expected: { status: 'drained' },
-      environment: missingInstance.capability.environment,
-      configDigest: 'sha256:6060606060606060606060606060606060606060606060606060606060606060',
     }),
   );
   const missingRun = await runEvidence(missing, 'pob-docs-missing-capability', {
@@ -837,11 +793,8 @@ try {
     obligation({
       id: 'pob-docs-curl-http',
       planId: curlPlanId,
-      policyDigest: curlPolicyDigest,
       spec: curlHttp,
       expected: { status: 'ok' },
-      environment: curlHttpInstance.capability.environment,
-      configDigest: 'sha256:7070707070707070707070707070707070707070707070707070707070707070',
     }),
   );
   await addObligation(
@@ -849,11 +802,8 @@ try {
     obligation({
       id: 'pob-docs-browser-rendered',
       planId: curlPlanId,
-      policyDigest: curlPolicyDigest,
       spec: curlBrowserSpec,
       expected: { visible: true },
-      environment: curlBrowserInstance.capability.environment,
-      configDigest: 'sha256:7171717171717171717171717171717171717171717171717171717171717171',
     }),
   );
   const curlHttpRun = requireSuccess(

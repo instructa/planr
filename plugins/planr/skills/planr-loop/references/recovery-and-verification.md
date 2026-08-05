@@ -17,9 +17,11 @@ Verification:
 
 ```bash
 planr evidence readiness --scope criterion --id <criterion-id>
-planr evidence run --input <run-file>
+planr evidence run --input <exact-readiness.run_index.repository_path>
 planr evidence coverage --scope criterion --id <criterion-id>
 planr evidence explain --scope criterion --id <criterion-id>
 ```
+
+Execute only the exact `readiness.run_index.repository_path` returned by the immediately preceding leased readiness call. A repository-authored obligation, declarative index, guessed digest path, or remembered run filename is not executable Evidence input.
 
 Use a capability whose declared observations cover the criterion: browser automation for rendered web behavior, the built binary for CLI, real requests for API/backend, and simulator launch plus exercised flow for iOS. If tooling is unavailable, preserve the typed blocker, request approval when appropriate, and pause. Do not replace it with a weaker method that observes different facts.

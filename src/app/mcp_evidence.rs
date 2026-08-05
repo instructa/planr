@@ -35,11 +35,6 @@ impl App {
                 super::evidence::evidence_migration_request(&args)
                     .and_then(|(input, apply)| self.evidence_migration_value(input, apply)),
             )),
-            "planr_evidence_rebind" => Ok(mcp_evidence_json(
-                "evidence.rebind",
-                super::evidence::evidence_rebind_request(&args)
-                    .and_then(|(input, apply)| self.evidence_rebind_value(input, apply)),
-            )),
             "planr_evidence_classifications" => Ok(mcp_evidence_json(
                 "evidence.classifications",
                 Ok(super::evidence::evidence_classifications_value()),

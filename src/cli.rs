@@ -45,19 +45,20 @@ pub(crate) enum Command {
     Map(MapArgs),
     Item(ItemArgs),
     Link(LinkArgs),
+    Run(RunArgs),
     Pick(PickArgs),
     Approval(ApprovalArgs),
     Log(LogArgs),
     Close(CloseArgs),
     /// Log evidence and finish the step in one command: completion log,
-    /// then review request (--review) or close, optionally pick the next item.
+    /// then canonical settlement, optionally opening a structured ReviewGate.
     Done(DoneArgs),
     Review(ReviewArgs),
     /// Evaluate stored run evidence: suite check, run, show, compare, gate,
     /// invalidate, and rescore through the shared eval services.
     Eval(EvalArgs),
     /// Manage trusted Evidence policy, obligations, readiness, migrations,
-    /// versioned rebinds, capabilities, runs, receipts, coverage, and explanations.
+    /// capabilities, runs, receipts, coverage, and explanations.
     Evidence(EvidenceArgs),
     Context(ContextArgs),
     Note(NoteArgs),
@@ -361,8 +362,7 @@ pub(crate) struct LinkRemoveArgs {
 pub(crate) struct PickArgs {
     #[command(subcommand)]
     pub(crate) command: Option<PickCommand>,
-    /// Only lease items of this work type (e.g. `review` for checker
-    /// agents, `code` for makers).
+    /// Lease canonical `code`, `review`, or `verification` work.
     #[arg(long)]
     pub(crate) work_type: Option<String>,
     /// Only lease items belonging to this plan (plan id), so plan-scoped
@@ -373,6 +373,57 @@ pub(crate) struct PickArgs {
     /// leasing it — for drivers that dispatch; the worker takes the lease.
     #[arg(long)]
     pub(crate) peek: bool,
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct RunArgs {
+    #[command(subcommand)]
+    pub(crate) command: RunCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum RunCommand {
+    Batch(RunBatchArgs),
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct RunBatchArgs {
+    #[command(subcommand)]
+    pub(crate) command: RunBatchCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum RunBatchCommand {
+    Roll(RunBatchRollArgs),
+    Replace(RunBatchReplaceArgs),
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct RunBatchRollArgs {
+    #[arg(long)]
+    pub(crate) plan: String,
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct RunBatchReplaceArgs {
+    #[arg(long)]
+    pub(crate) plan: String,
+    #[arg(long)]
+    pub(crate) successor_maker: String,
+    #[arg(long, value_enum)]
+    pub(crate) reason: MakerReplacementReasonArg,
+    #[arg(long)]
+    pub(crate) reference: String,
+    #[arg(long)]
+    pub(crate) explanation: String,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub(crate) enum MakerReplacementReasonArg {
+    Unavailable,
+    ContextLost,
+    OwnershipIncompatible,
+    BatchCapReached,
 }
 
 #[derive(Subcommand, Debug)]
@@ -526,9 +577,20 @@ pub(crate) struct DoneArgs {
     pub(crate) cmd: Vec<String>,
     #[arg(long)]
     pub(crate) tests: Vec<String>,
-    /// Request a review instead of closing the item directly.
+    /// Open a checkpoint through one allowed structured escalation reason.
+    #[arg(
+        long,
+        value_enum,
+        requires = "escalation_ref",
+        requires = "escalation_explanation"
+    )]
+    pub(crate) escalate: Option<DoneEscalationReason>,
+    /// Stable user, policy, finding, or external-side-effect reference.
     #[arg(long)]
-    pub(crate) review: bool,
+    pub(crate) escalation_ref: Option<String>,
+    /// Why the referenced condition requires an interrupting checkpoint.
+    #[arg(long)]
+    pub(crate) escalation_explanation: Option<String>,
     /// Pick the next ready item after finishing this step.
     #[arg(long)]
     pub(crate) next: bool,
@@ -536,6 +598,15 @@ pub(crate) struct DoneArgs {
     pub(crate) profile: Option<String>,
     #[arg(long, value_name = "PATH")]
     pub(crate) route_audit: Option<PathBuf>,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub(crate) enum DoneEscalationReason {
+    UserRequested,
+    PolicyRequired,
+    ProtectedRiskDiscovered,
+    ExternalSideEffect,
+    DataIntegrityRisk,
 }
 
 #[derive(Args, Debug)]
@@ -581,19 +652,21 @@ pub(crate) struct ReviewArgs {
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum ReviewCommand {
-    Request(ReviewRequestArgs),
     Annotate(ReviewAnnotateArgs),
     Ingest(ReviewIngestArgs),
-    Artifact(ReviewArtifactArgs),
     Evidence(ReviewEvidenceArgs),
     Close(ReviewCloseArgs),
+    Findings(ReviewFindingsArgs),
     List(ReviewListArgs),
     Show(IdArg),
 }
 
 #[derive(Args, Debug)]
-pub(crate) struct ReviewRequestArgs {
-    pub(crate) item_id: String,
+pub(crate) struct ReviewFindingsArgs {
+    pub(crate) review_gate_id: String,
+    /// Finding id repaired by the responsible maker; repeat for all open findings.
+    #[arg(long = "resolve", required = true)]
+    pub(crate) resolve: Vec<String>,
 }
 
 #[derive(Args, Debug)]
@@ -621,13 +694,6 @@ pub(crate) struct ReviewIngestArgs {
 }
 
 #[derive(Args, Debug)]
-pub(crate) struct ReviewArtifactArgs {
-    pub(crate) review_item_id: String,
-    #[arg(long)]
-    pub(crate) out: Option<PathBuf>,
-}
-
-#[derive(Args, Debug)]
 pub(crate) struct ReviewEvidenceArgs {
     pub(crate) item_id: String,
     #[arg(long)]
@@ -636,19 +702,15 @@ pub(crate) struct ReviewEvidenceArgs {
 
 #[derive(Args, Debug)]
 pub(crate) struct ReviewCloseArgs {
-    pub(crate) review_item_id: String,
+    pub(crate) review_gate_id: String,
     #[arg(long, value_enum)]
     pub(crate) verdict: ReviewVerdict,
     #[arg(long)]
     pub(crate) findings: Vec<String>,
-    /// Reviewer identity recorded on the review log, artifact, and event.
+    /// Independent reviewer identity recorded on the durable attempt.
     /// Defaults to this process's worker id.
     #[arg(long)]
     pub(crate) reviewer: Option<String>,
-    /// On a complete verdict, also close the reviewed item when it already
-    /// has a completion log.
-    #[arg(long)]
-    pub(crate) close_target: bool,
 }
 
 #[derive(Args, Debug)]
@@ -920,14 +982,4 @@ pub(crate) enum ReviewVerdict {
     Complete,
     NotComplete,
     Unclear,
-}
-
-impl ReviewVerdict {
-    pub(crate) fn as_str(&self) -> &'static str {
-        match self {
-            ReviewVerdict::Complete => "complete",
-            ReviewVerdict::NotComplete => "not-complete",
-            ReviewVerdict::Unclear => "unclear",
-        }
-    }
 }

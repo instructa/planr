@@ -76,13 +76,7 @@ impl App {
     }
 
     pub(crate) fn close_item_value(&self, item_id: &str, source: &str) -> Result<Value> {
-        let ready_before = self.ready_item_ids()?;
-        self.close_item_core(item_id, source, false)?;
-        Ok(json!({
-            "closed": item_id,
-            "unlocked": self.unlocked_since(&ready_before)?,
-            "proof": self.proof_status_for_item(item_id)?,
-        }))
+        self.close_item_with_materiality_value(item_id, source)
     }
 
     pub(crate) fn add_context_value(

@@ -32,11 +32,6 @@ impl App {
                 super::evidence::evidence_migration_request(body_json)
                     .and_then(|(input, apply)| self.evidence_migration_value(input, apply)),
             ),
-            ("POST", "/v1/evidence/rebind") => http_evidence_json(
-                "evidence.rebind",
-                super::evidence::evidence_rebind_request(body_json)
-                    .and_then(|(input, apply)| self.evidence_rebind_value(input, apply)),
-            ),
             ("GET", "/v1/evidence/classifications") => http_evidence_json(
                 "evidence.classifications",
                 Ok(super::evidence::evidence_classifications_value()),
@@ -140,6 +135,16 @@ impl App {
                         .and_then(Value::as_str)
                         .ok_or_else(|| anyhow!("missing id"))
                         .and_then(|id| self.evidence_explain_value(scope, id))
+                }),
+            ),
+            ("POST", "/v1/evidence/readiness") => http_evidence_json(
+                "evidence.readiness",
+                http_evidence_scope(body_json).and_then(|scope| {
+                    body_json
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| anyhow!("missing id"))
+                        .and_then(|id| self.evidence_readiness_value(scope, id))
                 }),
             ),
             _ => Err(anyhow!("route not found: {method} {path}")),

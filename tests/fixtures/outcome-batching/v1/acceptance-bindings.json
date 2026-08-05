@@ -1,0 +1,28 @@
+{
+  "schema_version": "planr.outcome_batching.acceptance_bindings.v1",
+  "plan_id": "pln-f2b2cdbb",
+  "item_id": "i-add-focused-deterministic-covera-bc0f",
+  "source": ".planr/plans/build/outcome-batched-execution-and-materiality-gated-assurance-hard-cut-hard-cut-the-default-loop-to-outcome-batched-execution-materiality-gated-item-assurance-stable-review-attempts-one-final-product-review-and-matched-efficiency-verification.plan.md",
+  "acceptance_criteria": [
+    "AC-001",
+    "AC-002",
+    "AC-003",
+    "AC-004",
+    "AC-005",
+    "AC-006",
+    "AC-007",
+    "AC-008",
+    "AC-009",
+    "AC-010",
+    "AC-011",
+    "AC-012",
+    "AC-013",
+    "AC-014"
+  ],
+  "binding_obligation_prefix": "pob-outcome-batching-",
+  "supersedes_binding_suffix": "b98b7446a14d",
+  "gap_supersedes_binding_suffixes": {
+    "AC-014": "b98b7446a14d"
+  },
+  "local_artifact_root": ".planr/artifacts/outcome-batching/v1"
+}

@@ -41,7 +41,7 @@ All commands run through the root workspace scripts; no global Fumadocs or Next.
 
 `docs:verify-onboarding` first builds `target/debug/planr`, asserts that its version exactly matches both the root `package.json` and `Cargo.toml`, and replays the documented lifecycle in a fresh temporary project. It never falls back to a global `planr` on `PATH`. To test another explicit build of this same repository, run `PLANR_BIN=/absolute/path/to/planr pnpm --filter @planr/docs verify:onboarding`; the version parity assertion still applies.
 
-`docs:verify-concepts` builds the same repository binary, checks the source-level readiness predicates, and replays focused graph fixtures. It asserts that both `blocks` and `hands_to` gate readiness, only `closed`/`closed_partial` upstream items unlock them, cancellation stays blocking, plain `done` closes directly, and `done --review` enters the review branch.
+`docs:verify-concepts` builds the same repository binary, checks the source-level readiness predicates, and replays focused graph fixtures. It asserts that both `blocks` and `hands_to` gate readiness, only `closed`/`closed_partial` upstream items unlock them, cancellation stays blocking, and canonical `done` settlement never manufactures review map items.
 
 `docs:reference:generate` recursively captures compiled CLI help into the generated reference page. `docs:verify-reference` checks that file byte-for-byte, queries live MCP discovery, and verifies HTTP routes, environment variables, storage tables, model/error vocabularies, platforms, clients, and transports remain covered by the authored reference pages.
 

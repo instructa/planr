@@ -69,11 +69,9 @@ for (const token of [
   '.planr/evidence/schemas/com.example.http.status.schema.json',
   '.planr/evidence/adapters/verifier-http-curl-v1.manifest.json',
   'pob-docs-api-http.obligation.json',
-  'pob-docs-api-http.run.json',
   '.planr/evidence/schemas/com.example.queue.depth.v2.schema.json',
   '.planr/evidence/adapters/verifier-queue-depth-v2.manifest.json',
   'pob-docs-queue-depth.obligation.json',
-  'pob-docs-queue-depth.run.json',
 ]) {
   assert.ok(scenarioPage.includes(token), `scenario docs must include reproducible reference ${token}`);
   assert.ok(scenarioBuilder.includes(token), `shared scenario builder must own documented file ${token}`);
@@ -86,9 +84,18 @@ assert.ok(
     JSON.stringify(fullStackCase.output).includes('obs-pob-browser-cdp-visible'),
   'full-stack fixture must include browser CDP obligation output',
 );
-assert.ok(scenarioPage.includes('pob-browser-cdp.run.json'), 'scenario docs must include browser CDP run input');
+assert.ok(
+  scenarioPage.includes('<exact-readiness.run_index.repository_path>'),
+  'scenario docs must execute only the exact repository_path returned by leased readiness',
+);
 
-for (const staleToken of ['$EDITOR', 'pob-docs-full-browser.run.json']) {
+for (const staleToken of [
+  '$EDITOR',
+  'pob-docs-full-browser.run.json',
+  '.planr/evidence/runs/<sealed-digest>.json',
+  'run-feature.json',
+  'readiness-run-index-path',
+]) {
   assert.ok(!scenarioPage.includes(staleToken), `scenario docs must not include stale placeholder ${staleToken}`);
 }
 
@@ -109,7 +116,7 @@ for (const source of [scenarioHelper, exampleGenerator]) {
   }
 }
 
-for (const exported of ['SCENARIOS', 'httpSpec', 'queueSpec', 'writeEvidencePolicy', 'obligation', 'scenarioRunInput']) {
+for (const exported of ['SCENARIOS', 'httpSpec', 'queueSpec', 'writeEvidencePolicy', 'obligation']) {
   assert.ok(scenarioBuilder.includes(`export `) && scenarioBuilder.includes(exported), `shared builder must export ${exported}`);
 }
 

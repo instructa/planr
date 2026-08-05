@@ -15,7 +15,7 @@ planr evidence obligation list --plan <plan-id> --json
 planr evidence obligation show <obligation-id> --json
 planr evidence capability list --json
 planr evidence capability show <capability-instance-id> --json
-planr evidence run --input run.json --json
+planr evidence run --input <exact-readiness.run_index.repository_path> --json
 planr evidence import --input import.json --artifact-root . --json
 planr evidence host-capture import --input host-import.json --json
 planr evidence host-capture run --input host-run.json --json
@@ -29,8 +29,6 @@ planr evidence explain --scope plan --id <plan-id> --json
 planr evidence readiness --scope plan --id <plan-id> --json
 planr evidence migrate --input migration.json --json
 planr evidence migrate --input migration.json --apply --json
-planr evidence rebind --input rebind.json --json
-planr evidence rebind --input rebind.json --apply --json
 planr evidence classifications --json
 ```
 
@@ -45,7 +43,6 @@ The MCP tools call the same application services:
 - `planr_evidence_obligation_list`
 - `planr_evidence_obligation_show`
 - `planr_evidence_migrate`
-- `planr_evidence_rebind`
 - `planr_evidence_classifications`
 - `planr_evidence_capability_list`
 - `planr_evidence_capability_show`
@@ -71,6 +68,7 @@ Start `planr serve --port 7526`; the server binds `127.0.0.1`.
 | POST | `/v1/evidence/obligations` |
 | GET | `/v1/evidence/obligations?plan=<plan-id>` |
 | GET | `/v1/evidence/obligations/<obligation-id>` |
+| POST | `/v1/evidence/readiness` |
 | GET | `/v1/evidence/capabilities` |
 | GET | `/v1/evidence/capabilities/<capability-instance-id>` |
 | POST | `/v1/evidence/run` |
@@ -82,7 +80,6 @@ Start `planr serve --port 7526`; the server binds `127.0.0.1`.
 | POST | `/v1/evidence/coverage` |
 | POST | `/v1/evidence/explain` |
 | POST | `/v1/evidence/migrate` |
-| POST | `/v1/evidence/rebind` |
 | GET | `/v1/evidence/classifications` |
 
 HTTP errors use the same Evidence envelope and map `bad_request` to 400, `not_found` to 404, `conflict` to 409, and `internal_error` to 500.
@@ -122,32 +119,14 @@ planr evidence migrate --input migration.json --apply --json
 
 Preview is the default and does not write obligations. Apply is idempotent: duplicate IDs, lineage collisions, cross-project containment, and changed immutable fields are reported instead of silently rewriting history. Migration does not rewrite plans, logs, reviews, artifacts, or legacy claims.
 
-## Readiness And Versioned Rebind
+## Readiness
 
-Run readiness before a binding goal starts. It checks that every active observation has a registered JSON Schema, a capability matching its observation type, payload schema, and runtime target, a current repository adapter digest, and an available runtime instance without executing the product oracle:
+Run readiness after a stable implementation batch has settled, before binding source-sensitive receipts. It checks every active semantic observation, freezes exact runtime inputs, writes one digest-sealed executable run file, and returns that file only as `readiness.run_index.repository_path` without executing the product oracle:
 
 ```bash
 planr evidence readiness --scope plan --id <plan-id> --json
+planr evidence run --input <exact-readiness.run_index.repository_path> --json
 ```
-
-If a repository fixes an adapter contract after obligations were bound, create new obligation IDs that `supersede` the active IDs. Preview computes the immutable capability/obligation transition and returns `preview.preview_digest`. Copy that digest into the input before apply:
-
-```json
-{
-  "schema_version": "planr.evidence.rebind.v1",
-  "plan_id": "pln-example",
-  "manifest_id": "verifier-project-v2",
-  "obligations": [{ "id": "pob-new", "supersedes": "pob-old", "...": "full ProofObligation" }],
-  "preview_digest": "sha256:..."
-}
-```
-
-```bash
-planr evidence rebind --input rebind.json --json
-planr evidence rebind --input rebind.json --apply --json
-```
-
-Apply is one transaction. It refuses criterion, target, fixture, freshness, assurance, or expected-observation drift. Those are product-scope changes and require plan/user authorization, not a rebind.
 
 Source freshness hashes product files plus repository-owned plans, policies, schemas, and adapters. Mutable Planr runtime outputs such as `planr.sqlite` and generated Evidence run, attempt, receipt, and coverage directories are excluded so recording a receipt cannot invalidate itself. Changing a policy, schema, adapter, or product file still changes the source binding.
 
@@ -155,13 +134,49 @@ Source freshness hashes product files plus repository-owned plans, policies, sch
 
 The executable examples live in [`apps/docs/scripts/generate-evidence-examples.mjs`](https://github.com/instructa/planr/blob/main/apps/docs/scripts/generate-evidence-examples.mjs) with the reusable policy/manifest builder in [`evidence-fixture-builder.mjs`](https://github.com/instructa/planr/blob/main/apps/docs/scripts/evidence-fixture-builder.mjs). They create fresh repositories and run the exact candidate binary.
 
+### Materiality-gated outcomes
+
+Materiality is configured in `.planr/policy.toml`; callers can escalate review but cannot weaken the computed requirement:
+
+```toml
+[materiality]
+changed_files_threshold = 3
+changed_lines_threshold = 120
+protected_paths = ["src/app/**", "docs/contracts/**", ".planr/policy.toml"]
+```
+
+Dogfood and benchmark reruns must choose a committed repository policy profile before maker settlement. A missing `.planr/policy.toml` is safe but intentionally conservative: settlement fails closed to review with `policy_unavailable:missing`, which is useful for safety but not a valid efficiency baseline. For a normal Planr project, start from the project's provider-neutral `.planr/policy.toml`, tune thresholds and `protected_paths` for the repository, commit it with the plan, and then run maker batches with plain `planr done`; materiality decides which outcomes need review.
+
+```bash
+planr done <docs-item> --summary "Fixed copy." \
+  --files docs/guide.md --cmd "node scripts/check-docs.mjs" --json
+planr done <api-item> --summary "Changed public API." \
+  --files src/app/http.rs --cmd "cargo test api_contract -- --exact" --json
+```
+
+The first command can close with `materiality.decision.review: "none"` when the actual change facts are non-material. The second command returns a review gate when protected materiality triggers apply.
+
+### Selective replay and final review
+
+Exact-source expensive receipts are validated before replay. Reviewers selectively replay only cheap, missing, failing, or explicitly high-risk evidence:
+
+```bash
+planr evidence readiness --scope plan --id <plan-id> --json
+planr evidence coverage --scope criterion --id AC-008 --json
+planr evidence explain --scope criterion --id AC-008 --json
+planr plan final-review <plan-id> --json
+planr plan audit <plan-id> --json
+```
+
+Use `evidence explain` to name stale source, target, policy, adapter, or configuration bindings. A fix reruns affected evidence after the source-sensitive batch is stable; newly introduced material review risk can justify exact evidence earlier, but the log should say why.
+
 ### Command or backend observation
 
 The queue-worker example registers `com.example.queue.depth.v2`, executes a repository-owned command, validates stdout against its registered payload schema, then evaluates coverage:
 
 ```bash
 planr evidence readiness --scope criterion --id crit-pob-docs-queue-depth
-planr evidence run --input pob-docs-queue-depth.run.json
+planr evidence run --input <exact-readiness.run_index.repository_path>
 planr evidence coverage --scope criterion --id crit-pob-docs-queue-depth
 planr evidence explain --scope criterion --id crit-pob-docs-queue-depth
 ```

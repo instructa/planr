@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS proof_obligations(
   created_at TEXT NOT NULL,
   retry_aggregation TEXT NOT NULL DEFAULT 'latest_applicable_pass'
     CHECK(retry_aggregation IN ('latest_applicable_pass','all_applicable_pass')),
+  obligation_shape TEXT NOT NULL DEFAULT 'semantic_v1'
+    CHECK(obligation_shape IN ('semantic_v1','legacy_runtime_bound')),
   FOREIGN KEY(project_id) REFERENCES projects(id),
   FOREIGN KEY(item_id) REFERENCES items(id),
   FOREIGN KEY(supersedes_obligation_id) REFERENCES proof_obligations(id)
@@ -131,6 +133,21 @@ CREATE TABLE IF NOT EXISTS evidence_receipts(
   FOREIGN KEY(supersedes_receipt_id) REFERENCES evidence_receipts(id),
   UNIQUE(attempt_id, receipt_digest)
 );
+CREATE TABLE IF NOT EXISTS evidence_hermetic_check_cache(
+  reuse_key TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  obligation_id TEXT NOT NULL,
+  attempt_id TEXT NOT NULL,
+  receipt_id TEXT NOT NULL,
+  execution_contract_digest TEXT NOT NULL,
+  source_tree_digest TEXT NOT NULL,
+  toolchain_lock_digest TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(project_id) REFERENCES projects(id),
+  FOREIGN KEY(obligation_id) REFERENCES proof_obligations(id),
+  FOREIGN KEY(attempt_id) REFERENCES evidence_attempts(id),
+  FOREIGN KEY(receipt_id) REFERENCES evidence_receipts(id)
+);
 CREATE TABLE IF NOT EXISTS evidence_validated_imports(
   project_id TEXT NOT NULL,
   id TEXT NOT NULL,
@@ -220,6 +237,7 @@ CREATE INDEX IF NOT EXISTS proof_obligations_policy_idx ON proof_obligations(pro
 CREATE INDEX IF NOT EXISTS verification_capability_instances_manifest_idx ON verification_capability_instances(manifest_id, manifest_version, availability_status);
 CREATE UNIQUE INDEX IF NOT EXISTS evidence_attempts_project_obligation_identity_idx ON evidence_attempts(id, project_id, obligation_id);
 CREATE INDEX IF NOT EXISTS evidence_attempts_obligation_idx ON evidence_attempts(obligation_id, created_at);
+CREATE INDEX IF NOT EXISTS evidence_hermetic_check_cache_lookup_idx ON evidence_hermetic_check_cache(project_id, obligation_id, created_at);
 CREATE INDEX IF NOT EXISTS evidence_attempt_artifacts_attempt_idx ON evidence_attempt_artifacts(attempt_id);
 CREATE INDEX IF NOT EXISTS evidence_receipts_obligation_idx ON evidence_receipts(obligation_id, receipt_status, created_at);
 CREATE INDEX IF NOT EXISTS evidence_observation_results_type_idx ON evidence_observation_results(observation_type, result_status);
@@ -560,6 +578,16 @@ WHEN planr_evidence_receipt_binding_is_valid(NEW.trusted_binding_json, NEW.recei
 BEGIN
   SELECT RAISE(ABORT, 'evidence_receipts trusted binding must exactly match receipt');
 END;
+CREATE TRIGGER IF NOT EXISTS evidence_hermetic_check_cache_no_update
+BEFORE UPDATE ON evidence_hermetic_check_cache
+BEGIN
+  SELECT RAISE(ABORT, 'evidence_hermetic_check_cache is immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS evidence_hermetic_check_cache_no_delete
+BEFORE DELETE ON evidence_hermetic_check_cache
+BEGIN
+  SELECT RAISE(ABORT, 'evidence_hermetic_check_cache is immutable');
+END;
 CREATE TRIGGER IF NOT EXISTS evidence_observation_results_no_update
 BEFORE UPDATE ON evidence_observation_results
 BEGIN
@@ -784,6 +812,7 @@ END;
         "retry_aggregation",
         "TEXT NOT NULL DEFAULT 'latest_applicable_pass' CHECK(retry_aggregation IN ('latest_applicable_pass','all_applicable_pass'))",
     )?;
+    ensure_obligation_shape_column(conn)?;
     Ok(())
 }
 
@@ -1724,6 +1753,28 @@ fn ensure_column(conn: &Connection, table: &str, name: &str, definition: &str) -
     Ok(())
 }
 
+fn ensure_obligation_shape_column(conn: &Connection) -> Result<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(proof_obligations)")?;
+    let columns = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    for column in columns {
+        if column? == "obligation_shape" {
+            return Ok(());
+        }
+    }
+    conn.execute_batch(
+        "DROP TRIGGER IF EXISTS proof_obligations_no_update;
+         ALTER TABLE proof_obligations ADD COLUMN obligation_shape TEXT NOT NULL DEFAULT 'semantic_v1'
+           CHECK(obligation_shape IN ('semantic_v1','legacy_runtime_bound'));
+         UPDATE proof_obligations SET obligation_shape = 'legacy_runtime_bound';
+         CREATE TRIGGER proof_obligations_no_update
+         BEFORE UPDATE ON proof_obligations
+         BEGIN
+           SELECT RAISE(ABORT, 'proof_obligations are immutable');
+         END;",
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::canonical_json::sha256_json_digest_without_top_level_field;
@@ -2161,7 +2212,7 @@ END;
             "capability": receipt["capability"],
             "config_digest": receipt["config_digest"],
             "policy_digest": DIGEST,
-            "policy_source": "proof_obligation"
+            "policy_source": "repository"
         });
         (receipt.to_string(), binding.to_string())
     }

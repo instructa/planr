@@ -23,7 +23,7 @@ pub(crate) enum EvalCommand {
     Invalidate(EvalInvalidateArgs),
     /// Start a rescore run from an existing run.
     Rescore(EvalRescoreArgs),
-    /// Attach an eval run/comparison to an existing Planr log, review, or artifact.
+    /// Attach an eval run/comparison to an existing Planr log or artifact.
     EvidenceRef(EvalEvidenceRefArgs),
 }
 
@@ -122,6 +122,5 @@ pub(crate) enum EvalEvidenceTargetKind {
 #[derive(ValueEnum, Clone, Debug)]
 pub(crate) enum EvalEvidenceAttachmentKind {
     Log,
-    Review,
     Artifact,
 }

@@ -29,20 +29,21 @@ function run(args, input) {
 
 const HTTP_ROUTE_MANIFEST = [
   ['GET exact:/v1/events/stream', '/v1/events/stream'],
-  ['GET exact:/review', '/review'], ['GET exact:/review/', '/review'],
-  ['GET exact:/v1/review-workspace', '/v1/review-workspace'],
   ['GET exact:/v1/projects', '/v1/projects'], ['POST exact:/v1/projects', '/v1/projects'],
   ['GET ends_with:/map', '/v1/projects/{project_id}/map'],
   ['GET ends_with:/map/status', '/v1/projects/{project_id}/map/status'],
   ['GET ends_with:/map/lookahead', '/v1/projects/{project_id}/map/lookahead'],
+  ['GET starts_with:/v1/plans/&ends_with:/audit', '/v1/plans/{id}/audit'],
+  ['GET starts_with:/v1/plans/&ends_with:/final-product-review', '/v1/plans/{id}/final-product-review'],
+  ['POST starts_with:/v1/plans/&ends_with:/final-product-review', '/v1/plans/{id}/final-product-review'],
   ['GET ends_with:/items', '/v1/projects/{project_id}/items'], ['POST ends_with:/items', '/v1/projects/{project_id}/items'],
   ['GET ends_with:/unlocks', '/v1/items/{id}/unlocks'], ['GET ends_with:/preview-close', '/v1/items/{id}/preview-close'],
   ['POST exact:/v1/recover/sweep', '/v1/recover/sweep'], ['POST exact:/v1/policy/admit', '/v1/policy/admit'],
   ['GET exact:/v1/evidence/policy', '/v1/evidence/policy'],
   ['GET exact:/v1/evidence/obligations', '/v1/evidence/obligations'],
   ['POST exact:/v1/evidence/obligations', '/v1/evidence/obligations'],
+  ['POST exact:/v1/evidence/readiness', '/v1/evidence/readiness'],
   ['POST exact:/v1/evidence/migrate', '/v1/evidence/migrate'],
-  ['POST exact:/v1/evidence/rebind', '/v1/evidence/rebind'],
   ['GET exact:/v1/evidence/classifications', '/v1/evidence/classifications'],
   ['GET starts_with:/v1/evidence/obligations/', '/v1/evidence/obligations/{id}'],
   ['GET exact:/v1/evidence/capabilities', '/v1/evidence/capabilities'],
@@ -63,10 +64,9 @@ const HTTP_ROUTE_MANIFEST = [
   ['POST ends_with:/approval/request', '/v1/items/{id}/approval/request'], ['POST ends_with:/approval/approve', '/v1/items/{id}/approval/approve'],
   ['POST ends_with:/approval/deny', '/v1/items/{id}/approval/deny'], ['GET exact:/v1/approvals', '/v1/approvals'],
   ['POST exact:/v1/pick', '/v1/pick'], ['POST ends_with:/log', '/v1/items/{id}/log'],
-  ['POST starts_with:/v1/reviews/&ends_with:/close', '/v1/reviews/{id}/close'],
-  ['GET starts_with:/v1/reviews/&ends_with:/artifact', '/v1/reviews/{id}/artifact'],
-  ['POST starts_with:/v1/reviews/&ends_with:/artifact', '/v1/reviews/{id}/artifact'],
-  ['POST ends_with:/close', '/v1/items/{id}/close'], ['POST ends_with:/reviews', '/v1/items/{id}/reviews'],
+  ['POST starts_with:/v1/review-gates/&ends_with:/close', '/v1/review-gates/{id}/close'],
+  ['POST starts_with:/v1/review-gates/&ends_with:/findings/resolve', '/v1/review-gates/{id}/findings/resolve'],
+  ['POST ends_with:/close', '/v1/items/{id}/close'],
   ['POST ends_with:/review-annotations', '/v1/items/{id}/review-annotations'],
   ['GET ends_with:/review-evidence', '/v1/items/{id}/review-evidence'], ['POST ends_with:/review-evidence', '/v1/items/{id}/review-evidence'],
   ['POST ends_with:/review-feedback', '/v1/items/{id}/review-feedback'], ['POST exact:/v1/contexts', '/v1/contexts'],
@@ -81,9 +81,14 @@ function extractHttpRouteSignatures(source) {
   const end = source.indexOf('(m, p) => bail!', start);
   assert.ok(start >= 0 && end > start, 'Could not locate authoritative HTTP route match');
   const signatures = ['GET exact:/v1/events/stream'];
+  let pendingArm = '';
   for (const raw of source.slice(start, end).split('\n')) {
-    const line = raw.trim();
-    if (!line.includes('=>')) continue;
+    const fragment = raw.trim();
+    if (!pendingArm && /^\((?:"|_|m, p)/.test(fragment)) pendingArm = fragment;
+    else if (pendingArm) pendingArm += ` ${fragment}`;
+    if (!pendingArm.includes('=>')) continue;
+    const line = pendingArm;
+    pendingArm = '';
     if (line.includes(', p) if')) {
       const method = line.match(/^\("([A-Z]+)", p\)/)?.[1] ?? (line.match(/^\(m, p\)/) && 'ANY');
       const predicates = [...line.matchAll(/p\.(starts_with|ends_with)\("([^"]+)"\)/g)]

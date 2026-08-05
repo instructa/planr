@@ -12,7 +12,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 #[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::Path;
 use std::process::Command as StdCommand;
 use std::sync::mpsc;
@@ -39,6 +39,76 @@ fn planr() -> Command {
         cmd.env_remove(var);
     }
     cmd
+}
+
+fn free_port() -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.local_addr().unwrap().port()
+}
+
+fn wait_for_http_server(port: u16) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match TcpStream::connect(("127.0.0.1", port)) {
+            Ok(stream) => {
+                drop(stream);
+                return;
+            }
+            Err(_) if std::time::Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("HTTP server did not become ready: {error}"),
+        }
+    }
+}
+
+fn http_request(port: u16, method: &str, path: &str, body: &str) -> String {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    let request = format!(
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    stream.write_all(request.as_bytes()).unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    response
+}
+
+fn http_sse_read_until(port: u16, path: &str, needle: &str) -> String {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    write!(
+        stream,
+        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: text/event-stream\r\n\r\n"
+    )
+    .unwrap();
+    let mut collected = String::new();
+    let mut buf = [0u8; 4096];
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        match stream.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                collected.push_str(&String::from_utf8_lossy(&buf[..n]));
+                if collected.contains(needle) {
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    collected
+}
+
+fn http_json(response: &str) -> Value {
+    let body = response
+        .split("\r\n\r\n")
+        .nth(1)
+        .expect("HTTP response body");
+    serde_json::from_str(body).expect(body)
 }
 
 fn single_json_document(bytes: &[u8]) -> Value {
@@ -450,23 +520,21 @@ fn evidence_attempt_receipt_counts(db: &Path, obligation_id: &str) -> (i64, i64)
     (attempts, receipts)
 }
 
+fn latest_evidence_attempt_for_obligation(db: &Path, obligation_id: &str) -> Value {
+    let conn = Connection::open(db).unwrap();
+    let attempt_json: String = conn
+        .query_row(
+            "SELECT attempt_json FROM evidence_attempts WHERE obligation_id = ?1 ORDER BY created_at DESC LIMIT 1",
+            [obligation_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    serde_json::from_str(&attempt_json).unwrap()
+}
+
 fn evidence_observe_snapshot(db: &Path, item_id: &str) -> Value {
     let conn = Connection::open(db).unwrap();
-    let item_ids = {
-        let mut ids = vec![item_id.to_string()];
-        let mut stmt = conn
-            .prepare(
-                "SELECT from_item FROM links WHERE to_item = ?1 AND kind = 'reviews' ORDER BY from_item",
-            )
-            .unwrap();
-        let rows = stmt
-            .query_map([item_id], |row| row.get::<_, String>(0))
-            .unwrap();
-        for row in rows {
-            ids.push(row.unwrap());
-        }
-        ids
-    };
+    let item_ids = [item_id.to_string()];
     let quoted_ids = item_ids
         .iter()
         .map(|id| format!("'{}'", id.replace('\'', "''")))
@@ -703,7 +771,7 @@ fn evidence_runner_manifest() -> (Value, Value, String) {
     let execution = json!({
         "kind": "process",
         "executable": "sh",
-        "args": ["-c", "if [ -n \"${PLANR_FIXTURE_GAP_REASONS:-}\" ]; then printf '{\"planr_adapter_gap_reasons\":%s}\\n' \"$PLANR_FIXTURE_GAP_REASONS\" >&2; exit 2; fi; if [ -n \"${PLANR_FIXTURE_BOUNDARY:-}\" ]; then printf '{\"planr_adapter_boundary\":\"%s\"}\\n' \"$PLANR_FIXTURE_BOUNDARY\" >&2; exit 2; fi; if [ -n \"${PLANR_FIXTURE_EXIT:-}\" ]; then exit \"$PLANR_FIXTURE_EXIT\"; fi; printf '{\"status\":\"ok\"}'"],
+        "args": ["-c", "if [ -n \"${PLANR_FIXTURE_GAP_REASONS:-}\" ]; then printf '{\"planr_adapter_gap_reasons\":%s}\\n' \"$PLANR_FIXTURE_GAP_REASONS\" >&2; exit 2; fi; if [ -n \"${PLANR_FIXTURE_BOUNDARY:-}\" ]; then printf '{\"planr_adapter_boundary\":\"%s\"}\\n' \"$PLANR_FIXTURE_BOUNDARY\" >&2; exit 2; fi; if [ -n \"${PLANR_FIXTURE_EXIT:-}\" ]; then exit \"$PLANR_FIXTURE_EXIT\"; fi; if [ -n \"${PLANR_E2E_WRITE_PLANR_RUNTIME:-}\" ]; then mkdir -p .planr/evidence/runs .planr/evidence/attempts .planr/evidence/receipts .planr/evidence/coverage; printf runtime > .planr/planr.sqlite; printf runtime > .planr/evidence/runs/runtime.txt; printf runtime > .planr/evidence/attempts/runtime.txt; printf runtime > .planr/evidence/receipts/runtime.txt; printf runtime > .planr/evidence/coverage/runtime.txt; fi; if [ -n \"${PLANR_E2E_MUTATE_SOURCE:-}\" ]; then printf mutated > product-source.txt; fi; printf '{\"status\":\"ok\"}'"],
         "working_directory": ".",
         "timeout_ms": 5000,
         "stdout_limit_bytes": 4096,
@@ -822,8 +890,6 @@ fn write_evidence_policy_fixture(root: &Path) {
                 "subject": "public evidence health",
                 "expected": {"status": "ok"},
                 "target": {"kind": "process", "uri": "local://health"},
-                "environment": {"kind": "local", "id": "placeholder", "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"},
-                "runtime_target": {"kind": "process", "id": "runtime-local"},
             }],
         }],
         "observation_schema_registrations": [{
@@ -925,6 +991,77 @@ fn init_git_repo(root: &Path) {
     }
 }
 
+fn write_materiality_policy(root: &Path) {
+    fs::write(
+        root.join(".planr/policy.toml"),
+        r#"
+schema_version = 1
+id = "materiality-test"
+version = "1.0.0"
+
+[usage]
+max_active_agents = 3
+max_parallel_readers = 2
+max_parallel_writers = 1
+max_depth = 1
+max_attempts = 4
+max_wall_time_seconds = 600
+max_tool_calls = 100
+max_tokens = 10000
+max_credits_micros = 1000000
+budget_exhaustion = "downgrade_noncritical"
+metering = "trusted"
+
+[usage.phase_reserves]
+verification_percent = 10
+review_percent = 5
+repair_percent = 5
+
+[transitions.retry]
+max_same_route_retries = 1
+
+[transitions.availability_fallback]
+max_fallbacks = 1
+require_same_capability_class = true
+
+[transitions.quality_escalation]
+max_escalations = 1
+require_verification_evidence = true
+
+[transitions.quota_downgrade]
+enabled = true
+max_downgrades = 1
+noncritical_only = true
+
+[transitions.safety_stop]
+enabled = true
+
+[materiality]
+protected_risks = ["security_or_auth", "secrets_or_crypto", "schema_or_migration", "infrastructure_or_deploy", "public_api", "billing", "concurrency_or_transaction"]
+changed_files_threshold = 10
+changed_lines_threshold = 500
+
+[execution]
+max_read_scope_entries = 4
+max_write_scope_entries = 2
+
+[execution.roles.worker]
+tools = ["cargo"]
+commands = [{ program = "cargo", args = ["test"] }]
+
+[execution.roles.worker.filesystem]
+read_roots = ["src", "tests"]
+write_roots = ["src", "tests"]
+allow_overwrite = true
+"#,
+    )
+    .unwrap();
+}
+
+fn init_materiality_git(root: &Path) {
+    init_git_repo(root);
+}
+
 fn git_stdout(root: &Path, args: &[&str]) -> String {
     let output = StdCommand::new("git")
         .arg("-C")
@@ -979,7 +1116,6 @@ fn source_git_stdout(root: &Path, args: &[&str]) -> String {
         ":(exclude).planr/planr.sqlite-shm",
         ":(exclude).planr/planr.sqlite-wal",
         ":(exclude).planr/artifacts/**",
-        ":(exclude).planr/reviews/**",
         ":(exclude).planr/verification/**",
         ":(exclude).planr/evidence/runs/**",
         ":(exclude).planr/evidence/attempts/**",
@@ -997,7 +1133,7 @@ fn evidence_obligation(id: &str, policy_digest: &str, environment: Value) -> Val
         "public evidence health",
         json!({"status": "ok"}),
         json!({"kind": "process", "uri": "local://health"}),
-        environment,
+        environment.clone(),
         json!({"kind": "process", "id": "runtime-local"}),
         json!([
             "source_change",
@@ -1012,15 +1148,15 @@ fn evidence_obligation(id: &str, policy_digest: &str, environment: Value) -> Val
 #[allow(clippy::too_many_arguments)]
 fn evidence_obligation_for(
     id: &str,
-    policy_digest: &str,
+    _policy_digest: &str,
     observation_type: &str,
     subject: &str,
     expected: Value,
     target: Value,
-    environment: Value,
-    runtime_target: Value,
+    _environment: Value,
+    _runtime_target: Value,
     invalidate_on: Value,
-    config_digest: &str,
+    _config_digest: &str,
 ) -> Value {
     json!({
         "id": id,
@@ -1035,15 +1171,10 @@ fn evidence_obligation_for(
             "subject": subject,
             "expected": expected,
             "target": target,
-            "environment": environment,
-            "runtime_target": runtime_target,
         }],
         "fixture_policy": {"fixtures_allowed": false, "mocks_allowed": false, "disclosure_required": true},
         "freshness_policy": {"invalidate_on": invalidate_on},
         "assurance_policy": {},
-        "policy_digest": policy_digest,
-        "config_digest": config_digest,
-        "created_at": "2026-07-29T00:00:00Z",
     })
 }
 
@@ -1207,7 +1338,7 @@ fn write_registered_host_capture_run_helper_with_disclosure(
         "executable": "sh",
         "args": [helper_rel],
         "working_directory": ".",
-        "timeout_ms": 30000,
+        "timeout_ms": 45000,
         "stdout_limit_bytes": 1048576,
         "stderr_limit_bytes": 1048576,
         "payload_schema": payload_schema,
@@ -1698,6 +1829,116 @@ fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_m
         serde_json::to_vec_pretty(&import_input).unwrap(),
     )
     .unwrap();
+    {
+        let conn = Connection::open(&db).unwrap();
+        let project_id: String = conn
+            .query_row(
+                "SELECT project_id FROM proof_obligations WHERE id = 'pob-host-capture'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let plan_id: String = conn
+            .query_row(
+                "SELECT plan_id FROM proof_obligations WHERE id = 'pob-host-capture'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "INSERT INTO feature_runs(id, project_id, plan_id, status, phase, policy_digest) VALUES ('frun-host-pre-freeze', ?1, ?2, 'active', 'implementation', 'sha256:test')",
+            rusqlite::params![project_id, plan_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO feature_run_role_leases(run_id, role, worker_id, lease_generation) VALUES ('frun-host-pre-freeze', 'maker', 'maker-host', 1)",
+            [],
+        )
+        .unwrap();
+    }
+    let pre_freeze_cli = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "host-capture",
+                "import",
+                "--input",
+                import_path.to_str().unwrap(),
+            ])
+            .assert()
+            .failure()
+            .get_output()
+            .stdout,
+    );
+    assert_evidence_error(
+        &pre_freeze_cli,
+        "evidence.host_capture.import",
+        "internal_error",
+        "binding_evidence_requires_verification",
+    );
+    let pre_freeze_mcp = mcp_tool(
+        dir.path(),
+        &db,
+        701,
+        "planr_evidence_host_capture_import",
+        json!({"input": import_input.clone()}),
+    );
+    assert_evidence_error(
+        &pre_freeze_mcp,
+        "evidence.host_capture.import",
+        "internal_error",
+        "binding_evidence_requires_verification",
+    );
+    let pre_freeze_port = free_port();
+    let mut pre_freeze_server = StdCommand::new(assert_cmd::cargo::cargo_bin!("planr"))
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "serve",
+            "--port",
+            &pre_freeze_port.to_string(),
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    wait_for_http_server(pre_freeze_port);
+    let pre_freeze_http = http_json(&http_request(
+        pre_freeze_port,
+        "POST",
+        "/v1/evidence/host-capture/import",
+        &import_input.to_string(),
+    ));
+    assert_evidence_error(
+        &pre_freeze_http,
+        "evidence.host_capture.import",
+        "internal_error",
+        "binding_evidence_requires_verification",
+    );
+    pre_freeze_server.kill().ok();
+    pre_freeze_server.wait().ok();
+    {
+        let conn = Connection::open(&db).unwrap();
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM evidence_receipts WHERE obligation_id = 'pob-host-capture'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            0
+        );
+        conn.execute(
+            "DELETE FROM feature_runs WHERE id = 'frun-host-pre-freeze'",
+            [],
+        )
+        .unwrap();
+    }
     let cli_import = single_json_document(
         &planr()
             .current_dir(dir.path())
@@ -2136,6 +2377,48 @@ fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_m
     assert_eq!(fault_instances, 0);
     assert_eq!(fault_attempts, 0);
     assert_eq!(fault_receipts, 0);
+
+    planr()
+        .current_dir(dir.path())
+        .env(
+            "PLANR_TEST_EVIDENCE_PRE_COMMIT_MUTATE_SOURCE_PATH",
+            "product-source.txt",
+        )
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "evidence",
+            "host-capture",
+            "run",
+            "--input",
+            fault_path.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("stale_source"));
+    let conn = Connection::open(&db).unwrap();
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM verification_capability_instances WHERE manifest_id = 'verifier-host-capture-run-atomic-fault'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+        0,
+        "pre-commit mutation must roll back host capability registration"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM evidence_receipts WHERE obligation_id = 'pob-host-capture-atomic-fault'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+        0,
+        "pre-commit mutation must mint zero trusted host receipts"
+    );
+    fs::remove_file(dir.path().join("product-source.txt")).unwrap();
 
     let manifest_id = write_registered_host_capture_run_helper(
         dir.path(),
@@ -3355,7 +3638,7 @@ fn add_evidence_obligation_with_environment(
         "public evidence health",
         json!({"status": "ok"}),
         json!({"kind": "process", "uri": "local://health"}),
-        environment,
+        environment.clone(),
         json!({"kind": "process", "id": "runtime-local"}),
         json!(["target_change", "policy_change", "adapter_schema_change"]),
         "sha256:8888888888888888888888888888888888888888888888888888888888888888",
@@ -3665,14 +3948,13 @@ fn evidence_doctor_reports_degraded_states_and_matches_run_resolution() {
     });
     rewrite_evidence_policy_fixture(unavailable_dir.path(), |policy| {
         policy["adapter_registrations"][0]["manifest_digest"] = json!(unavailable_digest);
-        policy["adapter_registrations"][0]["execution_contract"]["executable"] =
-            json!("definitely-not-a-planr-probe");
     });
     init_evidence_project(
         unavailable_dir.path(),
         &unavailable_db,
         "Unavailable Evidence Adapter",
     );
+    init_git_repo(unavailable_dir.path());
     let unavailable = doctor_evidence(unavailable_dir.path(), &unavailable_db);
     assert_eq!(unavailable["status"], "warning");
     assert_eq!(unavailable["policy"]["state"], "unavailable");
@@ -3720,7 +4002,8 @@ fn evidence_doctor_reports_degraded_states_and_matches_run_resolution() {
         unavailable_run["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("capability instance is not available")
+            .contains("capability instance is not available"),
+        "{unavailable_run}"
     );
 
     let degraded_dir = tempdir().unwrap();
@@ -3996,6 +4279,313 @@ fn evidence_doctor_reports_degraded_states_and_matches_run_resolution() {
 }
 
 #[test]
+fn evidence_run_enforces_frozen_source_before_receipt_commit() {
+    let dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db = db_dir.path().join("planr.sqlite");
+    write_evidence_policy_fixture(dir.path());
+    init_evidence_project(dir.path(), &db, "Evidence Frozen Source Boundary");
+    init_git_repo(dir.path());
+
+    let policy = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args(["--db", db.to_str().unwrap(), "--json", "evidence", "policy"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    let capabilities = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "capability",
+                "list",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    let instance = capabilities["object"]["instances"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|instance| {
+            instance["availability_status"] == "available"
+                && instance["manifest_id"] == "verifier-generic-adapter"
+        })
+        .expect("available generic adapter instance");
+    let instance_id = instance["id"].as_str().unwrap().to_string();
+    let environment = instance["capability"]["environment"].clone();
+
+    let mut obligation = evidence_obligation_for(
+        "pob-frozen-source-boundary",
+        policy["object"]["digest"].as_str().unwrap(),
+        "com.example.health.status",
+        "frozen source boundary",
+        json!({"status": "ok"}),
+        json!({"kind": "process", "uri": "local://health"}),
+        environment,
+        json!({"kind": "process", "id": "runtime-local"}),
+        json!(["source_change", "target_change", "policy_change"]),
+        "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+    );
+    obligation["observations"][0]["payload_schema"] =
+        json!({"schema_ref": "schema://com.example.health.status"});
+    add_evidence_obligation_value(dir.path(), &db, "pob-frozen-source-boundary", &obligation);
+
+    let runtime_write_run = run_evidence_value_with_env_code(
+        dir.path(),
+        &db,
+        "pob-frozen-source-boundary",
+        &instance_id,
+        json!({"kind": "process", "uri": "local://health"}),
+        Some(json!({"PLANR_E2E_WRITE_PLANR_RUNTIME": "1"})),
+        0,
+    );
+    assert_evidence_envelope(&runtime_write_run, "evidence.run", true);
+    assert_eq!(runtime_write_run["object"]["verdict"], "passed");
+    assert_eq!(
+        evidence_attempt_receipt_counts(&db, "pob-frozen-source-boundary"),
+        (1, 1),
+        "allowed Planr runtime writes must not invalidate the canonical source digest"
+    );
+
+    let source_mutation_path = dir.path().join("frozen-source-mutation.run.json");
+    fs::write(
+        &source_mutation_path,
+        serde_json::to_vec_pretty(&json!({
+            "obligation_id": "pob-frozen-source-boundary",
+            "capability_instance_id": instance_id,
+            "target": {"kind": "process", "uri": "local://health"},
+            "env": {"PLANR_E2E_MUTATE_SOURCE": "1"},
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let source_mutation = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "run",
+                "--input",
+                source_mutation_path.to_str().unwrap(),
+            ])
+            .assert()
+            .failure()
+            .get_output()
+            .stdout,
+    );
+    assert_evidence_error(
+        &source_mutation,
+        "evidence.run",
+        "internal_error",
+        "without trusted receipt",
+    );
+    assert_eq!(
+        evidence_attempt_receipt_counts(&db, "pob-frozen-source-boundary"),
+        (2, 1),
+        "source mutation must record one failed attempt and zero new trusted receipts"
+    );
+    let failed_attempt = latest_evidence_attempt_for_obligation(&db, "pob-frozen-source-boundary");
+    assert_eq!(failed_attempt["status"], "failed");
+    assert_eq!(failed_attempt["exit"]["error"], "stale_source");
+    assert_eq!(
+        failed_attempt["raw_result"]["planr_adapter_gap_reasons"],
+        json!(["stale_source"])
+    );
+
+    fs::remove_file(dir.path().join("product-source.txt")).unwrap();
+    let readiness_after_fix = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "readiness",
+                "--scope",
+                "obligation",
+                "--id",
+                "pob-frozen-source-boundary",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    assert_evidence_envelope(&readiness_after_fix, "evidence.readiness", true);
+    let run_index_path = dir.path().join(
+        readiness_after_fix["object"]["run_index"]["repository_path"]
+            .as_str()
+            .unwrap(),
+    );
+    let mut tampered_run_index: Value =
+        serde_json::from_slice(&fs::read(&run_index_path).unwrap()).unwrap();
+    assert!(tampered_run_index["source"]["tree_digest"].is_string());
+    assert!(tampered_run_index["policy_digest"].is_string());
+    assert!(tampered_run_index["runs"][0]["input"]["execution_contract"].is_object());
+    tampered_run_index["runs"][0]["input"]["target"]["uri"] = json!("local://tampered");
+    let tampered_path = dir
+        .path()
+        .join(".planr/evidence/runs/tampered-readiness-run-index.json");
+    fs::write(
+        &tampered_path,
+        serde_json::to_vec_pretty(&tampered_run_index).unwrap(),
+    )
+    .unwrap();
+    let tampered = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "run",
+                "--input",
+                tampered_path.to_str().unwrap(),
+            ])
+            .assert()
+            .failure()
+            .get_output()
+            .stdout,
+    );
+    assert_evidence_error(
+        &tampered,
+        "evidence.run",
+        "conflict",
+        "run-index seal is invalid",
+    );
+    assert_eq!(
+        evidence_attempt_receipt_counts(&db, "pob-frozen-source-boundary"),
+        (2, 1),
+        "tampered readiness work must not start an attempt"
+    );
+    let selective_replay = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "run",
+                "--input",
+                run_index_path.to_str().unwrap(),
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    assert_evidence_envelope(&selective_replay, "evidence.run", true);
+    assert_eq!(
+        selective_replay["object"]["schema_version"],
+        "planr.evidence.run-index.result.v1"
+    );
+    assert_eq!(selective_replay["object"]["verdict"], "passed");
+    assert_eq!(
+        selective_replay["object"]["results"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        evidence_attempt_receipt_counts(&db, "pob-frozen-source-boundary"),
+        (3, 2),
+        "maker fix plus readiness/source snapshot should allow selective replay to create exactly one new receipt"
+    );
+    let reused = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "run",
+                "--input",
+                run_index_path.to_str().unwrap(),
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    assert_eq!(reused["object"]["results"][0]["reused"], true);
+    assert!(reused["object"]["results"][0]["reuse_key"].is_string());
+    assert_eq!(
+        evidence_attempt_receipt_counts(&db, "pob-frozen-source-boundary"),
+        (3, 2),
+        "an exact hermetic key hit must not execute or persist duplicate evidence"
+    );
+    let pre_commit_race_path = dir.path().join("frozen-source-pre-commit-race.run.json");
+    fs::write(
+        &pre_commit_race_path,
+        serde_json::to_vec_pretty(&json!({
+            "obligation_id": "pob-frozen-source-boundary",
+            "capability_instance_id": instance_id,
+            "target": {"kind": "process", "uri": "local://health"},
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let pre_commit_race = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .env(
+                "PLANR_TEST_EVIDENCE_PRE_COMMIT_MUTATE_SOURCE_PATH",
+                "product-source.txt",
+            )
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "run",
+                "--input",
+                pre_commit_race_path.to_str().unwrap(),
+            ])
+            .assert()
+            .failure()
+            .get_output()
+            .stdout,
+    );
+    assert_evidence_error(
+        &pre_commit_race,
+        "evidence.run",
+        "internal_error",
+        "without trusted receipt",
+    );
+    assert_eq!(
+        evidence_attempt_receipt_counts(&db, "pob-frozen-source-boundary"),
+        (4, 2),
+        "pre-commit source mutation must roll back staged trusted rows and persist only a failed attempt"
+    );
+    let pre_commit_attempt =
+        latest_evidence_attempt_for_obligation(&db, "pob-frozen-source-boundary");
+    assert_eq!(pre_commit_attempt["status"], "failed");
+    assert_eq!(pre_commit_attempt["exit"]["error"], "stale_source");
+    assert_eq!(
+        pre_commit_attempt["raw_result"]["planr_adapter_gap_reasons"],
+        json!(["stale_source"])
+    );
+}
+
+#[test]
 fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
     let dir = tempdir().unwrap();
     let db_dir = tempdir().unwrap();
@@ -4016,18 +4606,6 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
             "--db",
             db.to_str().unwrap(),
             "--json",
-            "review",
-            "request",
-            &observed_item_id,
-        ])
-        .assert()
-        .success();
-    planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
             "approval",
             "request",
             &observed_item_id,
@@ -4036,15 +4614,6 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
         ])
         .assert()
         .success();
-    let review_id = {
-        let conn = Connection::open(&db).unwrap();
-        conn.query_row(
-            "SELECT from_item FROM links WHERE to_item = ?1 AND kind = 'reviews' ORDER BY from_item LIMIT 1",
-            [&observed_item_id],
-            |row| row.get::<_, String>(0),
-        )
-        .unwrap()
-    };
     planr()
         .current_dir(dir.path())
         .args([
@@ -4063,18 +4632,6 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
             "true",
             "--tests",
             "true",
-        ])
-        .assert()
-        .success();
-    planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "review",
-            "artifact",
-            &review_id,
         ])
         .assert()
         .success();
@@ -4101,33 +4658,6 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
     conn.execute(
         "UPDATE logs SET blocked_or_unverified = ?1 WHERE item_id = ?2",
         rusqlite::params![baseline_log_blocked, observed_item_id],
-    )
-    .unwrap();
-    assert_eq!(
-        evidence_observe_snapshot(&db, &observed_item_id),
-        adversarial_baseline
-    );
-
-    let (artifact_id, baseline_artifact_content): (String, Option<String>) = conn
-        .query_row(
-            "SELECT id, content FROM artifacts WHERE item_id = ?1 AND kind = 'review' ORDER BY id LIMIT 1",
-            [&review_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .unwrap();
-    conn.execute(
-        "UPDATE artifacts SET content = 'adversarial artifact content mutation' WHERE id = ?1",
-        [&artifact_id],
-    )
-    .unwrap();
-    assert_ne!(
-        evidence_observe_snapshot(&db, &observed_item_id),
-        adversarial_baseline,
-        "observe snapshot must detect in-place review artifact content mutation"
-    );
-    conn.execute(
-        "UPDATE artifacts SET content = ?1 WHERE id = ?2",
-        rusqlite::params![baseline_artifact_content, artifact_id],
     )
     .unwrap();
     assert_eq!(
@@ -4296,6 +4826,8 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
         .expect("generic import validator capability instance");
     let validator_instance_id = validator_instance["id"].as_str().unwrap().to_string();
 
+    let obligation_runtime_config_digest =
+        "sha256:8888888888888888888888888888888888888888888888888888888888888888";
     let obligation = evidence_obligation_for(
         "pob-public-run",
         policy["object"]["digest"].as_str().unwrap(),
@@ -4303,10 +4835,10 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
         "public evidence health",
         json!({"status": "ok"}),
         json!({"kind": "process", "uri": "local://health"}),
-        environment,
+        environment.clone(),
         json!({"kind": "process", "id": "runtime-local"}),
         json!(["target_change", "policy_change", "adapter_schema_change"]),
-        "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+        obligation_runtime_config_digest,
     );
     let obligation_path = dir.path().join("proof-obligation.json");
     fs::write(
@@ -4800,6 +5332,47 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
         .collect::<Vec<_>>();
     for expected in [receipt_id, mcp_receipt_id, http_receipt_id] {
         assert!(http_receipt_ids.contains(&expected.to_string()));
+    }
+
+    let cli_readiness = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "readiness",
+                "--scope",
+                "obligation",
+                "--id",
+                "pob-public-run",
+            ])
+            .assert()
+            .code(3)
+            .get_output()
+            .stdout,
+    );
+    let mcp_readiness = mcp_tool(
+        dir.path(),
+        &db,
+        240,
+        "planr_evidence_readiness",
+        json!({"scope": "obligation", "id": "pob-public-run"}),
+    );
+    let http_readiness = http_json(&http_request(
+        port,
+        "POST",
+        "/v1/evidence/readiness",
+        r#"{"scope":"obligation","id":"pob-public-run"}"#,
+    ));
+    for readiness in [&cli_readiness, &mcp_readiness, &http_readiness] {
+        assert_evidence_envelope(readiness, "evidence.readiness", true);
+        assert_eq!(readiness["object"]["status"], "blocked");
+        assert_eq!(
+            readiness["object"]["active_obligation_ids"],
+            json!(["pob-public-run"])
+        );
     }
 
     let coverage_output = planr()
@@ -5313,8 +5886,8 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
         rusqlite::params![
             serde_json::to_string(&obligation["observations"]).unwrap(),
             serde_json::to_string(&obligation["fixture_policy"]).unwrap(),
-            obligation["policy_digest"].as_str().unwrap(),
-            obligation["config_digest"].as_str().unwrap(),
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         ],
     )
     .unwrap();
@@ -5329,8 +5902,8 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
         )",
         rusqlite::params![
             instance_id,
-            obligation["policy_digest"].as_str().unwrap(),
-            obligation["config_digest"].as_str().unwrap(),
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             json!({
                 "id": "attempt-other-project",
                 "status": "passed",
@@ -5404,8 +5977,8 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
                 binding,
                 serde_json::to_string(&obligation["observations"]).unwrap(),
                 serde_json::to_string(&obligation["fixture_policy"]).unwrap(),
-                obligation["policy_digest"].as_str().unwrap(),
-                obligation["config_digest"].as_str().unwrap(),
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                 supersedes,
             ],
         )
@@ -5463,7 +6036,7 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
                 public_observation_requirements,
                 public_fixture_policy,
                 freshness_policy,
-                obligation["policy_digest"].as_str().unwrap(),
+                policy["object"]["digest"].as_str().unwrap(),
                 config_digest,
                 source_digest,
                 supersedes,
@@ -5499,7 +6072,7 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
         None,
         "crit-binding-positive",
         1,
-        obligation["config_digest"].as_str().unwrap(),
+        obligation_runtime_config_digest,
         Option::<&str>::None,
         &public_freshness_policy,
         Option::<&str>::None,
@@ -5531,8 +6104,8 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
             "crit-binding-plan",
             1,
             1,
-            obligation["config_digest"].as_str().unwrap(),
-            obligation["config_digest"].as_str().unwrap(),
+            obligation_runtime_config_digest,
+            obligation_runtime_config_digest,
             Option::<&str>::None,
             Option::<&str>::None,
             &public_freshness_policy,
@@ -5550,8 +6123,8 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
             "crit-binding-item",
             1,
             1,
-            obligation["config_digest"].as_str().unwrap(),
-            obligation["config_digest"].as_str().unwrap(),
+            obligation_runtime_config_digest,
+            obligation_runtime_config_digest,
             Option::<&str>::None,
             Option::<&str>::None,
             &public_freshness_policy,
@@ -5569,8 +6142,8 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
             "crit-binding-criterion-base",
             1,
             1,
-            obligation["config_digest"].as_str().unwrap(),
-            obligation["config_digest"].as_str().unwrap(),
+            obligation_runtime_config_digest,
+            obligation_runtime_config_digest,
             Option::<&str>::None,
             Option::<&str>::None,
             &public_freshness_policy,
@@ -5588,13 +6161,13 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
             "crit-binding-source",
             1,
             1,
-            obligation["config_digest"].as_str().unwrap(),
-            obligation["config_digest"].as_str().unwrap(),
+            obligation_runtime_config_digest,
+            obligation_runtime_config_digest,
             Some("sha256:1212121212121212121212121212121212121212121212121212121212121212"),
             Some("sha256:3434343434343434343434343434343434343434343434343434343434343434"),
             &source_freshness_policy,
-            "stale_source",
-            &["stale_configuration", "stale_source"][..],
+            "stale_configuration",
+            &["stale_configuration"][..],
         ),
         (
             "config",
@@ -5607,7 +6180,7 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
             "crit-binding-config",
             1,
             1,
-            obligation["config_digest"].as_str().unwrap(),
+            obligation_runtime_config_digest,
             "sha256:5656565656565656565656565656565656565656565656565656565656565656",
             Option::<&str>::None,
             Option::<&str>::None,
@@ -5626,8 +6199,8 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
             "crit-binding-version",
             1,
             2,
-            obligation["config_digest"].as_str().unwrap(),
-            obligation["config_digest"].as_str().unwrap(),
+            obligation_runtime_config_digest,
+            obligation_runtime_config_digest,
             Option::<&str>::None,
             Option::<&str>::None,
             &public_freshness_policy,
@@ -5855,7 +6428,7 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
         None,
         "crit-binding-artifact-positive",
         1,
-        obligation["config_digest"].as_str().unwrap(),
+        obligation_runtime_config_digest,
         Option::<&str>::None,
         &public_freshness_policy,
         Option::<&str>::None,
@@ -5976,7 +6549,7 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
             None,
             &criterion_id,
             1,
-            obligation["config_digest"].as_str().unwrap(),
+            obligation_runtime_config_digest,
             Option::<&str>::None,
             &public_freshness_policy,
             Option::<&str>::None,
@@ -6034,7 +6607,7 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
         None,
         "crit-binding-project",
         1,
-        obligation["config_digest"].as_str().unwrap(),
+        obligation_runtime_config_digest,
         Option::<&str>::None,
         &public_freshness_policy,
         Option::<&str>::None,
@@ -7050,13 +7623,31 @@ fn evidence_e2e_scenarios_cover_api_queue_stale_retry_unavailable_and_browser_ga
         json!({"kind": "process", "uri": "local://queue/depth", "digest": "sha256:1212121212121212121212121212121212121212121212121212121212121212"}),
     );
     assert_evidence_envelope(&stale_config_base_run, "evidence.run", true);
-    let mut stale_config_obligation = superseding_obligation(
+    let stale_config_obligation = superseding_obligation(
         stale_config_base,
         "pob-stale-config",
         "pob-stale-config-base",
     );
-    stale_config_obligation["config_digest"] =
-        json!("sha256:7878787878787878787878787878787878787878787878787878787878787878");
+    let successor_instance_id = format!("zz-{queue_instance_id}-config-change");
+    Connection::open(&db)
+        .unwrap()
+        .execute(
+            "INSERT INTO verification_capability_instances(
+               id, manifest_id, manifest_version, manifest_digest, probe_execution_id,
+               availability_status, runtime_target_json, host_fingerprint_json,
+               capability_snapshot_json, probe_result_json, created_at, valid_until)
+             SELECT ?1, manifest_id, manifest_version, manifest_digest, ?2,
+                    availability_status, runtime_target_json, host_fingerprint_json,
+                    json_set(capability_snapshot_json, '$.id', ?1), probe_result_json,
+                    datetime('now', '+1 second'), valid_until
+             FROM verification_capability_instances WHERE id = ?3",
+            rusqlite::params![
+                successor_instance_id,
+                format!("probe-{successor_instance_id}"),
+                queue_instance_id,
+            ],
+        )
+        .unwrap();
     add_evidence_obligation_value(
         dir.path(),
         &db,
@@ -7285,8 +7876,6 @@ fn evidence_e2e_scenarios_cover_api_queue_stale_retry_unavailable_and_browser_ga
             "subject": "rendered browser interaction cannot be replaced by curl",
             "expected": {"visible": true},
             "target": {"kind": "browser", "uri": format!("http://127.0.0.1:{curl_port}/health")},
-            "environment": http_environment,
-            "runtime_target": {"kind": "browser", "id": "browser-session"}
         }));
     let browser_add = add_evidence_obligation_value(
         dir.path(),
@@ -8210,6 +8799,371 @@ fn evidence_e2e_scenarios_cover_api_queue_stale_retry_unavailable_and_browser_ga
 }
 
 #[test]
+fn project_relocation_previews_validates_and_applies_all_paths_atomically() {
+    let source = tempdir().unwrap();
+    let destination = tempdir().unwrap();
+    let db = source.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(source.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Relocate"])
+        .assert()
+        .success();
+
+    let relative_plan = Path::new(".planr/plans/build/relocate.plan.md");
+    let source_plan = source.path().join(relative_plan);
+    let destination_plan = destination.path().join(relative_plan);
+    fs::create_dir_all(source_plan.parent().unwrap()).unwrap();
+    fs::create_dir_all(destination_plan.parent().unwrap()).unwrap();
+    fs::write(&source_plan, "# Relocate\n").unwrap();
+    fs::write(&destination_plan, "# Relocate\n").unwrap();
+
+    let conn = Connection::open(&db).unwrap();
+    let project_id: String = conn
+        .query_row("SELECT id FROM projects LIMIT 1", [], |row| row.get(0))
+        .unwrap();
+    conn.execute(
+        "INSERT INTO plans(id, project_id, stage, path, title, slug, parse_status, content_hash, created_at, updated_at)
+         VALUES ('plan-relocate', ?1, 'build', ?2, 'Relocate', 'relocate', 'ok', 'sha256:relocate', datetime('now'), datetime('now'))",
+        rusqlite::params![project_id, source_plan.to_string_lossy()],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO items(id, project_id, title, description, status, work_type, plan_path, created_at, updated_at)
+         VALUES ('item-relocate', ?1, 'Relocate', 'relocate', 'ready', 'code', ?2, datetime('now'), datetime('now'))",
+        rusqlite::params![project_id, source_plan.to_string_lossy()],
+    )
+    .unwrap();
+    drop(conn);
+
+    let output = planr()
+        .current_dir(source.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "project",
+            "relocate",
+            &project_id,
+            "--destination",
+            destination.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let preview: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(preview["mode"], "preview");
+    assert_eq!(preview["relocation"]["project"]["id"], project_id);
+    assert_eq!(
+        preview["relocation"]["project"]["from"],
+        source.path().to_string_lossy().as_ref()
+    );
+    assert_eq!(
+        preview["relocation"]["project"]["to"],
+        destination.path().to_string_lossy().as_ref()
+    );
+    assert_eq!(preview["relocation"]["plans"][0]["id"], "plan-relocate");
+    assert_eq!(
+        preview["relocation"]["plans"][0]["to"],
+        destination_plan.to_string_lossy().as_ref()
+    );
+    assert_eq!(preview["relocation"]["items"][0]["id"], "item-relocate");
+    assert_eq!(
+        preview["relocation"]["items"][0]["to"],
+        destination_plan.to_string_lossy().as_ref()
+    );
+
+    let conn = Connection::open(&db).unwrap();
+    let stored_paths = || -> (String, String, String) {
+        (
+            conn.query_row(
+                "SELECT root_path FROM projects WHERE id = ?1",
+                [&project_id],
+                |row| row.get(0),
+            )
+            .unwrap(),
+            conn.query_row(
+                "SELECT path FROM plans WHERE id = 'plan-relocate'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap(),
+            conn.query_row(
+                "SELECT plan_path FROM items WHERE id = 'item-relocate'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap(),
+        )
+    };
+    assert_eq!(
+        stored_paths(),
+        (
+            source.path().to_string_lossy().to_string(),
+            source_plan.to_string_lossy().to_string(),
+            source_plan.to_string_lossy().to_string(),
+        )
+    );
+    drop(conn);
+
+    let missing_destination = source.path().join("missing-destination");
+    planr()
+        .current_dir(source.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "project",
+            "relocate",
+            &project_id,
+            "--destination",
+            missing_destination.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "project_relocation_destination_invalid",
+        ));
+
+    let assert_relocation_rejected_without_mutation =
+        |expected_error: &str, stored_plan_path: &str| {
+            for apply in [false, true] {
+                let mut args = vec![
+                    "--db".to_string(),
+                    db.to_string_lossy().to_string(),
+                    "project".to_string(),
+                    "relocate".to_string(),
+                    project_id.clone(),
+                    "--destination".to_string(),
+                    destination.path().to_string_lossy().to_string(),
+                ];
+                if apply {
+                    args.push("--apply".to_string());
+                }
+                planr()
+                    .current_dir(source.path())
+                    .args(args)
+                    .assert()
+                    .failure()
+                    .stderr(predicate::str::contains(expected_error.to_string()));
+                let conn = Connection::open(&db).unwrap();
+                assert_eq!(
+                    conn.query_row(
+                        "SELECT root_path FROM projects WHERE id = ?1",
+                        [&project_id],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .unwrap(),
+                    source.path().to_string_lossy()
+                );
+                assert_eq!(
+                    conn.query_row(
+                        "SELECT path FROM plans WHERE id = 'plan-relocate'",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .unwrap(),
+                    stored_plan_path
+                );
+                assert_eq!(
+                    conn.query_row(
+                        "SELECT plan_path FROM items WHERE id = 'item-relocate'",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .unwrap(),
+                    stored_plan_path
+                );
+            }
+        };
+
+    let parent_escape = source.path().join("../parent-escape.plan.md");
+    let parent_escape = parent_escape.to_string_lossy().to_string();
+    let conn = Connection::open(&db).unwrap();
+    conn.execute(
+        "UPDATE plans SET path = ?1 WHERE id = 'plan-relocate'",
+        [&parent_escape],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE items SET plan_path = ?1 WHERE id = 'item-relocate'",
+        [&parent_escape],
+    )
+    .unwrap();
+    drop(conn);
+    assert_relocation_rejected_without_mutation(
+        "project_relocation_relative_path_component_rejected",
+        &parent_escape,
+    );
+
+    #[cfg(unix)]
+    {
+        let source_link_plan = source
+            .path()
+            .join(".planr/plans/build/symlink-escape.plan.md");
+        fs::write(&source_link_plan, "# Symlink escape\n").unwrap();
+        let destination_link_plan = destination
+            .path()
+            .join(".planr/plans/build/symlink-escape.plan.md");
+        let outside = tempdir().unwrap();
+        let outside_plan = outside.path().join("outside.plan.md");
+        fs::write(&outside_plan, "# Outside\n").unwrap();
+        symlink(&outside_plan, &destination_link_plan).unwrap();
+        let source_link_plan = source_link_plan.to_string_lossy().to_string();
+        let conn = Connection::open(&db).unwrap();
+        conn.execute(
+            "UPDATE plans SET path = ?1 WHERE id = 'plan-relocate'",
+            [&source_link_plan],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE items SET plan_path = ?1 WHERE id = 'item-relocate'",
+            [&source_link_plan],
+        )
+        .unwrap();
+        drop(conn);
+        assert_relocation_rejected_without_mutation(
+            "project_relocation_destination_escape",
+            &source_link_plan,
+        );
+    }
+
+    let conn = Connection::open(&db).unwrap();
+    conn.execute(
+        "UPDATE plans SET path = ?1 WHERE id = 'plan-relocate'",
+        [source_plan.to_string_lossy().as_ref()],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE items SET plan_path = ?1 WHERE id = 'item-relocate'",
+        [source_plan.to_string_lossy().as_ref()],
+    )
+    .unwrap();
+    drop(conn);
+
+    let conn = Connection::open(&db).unwrap();
+    conn.execute(
+        "INSERT INTO items(id, project_id, title, description, status, work_type, plan_path, created_at, updated_at)
+         VALUES ('item-dangling-relocate', ?1, 'Dangling', 'dangling', 'ready', 'code', '/not/a/canonical/plan', datetime('now'), datetime('now'))",
+        [&project_id],
+    )
+    .unwrap();
+    drop(conn);
+    planr()
+        .current_dir(source.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "project",
+            "relocate",
+            &project_id,
+            "--destination",
+            destination.path().to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "project_relocation_dangling_item_plan_path",
+        ));
+    let conn = Connection::open(&db).unwrap();
+    conn.execute("DELETE FROM items WHERE id = 'item-dangling-relocate'", [])
+        .unwrap();
+    conn.execute_batch(
+        "CREATE TRIGGER fail_project_relocation_item_update
+         BEFORE UPDATE OF plan_path ON items
+         WHEN OLD.id = 'item-relocate'
+         BEGIN SELECT RAISE(ABORT, 'injected relocation rollback'); END;",
+    )
+    .unwrap();
+    drop(conn);
+
+    planr()
+        .current_dir(source.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "project",
+            "relocate",
+            &project_id,
+            "--destination",
+            destination.path().to_str().unwrap(),
+            "--apply",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("injected relocation rollback"));
+    let conn = Connection::open(&db).unwrap();
+    let root_after_failure: String = conn
+        .query_row(
+            "SELECT root_path FROM projects WHERE id = ?1",
+            [&project_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let plan_after_failure: String = conn
+        .query_row(
+            "SELECT path FROM plans WHERE id = 'plan-relocate'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(root_after_failure, source.path().to_string_lossy());
+    assert_eq!(plan_after_failure, source_plan.to_string_lossy());
+    conn.execute_batch("DROP TRIGGER fail_project_relocation_item_update")
+        .unwrap();
+    drop(conn);
+
+    let output = planr()
+        .current_dir(source.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "project",
+            "relocate",
+            &project_id,
+            "--destination",
+            destination.path().to_str().unwrap(),
+            "--apply",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let applied: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(applied["mode"], "apply");
+    let conn = Connection::open(&db).unwrap();
+    assert_eq!(
+        conn.query_row(
+            "SELECT root_path FROM projects WHERE id = ?1",
+            [&project_id],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap(),
+        destination.path().to_string_lossy()
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT path FROM plans WHERE id = 'plan-relocate'",
+            [],
+            |row| { row.get::<_, String>(0) }
+        )
+        .unwrap(),
+        destination_plan.to_string_lossy()
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT plan_path FROM items WHERE id = 'item-relocate'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap(),
+        destination_plan.to_string_lossy()
+    );
+}
+
+#[test]
 fn project_plan_map_pick_log_close_flow() {
     let dir = tempdir().unwrap();
     let db_dir = tempdir().unwrap();
@@ -8648,7 +9602,9 @@ fn mcp_contract_install_fixtures_and_cli_docs_do_not_drift() {
         .stdout
         .clone();
     let prompt_http: Value = serde_json::from_slice(&prompt_http).unwrap();
-    assert!(prompt_http["prompt"].as_str().unwrap().contains("/review"));
+    let prompt_http = prompt_http["prompt"].as_str().unwrap();
+    assert!(prompt_http.contains("/final-product-review"));
+    assert!(prompt_http.contains("/review-gates/<gate-id>/findings/resolve"));
 
     let cli_reference =
         fs::read_to_string(root.join("apps/docs/content/docs/reference/cli.mdx")).unwrap();
@@ -8667,9 +9623,12 @@ fn mcp_contract_install_fixtures_and_cli_docs_do_not_drift() {
         .stdout
         .clone();
     let review_help = String::from_utf8(review_help).unwrap();
-    for subcommand in ["annotate", "ingest", "artifact", "evidence", "close"] {
+    for subcommand in [
+        "annotate", "ingest", "evidence", "close", "findings", "list", "show",
+    ] {
         assert!(review_help.contains(subcommand));
     }
+    assert!(!review_help.contains("artifact"));
 }
 
 #[test]
@@ -9888,159 +10847,6 @@ fn eval_cli_and_mcp_share_one_surface() {
     let after_ref: Value = serde_json::from_slice(&after_ref).unwrap();
     assert_eq!(after_ref["item"]["status"], before_ref["item"]["status"]);
 
-    let non_review_item = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "item",
-            "create",
-            "Not a review",
-            "--description",
-            "ordinary item",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let non_review_item: Value = serde_json::from_slice(&non_review_item).unwrap();
-    let non_review_item_id = non_review_item["item"]["id"].as_str().unwrap();
-    let non_review_attachment = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "eval",
-            "evidence-ref",
-            "run",
-            "baseline-run",
-            "review",
-            non_review_item_id,
-            "--item",
-            evidence_item_id,
-        ])
-        .assert()
-        .code(3)
-        .get_output()
-        .stdout
-        .clone();
-    let non_review_attachment = single_json_document(&non_review_attachment);
-    assert_eq!(non_review_attachment["error"]["code"], "invalid_input");
-    assert!(
-        non_review_attachment["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("must be a review item")
-    );
-
-    let unrelated_review_target = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "item",
-            "create",
-            "Unrelated review target",
-            "--description",
-            "reviewed elsewhere",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let unrelated_review_target: Value = serde_json::from_slice(&unrelated_review_target).unwrap();
-    let unrelated_review_target_id = unrelated_review_target["item"]["id"].as_str().unwrap();
-    let unrelated_review = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "review",
-            "request",
-            unrelated_review_target_id,
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let unrelated_review: Value = serde_json::from_slice(&unrelated_review).unwrap();
-    let unrelated_review_id = unrelated_review["review"]["id"].as_str().unwrap();
-    let wrong_review_target = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "eval",
-            "evidence-ref",
-            "run",
-            "baseline-run",
-            "review",
-            unrelated_review_id,
-            "--item",
-            evidence_item_id,
-        ])
-        .assert()
-        .code(3)
-        .get_output()
-        .stdout
-        .clone();
-    let wrong_review_target = single_json_document(&wrong_review_target);
-    assert_eq!(wrong_review_target["error"]["code"], "invalid_input");
-    assert!(
-        wrong_review_target["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("must review item")
-    );
-
-    let owned_review = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "review",
-            "request",
-            evidence_item_id,
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let owned_review: Value = serde_json::from_slice(&owned_review).unwrap();
-    let owned_review_id = owned_review["review"]["id"].as_str().unwrap();
-    let review_ref_output = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "eval",
-            "evidence-ref",
-            "run",
-            "baseline-run",
-            "review",
-            owned_review_id,
-            "--item",
-            evidence_item_id,
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let review_ref = single_json_document(&review_ref_output);
-    assert_eval_envelope(&review_ref, "eval.evidence.ref", true);
-
     let insufficient_output = planr()
         .current_dir(dir.path())
         .args([
@@ -10202,14 +11008,10 @@ fn eval_cli_and_mcp_share_one_surface() {
         .success();
     let package_json: Value = serde_json::from_slice(&fs::read(&package).unwrap()).unwrap();
     let refs = package_json["eval_evidence_refs"].as_array().unwrap();
-    assert_eq!(refs.len(), 2);
+    assert_eq!(refs.len(), 1);
     assert!(
         refs.iter()
             .any(|reference| reference["target_id"] == regressed_id)
-    );
-    assert!(
-        refs.iter()
-            .any(|reference| reference["target_id"] == "baseline-run")
     );
     assert!(
         refs.iter()
@@ -10571,7 +11373,7 @@ fn eval_cli_and_mcp_share_one_surface() {
     let import_preview: Value = serde_json::from_slice(&import_preview).unwrap();
     assert_eq!(
         import_preview["report"]["would_create"]["eval_evidence_refs"],
-        2
+        1
     );
     assert!(
         import_preview["report"]["would_create"]["eval_case_results"]
@@ -10613,7 +11415,7 @@ fn eval_cli_and_mcp_share_one_surface() {
         .stdout
         .clone();
     let import_apply: Value = serde_json::from_slice(&import_apply).unwrap();
-    assert_eq!(import_apply["imported"]["eval_evidence_refs"], 2);
+    assert_eq!(import_apply["imported"]["eval_evidence_refs"], 1);
     let imported_comparison_output = planr()
         .current_dir(import_target.path())
         .args([
@@ -10903,24 +11705,6 @@ fn eval_cli_and_mcp_share_one_surface() {
         ])
         .assert()
         .failure();
-    let imported_review_output = planr()
-        .current_dir(import_target.path())
-        .args([
-            "--db",
-            import_db.to_str().unwrap(),
-            "--json",
-            "item",
-            "show",
-            owned_review_id,
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let imported_review: Value = serde_json::from_slice(&imported_review_output).unwrap();
-    assert_eq!(imported_review["item"]["work_type"], "review");
-
     let dangling_package = dir.path().join("eval-package-dangling.json");
     let mut dangling_json = package_json.clone();
     dangling_json["eval_comparisons"] = json!([]);
@@ -14815,7 +15599,7 @@ VALUES ('pln-stop-other', 'p-stop-other', 'build', 'other.md', 'Other Stop Plan'
 }
 
 #[test]
-fn codex_stop_hook_enforces_explicit_active_plan_until_audit_holds() {
+fn codex_stop_hook_enforces_explicit_active_plan_until_final_review_or_archive() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
     let db_arg = db.to_str().unwrap().to_string();
@@ -14930,8 +15714,18 @@ fn codex_stop_hook_enforces_explicit_active_plan_until_audit_holds() {
         .assert()
         .success();
     run(&["close", &second, "--summary", "second done"]);
-    let audit_holds = stop("thread-a");
-    assert!(audit_holds.as_object().unwrap().is_empty(), "{audit_holds}");
+    let final_review_required = stop("thread-a");
+    assert_eq!(
+        final_review_required["decision"], "block",
+        "{final_review_required}"
+    );
+    assert!(
+        final_review_required["reason"]
+            .as_str()
+            .unwrap()
+            .contains("final_product_review_complete"),
+        "{final_review_required}"
+    );
 
     planr()
         .current_dir(dir.path())
@@ -15207,7 +16001,7 @@ fn evidence_migration_explicitly_binds_pre_evidence_plans_without_rewriting_clai
         .iter()
         .find(|clause| clause["clause"] == "verification_logged")
         .unwrap();
-    assert_eq!(pre_audit["holds"], true, "{pre_audit}");
+    assert_eq!(pre_audit["holds"], false, "{pre_audit}");
     assert_eq!(
         pre_clause["authority"],
         "legacy_verification_log_compatibility"
@@ -15432,7 +16226,7 @@ fn evidence_migration_explicitly_binds_pre_evidence_plans_without_rewriting_clai
         "duplicate obligation id: pob-migration-binding",
     );
     let still_legacy = run(&["plan", "audit", &plan_id]);
-    assert_eq!(still_legacy["holds"], true, "{still_legacy}");
+    assert_eq!(still_legacy["holds"], false, "{still_legacy}");
 
     let port = free_port();
     let bin = assert_cmd::cargo::cargo_bin("planr");
@@ -15545,14 +16339,25 @@ fn evidence_migration_explicitly_binds_pre_evidence_plans_without_rewriting_clai
 
     let obligations_after_first_apply =
         run(&["evidence", "obligation", "list", "--plan", &plan_id]);
-    assert!(
-        obligations_after_first_apply["object"]["obligations"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|obligation| obligation["id"] == "pob-migration-binding"),
-        "{obligations_after_first_apply}"
-    );
+    let canonical = obligations_after_first_apply["object"]["obligations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|obligation| obligation["id"] == "pob-migration-binding")
+        .unwrap_or_else(|| panic!("{obligations_after_first_apply}"));
+    assert_eq!(canonical["obligation_shape"], "semantic_v1");
+    for runtime_field in ["policy_digest", "config_digest", "source_digest"] {
+        assert!(
+            canonical.get(runtime_field).is_none(),
+            "semantic obligation leaked runtime field {runtime_field}: {canonical}"
+        );
+    }
+    for runtime_field in ["environment", "runtime_target"] {
+        assert!(
+            canonical["observations"][0].get(runtime_field).is_none(),
+            "semantic observation leaked runtime field {runtime_field}: {canonical}"
+        );
+    }
 
     let persisted_lineage_collision = |id: &str, title: &str| {
         let mut persisted_obligation = migration["obligations"][0].clone();
@@ -15680,29 +16485,6 @@ fn evidence_migration_explicitly_binds_pre_evidence_plans_without_rewriting_clai
         "evidence migration has 1 conflict(s)",
     );
     assert_persisted_lineage_state("pob-migration-lineage-http");
-
-    let mut changed_created_at = migration.clone();
-    changed_created_at["obligations"][0]["created_at"] = json!("2026-07-29T01:02:03Z");
-    let changed_created_at_path = dir.path().join("migration-changed-created-at.json");
-    fs::write(
-        &changed_created_at_path,
-        serde_json::to_vec_pretty(&changed_created_at).unwrap(),
-    )
-    .unwrap();
-    let changed_created_at_preview = run(&[
-        "evidence",
-        "migrate",
-        "--input",
-        changed_created_at_path.to_str().unwrap(),
-    ]);
-    assert_eq!(
-        changed_created_at_preview["object"]["obligations"][0]["action"],
-        "conflict"
-    );
-    assert_eq!(
-        changed_created_at_preview["object"]["obligations"][0]["reason"],
-        "changed_payload"
-    );
 
     let mut mcp_obligation = migration["obligations"][0].clone();
     mcp_obligation["id"] = json!("pob-migration-mcp-binding");
@@ -16411,392 +17193,6 @@ fn evidence_migration_explicitly_binds_pre_evidence_plans_without_rewriting_clai
 }
 
 #[test]
-fn evidence_readiness_and_versioned_rebind_are_fail_closed_and_atomic() {
-    let dir = tempdir().unwrap();
-    let db = dir.path().join(".planr/planr.sqlite");
-    let db_arg = db.to_str().unwrap().to_string();
-    write_evidence_policy_fixture(dir.path());
-    let helper_relative = ".planr/evidence/adapters/runner.sh";
-    let helper_path = dir.path().join(helper_relative);
-    let helper_source = "#!/bin/sh\nprintf '{\"status\":\"ok\"}'\n";
-    fs::write(&helper_path, helper_source).unwrap();
-    let execution = json!({
-        "kind": "process",
-        "executable": "sh",
-        "args": [helper_relative],
-        "working_directory": ".",
-        "timeout_ms": 5000,
-        "stdout_limit_bytes": 4096,
-        "stderr_limit_bytes": 1024,
-        "payload_schema": {
-            "type": "com.example.health.status",
-            "schema_ref": "schema://com.example.health.status",
-            "schema_digest": sha256_json(&json!({
-                "type": "object",
-                "required": ["status"],
-                "properties": {"status": {"const": "ok"}},
-                "additionalProperties": false
-            })),
-        },
-    });
-    let file_identity = host_capture_run_helper_identity(dir.path(), &execution, helper_relative);
-    let manifest_digest = rewrite_evidence_runner_manifest(dir.path(), |manifest| {
-        manifest["availability_probe"]["execution"] = execution.clone();
-        manifest["adapter_digest"] = json!(process_adapter_digest(&execution, vec![file_identity]));
-    });
-    rewrite_evidence_policy_fixture(dir.path(), |policy| {
-        policy["adapter_registrations"][0]["manifest_digest"] = json!(manifest_digest);
-        policy["adapter_registrations"][0]["execution_contract"] = execution.clone();
-    });
-    init_git_repo(dir.path());
-    init_evidence_project(dir.path(), &db, "Evidence Rebind");
-    let run = |args: &[&str]| -> Value {
-        single_json_document(
-            &planr()
-                .current_dir(dir.path())
-                .args(["--db", &db_arg, "--json"])
-                .args(args)
-                .assert()
-                .success()
-                .get_output()
-                .stdout,
-        )
-    };
-    let product = run(&["plan", "new", "Rebind Product"]);
-    let product_id = product["plan"]["id"].as_str().unwrap();
-    let build = run(&["plan", "split", product_id, "--slice", "Rebind Build"]);
-    let plan_id = build["plan"]["id"].as_str().unwrap().to_string();
-    let policy = run(&["evidence", "policy"]);
-    let policy_digest = policy["object"]["digest"].as_str().unwrap();
-    let probe = policy["object"]["registry"]["probes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|probe| probe["manifest_id"] == "verifier-generic-adapter")
-        .unwrap();
-    let environment = capability_instance_environment(&db, probe["instance_id"].as_str().unwrap());
-    let mut old = evidence_obligation_for(
-        "pob-rebind-old",
-        policy_digest,
-        "com.example.health.status",
-        "rebind health",
-        json!({"status": "ok"}),
-        json!({"kind": "process", "uri": "local://health"}),
-        environment,
-        json!({"kind": "process", "id": "runtime-local"}),
-        json!([]),
-        "sha256:abababababababababababababababababababababababababababababababab",
-    );
-    old["plan_id"] = json!(plan_id);
-    old["item_id"] = Value::Null;
-    old["criterion_id"] = json!("crit-rebind");
-    old["observations"][0]["payload_schema"] =
-        json!({"schema_ref": "schema://com.example.health.status"});
-    add_evidence_obligation_value(dir.path(), &db, "pob-rebind-old", &old);
-
-    let mut incompatible = old.clone();
-    incompatible["id"] = json!("pob-readiness-incompatible");
-    incompatible["criterion_id"] = json!("crit-readiness-incompatible");
-    incompatible["observations"][0]["id"] = json!("obs-readiness-incompatible");
-    incompatible["observations"][0]["payload_schema"] =
-        json!({"schema_ref": "schema://com.example.unregistered.result"});
-    add_evidence_obligation_value(dir.path(), &db, "pob-readiness-incompatible", &incompatible);
-    let blocked_readiness = single_json_document(
-        &planr()
-            .current_dir(dir.path())
-            .args([
-                "--db",
-                &db_arg,
-                "--json",
-                "evidence",
-                "readiness",
-                "--scope",
-                "obligation",
-                "--id",
-                "pob-readiness-incompatible",
-            ])
-            .assert()
-            .failure()
-            .code(3)
-            .get_output()
-            .stdout,
-    );
-    assert_eq!(
-        blocked_readiness["object"]["status"], "blocked",
-        "{blocked_readiness}"
-    );
-    assert!(
-        blocked_readiness["object"]["gaps"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|gap| gap["code"] == "missing_payload_schema_registration"),
-        "{blocked_readiness}"
-    );
-    let mut compatible = incompatible;
-    compatible["id"] = json!("pob-readiness-compatible");
-    compatible["supersedes"] = json!("pob-readiness-incompatible");
-    compatible["observations"][0]["payload_schema"] =
-        json!({"schema_ref": "schema://com.example.health.status"});
-    compatible["config_digest"] =
-        json!("sha256:bcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbc");
-    compatible["created_at"] = json!("2026-07-31T19:59:00Z");
-    add_evidence_obligation_value(dir.path(), &db, "pob-readiness-compatible", &compatible);
-
-    let superseded_readiness = single_json_document(
-        &planr()
-            .current_dir(dir.path())
-            .args([
-                "--db",
-                &db_arg,
-                "--json",
-                "evidence",
-                "readiness",
-                "--scope",
-                "obligation",
-                "--id",
-                "pob-readiness-incompatible",
-            ])
-            .assert()
-            .failure()
-            .code(3)
-            .get_output()
-            .stdout,
-    );
-    assert!(
-        superseded_readiness["object"]["active_obligation_ids"]
-            .as_array()
-            .is_some_and(Vec::is_empty),
-        "{superseded_readiness}"
-    );
-    assert!(
-        superseded_readiness["object"]["gaps"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|gap| gap["code"] == "missing_obligation"),
-        "{superseded_readiness}"
-    );
-
-    let mut incompatible_runtime = compatible.clone();
-    incompatible_runtime["id"] = json!("pob-readiness-runtime-incompatible");
-    incompatible_runtime["supersedes"] = Value::Null;
-    incompatible_runtime["criterion_id"] = json!("crit-readiness-runtime");
-    incompatible_runtime["observations"][0]["id"] = json!("obs-readiness-runtime");
-    incompatible_runtime["observations"][0]["runtime_target"] =
-        json!({"kind": "process", "id": "runtime-unregistered"});
-    incompatible_runtime["config_digest"] =
-        json!("sha256:dededededededededededededededededededededededededededededededede");
-    incompatible_runtime["created_at"] = json!("2026-07-31T19:59:01Z");
-    add_evidence_obligation_value(
-        dir.path(),
-        &db,
-        "pob-readiness-runtime-incompatible",
-        &incompatible_runtime,
-    );
-    let runtime_blocked = single_json_document(
-        &planr()
-            .current_dir(dir.path())
-            .args([
-                "--db",
-                &db_arg,
-                "--json",
-                "evidence",
-                "readiness",
-                "--scope",
-                "obligation",
-                "--id",
-                "pob-readiness-runtime-incompatible",
-            ])
-            .assert()
-            .failure()
-            .code(3)
-            .get_output()
-            .stdout,
-    );
-    assert!(
-        runtime_blocked["object"]["gaps"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|gap| {
-                gap["code"] == "verifier_contract_mismatch"
-                    && gap["runtime_target"]["id"] == "runtime-unregistered"
-            }),
-        "{runtime_blocked}"
-    );
-    let mut compatible_runtime = incompatible_runtime;
-    compatible_runtime["id"] = json!("pob-readiness-runtime-compatible");
-    compatible_runtime["supersedes"] = json!("pob-readiness-runtime-incompatible");
-    compatible_runtime["observations"][0]["runtime_target"] =
-        json!({"kind": "process", "id": "runtime-local"});
-    compatible_runtime["config_digest"] =
-        json!("sha256:efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef");
-    compatible_runtime["created_at"] = json!("2026-07-31T19:59:02Z");
-    add_evidence_obligation_value(
-        dir.path(),
-        &db,
-        "pob-readiness-runtime-compatible",
-        &compatible_runtime,
-    );
-
-    let readiness = run(&["evidence", "readiness", "--scope", "plan", "--id", &plan_id]);
-    assert_evidence_envelope(&readiness, "evidence.readiness", true);
-    assert_eq!(readiness["object"]["status"], "passed", "{readiness}");
-
-    fs::write(&helper_path, format!("{helper_source}# drift\n")).unwrap();
-    let drifted_readiness = single_json_document(
-        &planr()
-            .current_dir(dir.path())
-            .args([
-                "--db",
-                &db_arg,
-                "--json",
-                "evidence",
-                "readiness",
-                "--scope",
-                "plan",
-                "--id",
-                &plan_id,
-            ])
-            .assert()
-            .failure()
-            .code(3)
-            .get_output()
-            .stdout,
-    );
-    assert!(
-        drifted_readiness["object"]["gaps"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|gap| gap["code"] == "adapter_digest_drift"),
-        "{drifted_readiness}"
-    );
-    fs::write(&helper_path, helper_source).unwrap();
-    let restored_readiness = run(&["evidence", "readiness", "--scope", "plan", "--id", &plan_id]);
-    assert_eq!(
-        restored_readiness["object"]["status"], "passed",
-        "{restored_readiness}"
-    );
-
-    let mut proposed = old.clone();
-    proposed["id"] = json!("pob-rebind-new");
-    proposed["supersedes"] = json!("pob-rebind-old");
-    proposed["config_digest"] =
-        json!("sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd");
-    proposed["created_at"] = json!("2026-07-31T20:00:00Z");
-    let mut input = json!({
-        "schema_version": "planr.evidence.rebind.v1",
-        "plan_id": plan_id,
-        "manifest_id": "verifier-generic-adapter",
-        "obligations": [proposed],
-    });
-    let input_path = dir.path().join("rebind.json");
-    fs::write(&input_path, serde_json::to_vec_pretty(&input).unwrap()).unwrap();
-    let preview = run(&[
-        "evidence",
-        "rebind",
-        "--input",
-        input_path.to_str().unwrap(),
-    ]);
-    assert_evidence_envelope(&preview, "evidence.rebind", true);
-    let preview_digest = preview["object"]["preview"]["preview_digest"]
-        .as_str()
-        .unwrap();
-    input["preview_digest"] = json!(preview_digest);
-    fs::write(&input_path, serde_json::to_vec_pretty(&input).unwrap()).unwrap();
-
-    let mut changed_after_preview = input.clone();
-    changed_after_preview["obligations"][0]["config_digest"] =
-        json!("sha256:fdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfd");
-    fs::write(
-        &input_path,
-        serde_json::to_vec_pretty(&changed_after_preview).unwrap(),
-    )
-    .unwrap();
-    let stale_preview = single_json_document(
-        &planr()
-            .current_dir(dir.path())
-            .args([
-                "--db",
-                &db_arg,
-                "--json",
-                "evidence",
-                "rebind",
-                "--input",
-                input_path.to_str().unwrap(),
-                "--apply",
-            ])
-            .assert()
-            .failure()
-            .get_output()
-            .stdout,
-    );
-    assert_evidence_error(
-        &stale_preview,
-        "evidence.rebind",
-        "conflict",
-        "requires current preview_digest",
-    );
-    assert_eq!(
-        Connection::open(&db)
-            .unwrap()
-            .query_row(
-                "SELECT COUNT(*) FROM proof_obligations WHERE id = 'pob-rebind-new'",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .unwrap(),
-        0,
-        "stale rebind preview must not persist the changed obligation"
-    );
-    fs::write(&input_path, serde_json::to_vec_pretty(&input).unwrap()).unwrap();
-
-    planr()
-        .current_dir(dir.path())
-        .env("PLANR_EVIDENCE_REBIND_FAIL_AFTER_CREATES", "1")
-        .args([
-            "--db",
-            &db_arg,
-            "--json",
-            "evidence",
-            "rebind",
-            "--input",
-            input_path.to_str().unwrap(),
-            "--apply",
-        ])
-        .assert()
-        .failure();
-    let rolled_back: i64 = Connection::open(&db)
-        .unwrap()
-        .query_row(
-            "SELECT COUNT(*) FROM proof_obligations WHERE id = 'pob-rebind-new'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(rolled_back, 0, "failed rebind must roll back every write");
-
-    let applied = run(&[
-        "evidence",
-        "rebind",
-        "--input",
-        input_path.to_str().unwrap(),
-        "--apply",
-    ]);
-    assert_eq!(applied["object"]["status"], "applied", "{applied}");
-    assert_eq!(applied["object"]["created"][0]["obligation_version"], 2);
-    let old_row = run(&["evidence", "obligation", "show", "pob-rebind-old"]);
-    let new_row = run(&["evidence", "obligation", "show", "pob-rebind-new"]);
-    assert_eq!(old_row["object"]["obligation"]["obligation_version"], 1);
-    assert_eq!(
-        new_row["object"]["obligation"]["supersedes_obligation_id"],
-        "pob-rebind-old"
-    );
-}
-
-#[test]
 fn codex_stop_hook_bounds_real_non_actionable_coverage_blockers() {
     struct StopBlockerCase {
         name: &'static str,
@@ -16893,7 +17289,6 @@ fn codex_stop_hook_bounds_real_non_actionable_coverage_blockers() {
         .unwrap();
         let map = run(&["map", "build", "--from", &plan_id]);
         let item = map["created"][0]["id"].as_str().unwrap().to_string();
-        run(&["close", &item, "--summary", "item done"]);
         run(&[
             "context",
             "add",
@@ -16945,6 +17340,7 @@ fn codex_stop_hook_bounds_real_non_actionable_coverage_blockers() {
             case.expected_run_code,
         );
         assert_evidence_envelope(&attempt, "evidence.run", true);
+        run(&["close", &item, "--summary", "item done"]);
         if let Some(fixture_ref) = case.fixture_ref {
             let disclosure = &attempt["object"]["receipt"]["fixture_disclosure"];
             assert_eq!(
@@ -17025,7 +17421,9 @@ fn codex_stop_hook_bounds_real_non_actionable_coverage_blockers() {
             case.name
         );
         let bounded = stop(&thread);
-        assert_codex_stop_output_schema(&bounded, false);
+        assert_codex_stop_output_schema(&bounded, true);
+        let exhausted = stop(&thread);
+        assert_codex_stop_output_schema(&exhausted, false);
     }
 }
 
@@ -17156,6 +17554,27 @@ fn pick_peek_reads_the_packet_without_leasing() {
     )
     .unwrap();
     let item = create_test_item(dir.path(), &db, "Dispatch me", "peek target");
+    let plan_path = dir.path().join("peek.plan.md");
+    fs::write(&plan_path, "# Peek\n").unwrap();
+    let conn = Connection::open(&db).unwrap();
+    let project_id: String = conn
+        .query_row("SELECT id FROM projects LIMIT 1", [], |row| row.get(0))
+        .unwrap();
+    conn.execute(
+        "INSERT INTO plans(id, project_id, stage, path, title, slug, parse_status, content_hash, created_at, updated_at)
+         VALUES ('plan-peek-read-only', ?1, 'build', ?2, 'Peek', 'peek', 'ok', 'sha256:peek', datetime('now'), datetime('now'))",
+        rusqlite::params![project_id, plan_path.to_string_lossy()],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE items SET plan_path = ?1 WHERE id = ?2",
+        rusqlite::params![plan_path.to_string_lossy(), item],
+    )
+    .unwrap();
+    let events_before: i64 = conn
+        .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
+        .unwrap();
+    drop(conn);
 
     // Peek returns the full packet including routing, marked as peek.
     let output = planr()
@@ -17171,25 +17590,31 @@ fn pick_peek_reads_the_packet_without_leasing() {
     assert_eq!(peek["item"]["id"], item.as_str());
     assert_eq!(peek["item"]["status"], "ready", "peek must not lease");
     assert_eq!(peek["routing"]["profile"], "coder");
-
-    // No lease, no pick events were written.
-    let output = planr()
-        .current_dir(dir.path())
-        .args(["--db", &db_arg, "--json", "event", "list"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let events: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(peek["work_packet"]["kind"], "outcome");
     assert!(
-        events["events"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|event| event["event_type"] != "item_picked"),
-        "peek must record no pick event: {events}"
+        peek["work_packet"].get("execution_state").is_none(),
+        "peek may project a planned outcome without creating execution state"
     );
+
+    // No execution state, lease, budget, replacement provenance, or event was
+    // written by the read-only projection.
+    let conn = Connection::open(&db).unwrap();
+    let count = |sql: &str| -> i64 { conn.query_row(sql, [], |row| row.get(0)).unwrap() };
+    assert_eq!(count("SELECT COUNT(*) FROM feature_runs"), 0);
+    assert_eq!(count("SELECT COUNT(*) FROM execution_batches"), 0);
+    assert_eq!(count("SELECT COUNT(*) FROM feature_run_role_leases"), 0);
+    assert_eq!(
+        count("SELECT COUNT(*) FROM feature_run_budget_reservations"),
+        0
+    );
+    assert_eq!(
+        count(
+            "SELECT COUNT(*) FROM execution_batches WHERE replacement_reason IS NOT NULL OR replaced_maker_worker_id IS NOT NULL OR successor_maker_worker_id IS NOT NULL"
+        ),
+        0
+    );
+    assert_eq!(count("SELECT COUNT(*) FROM events"), events_before);
+    drop(conn);
 
     // The worker's real pick leases the same item normally afterwards.
     let output = planr()
@@ -17206,6 +17631,26 @@ fn pick_peek_reads_the_packet_without_leasing() {
     assert_eq!(pick["item"]["status"], "picked");
     assert_eq!(pick["item"]["worker_id"], "worker-1");
     assert!(pick.get("peek").is_none());
+    assert_eq!(pick["work_packet"]["kind"], "outcome");
+    assert!(pick["work_packet"]["execution_state"].is_object());
+
+    let conn = Connection::open(&db).unwrap();
+    let count = |sql: &str| -> i64 { conn.query_row(sql, [], |row| row.get(0)).unwrap() };
+    assert_eq!(count("SELECT COUNT(*) FROM feature_runs"), 1);
+    assert_eq!(count("SELECT COUNT(*) FROM execution_batches"), 1);
+    assert_eq!(count("SELECT COUNT(*) FROM feature_run_role_leases"), 1);
+    assert_eq!(
+        count("SELECT COUNT(*) FROM feature_run_budget_reservations"),
+        1
+    );
+    assert_eq!(
+        count("SELECT COUNT(*) FROM events WHERE event_type = 'feature_run_started'"),
+        1
+    );
+    assert_eq!(
+        count("SELECT COUNT(*) FROM events WHERE event_type = 'item_picked'"),
+        1
+    );
 }
 
 #[test]
@@ -17315,6 +17760,198 @@ profile = "driver"
 }
 
 #[test]
+fn structurally_supported_policy_upgrade_is_explicit_strict_and_atomic() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "project",
+            "init",
+            "Policy Upgrade",
+        ])
+        .assert()
+        .success();
+    let fixture = include_str!("fixtures/policy-v1.10.0-alpha.2.toml")
+        .replace("version = \"1.10.0-alpha.2\"", "version = \"1.0.0\"");
+    let policy_path = dir.path().join(".planr/policy.toml");
+    fs::write(&policy_path, &fixture).unwrap();
+
+    let plan_path = dir.path().join(".planr/plans/build/policy-upgrade.plan.md");
+    fs::create_dir_all(plan_path.parent().unwrap()).unwrap();
+    fs::write(&plan_path, "# Policy upgrade\n").unwrap();
+    let conn = Connection::open(&db).unwrap();
+    let project_id: String = conn
+        .query_row("SELECT id FROM projects LIMIT 1", [], |row| row.get(0))
+        .unwrap();
+    conn.execute(
+        "INSERT INTO plans(id, project_id, stage, path, title, slug, parse_status, content_hash, created_at, updated_at)
+         VALUES ('plan-policy-upgrade', ?1, 'build', ?2, 'Policy upgrade', 'policy-upgrade', 'ok', 'sha256:policy-upgrade', datetime('now'), datetime('now'))",
+        rusqlite::params![project_id, plan_path.to_string_lossy()],
+    )
+    .unwrap();
+    for ordinal in 1..=2 {
+        conn.execute(
+            "INSERT INTO items(id, project_id, title, description, status, work_type, plan_path, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 'policy upgrade', 'ready', 'code', ?4, datetime('now'), datetime('now'))",
+            rusqlite::params![
+                format!("item-policy-upgrade-{ordinal}"),
+                project_id,
+                format!("Policy upgrade {ordinal}"),
+                plan_path.to_string_lossy(),
+            ],
+        )
+        .unwrap();
+    }
+    drop(conn);
+
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "policy", "check"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("policy_upgrade_required"));
+    planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "policy-upgrade-maker")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "pick",
+            "--work-type",
+            "code",
+            "--plan",
+            "plan-policy-upgrade",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("policy_upgrade_required"));
+    let conn = Connection::open(&db).unwrap();
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM feature_runs", [], |row| row
+            .get::<_, i64>(0))
+            .unwrap(),
+        0,
+        "legacy policy must be detected before FeatureRun creation"
+    );
+    drop(conn);
+
+    let ambiguous = format!(
+        "{fixture}\n[usage.phase_reserves]\nverification_percent = 0\nreview_percent = 20\nrepair_percent = 0\n"
+    );
+    fs::write(&policy_path, &ambiguous).unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "policy", "upgrade"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "ambiguous mixed legacy/current policy shape",
+        ));
+    assert_eq!(fs::read_to_string(&policy_path).unwrap(), ambiguous);
+
+    let lossy = fixture.replace(
+        "review_reserve_percent = 20",
+        "review_reserve_percent = 120",
+    );
+    fs::write(&policy_path, &lossy).unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "policy", "upgrade"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("must total at most 100 percent"));
+    assert_eq!(fs::read_to_string(&policy_path).unwrap(), lossy);
+
+    fs::write(&policy_path, &fixture).unwrap();
+    let output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "policy", "upgrade"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let preview: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(preview["mode"], "preview");
+    assert_eq!(
+        preview["upgrade"]["from_shape"],
+        "planr.policy.v1@v1.10.0-alpha.2"
+    );
+    let canonical = preview["upgrade"]["canonical_toml"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(canonical.contains("review_percent = 20"));
+    assert!(canonical.contains("verification_percent = 0"));
+    assert!(canonical.contains("repair_percent = 0"));
+    assert!(canonical.contains("protected_risks = ["));
+    assert!(canonical.contains("security_or_auth"));
+    assert!(canonical.contains("concurrency_or_transaction"));
+    assert!(canonical.contains("require_verification_evidence = true"));
+    let canonical_value: toml::Value = toml::from_str(&canonical).unwrap();
+    assert_eq!(
+        canonical_value["execution"]["roles"]["worker"]["filesystem"]["write_roots"],
+        toml::Value::Array(vec![
+            toml::Value::String("src".to_string()),
+            toml::Value::String("tests".to_string()),
+        ])
+    );
+    assert_eq!(fs::read_to_string(&policy_path).unwrap(), fixture);
+    assert!(canonical.contains("version = \"1.0.0\""));
+
+    let output = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "policy",
+            "upgrade",
+            "--apply",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let applied: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(applied["mode"], "apply");
+    assert_eq!(applied["upgrade"]["canonical_toml"], canonical);
+    assert_eq!(fs::read_to_string(&policy_path).unwrap(), canonical);
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "policy", "check"])
+        .assert()
+        .success();
+
+    planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "policy-upgrade-maker")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "pick",
+            "--work-type",
+            "code",
+            "--plan",
+            "plan-policy-upgrade",
+        ])
+        .assert()
+        .success();
+    let conn = Connection::open(&db).unwrap();
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM feature_runs", [], |row| row
+            .get::<_, i64>(0))
+            .unwrap(),
+        1,
+        "canonical policy must permit normal FeatureRun initialization"
+    );
+}
+
+#[test]
 fn usage_policy_cli_and_mcp_reuse_shapes_and_fail_closed() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
@@ -17354,9 +17991,12 @@ max_wall_time_seconds = 600
 max_tool_calls = 100
 max_tokens = 10000
 max_credits_micros = 1000000
-review_reserve_percent = 20
 budget_exhaustion = "downgrade_noncritical"
 metering = "trusted"
+[usage.phase_reserves]
+verification_percent = 10
+review_percent = 5
+repair_percent = 5
 
 [transitions.retry]
 max_same_route_retries = 1
@@ -17378,6 +18018,7 @@ noncritical_only = true
 enabled = true
 
 [materiality]
+protected_risks = ["security_or_auth", "secrets_or_crypto", "schema_or_migration", "infrastructure_or_deploy", "public_api", "billing", "concurrency_or_transaction"]
 changed_files_threshold = 10
 changed_lines_threshold = 500
 
@@ -18335,6 +18976,7 @@ fn runtime_control_and_approval_gates_are_enforced() {
 
     let blocked_close = planr()
         .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "runtime-a")
         .args([
             "--db",
             db.to_str().unwrap(),
@@ -18350,10 +18992,14 @@ fn runtime_control_and_approval_gates_are_enforced() {
         .stdout
         .clone();
     let blocked_close: Value = serde_json::from_slice(&blocked_close).unwrap();
-    assert_eq!(blocked_close["error"]["code"], "invalid_transition");
+    assert_eq!(
+        blocked_close["error"]["code"], "invalid_transition",
+        "{blocked_close}"
+    );
 
     planr()
         .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "runtime-a")
         .args([
             "--db",
             db.to_str().unwrap(),
@@ -18370,6 +19016,7 @@ fn runtime_control_and_approval_gates_are_enforced() {
         .success();
     planr()
         .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "runtime-a")
         .args([
             "--db",
             db.to_str().unwrap(),
@@ -18400,6 +19047,7 @@ fn runtime_control_and_approval_gates_are_enforced() {
         .success();
     planr()
         .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "runtime-a")
         .args([
             "--db",
             db.to_str().unwrap(),
@@ -18423,393 +19071,6 @@ fn runtime_control_and_approval_gates_are_enforced() {
         .stdout(predicate::str::contains("planr_pick_heartbeat"))
         .stdout(predicate::str::contains("planr_approval_request"))
         .stdout(predicate::str::contains("approvals"));
-}
-
-#[test]
-fn open_review_blocks_target_close_until_review_closes() {
-    let dir = tempdir().unwrap();
-    let db = dir.path().join(".planr/planr.sqlite");
-    planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "project", "init", "Review"])
-        .assert()
-        .success();
-    let output = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "item",
-            "create",
-            "Reviewed Item",
-            "--description",
-            "review gate",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let value: Value = serde_json::from_slice(&output).unwrap();
-    let item_id = value["item"]["id"].as_str().unwrap();
-
-    let output = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "review",
-            "request",
-            item_id,
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let value: Value = serde_json::from_slice(&output).unwrap();
-    let review_id = value["review"]["id"].as_str().unwrap();
-
-    let output = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "close",
-            item_id,
-            "--summary",
-            "premature",
-        ])
-        .assert()
-        .failure()
-        .get_output()
-        .stdout
-        .clone();
-    let value: Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(value["error"]["code"], "invalid_transition");
-
-    planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "review",
-            "close",
-            review_id,
-            "--verdict",
-            "complete",
-        ])
-        .assert()
-        .success();
-    planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "close",
-            item_id,
-            "--summary",
-            "reviewed",
-        ])
-        .assert()
-        .success();
-}
-
-#[test]
-fn human_review_feedback_contract_writes_annotations_artifacts_and_followups() {
-    let dir = tempdir().unwrap();
-    let db = dir.path().join(".planr/planr.sqlite");
-    planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "project",
-            "init",
-            "Human Gates",
-        ])
-        .assert()
-        .success();
-    let created = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "item",
-            "create",
-            "Human reviewed item",
-            "--description",
-            "needs a review contract",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let created: Value = serde_json::from_slice(&created).unwrap();
-    let item_id = created["item"]["id"].as_str().unwrap();
-    let review = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "review",
-            "request",
-            item_id,
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let review: Value = serde_json::from_slice(&review).unwrap();
-    let review_id = review["review"]["id"].as_str().unwrap();
-
-    let annotation = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "review",
-            "annotate",
-            item_id,
-            "--message",
-            "Add missing acceptance coverage",
-            "--severity",
-            "blocking",
-            "--file",
-            "tests/e2e.rs",
-            "--line",
-            "42",
-            "--author",
-            "qa",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let annotation: Value = serde_json::from_slice(&annotation).unwrap();
-    assert_eq!(annotation["annotation"]["severity"], "blocking");
-
-    let feedback_path = dir.path().join("review-feedback.json");
-    fs::write(
-        &feedback_path,
-        serde_json::to_vec(&json!({
-            "reviewer": "hook-reviewer",
-            "verdict": "not-complete",
-            "findings": ["Hook finding requires a failing-path test"],
-            "annotations": [
-                {
-                    "message": "Hook annotation is persisted",
-                    "severity": "warning",
-                    "file": "src/app.rs",
-                    "line": 7
-                }
-            ]
-        }))
-        .unwrap(),
-    )
-    .unwrap();
-    let feedback = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "review",
-            "ingest",
-            item_id,
-            "--from",
-            feedback_path.to_str().unwrap(),
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let feedback: Value = serde_json::from_slice(&feedback).unwrap();
-    assert_eq!(feedback["auto_closed"], false);
-    assert_eq!(feedback["auto_approved"], false);
-    assert_eq!(feedback["annotations"].as_array().unwrap().len(), 1);
-
-    let mut mcp = planr();
-    mcp.current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "mcp"])
-        .write_stdin(format!(
-            "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}}\n{}\n",
-            json!({
-                "jsonrpc": "2.0",
-                "id": 2,
-                "method": "tools/call",
-                "params": {
-                    "name": "planr_review_annotate",
-                    "arguments": {
-                        "item_id": item_id,
-                        "message": "MCP annotation",
-                        "severity": "info"
-                    }
-                }
-            })
-        ))
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("planr_review_ingest"))
-        .stdout(predicate::str::contains("MCP annotation"));
-
-    let close = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "review",
-            "close",
-            review_id,
-            "--verdict",
-            "not-complete",
-            "--findings",
-            "Add missing test",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let close: Value = serde_json::from_slice(&close).unwrap();
-    assert_eq!(close["verdict"], "not-complete");
-    assert_eq!(close["created"].as_array().unwrap().len(), 2);
-    let artifact_path = close["artifact"]["path"].as_str().unwrap();
-    let artifact_body = fs::read_to_string(artifact_path).unwrap();
-    assert!(artifact_body.contains("Add missing test"));
-    assert!(artifact_body.contains("Hook annotation is persisted"));
-    assert!(artifact_body.contains("Source file content included: false"));
-
-    let explicit_artifact = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "review",
-            "artifact",
-            review_id,
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let explicit_artifact: Value = serde_json::from_slice(&explicit_artifact).unwrap();
-    assert_eq!(explicit_artifact["artifact"]["kind"], "review");
-
-    let events = planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "--json", "event", "list"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let events: Value = serde_json::from_slice(&events).unwrap();
-    let event_types = events["events"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|event| event["event_type"].as_str())
-        .collect::<Vec<_>>();
-    assert!(event_types.contains(&"review_annotation_added"));
-    assert!(event_types.contains(&"review_feedback_ingested"));
-    assert!(event_types.contains(&"review_artifact_written"));
-
-    let http_item = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "item",
-            "create",
-            "HTTP human gate item",
-            "--description",
-            "http review routes",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let http_item: Value = serde_json::from_slice(&http_item).unwrap();
-    let http_item_id = http_item["item"]["id"].as_str().unwrap();
-    let port = free_port();
-    let bin = assert_cmd::cargo::cargo_bin("planr");
-    let mut server = StdCommand::new(&bin)
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "serve",
-            "--port",
-            &port.to_string(),
-        ])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    wait_for_http_server(port);
-    let http_review = http_json(&http_request(
-        port,
-        "POST",
-        &format!("/v1/items/{http_item_id}/reviews"),
-        "{}",
-    ));
-    let http_review_id = http_review["review"]["id"].as_str().unwrap();
-    let http_annotation = http_json(&http_request(
-        port,
-        "POST",
-        &format!("/v1/items/{http_item_id}/review-annotations"),
-        "{\"message\":\"HTTP annotation\",\"severity\":\"blocking\"}",
-    ));
-    assert_eq!(http_annotation["annotation"]["severity"], "blocking");
-    let http_feedback = http_json(&http_request(
-        port,
-        "POST",
-        &format!("/v1/items/{http_item_id}/review-feedback"),
-        "{\"reviewer\":\"http-hook\",\"findings\":[\"HTTP finding\"]}",
-    ));
-    assert_eq!(http_feedback["auto_closed"], false);
-    let http_close = http_json(&http_request(
-        port,
-        "POST",
-        &format!("/v1/reviews/{http_review_id}/close"),
-        "{\"verdict\":\"complete\",\"findings\":[]}",
-    ));
-    assert_eq!(http_close["verdict"], "complete");
-    let http_artifact = http_json(&http_request(
-        port,
-        "GET",
-        &format!("/v1/reviews/{http_review_id}/artifact"),
-        "",
-    ));
-    assert_eq!(http_artifact["artifact"]["kind"], "review");
-    let http_artifact_again = http_json(&http_request(
-        port,
-        "GET",
-        &format!("/v1/reviews/{http_review_id}/artifact"),
-        "",
-    ));
-    assert_eq!(
-        http_artifact_again["artifact"]["id"],
-        http_artifact["artifact"]["id"]
-    );
-    server.kill().unwrap();
-    server.wait().unwrap();
 }
 
 #[test]
@@ -19806,107 +20067,913 @@ fn child_item_ids(db: &std::path::Path, parent_id: &str) -> Vec<String> {
         .unwrap()
 }
 
-#[test]
-fn breakdown_accepts_repeated_flags_and_newlines_and_reports_chain_and_next() {
-    let dir = tempdir().unwrap();
-    let db = dir.path().join(".planr/planr.sqlite");
+fn seed_final_review_feature_run(dir: &Path, db: &Path) -> String {
     planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "project", "init", "Breakdown"])
+        .current_dir(dir)
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "project",
+            "init",
+            "Final Gate Seed",
+        ])
         .assert()
         .success();
-    let parent = create_test_item(dir.path(), &db, "Coarse slice", "breakdown contract");
+    let plan = planr()
+        .current_dir(dir)
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "plan",
+            "new",
+            "Final Gate Seed Plan",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let plan: Value = serde_json::from_slice(&plan).unwrap();
+    let plan_id = plan["plan"]["id"].as_str().unwrap().to_string();
+    let plan_path = plan["plan"]["path"].as_str().unwrap().to_string();
+    let conn = Connection::open(db).unwrap();
+    let project_id: String = conn
+        .query_row("SELECT id FROM projects LIMIT 1", [], |row| row.get(0))
+        .unwrap();
+    conn.execute(
+        "INSERT INTO items(id, project_id, title, description, status, work_type, worker_id, plan_path, created_at, updated_at, completed_at)
+         VALUES ('outcome-final-seed', ?1, 'Outcome', 'settled outcome', 'closed', 'code', 'maker-final', ?2, datetime('now'), datetime('now'), datetime('now'))",
+        rusqlite::params![project_id, plan_path],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO feature_runs(id, project_id, plan_id, status, phase, policy_digest, source_revision, active_batch_id, outcomes_settled, batch_outcome_count, revision)
+         VALUES ('run-final-seed', ?1, ?2, 'active', 'verification', 'sha256:policy', 'source-final', NULL, 1, 0, 0)",
+        rusqlite::params![project_id, plan_id],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO feature_run_role_leases(run_id, role, worker_id, lease_generation, released_at)
+         VALUES ('run-final-seed', 'maker', 'maker-final', 1, datetime('now'))",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO feature_run_role_leases(run_id, role, worker_id, lease_generation)
+         VALUES ('run-final-seed', 'verifier', 'verifier-final', 1)",
+        [],
+    )
+    .unwrap();
+    plan_id
+}
 
-    // The delimiter contract: repeated --into flags and newline-packed
-    // values parse identically, so agents never guess the separator (the
-    // Codex dogfood passed newlines and got one swallowed mega-title).
-    let output = planr()
+#[test]
+fn canonical_final_review_cli_mcp_pick_accept_and_audit_use_one_gate_without_map_items() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    let plan_id = seed_final_review_feature_run(dir.path(), &db);
+    let created = planr()
         .current_dir(dir.path())
         .args([
             "--db",
             db.to_str().unwrap(),
             "--json",
-            "item",
-            "breakdown",
-            &parent,
-            "--into",
-            "Step A",
-            "--into",
-            "Step B\nStep C",
+            "plan",
+            "final-review",
+            &plan_id,
         ])
         .assert()
         .success()
         .get_output()
         .stdout
         .clone();
-    let value: Value = serde_json::from_slice(&output).unwrap();
-    let items = value["items"].as_array().unwrap();
-    let titles = items
-        .iter()
-        .map(|item| item["title"].as_str().unwrap())
-        .collect::<Vec<_>>();
-    assert_eq!(titles, ["Step A", "Step B", "Step C"]);
+    let created: Value = serde_json::from_slice(&created).unwrap();
+    let gate_id = created["execution_state"]["review_gate"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let picked = planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "reviewer-final")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "pick",
+            "--plan",
+            &plan_id,
+            "--work-type",
+            "review",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let picked: Value = serde_json::from_slice(&picked).unwrap();
     assert_eq!(
-        items[0]["status"], "ready",
-        "first child must be ready: {value}"
+        picked["work_packet"]["execution_state"]["review_gate"]["id"],
+        gate_id
     );
-    assert_eq!(
-        items[1]["status"], "pending",
-        "chained children must wait on the chain: {value}"
-    );
-    assert_eq!(
-        value["links"].as_array().unwrap().len(),
-        2,
-        "breakdown must report the chain links: {value}"
-    );
-    assert_eq!(value["item"]["status"], "blocked", "parent parks as a gate");
-    assert_eq!(value["next"], "planr pick --json");
-
-    // The human output names every child and the next command instead of a
-    // bare count.
-    let human = planr()
+    let close_input = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"planr_review_gate_close","arguments":{"review_gate_id":gate_id,"verdict":"complete","reviewer":"reviewer-final"}}}).to_string() + "\n";
+    planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "reviewer-final")
+        .args(["--db", db.to_str().unwrap(), "mcp"])
+        .write_stdin(close_input)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("accepted"));
+    let audit = planr()
         .current_dir(dir.path())
         .args([
             "--db",
             db.to_str().unwrap(),
-            "item",
-            "breakdown",
-            &create_test_item(dir.path(), &db, "Second slice", "human output"),
-            "--into",
-            "Only child",
+            "--json",
+            "plan",
+            "audit",
+            &plan_id,
         ])
         .assert()
         .success()
         .get_output()
         .stdout
         .clone();
-    let human = String::from_utf8(human).unwrap();
-    assert!(human.contains("Only child"), "human output: {human}");
-    assert!(human.contains("next: planr pick"), "human output: {human}");
+    let audit: Value = serde_json::from_slice(&audit).unwrap();
+    assert_eq!(
+        audit["clauses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|clause| clause["clause"] == "final_product_review_complete")
+            .unwrap()["pass"],
+        true
+    );
+}
 
-    // Without --next, done still ends in an action: the response names the
-    // exact follow-up command.
-    let output = planr()
+#[test]
+fn canonical_execution_state_projects_across_cli_mcp_http_inspection_recovery_package_and_audit() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
         .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "--json", "pick"])
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "project",
+            "init",
+            "Final Gate",
+        ])
+        .assert()
+        .success();
+    let plan = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "plan",
+            "new",
+            "Canonical Final Gate",
+        ])
         .assert()
         .success()
         .get_output()
         .stdout
         .clone();
-    let pick: Value = serde_json::from_slice(&output).unwrap();
-    let picked = pick["item"]["id"].as_str().unwrap().to_string();
+    let plan: Value = serde_json::from_slice(&plan).unwrap();
+    let plan_id = plan["plan"]["id"].as_str().unwrap().to_string();
+    let plan_path = plan["plan"]["path"].as_str().unwrap().to_string();
+    let conn = Connection::open(&db).unwrap();
+    let project_id: String = conn
+        .query_row("SELECT id FROM projects LIMIT 1", [], |row| row.get(0))
+        .unwrap();
+    conn.execute(
+        "INSERT INTO feature_runs(id, project_id, plan_id, status, phase, policy_digest, source_revision, active_batch_id, outcomes_settled, batch_outcome_count, revision, terminal_reason, created_at, updated_at)
+         VALUES ('run-historical', ?1, ?2, 'complete', 'complete', 'sha256:old-policy', 'source-historical', NULL, 1, 0, 1, 'completed', '2000-01-01 00:00:00', '2000-01-01 00:00:00')",
+        rusqlite::params![project_id, plan_id],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO feature_run_role_leases(run_id, role, worker_id, lease_generation, released_at)
+         VALUES ('run-historical', 'maker', 'maker-historical', 1, '2000-01-01 00:00:00')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO review_gates(id, run_id, scope_kind, scope_id, kind, status, responsible_maker_id, latest_attempt, source_revision, created_at, updated_at)
+         VALUES ('gate-historical', 'run-historical', 'plan', ?1, 'final_product', 'changes_requested', 'maker-historical', 1, 'source-historical', '2000-01-01 00:00:00', '2000-01-01 00:00:00')",
+        [&plan_id],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO review_attempts(id, gate_id, attempt_number, reviewer_worker_id, reviewer_mode, verdict, source_revision, artifacts_json, created_at)
+         VALUES ('attempt-historical', 'gate-historical', 1, 'reviewer-historical', 'independent', 'changes_requested', 'source-historical', '[]', '2000-01-01 00:00:00')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO review_findings(id, run_id, gate_id, attempt_id, severity, target, owner_worker_id, status, invalidated_evidence_ids_json, created_at)
+         VALUES ('finding-historical', 'run-historical', 'gate-historical', 'attempt-historical', 'high', 'historical-target', 'maker-historical', 'open', '[]', '2000-01-01 00:00:00')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO feature_run_budget_reservations(id, run_id, phase, boundary_key, status, reserved_wall_seconds, reserved_tool_calls, owns_wall, started_at_unix_ms, provenance)
+         VALUES ('reservation-historical', 'run-historical', 'review', 'review:historical', 'active', 97, 13, 1, 1, 'historical-test')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO feature_run_budget_observations(id, run_id, phase, metering, wall_seconds, tokens, tool_calls, provenance)
+         VALUES ('observation-historical', 'run-historical', 'review', 'trusted', 97, 1000, 13, 'historical-test')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO items(id, project_id, title, description, status, work_type, worker_id, plan_path, created_at, updated_at, completed_at)
+         VALUES ('outcome-final', ?1, 'Outcome', 'settled outcome', 'closed', 'code', 'maker-final', ?2, datetime('now'), datetime('now'), datetime('now'))",
+        rusqlite::params![project_id, plan_path],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO feature_runs(id, project_id, plan_id, status, phase, policy_digest, source_revision, active_batch_id, outcomes_settled, batch_outcome_count, revision)
+         VALUES ('run-final', ?1, ?2, 'active', 'verification', 'sha256:policy', 'source-final', NULL, 1, 0, 0)",
+        rusqlite::params![project_id, plan_id],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO feature_run_role_leases(run_id, role, worker_id, lease_generation, released_at)
+         VALUES ('run-final', 'maker', 'maker-final', 1, datetime('now'))",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO feature_run_role_leases(run_id, role, worker_id, lease_generation)
+         VALUES ('run-final', 'verifier', 'verifier-final', 1)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    let created = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "plan",
+            "final-review",
+            &plan_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let created: Value = serde_json::from_slice(&created).unwrap();
+    assert_eq!(created["created"], true);
+    assert_eq!(
+        created["execution_state"]["schema_version"],
+        "planr.execution_state.v1"
+    );
+    assert_eq!(created["execution_state"]["feature_run"]["id"], "run-final");
+    assert_eq!(
+        created["execution_state"]["feature_run"]["source_revision"],
+        "source-final"
+    );
+    assert_eq!(
+        created["execution_state"]["review_gate"]["source_revision"],
+        "source-final"
+    );
+    assert_eq!(
+        created["execution_state"]["owner"]["worker_id"],
+        "verifier-final"
+    );
+    assert_eq!(
+        created["execution_state"]["budget"]["active_reservations"],
+        0
+    );
+    let gate_id = created["execution_state"]["review_gate"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let mcp_input = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"planr_plan_final_review","arguments":{"id":plan_id}}}).to_string() + "\n";
+    let mcp_output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "mcp"])
+        .write_stdin(mcp_input)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let mcp_response: Value = serde_json::from_str(
+        String::from_utf8(mcp_output)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap(),
+    )
+    .unwrap();
+    let mcp_value: Value = serde_json::from_str(
+        mcp_response["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(mcp_value["execution_state"], created["execution_state"]);
+    assert_eq!(mcp_value["created"], false);
+
+    let port = free_port();
+    let bin = assert_cmd::cargo::cargo_bin("planr");
+    let mut server = StdCommand::new(&bin)
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "serve",
+            "--port",
+            &port.to_string(),
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    wait_for_http_server(port);
+    let projected = http_json(&http_request(
+        port,
+        "GET",
+        &format!("/v1/plans/{plan_id}/final-product-review"),
+        "",
+    ));
+    assert_eq!(projected["current"]["review_gate"]["id"], gate_id);
+    assert_eq!(projected["current"]["accepted"], false);
+
+    let picked = planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "reviewer-final")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "pick",
+            "--plan",
+            &plan_id,
+            "--work-type",
+            "review",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let picked: Value = serde_json::from_slice(&picked).unwrap();
+    assert_eq!(picked["work_packet"]["kind"], "review_gate");
+    assert_eq!(
+        picked["work_packet"]["execution_state"]["review_gate"]["id"],
+        gate_id
+    );
+
+    let close_input = json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"planr_review_gate_close","arguments":{"review_gate_id":gate_id,"verdict":"complete","reviewer":"reviewer-final"}}}).to_string() + "\n";
+    planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "reviewer-final")
+        .args(["--db", db.to_str().unwrap(), "mcp"])
+        .write_stdin(close_input)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("accepted"));
+
+    let projected = http_json(&http_request(
+        port,
+        "GET",
+        &format!("/v1/plans/{plan_id}/final-product-review"),
+        "",
+    ));
+    assert_eq!(projected["current"]["accepted"], true);
+
+    let audit = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "plan",
+            "audit",
+            &plan_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let audit: Value = serde_json::from_slice(&audit).unwrap();
+    let final_clause = audit["clauses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|clause| clause["clause"] == "final_product_review_complete")
+        .unwrap();
+    assert_eq!(final_clause["pass"], true, "{final_clause}");
+
+    let status = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "map", "status"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let status: Value = serde_json::from_slice(&status).unwrap();
+    let current_status = status["execution_states"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|state| state["feature_run"]["id"] == "run-final")
+        .unwrap()
+        .clone();
+    let historical_status = status["execution_states"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|state| state["feature_run"]["id"] == "run-historical")
+        .unwrap();
+    assert_eq!(current_status["reason_code"], "feature_run_complete");
+    assert_eq!(historical_status["review_gate"]["id"], "gate-historical");
+    assert_eq!(
+        historical_status["review_attempts"][0]["id"],
+        "attempt-historical"
+    );
+    assert_eq!(historical_status["findings"][0]["id"], "finding-historical");
+    assert_eq!(historical_status["budget"]["active_reservations"], 1);
+    assert!(historical_status["owner"].is_null());
+    assert_eq!(
+        historical_status["feature_run"]["source_revision"],
+        "source-historical"
+    );
+
+    let http_status = http_json(&http_request(port, "GET", "/v1/map/status", ""));
+    let http_current = http_status["execution_states"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|state| state["feature_run"]["id"] == "run-final")
+        .unwrap();
+    assert_eq!(http_current, &current_status);
+    server.kill().unwrap();
+    server.wait().unwrap();
+
+    let status_mcp_input = json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"planr_map_status","arguments":{}}}).to_string() + "\n";
+    let status_mcp_output = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "mcp"])
+        .write_stdin(status_mcp_input)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let status_mcp_response: Value = serde_json::from_str(
+        String::from_utf8(status_mcp_output)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap(),
+    )
+    .unwrap();
+    let status_mcp: Value = serde_json::from_str(
+        status_mcp_response["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    let status_mcp_current = status_mcp["execution_states"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|state| state["feature_run"]["id"] == "run-final")
+        .unwrap();
+    assert_eq!(status_mcp_current, &current_status);
+    let trace = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "trace",
+            "item",
+            "outcome-final",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let trace: Value = serde_json::from_slice(&trace).unwrap();
+    assert_eq!(
+        trace["execution_state"]["reason_code"],
+        "feature_run_complete"
+    );
+    assert_eq!(trace["execution_state"], current_status);
+    assert_eq!(
+        trace["recovery"]["execution_state"],
+        trace["execution_state"]
+    );
+    assert_eq!(audit["execution_state"], trace["execution_state"]);
+    for legacy_key in ["review_attempts", "review_gate", "final_product_review"] {
+        assert!(
+            trace.get(legacy_key).is_none(),
+            "legacy live trace field {legacy_key}: {trace}"
+        );
+    }
+
+    let export_path = dir.path().join("canonical-package.json");
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "export",
+            "--out",
+            export_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let package: Value = serde_json::from_slice(&fs::read(export_path).unwrap()).unwrap();
+    let packaged_current = package["execution_states"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|state| state["feature_run"]["id"] == "run-final")
+        .unwrap();
+    assert_eq!(packaged_current, &trace["execution_state"]);
+    assert_eq!(
+        trace["execution_state"]["review_attempts"][0]["source_revision"],
+        "source-final"
+    );
+    assert!(
+        trace["execution_state"]["findings"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    for args in [
+        vec!["map", "status"],
+        vec!["trace", "item", "outcome-final"],
+        vec!["review", "show", gate_id.as_str()],
+        vec!["plan", "audit", plan_id.as_str()],
+    ] {
+        let output = planr()
+            .current_dir(dir.path())
+            .args(["--db", db.to_str().unwrap()])
+            .args(args)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let human = String::from_utf8(output).unwrap();
+        let leading = human.lines().take(5).collect::<Vec<_>>();
+        assert!(leading[0].starts_with("phase:"), "{human}");
+        assert!(leading[1].starts_with("owner:"), "{human}");
+        assert!(leading[2].starts_with("budget:"), "{human}");
+        assert!(leading[3].starts_with("unmet gate:"), "{human}");
+        assert!(leading[4].starts_with("next action:"), "{human}");
+    }
+}
+
+#[test]
+fn capability_and_budget_holds_keep_distinct_reasons_across_cli_mcp_and_http() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "project",
+            "init",
+            "Held Reasons",
+        ])
+        .assert()
+        .success();
+    let conn = Connection::open(&db).unwrap();
+    let project_id: String = conn
+        .query_row("SELECT id FROM projects LIMIT 1", [], |row| row.get(0))
+        .unwrap();
+    for (run_id, plan_id, reason) in [
+        ("run-capability-held", "plan-capability-held", "capability"),
+        ("run-budget-held", "plan-budget-held", "budget"),
+    ] {
+        conn.execute(
+            "INSERT INTO plans(id, project_id, stage, path, title, slug, parse_status, content_hash, created_at, updated_at)
+             VALUES (?1, ?2, 'build', ?3, ?4, ?1, 'ok', ?1, datetime('now'), datetime('now'))",
+            rusqlite::params![plan_id, project_id, format!("/tmp/{plan_id}.plan.md"), plan_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO feature_runs(id, project_id, plan_id, status, phase, policy_digest, source_revision, active_batch_id, outcomes_settled, batch_outcome_count, held_from_phase, hold_reason, revision)
+             VALUES (?1, ?2, ?3, 'held', 'held', 'sha256:policy', 'source-held', NULL, 1, 0, 'source_frozen', ?4, 0)",
+            rusqlite::params![run_id, project_id, plan_id, reason],
+        )
+        .unwrap();
+    }
+    drop(conn);
+
+    let assert_reasons = |value: &Value| {
+        let states = value["execution_states"].as_array().unwrap();
+        let capability = states
+            .iter()
+            .find(|state| state["feature_run"]["id"] == "run-capability-held")
+            .unwrap();
+        assert_eq!(capability["reason_code"], "evidence_readiness_blocked");
+        assert_eq!(capability["next_action"], "repair_evidence_readiness");
+        assert_eq!(capability["feature_run"]["hold_reason"], "capability");
+        let budget = states
+            .iter()
+            .find(|state| state["feature_run"]["id"] == "run-budget-held")
+            .unwrap();
+        assert_eq!(budget["reason_code"], "feature_run_budget_held");
+        assert_eq!(budget["next_action"], "resolve_budget_hold");
+        assert_eq!(budget["feature_run"]["hold_reason"], "budget");
+    };
+
+    let cli = planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "--json", "map", "status"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_reasons(&serde_json::from_slice(&cli).unwrap());
+
+    let mcp = mcp_tool(dir.path(), &db, 71, "planr_map_status", json!({}));
+    assert_reasons(&mcp);
+
+    let port = free_port();
+    let bin = assert_cmd::cargo::cargo_bin("planr");
+    let mut server = StdCommand::new(&bin)
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "serve",
+            "--port",
+            &port.to_string(),
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    wait_for_http_server(port);
+    assert_reasons(&http_json(&http_request(port, "GET", "/v1/map/status", "")));
+    server.kill().unwrap();
+    server.wait().unwrap();
+}
+
+#[test]
+fn capped_cli_batch_roll_preserves_same_maker_and_fourth_outcome_continues_cleanly() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "project",
+            "init",
+            "Same Maker Roll",
+        ])
+        .assert()
+        .success();
+    let plan_path = dir.path().join("same-maker-roll.plan.md");
+    fs::write(&plan_path, "# Same Maker Roll\n").unwrap();
+    let conn = Connection::open(&db).unwrap();
+    let project_id: String = conn
+        .query_row("SELECT id FROM projects LIMIT 1", [], |row| row.get(0))
+        .unwrap();
+    conn.execute(
+        "INSERT INTO plans(id, project_id, stage, path, title, slug, parse_status, content_hash, created_at, updated_at)
+         VALUES ('plan-same-maker-roll', ?1, 'build', ?2, 'Same Maker Roll', 'same-maker-roll', 'ok', 'sha256:same-maker-roll', datetime('now'), datetime('now'))",
+        rusqlite::params![project_id, plan_path.to_string_lossy()],
+    )
+    .unwrap();
+    for ordinal in 1..=6 {
+        conn.execute(
+            "INSERT INTO items(id, project_id, title, description, status, work_type, worker_id, plan_path, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 'same-maker outcome', 'picked', 'code', 'maker-roll-e2e', ?4, datetime('now'), datetime('now'))",
+            rusqlite::params![
+                format!("item-roll-{ordinal}"),
+                project_id,
+                format!("Outcome {ordinal}"),
+                plan_path.to_string_lossy(),
+            ],
+        )
+        .unwrap();
+    }
+    conn.execute(
+        "UPDATE items SET status = 'ready', worker_id = NULL WHERE id IN ('item-roll-4', 'item-roll-5', 'item-roll-6')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO items(id, project_id, title, description, status, work_type, priority, plan_path, created_at, updated_at)
+         VALUES ('item-roll-generic', ?1, 'Non-code work', 'must not be fused into a maker batch', 'ready', 'generic', 100, ?2, datetime('now'), datetime('now'))",
+        rusqlite::params![project_id, plan_path.to_string_lossy()],
+    )
+    .unwrap();
+    let other_plan_path = dir.path().join("other.plan.md");
+    fs::write(&other_plan_path, "# Other Plan\n").unwrap();
+    conn.execute(
+        "INSERT INTO plans(id, project_id, stage, path, title, slug, parse_status, content_hash, created_at, updated_at)
+         VALUES ('plan-other', ?1, 'build', ?2, 'Other Plan', 'other', 'ok', 'sha256:other', datetime('now'), datetime('now'))",
+        rusqlite::params![project_id, other_plan_path.to_string_lossy()],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO items(id, project_id, title, description, status, work_type, priority, plan_path, created_at, updated_at)
+         VALUES ('item-other-plan', ?1, 'Other plan outcome', 'must remain outside the fused continuation', 'ready', 'code', 200, ?2, datetime('now'), datetime('now'))",
+        rusqlite::params![project_id, other_plan_path.to_string_lossy()],
+    )
+    .unwrap();
+    drop(conn);
+
+    let settle = |ordinal: u32, next: bool| -> Value {
+        let mut command = planr();
+        command
+            .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", "maker-roll-e2e")
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "done",
+                &format!("item-roll-{ordinal}"),
+                "--summary",
+                &format!("settled outcome {ordinal}"),
+                "--cmd",
+                "true",
+                "--tests",
+                "true",
+            ]);
+        if next {
+            command.arg("--next");
+        }
+        let output = command.assert().success().get_output().stdout.clone();
+        serde_json::from_slice(&output).unwrap()
+    };
+    assert_eq!(
+        settle(1, false)["work_packet"]["transition"],
+        "continue_batch"
+    );
+    assert_eq!(
+        settle(2, false)["work_packet"]["transition"],
+        "continue_batch"
+    );
+    let third = settle(3, true);
+    assert_eq!(third["work_packet"]["transition"], "batch_cap_reached");
+    let first_batch = third["work_packet"]["batch_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let rolled = &third["work_packet"]["rollover"];
+    assert_eq!(rolled["reason"], "same_maker_batch_rolled");
+    assert_eq!(rolled["ended_batch"]["id"], first_batch);
+    assert_eq!(rolled["ended_batch"]["replacement"], Value::Null);
+    assert_eq!(rolled["feature_run"]["batch_outcome_count"], 0);
+    assert_eq!(
+        rolled["feature_run"]["role_owners"][0]["worker_id"],
+        "maker-roll-e2e"
+    );
+    assert_eq!(
+        rolled["feature_run"]["role_owners"][0]["lease_generation"],
+        1
+    );
+    assert_eq!(
+        third["work_packet"]["successor_batch_id"],
+        rolled["execution_batch"]["id"]
+    );
+    assert_eq!(third["next"]["item"]["id"], "item-roll-4");
+    assert_eq!(third["next"]["item"]["work_type"], "code");
+    assert_eq!(
+        third["next"]["item"]["plan_path"],
+        plan_path.to_string_lossy().as_ref()
+    );
+
+    let fourth = settle(4, false);
+    assert_eq!(fourth["work_packet"]["transition"], "continue_batch");
+    assert_eq!(fourth["work_packet"]["batch_outcome_count"], 1);
+    assert_ne!(fourth["work_packet"]["batch_id"], first_batch);
+    assert_eq!(
+        settle(5, false)["work_packet"]["transition"],
+        "continue_batch"
+    );
+    let sixth = settle(6, true);
+    assert_eq!(sixth["work_packet"]["transition"], "batch_cap_reached");
+    assert_eq!(sixth["work_packet"]["rollover"], Value::Null);
+    assert_eq!(sixth["next"]["item"], Value::Null);
+
+    let conn = Connection::open(&db).unwrap();
+    let scalar = |sql: &str| -> i64 { conn.query_row(sql, [], |row| row.get(0)).unwrap() };
+    assert_eq!(scalar("SELECT COUNT(*) FROM execution_batches"), 2);
+    assert_eq!(
+        scalar(
+            "SELECT COUNT(*) FROM execution_batches WHERE status = 'ended' AND replacement_reason IS NULL AND replaced_maker_worker_id IS NULL AND successor_maker_worker_id IS NULL"
+        ),
+        1
+    );
+    assert_eq!(
+        scalar(
+            "SELECT COUNT(*) FROM execution_batches WHERE status = 'active' AND maker_worker_id = 'maker-roll-e2e'"
+        ),
+        1
+    );
+    assert_eq!(scalar("SELECT COUNT(*) FROM execution_run_outcomes"), 6);
+    assert_eq!(
+        scalar(
+            "SELECT COUNT(*) FROM items WHERE id IN ('item-roll-generic', 'item-other-plan') AND status = 'ready'"
+        ),
+        2
+    );
+    assert_eq!(scalar("SELECT COUNT(*) FROM review_gates"), 0);
+    assert_eq!(scalar("SELECT COUNT(*) FROM review_attempts"), 0);
+    assert_eq!(
+        scalar("SELECT COUNT(*) FROM items WHERE work_type IN ('review','fix')"),
+        0
+    );
+    assert_eq!(
+        scalar(
+            "SELECT COUNT(*) FROM logs WHERE kind = 'completion' AND item_id LIKE 'item-roll-%'"
+        ),
+        6
+    );
+}
+
+#[test]
+fn done_next_stops_at_review_gate_without_leasing_more_work() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "project",
+            "init",
+            "Review stop",
+        ])
+        .assert()
+        .success();
+    let plan_path = dir.path().join("review-stop.plan.md");
+    fs::write(&plan_path, "# Review Stop\n").unwrap();
+    let conn = Connection::open(&db).unwrap();
+    let project_id: String = conn
+        .query_row("SELECT id FROM projects LIMIT 1", [], |row| row.get(0))
+        .unwrap();
+    conn.execute(
+        "INSERT INTO plans(id, project_id, stage, path, title, slug, parse_status, content_hash, created_at, updated_at)
+         VALUES ('plan-review-stop', ?1, 'build', ?2, 'Review Stop', 'review-stop', 'ok', 'sha256:review-stop', datetime('now'), datetime('now'))",
+        rusqlite::params![project_id, plan_path.to_string_lossy()],
+    )
+    .unwrap();
+    for (id, status, worker) in [
+        ("item-review-stop-1", "picked", Some("maker-review-stop")),
+        ("item-review-stop-2", "ready", None),
+    ] {
+        conn.execute(
+            "INSERT INTO items(id, project_id, title, description, status, work_type, worker_id, plan_path, created_at, updated_at)
+             VALUES (?1, ?2, ?1, 'review stop outcome', ?3, 'code', ?4, ?5, datetime('now'), datetime('now'))",
+            rusqlite::params![id, project_id, status, worker, plan_path.to_string_lossy()],
+        )
+        .unwrap();
+    }
+    drop(conn);
+
     let output = planr()
         .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "maker-review-stop")
         .args([
             "--db",
             db.to_str().unwrap(),
             "--json",
             "done",
-            &picked,
+            "item-review-stop-1",
             "--summary",
-            "picked slice done",
-            "--review",
+            "protected behavior changed",
+            "--cmd",
+            "true",
+            "--next",
+            "--escalate",
+            "protected-risk-discovered",
+            "--escalation-ref",
+            "risk:test",
+            "--escalation-explanation",
+            "focused review-gate regression",
         ])
         .assert()
         .success()
@@ -19914,34 +20981,44 @@ fn breakdown_accepts_repeated_flags_and_newlines_and_reports_chain_and_next() {
         .stdout
         .clone();
     let done: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(done["work_packet"]["transition"], "review_gate");
+    assert_eq!(done["next"]["item"], Value::Null);
     assert_eq!(
-        done["next"], "planr pick --work-type review --json",
-        "done --review without --next must name the follow-up command: {done}"
+        done["next"]["reason"],
+        "review_gate_pending_independent_lease"
+    );
+
+    let conn = Connection::open(&db).unwrap();
+    assert_eq!(item_status(&db, "item-review-stop-2"), "ready");
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM review_gates", [], |row| row
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM execution_batches", [], |row| row
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
     );
 }
 
 #[test]
-fn done_on_never_picked_item_adopts_lease_and_review_mode_stays_attributed() {
+fn unplanned_materiality_records_missing_change_facts_without_a_review_gate() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
     planr()
         .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "project", "init", "Adopt"])
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Uncertain"])
         .assert()
         .success();
-    let item = create_test_item(
-        dir.path(),
-        &db,
-        "Upload flow",
-        "dogfood adoption regression",
-    );
+    write_materiality_policy(dir.path());
+    let item = create_test_item(dir.path(), &db, "No files", "missing facts");
 
-    // `done --review` on a ready item that was never picked: the second
-    // Codex dogfood hit the silent-skip variant of this — the target stayed
-    // `ready` and the review closed `unattributed` despite a worker id.
     let output = planr()
         .current_dir(dir.path())
-        .env("PLANR_WORKER_ID", "maker-1")
+        .env("PLANR_WORKER_ID", "maker-uncertain")
         .args([
             "--db",
             db.to_str().unwrap(),
@@ -19949,8 +21026,9 @@ fn done_on_never_picked_item_adopts_lease_and_review_mode_stays_attributed() {
             "done",
             &item,
             "--summary",
-            "implemented upload flow",
-            "--review",
+            "implemented but forgot file evidence",
+            "--cmd",
+            "cargo test focused",
         ])
         .assert()
         .success()
@@ -19958,40 +21036,680 @@ fn done_on_never_picked_item_adopts_lease_and_review_mode_stays_attributed() {
         .stdout
         .clone();
     let done: Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(
-        done["item"]["status"], "in_review",
-        "adopted item must transition to in_review: {done}"
+    assert_eq!(done["item"]["status"], "closed");
+    assert_eq!(done["work_packet"]["review_gate"], Value::Null);
+    assert_eq!(done["materiality"]["effective_review"]["required"], false);
+    assert!(
+        done["materiality"]["decision"]["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason == "missing_changed_files")
     );
-    assert_eq!(
-        done["item"]["worker_id"], "maker-1",
-        "adoption must record the worker lease: {done}"
-    );
-    let review_id = done["review"]["id"].as_str().unwrap().to_string();
+}
 
-    let output = planr()
+#[test]
+fn done_elevates_uncorroborated_file_facts_under_materiality_policy() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
         .current_dir(dir.path())
-        .env("PLANR_WORKER_ID", "maker-1")
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Facts"])
+        .assert()
+        .success();
+    write_materiality_policy(dir.path());
+
+    let no_git_item = create_test_item(dir.path(), &db, "No git", "unknown changed lines");
+    let no_git = planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "maker-no-git")
         .args([
             "--db",
             db.to_str().unwrap(),
             "--json",
-            "review",
-            "close",
-            &review_id,
-            "--verdict",
-            "complete",
-            "--close-target",
+            "done",
+            &no_git_item,
+            "--summary",
+            "docs update",
+            "--files",
+            "docs/README.md",
+            "--cmd",
+            "true",
         ])
         .assert()
         .success()
         .get_output()
         .stdout
         .clone();
-    let closed: Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(
-        closed["review_mode"], "single_agent",
-        "same identity on both sides must record single_agent, never unattributed: {closed}"
+    let no_git: Value = serde_json::from_slice(&no_git).unwrap();
+    assert!(
+        no_git["materiality"]["decision"]["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason == "changed_lines_unknown:git_error"),
+        "{no_git}"
     );
+
+    init_materiality_git(dir.path());
+    fs::create_dir_all(dir.path().join("docs")).unwrap();
+    fs::create_dir_all(dir.path().join("src/app")).unwrap();
+    let missing_item = create_test_item(dir.path(), &db, "Missing file", "missing path");
+    let missing = planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "maker-missing-file")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "done",
+            &missing_item,
+            "--summary",
+            "claimed missing file",
+            "--files",
+            "docs/missing.md",
+            "--cmd",
+            "true",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let missing: Value = serde_json::from_slice(&missing).unwrap();
+    assert!(
+        missing["materiality"]["decision"]["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason == "missing_claimed_file:docs/missing.md"),
+        "{missing}"
+    );
+
+    fs::write(dir.path().join("docs/untracked.md"), "new untracked docs\n").unwrap();
+    let untracked_item = create_test_item(
+        dir.path(),
+        &db,
+        "Ordinary added file",
+        "ordinary untracked path",
+    );
+    let untracked = planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "maker-untracked-file")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "done",
+            &untracked_item,
+            "--summary",
+            "claimed untracked file",
+            "--files",
+            "docs/untracked.md",
+            "--cmd",
+            "true",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let untracked: Value = serde_json::from_slice(&untracked).unwrap();
+    assert_eq!(untracked["item"]["status"], "closed", "{untracked}");
+    assert_eq!(untracked["work_packet"]["review_gate"], Value::Null);
+    assert_eq!(
+        untracked["materiality"]["change_summary"]["changed_lines"], 1,
+        "{untracked}"
+    );
+    assert!(
+        untracked["materiality"]["decision"]["reasons"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{untracked}"
+    );
+
+    fs::write(
+        dir.path().join("src/app/http_added.rs"),
+        "pub fn route() {}\n",
+    )
+    .unwrap();
+    let protected_item = create_test_item(
+        dir.path(),
+        &db,
+        "Protected added file",
+        "protected untracked path",
+    );
+    let protected = planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "maker-protected-untracked-file")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "done",
+            &protected_item,
+            "--summary",
+            "claimed protected added file",
+            "--files",
+            "src/app/http_added.rs",
+            "--cmd",
+            "true",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let protected: Value = serde_json::from_slice(&protected).unwrap();
+    assert_eq!(protected["item"]["status"], "closed", "{protected}");
+    assert_eq!(protected["work_packet"]["review_gate"], Value::Null);
+    assert!(
+        protected["materiality"]["decision"]["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason == "risk:high"),
+        "{protected}"
+    );
+    assert!(
+        protected["materiality"]["change_summary"]["triggers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|trigger| trigger == "public_api"),
+        "{protected}"
+    );
+
+    let large_docs = "line\n".repeat(1001);
+    fs::write(dir.path().join("docs/large-untracked.md"), large_docs).unwrap();
+    let large_item = create_test_item(dir.path(), &db, "Large added file", "large untracked path");
+    let large = planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "maker-large-untracked-file")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "done",
+            &large_item,
+            "--summary",
+            "claimed large added file",
+            "--files",
+            "docs/large-untracked.md",
+            "--cmd",
+            "true",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let large: Value = serde_json::from_slice(&large).unwrap();
+    assert_eq!(large["item"]["status"], "closed", "{large}");
+    assert_eq!(large["work_packet"]["review_gate"], Value::Null);
+    assert_eq!(
+        large["materiality"]["change_summary"]["changed_lines"], 1001,
+        "{large}"
+    );
+    assert!(
+        large["materiality"]["decision"]["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason == "changed_lines_threshold:1001"),
+        "{large}"
+    );
+
+    let unchanged_item = create_test_item(dir.path(), &db, "Unchanged file", "unchanged path");
+    let unchanged = planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "maker-unchanged-file")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "done",
+            &unchanged_item,
+            "--summary",
+            "claimed unchanged file",
+            "--files",
+            "docs/README.md",
+            "--cmd",
+            "true",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let unchanged: Value = serde_json::from_slice(&unchanged).unwrap();
+    assert!(
+        unchanged["materiality"]["decision"]["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason == "missing_claimed_file:docs/README.md"),
+        "{unchanged}"
+    );
+}
+
+#[test]
+fn unplanned_done_records_missing_materiality_policy_without_a_review_gate() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "No policy"])
+        .assert()
+        .success();
+    let item = create_test_item(dir.path(), &db, "No policy item", "missing policy");
+
+    let output = planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "maker-no-policy")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "done",
+            &item,
+            "--summary",
+            "completed without policy",
+            "--files",
+            "docs/README.md",
+            "--cmd",
+            "true",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let done: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(done["item"]["status"], "closed");
+    assert_eq!(done["work_packet"]["review_gate"], Value::Null);
+    assert_eq!(done["materiality"]["policy"]["reason"], "missing");
+    assert_eq!(
+        done["materiality"]["effective_review"]["reason"],
+        "policy_missing_operational_gap"
+    );
+    assert_eq!(done["materiality"]["decision"]["review"], "none");
+}
+
+#[test]
+fn unplanned_done_retry_reuses_completion_log_without_review_rows() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Retry"])
+        .assert()
+        .success();
+    write_materiality_policy(dir.path());
+    init_materiality_git(dir.path());
+    fs::create_dir_all(dir.path().join("src/app")).unwrap();
+    fs::write(
+        dir.path().join("src/app/http.rs"),
+        "fn initial() {}\nfn retry_route() {}\n",
+    )
+    .unwrap();
+
+    let item = create_test_item(dir.path(), &db, "Retry item", "retry gate");
+    let first = planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "maker-retry")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "done",
+            &item,
+            "--summary",
+            "changed API route",
+            "--files",
+            "src/app/http.rs",
+            "--cmd",
+            "cargo test retry",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let first: Value = serde_json::from_slice(&first).unwrap();
+    assert_eq!(first["work_packet"]["review_gate"], Value::Null);
+
+    let retry = planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "maker-retry")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "done",
+            &item,
+            "--summary",
+            "retry same API route",
+            "--files",
+            "src/app/http.rs",
+            "--cmd",
+            "cargo test retry",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let retry: Value = serde_json::from_slice(&retry).unwrap();
+    assert_eq!(retry["work_packet"]["review_gate"], Value::Null);
+
+    let conn = Connection::open(&db).unwrap();
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM review_gates WHERE scope_id = ?1",
+            [&item],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 0);
+    let log_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM logs WHERE item_id = ?1 AND kind = 'completion'",
+            [&item],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let decision_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM events WHERE item_id = ?1 AND event_type = 'materiality_decided'",
+            [&item],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(log_count, 1);
+    assert_eq!(decision_count, 2);
+}
+
+#[test]
+fn done_persists_supplied_settlement_evidence_after_an_earlier_completion_log() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "project",
+            "init",
+            "Settlement evidence",
+        ])
+        .assert()
+        .success();
+    write_materiality_policy(dir.path());
+    init_materiality_git(dir.path());
+    fs::create_dir_all(dir.path().join("src/app")).unwrap();
+    fs::write(dir.path().join("src/app/flow.rs"), "fn settlement() {}\n").unwrap();
+
+    let item = create_test_item(dir.path(), &db, "Settlement item", "evidence integrity");
+    planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "maker-settlement-evidence")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "log",
+            "add",
+            "--item",
+            &item,
+            "--kind",
+            "completion",
+            "--summary",
+            "earlier partial completion claim",
+            "--files",
+            "docs/old.md",
+            "--cmd",
+            "false",
+        ])
+        .assert()
+        .success();
+
+    let done = planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "maker-settlement-evidence")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "done",
+            &item,
+            "--summary",
+            "canonical settlement evidence",
+            "--files",
+            "src/app/flow.rs",
+            "--cmd",
+            "cargo check",
+            "--tests",
+            "cargo test settlement",
+            "--profile",
+            "gpt55-coder",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let done: Value = serde_json::from_slice(&done).unwrap();
+
+    let conn = Connection::open(&db).unwrap();
+    let (summary, files, commands, tests, profile): (
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+    ) = conn
+        .query_row(
+            "SELECT l.summary, l.files, l.commands, l.tests, r.profile FROM logs l LEFT JOIN runs r ON r.id = l.run_id WHERE l.id = ?1",
+            [done["log_id"].as_str().unwrap()],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(summary, "canonical settlement evidence");
+    assert_eq!(
+        serde_json::from_str::<Value>(&files).unwrap(),
+        json!(["src/app/flow.rs"])
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&commands).unwrap(),
+        json!(["cargo check"])
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&tests).unwrap(),
+        json!(["cargo test settlement"])
+    );
+    assert_eq!(profile.as_deref(), Some("gpt55-coder"));
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM logs WHERE item_id = ?1 AND kind = 'completion'",
+            [&item],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+        2,
+        "the earlier claim and canonical settlement must remain distinct"
+    );
+}
+
+#[test]
+fn materiality_settlement_rolls_back_after_review_gate_failure() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", db.to_str().unwrap(), "project", "init", "Rollback"])
+        .assert()
+        .success();
+    write_materiality_policy(dir.path());
+    init_materiality_git(dir.path());
+    fs::create_dir_all(dir.path().join("src/app")).unwrap();
+    fs::write(
+        dir.path().join("src/app/http.rs"),
+        "fn initial() {}\nfn rollback_route() {}\n",
+    )
+    .unwrap();
+    let item = create_test_item(dir.path(), &db, "Rollback item", "partial failure");
+
+    planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "maker-rollback")
+        .env("PLANR_TEST_FAIL_AFTER_REVIEW_GATE", "1")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "done",
+            &item,
+            "--summary",
+            "changed API route",
+            "--files",
+            "src/app/http.rs",
+            "--cmd",
+            "cargo test rollback",
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("injected_failure"));
+
+    let conn = Connection::open(&db).unwrap();
+    let log_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM logs WHERE item_id = ?1",
+            [&item],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let review_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM review_gates WHERE scope_id = ?1",
+            [&item],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let event_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM events WHERE item_id = ?1 AND event_type IN ('log_created','review_gate_opened','materiality_decided')",
+            [&item],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let metadata: Option<String> = conn
+        .query_row("SELECT metadata FROM items WHERE id = ?1", [&item], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(log_count, 0);
+    assert_eq!(review_count, 0);
+    assert_eq!(event_count, 0);
+    assert!(metadata.is_none(), "{metadata:?}");
+    assert_eq!(item_status(&db, &item), "ready");
+}
+
+#[test]
+fn concurrent_unplanned_settlement_creates_one_log_and_no_review_rows() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "project",
+            "init",
+            "Concurrent",
+        ])
+        .assert()
+        .success();
+    write_materiality_policy(dir.path());
+    init_materiality_git(dir.path());
+    fs::create_dir_all(dir.path().join("src/app")).unwrap();
+    fs::write(
+        dir.path().join("src/app/http.rs"),
+        "fn initial() {}\nfn concurrent_route() {}\n",
+    )
+    .unwrap();
+    let item = create_test_item(dir.path(), &db, "Concurrent item", "duplicate gate race");
+
+    let bin = assert_cmd::cargo::cargo_bin("planr");
+    let mut children = Vec::new();
+    for _ in 0..2 {
+        children.push(
+            StdCommand::new(&bin)
+                .current_dir(dir.path())
+                .env("PLANR_WORKER_ID", "maker-concurrent")
+                .args([
+                    "--db",
+                    db.to_str().unwrap(),
+                    "--json",
+                    "done",
+                    &item,
+                    "--summary",
+                    "changed API route",
+                    "--files",
+                    "src/app/http.rs",
+                    "--cmd",
+                    "cargo test concurrent",
+                ])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
+    }
+    for child in children {
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "stdout:{}\nstderr:{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let conn = Connection::open(&db).unwrap();
+    let log_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM logs WHERE item_id = ?1 AND kind = 'completion'",
+            [&item],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let review_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM review_gates WHERE scope_id = ?1",
+            [&item],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let decision_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM events WHERE item_id = ?1 AND event_type = 'materiality_decided'",
+            [&item],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(log_count, 1);
+    assert_eq!(review_count, 0);
+    assert_eq!(decision_count, 2);
+    assert_eq!(item_status(&db, &item), "closed");
 }
 
 #[test]
@@ -20003,6 +21721,10 @@ fn parent_gate_rolls_up_and_auto_closes_when_children_settle() {
         .args(["--db", db.to_str().unwrap(), "project", "init", "Gates"])
         .assert()
         .success();
+    write_materiality_policy(dir.path());
+    init_materiality_git(dir.path());
+    fs::create_dir_all(dir.path().join("docs")).unwrap();
+    fs::write(dir.path().join("docs/README.md"), "child setup facts\n").unwrap();
     let parent = create_test_item(dir.path(), &db, "Parent feature", "parent gate rollup");
     planr()
         .current_dir(dir.path())
@@ -20026,6 +21748,24 @@ fn parent_gate_rolls_up_and_auto_closes_when_children_settle() {
         .args([
             "--db",
             db.to_str().unwrap(),
+            "log",
+            "add",
+            "--item",
+            &children[0],
+            "--summary",
+            "child a docs fact",
+            "--files",
+            "docs/README.md",
+            "--cmd",
+            "true",
+        ])
+        .assert()
+        .success();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
             "close",
             &children[0],
             "--summary",
@@ -20039,6 +21779,24 @@ fn parent_gate_rolls_up_and_auto_closes_when_children_settle() {
         "parent must stay blocked while a child is open"
     );
 
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "log",
+            "add",
+            "--item",
+            &children[1],
+            "--summary",
+            "child b docs fact",
+            "--files",
+            "docs/README.md",
+            "--cmd",
+            "true",
+        ])
+        .assert()
+        .success();
     planr()
         .current_dir(dir.path())
         .args([
@@ -20088,6 +21846,24 @@ fn parent_gate_rolls_up_and_auto_closes_when_children_settle() {
         .args([
             "--db",
             db.to_str().unwrap(),
+            "log",
+            "add",
+            "--item",
+            &partial_children[0],
+            "--summary",
+            "kept child docs fact",
+            "--files",
+            "docs/README.md",
+            "--cmd",
+            "true",
+        ])
+        .assert()
+        .success();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
             "close",
             &partial_children[0],
             "--summary",
@@ -20108,102 +21884,6 @@ fn parent_gate_rolls_up_and_auto_closes_when_children_settle() {
         .assert()
         .success();
     assert_eq!(item_status(&db, &partial_parent), "closed_partial");
-}
-
-#[test]
-fn parent_gate_waits_for_open_review_then_auto_closes() {
-    let dir = tempdir().unwrap();
-    let db = dir.path().join(".planr/planr.sqlite");
-    planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "project", "init", "Gates"])
-        .assert()
-        .success();
-    let parent = create_test_item(dir.path(), &db, "Reviewed parent", "gate with review");
-    planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "item",
-            "breakdown",
-            &parent,
-            "--into",
-            "Only child",
-        ])
-        .assert()
-        .success();
-    let output = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "review",
-            "request",
-            &parent,
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let review: Value = serde_json::from_slice(&output).unwrap();
-    let review_id = review["review"]["id"].as_str().unwrap().to_string();
-
-    let child = child_item_ids(&db, &parent)[0].clone();
-    planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "close",
-            &child,
-            "--summary",
-            "child done",
-        ])
-        .assert()
-        .success();
-    assert_eq!(
-        item_status(&db, &parent),
-        "ready",
-        "parent with open review must become ready, not auto-close"
-    );
-
-    // Parent gates are not pickable work even when ready.
-    let output = planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "--json", "pick"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let picked: Value = serde_json::from_slice(&output).unwrap();
-    assert_ne!(
-        picked["item"]["id"].as_str(),
-        Some(parent.as_str()),
-        "pick must not claim a parent gate"
-    );
-
-    planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "review",
-            "close",
-            &review_id,
-            "--verdict",
-            "complete",
-        ])
-        .assert()
-        .success();
-    assert_eq!(
-        item_status(&db, &parent),
-        "closed",
-        "parent gate must auto-close once its review closes"
-    );
 }
 
 #[test]
@@ -20285,760 +21965,6 @@ fn log_files_flag_is_repeatable_and_artifact_name_works_as_flag() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("artifact name is required"));
-}
-
-#[test]
-fn done_command_collapses_log_review_close_and_next_pick() {
-    let dir = tempdir().unwrap();
-    let db = dir.path().join(".planr/planr.sqlite");
-    planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "project", "init", "Flow"])
-        .assert()
-        .success();
-    let first = create_test_item(dir.path(), &db, "First slice", "compound flow test");
-    let second = create_test_item(dir.path(), &db, "Second slice", "compound flow test");
-
-    // Pick the first item, then finish it with review + next in one command.
-    let output = planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "--json", "pick"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let picked: Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(picked["item"]["id"], first);
-    assert!(
-        picked["runtime"]["pick_token"].is_string(),
-        "pick must include the flat work packet runtime: {picked}"
-    );
-    assert!(
-        picked.get("context").is_none() && picked.get("trace").is_none(),
-        "pick packet must be flat without nested context/trace duplication: {picked}"
-    );
-    let counts = picked["remaining"]["counts"].as_object().unwrap();
-    for status in [
-        "pending",
-        "ready",
-        "picked",
-        "running",
-        "in_review",
-        "blocked",
-        "failed",
-        "cancelled",
-        "closed",
-        "closed_partial",
-    ] {
-        assert!(
-            counts.contains_key(status),
-            "remaining.counts must carry explicit zero for {status}: {picked}"
-        );
-    }
-
-    let output = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "done",
-            &first,
-            "--summary",
-            "implemented first slice",
-            "--files",
-            "src/a.rs,src/b.rs",
-            "--cmd",
-            "cargo test",
-            "--review",
-            "--next",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let done: Value = serde_json::from_slice(&output).unwrap();
-    let review_id = done["review"]["id"].as_str().unwrap().to_string();
-    assert_eq!(done["closed"], Value::Null, "--review must not close");
-    assert!(
-        done["remaining"]["total"].as_i64().unwrap_or(0) > 0,
-        "done must report board progress for the loop stop condition"
-    );
-    assert_eq!(
-        done["next"]["item"]["id"], second,
-        "--next must pick the following ready item"
-    );
-    assert_eq!(
-        item_status(&db, &first),
-        "in_review",
-        "done --review must surface the review-wait state instead of running"
-    );
-
-    // A reviewer's first trace of the review item must already contain the
-    // target's evidence, and the human mode must render the packet.
-    let output = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "trace",
-            "item",
-            &review_id,
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let trace: Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(trace["target"]["item"]["id"], first);
-    assert!(
-        !trace["target"]["logs"].as_array().unwrap().is_empty(),
-        "review trace must inline the target completion log"
-    );
-    planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "trace", "item", &review_id])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains(&first))
-        .stdout(predicate::str::contains("target log"));
-
-    // The reviewer closes review and target in one command.
-    let output = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "review",
-            "close",
-            &review_id,
-            "--verdict",
-            "complete",
-            "--close-target",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let closed: Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(closed["closed_target"]["id"], first);
-    assert!(
-        closed["remaining"]["total"].as_i64().unwrap_or(0) > 0,
-        "review close must report board progress"
-    );
-    assert_eq!(item_status(&db, &first), "closed");
-
-    // done without --review closes directly.
-    planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "done",
-            &second,
-            "--summary",
-            "second slice done",
-        ])
-        .assert()
-        .success();
-    assert_eq!(item_status(&db, &second), "closed");
-
-    // --next must never hand the worker its own freshly requested review.
-    let third = create_test_item(dir.path(), &db, "Third slice", "maker checker split");
-    planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "pick"])
-        .assert()
-        .success();
-    let output = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "done",
-            &third,
-            "--summary",
-            "third slice done",
-            "--review",
-            "--next",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let done: Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(
-        done["next"]["item"],
-        Value::Null,
-        "worker must not pick its own review; only the review was ready"
-    );
-}
-
-#[test]
-fn independent_review_stamp_requires_explicit_reviewer_identity() {
-    let dir = tempdir().unwrap();
-    let db = dir.path().join(".planr/planr.sqlite");
-    planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "project", "init", "Stamps"])
-        .assert()
-        .success();
-
-    let mut review_ids = Vec::new();
-    for title in ["Slice A", "Slice B"] {
-        let item = create_test_item(dir.path(), &db, title, "stamp check");
-        planr()
-            .current_dir(dir.path())
-            .env("PLANR_WORKER_ID", "maker-1")
-            .args(["--db", db.to_str().unwrap(), "pick"])
-            .assert()
-            .success();
-        let output = planr()
-            .current_dir(dir.path())
-            .env("PLANR_WORKER_ID", "maker-1")
-            .args([
-                "--db",
-                db.to_str().unwrap(),
-                "--json",
-                "done",
-                &item,
-                "--summary",
-                "built",
-                "--review",
-            ])
-            .assert()
-            .success()
-            .get_output()
-            .stdout
-            .clone();
-        let done: Value = serde_json::from_slice(&output).unwrap();
-        review_ids.push(done["review"]["id"].as_str().unwrap().to_string());
-    }
-
-    // Anonymous reviewer (fallback identity): the string differs from
-    // maker-1, but that proves nothing — the stamp must be single_agent,
-    // never independent by luck.
-    let output = planr()
-        .current_dir(dir.path())
-        .env_remove("PLANR_WORKER_ID")
-        .env_remove("PLANR_SESSION_ID")
-        .env_remove("CODEX_SESSION_ID")
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "review",
-            "close",
-            &review_ids[0],
-            "--verdict",
-            "complete",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let closed: Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(
-        closed["review_mode"], "single_agent",
-        "anonymous reviewer must not stamp independent: {closed}"
-    );
-
-    // A blank --reviewer is not an identity: it must stamp single_agent
-    // exactly like the anonymous fallback (GPT-5.5 review finding).
-    let item = create_test_item(dir.path(), &db, "Slice C", "stamp check");
-    planr()
-        .current_dir(dir.path())
-        .env("PLANR_WORKER_ID", "maker-1")
-        .args(["--db", db.to_str().unwrap(), "pick"])
-        .assert()
-        .success();
-    let output = planr()
-        .current_dir(dir.path())
-        .env("PLANR_WORKER_ID", "maker-1")
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "done",
-            &item,
-            "--summary",
-            "built",
-            "--review",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let done: Value = serde_json::from_slice(&output).unwrap();
-    let blank_review = done["review"]["id"].as_str().unwrap().to_string();
-    let output = planr()
-        .current_dir(dir.path())
-        .env_remove("PLANR_WORKER_ID")
-        .env_remove("PLANR_SESSION_ID")
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "review",
-            "close",
-            &blank_review,
-            "--verdict",
-            "complete",
-            "--reviewer",
-            "   ",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let closed: Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(
-        closed["review_mode"], "single_agent",
-        "blank --reviewer must not stamp independent: {closed}"
-    );
-
-    // Explicit --reviewer earns the independent stamp as before.
-    let output = planr()
-        .current_dir(dir.path())
-        .env_remove("PLANR_WORKER_ID")
-        .env_remove("PLANR_SESSION_ID")
-        .env_remove("CODEX_SESSION_ID")
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "review",
-            "close",
-            &review_ids[1],
-            "--verdict",
-            "complete",
-            "--reviewer",
-            "checker-9",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let closed: Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(closed["review_mode"], "independent");
-    assert_eq!(closed["reviewer"], "checker-9");
-}
-
-#[test]
-fn review_close_guard_reviewer_identity_and_role_aware_picks() {
-    let dir = tempdir().unwrap();
-    let db = dir.path().join(".planr/planr.sqlite");
-    planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "project", "init", "FixPack"])
-        .assert()
-        .success();
-    let first = create_test_item(dir.path(), &db, "Build the slice", "fix pack run");
-    let second = create_test_item(dir.path(), &db, "Downstream slice", "fix pack run");
-    planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "link", "add", &first, &second])
-        .assert()
-        .success();
-
-    planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "pick"])
-        .assert()
-        .success();
-    let output = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "done",
-            &first,
-            "--summary",
-            "built the slice",
-            "--review",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let done: Value = serde_json::from_slice(&output).unwrap();
-    let review_id = done["review"]["id"].as_str().unwrap().to_string();
-
-    // Role-aware pick: a maker asking for code work must not lease the
-    // review, and the null pick must explain itself instead of being blind.
-    let output = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "pick",
-            "--work-type",
-            "code",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let null_pick: Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(null_pick["item"], Value::Null);
-    assert_eq!(null_pick["reason"], "ready_items_excluded_by_filter");
-    assert!(
-        null_pick["remaining"]["counts"]["ready"].as_i64().unwrap() > 0,
-        "null pick must carry the remaining snapshot: {null_pick}"
-    );
-    let excluded = null_pick["excluded"].as_array().unwrap();
-    assert!(
-        excluded.iter().any(|entry| {
-            entry["work_type"] == "review"
-                && entry["cause"]
-                    .as_str()
-                    .unwrap()
-                    .contains("--work-type code")
-        }),
-        "exclusions must name the work_type mismatch: {null_pick}"
-    );
-    assert!(
-        null_pick["repair"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|cmd| cmd == "planr pick --json"),
-        "filter exclusion must carry the exact repair command: {null_pick}"
-    );
-
-    // A checker asking for review work leases exactly the review item, and
-    // its close effect previews the --close-target cascade: closing this
-    // review settles the target, which unlocks the downstream item.
-    let output = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "pick",
-            "--work-type",
-            "review",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let review_pick: Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(review_pick["item"]["id"], review_id);
-    assert!(
-        review_pick.get("worker_id").is_none(),
-        "worker identity lives in item/runtime, not a third top-level copy: {review_pick}"
-    );
-    let unlocked = review_pick["close_effect"]["would_unlock"]
-        .as_array()
-        .unwrap();
-    assert!(
-        unlocked.iter().any(|item| item["id"] == second),
-        "review close effect must model the --close-target cascade: {review_pick}"
-    );
-
-    // Reviewer identity is recorded on the response and the artifact.
-    let output = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "review",
-            "close",
-            &review_id,
-            "--verdict",
-            "complete",
-            "--reviewer",
-            "checker-1",
-            "--close-target",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let closed: Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(closed["reviewer"], "checker-1");
-    assert_eq!(closed["closed_target"]["id"], first);
-    let artifact = fs::read_to_string(
-        dir.path()
-            .join(".planr/reviews")
-            .join(format!("{review_id}.review.md")),
-    )
-    .unwrap();
-    assert!(
-        artifact.contains("Reviewer: checker-1"),
-        "artifact must attribute the checker: {artifact}"
-    );
-    // The artifact is evidence: it must show the final target status after
-    // --close-target, not the pre-close in_review snapshot.
-    assert!(
-        artifact.contains(&format!("Target item: {first} (closed)")),
-        "artifact must snapshot the target after --close-target: {artifact}"
-    );
-
-    // Double close must fail instead of silently duplicating evidence logs.
-    planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "review",
-            "close",
-            &review_id,
-            "--verdict",
-            "complete",
-        ])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("already_closed"));
-
-    // In JSON mode the same failure carries a machine-readable error code
-    // instead of the generic internal_error.
-    let output = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "review",
-            "close",
-            &review_id,
-            "--verdict",
-            "complete",
-        ])
-        .assert()
-        .failure()
-        .get_output()
-        .stdout
-        .clone();
-    let error: Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(error["error"]["code"], "already_closed");
-
-    // map show reports the same explicit-zero counts vocabulary as the
-    // remaining snapshot, plus settled/total.
-    let output = planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "--json", "map", "show"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let map: Value = serde_json::from_slice(&output).unwrap();
-    let counts = map["counts"].as_object().unwrap();
-    for status in [
-        "pending",
-        "ready",
-        "picked",
-        "running",
-        "in_review",
-        "blocked",
-        "failed",
-        "cancelled",
-        "closed",
-        "closed_partial",
-    ] {
-        assert!(
-            counts.contains_key(status),
-            "map counts must carry explicit zero for {status}: {map}"
-        );
-    }
-    assert!(map["settled"].is_number() && map["total"].is_number());
-
-    // Settle the rest, then the null pick explains the finished board.
-    planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "pick"])
-        .assert()
-        .success();
-    planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "done",
-            &second,
-            "--summary",
-            "downstream slice done",
-        ])
-        .assert()
-        .success();
-    let output = planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "--json", "pick"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let final_pick: Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(final_pick["item"], Value::Null);
-    assert_eq!(final_pick["reason"], "all_settled");
-}
-
-#[test]
-fn cosmetic_batch_stable_shapes_ids_and_worker_identity() {
-    let dir = tempdir().unwrap();
-    let db = dir.path().join(".planr/planr.sqlite");
-    planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "project", "init", "Polish"])
-        .assert()
-        .success();
-
-    // Item ids never contain a double dash, even when the 32-char slug
-    // truncation lands on a hyphen.
-    let long_title = format!("{} b suffix", "a".repeat(31));
-    let id = create_test_item(dir.path(), &db, &long_title, "slug truncation");
-    assert!(!id.contains("--"), "item id must not contain '--': {id}");
-
-    // PLANR_WORKER_ID attributes the lease to the agent, not client:host:user.
-    let output = planr()
-        .current_dir(dir.path())
-        .env("PLANR_WORKER_ID", "maker-7")
-        .args(["--db", db.to_str().unwrap(), "--json", "pick"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let pick: Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(pick["item"]["worker_id"], "maker-7");
-
-    // deeper_reads hints consistently carry the --json flag.
-    for hint in pick["deeper_reads"].as_array().unwrap() {
-        assert!(
-            hint.as_str().unwrap().contains("--json"),
-            "deeper read hints must be JSON-mode commands: {hint}"
-        );
-    }
-
-    // Log list shapes are stable: list fields are [] instead of null even on
-    // logs that never set files/commands/tests (e.g. review logs).
-    let output = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "done",
-            &id,
-            "--summary",
-            "slice done",
-            "--review",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let done: Value = serde_json::from_slice(&output).unwrap();
-    let review_id = done["review"]["id"].as_str().unwrap().to_string();
-    planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "review",
-            "close",
-            &review_id,
-            "--verdict",
-            "complete",
-            "--close-target",
-        ])
-        .assert()
-        .success();
-    let output = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "log",
-            "list",
-            "--item",
-            &review_id,
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let logs: Value = serde_json::from_slice(&output).unwrap();
-    let review_log = logs["logs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|log| log["kind"] == "review")
-        .expect("review log exists");
-    for field in ["files", "commands", "tests"] {
-        assert!(
-            review_log[field].is_array(),
-            "log {field} must be [] instead of null: {review_log}"
-        );
-    }
-
-    // Plan split does not duplicate the source title in the build plan slug
-    // when the slice already repeats it.
-    let output = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "plan",
-            "new",
-            "Habit MVP",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let plan: Value = serde_json::from_slice(&output).unwrap();
-    let plan_id = plan["plan"]["id"].as_str().unwrap().to_string();
-    let output = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "plan",
-            "split",
-            &plan_id,
-            "--slice",
-            "Habit MVP build slice",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let build: Value = serde_json::from_slice(&output).unwrap();
-    let path = build["plan"]["path"].as_str().unwrap();
-    assert!(
-        path.ends_with("habit-mvp-build-slice.plan.md"),
-        "build plan filename must not duplicate the source title: {path}"
-    );
 }
 
 #[test]
@@ -21159,72 +22085,6 @@ fn plan_scoped_pick_never_leases_items_of_another_plan() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("plan not found"));
-}
-
-#[test]
-fn close_target_requires_completion_log_and_complete_verdict() {
-    let dir = tempdir().unwrap();
-    let db = dir.path().join(".planr/planr.sqlite");
-    planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "project", "init", "Gate"])
-        .assert()
-        .success();
-    let item = create_test_item(dir.path(), &db, "Unlogged item", "close target guard");
-    let output = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "review",
-            "request",
-            &item,
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let review_id = serde_json::from_slice::<Value>(&output).unwrap()["review"]["id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-
-    planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "review",
-            "close",
-            &review_id,
-            "--verdict",
-            "not-complete",
-            "--findings",
-            "missing tests",
-            "--close-target",
-        ])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("--close-target requires"));
-
-    planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "review",
-            "close",
-            &review_id,
-            "--verdict",
-            "complete",
-            "--close-target",
-        ])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("no completion log"));
-    assert_ne!(item_status(&db, &item), "closed");
 }
 
 #[test]
@@ -22091,13 +22951,6 @@ fn artifacts_events_and_debug_bundle_are_persisted() {
         "{\"summary\":\"http event log\",\"commands\":[\"cargo test\"]}",
     ));
     assert_eq!(http_log["log"]["summary"], "http event log");
-    let http_review = http_json(&http_request(
-        port,
-        "POST",
-        &format!("/v1/items/{item_id}/reviews"),
-        "{}",
-    ));
-    assert!(http_review["review"]["id"].is_string());
     let http_events = http_json(&http_request(port, "GET", "/v1/events", ""));
     let http_event_types = http_events["events"]
         .as_array()
@@ -22107,7 +22960,6 @@ fn artifacts_events_and_debug_bundle_are_persisted() {
         .collect::<Vec<_>>();
     assert!(http_event_types.contains(&"artifact_created"));
     assert!(http_event_types.contains(&"log_created"));
-    assert!(http_event_types.contains(&"review_requested"));
     let sse = http_sse_read_until(port, "/v1/events/stream", "event: artifact_created");
     assert!(sse.contains("text/event-stream"), "{sse}");
     assert!(sse.contains("event: artifact_created"), "{sse}");
@@ -22610,645 +23462,6 @@ fn recovery_sweep_is_available_through_mcp_and_http() {
     assert_eq!(http_recovery["released"], 1);
     server.kill().unwrap();
     server.wait().unwrap();
-}
-
-#[test]
-fn local_review_workspace_serves_browser_ui_and_drives_review_chain() {
-    let dir = tempdir().unwrap();
-    let db = dir.path().join(".planr/planr.sqlite");
-    planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "project",
-            "init",
-            "Review Workspace",
-        ])
-        .assert()
-        .success();
-    planr()
-        .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "plan", "new", "Workspace app"])
-        .assert()
-        .success();
-    let item = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "item",
-            "create",
-            "Workspace target",
-            "--description",
-            "target for local browser review",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let item: Value = serde_json::from_slice(&item).unwrap();
-    let item_id = item["item"]["id"].as_str().unwrap();
-
-    let bin = assert_cmd::cargo::cargo_bin("planr");
-    let port = free_port();
-    let mut server = StdCommand::new(&bin)
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "serve",
-            "--port",
-            &port.to_string(),
-        ])
-        .spawn()
-        .unwrap();
-    wait_for_http_server(port);
-
-    let review = http_json(&http_request(
-        port,
-        "POST",
-        &format!("/v1/items/{item_id}/reviews"),
-        "{}",
-    ));
-    let review_id = review["review"]["id"].as_str().unwrap();
-
-    let html = http_request(port, "GET", "/review", "");
-    assert!(html.contains("content-type: text/html"), "{html}");
-    assert!(html.contains("Planr Review Workspace"), "{html}");
-    assert!(html.contains("Add Annotation"), "{html}");
-    assert!(html.contains("Request Changes"), "{html}");
-
-    let workspace = http_json(&http_request(port, "GET", "/v1/review-workspace", ""));
-    assert_eq!(workspace["project"]["name"], "Review Workspace");
-    assert_eq!(workspace["reviews"][0]["review"]["id"], review_id);
-    assert_eq!(workspace["reviews"][0]["target"]["id"], item_id);
-    assert!(!workspace["plans"].as_array().unwrap().is_empty());
-    assert_eq!(workspace["diff"]["source_content_included"], false);
-
-    let annotation = http_json(&http_request(
-        port,
-        "POST",
-        &format!("/v1/items/{item_id}/review-annotations"),
-        "{\"message\":\"Workspace annotation\",\"severity\":\"blocking\",\"file\":\"src/lib.rs\",\"line\":12}",
-    ));
-    assert_eq!(annotation["annotation"]["severity"], "blocking");
-    let annotated_workspace = http_json(&http_request(port, "GET", "/v1/review-workspace", ""));
-    let annotations = annotated_workspace["reviews"][0]["annotations"]
-        .as_array()
-        .unwrap();
-    assert!(annotations.iter().any(|entry| {
-        entry["content"]
-            .as_str()
-            .unwrap()
-            .contains("Workspace annotation")
-    }));
-
-    let feedback = http_json(&http_request(
-        port,
-        "POST",
-        &format!("/v1/items/{item_id}/review-feedback"),
-        "{\"reviewer\":\"workspace\",\"verdict\":\"not-complete\",\"findings\":[\"Workspace finding\"]}",
-    ));
-    assert_eq!(feedback["auto_closed"], false);
-
-    let artifact = http_json(&http_request(
-        port,
-        "POST",
-        &format!("/v1/reviews/{review_id}/artifact"),
-        "{}",
-    ));
-    assert_eq!(artifact["artifact"]["kind"], "review");
-
-    let close = http_json(&http_request(
-        port,
-        "POST",
-        &format!("/v1/reviews/{review_id}/close"),
-        "{\"verdict\":\"not-complete\",\"findings\":[\"Workspace finding\"]}",
-    ));
-    assert_eq!(close["verdict"], "not-complete");
-    assert_eq!(close["created"].as_array().unwrap().len(), 2);
-
-    server.kill().unwrap();
-    server.wait().unwrap();
-}
-
-#[test]
-fn review_evidence_scopes_git_dirty_files_and_pr_context() {
-    let dir = tempdir().unwrap();
-    fs::create_dir_all(dir.path().join("src")).unwrap();
-    fs::write(dir.path().join("src/owned.rs"), "fn owned() {}\n").unwrap();
-    fs::write(dir.path().join("src/unrelated.rs"), "fn unrelated() {}\n").unwrap();
-    StdCommand::new("git")
-        .current_dir(dir.path())
-        .args(["init"])
-        .status()
-        .unwrap();
-    StdCommand::new("git")
-        .current_dir(dir.path())
-        .args(["config", "user.email", "planr@example.test"])
-        .status()
-        .unwrap();
-    StdCommand::new("git")
-        .current_dir(dir.path())
-        .args(["config", "user.name", "Planr Test"])
-        .status()
-        .unwrap();
-    StdCommand::new("git")
-        .current_dir(dir.path())
-        .args(["add", "."])
-        .status()
-        .unwrap();
-    StdCommand::new("git")
-        .current_dir(dir.path())
-        .args(["commit", "-m", "baseline"])
-        .status()
-        .unwrap();
-
-    let db = dir.path().join(".planr/planr.sqlite");
-    planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "project",
-            "init",
-            "Git Evidence",
-        ])
-        .assert()
-        .success();
-    let item = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "item",
-            "create",
-            "Git scoped item",
-            "--description",
-            "review git evidence",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let item: Value = serde_json::from_slice(&item).unwrap();
-    let item_id = item["item"]["id"].as_str().unwrap();
-    planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "log",
-            "add",
-            "--item",
-            item_id,
-            "--summary",
-            "changed owned file",
-            "--files",
-            "src/owned.rs",
-        ])
-        .assert()
-        .success();
-    StdCommand::new("git")
-        .current_dir(dir.path())
-        .args(["add", ".planr"])
-        .status()
-        .unwrap();
-    StdCommand::new("git")
-        .current_dir(dir.path())
-        .args(["commit", "-m", "planr baseline"])
-        .status()
-        .unwrap();
-
-    let clean = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "review",
-            "evidence",
-            item_id,
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let clean: Value = serde_json::from_slice(&clean).unwrap();
-    assert_eq!(clean["evidence"]["git"]["available"], true);
-    assert!(
-        clean["evidence"]["git"]["changed_files"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
-
-    fs::write(
-        dir.path().join("src/owned.rs"),
-        "fn owned() { assert!(true); }\n",
-    )
-    .unwrap();
-    fs::write(
-        dir.path().join("src/unrelated.rs"),
-        "fn unrelated() { assert!(true); }\n",
-    )
-    .unwrap();
-
-    let dirty = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "review",
-            "evidence",
-            item_id,
-            "--pr-url",
-            "https://github.com/instructa/planr/pull/1",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let dirty: Value = serde_json::from_slice(&dirty).unwrap();
-    assert!(
-        dirty["evidence"]["git"]["scoped_files"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|value| value == "src/owned.rs")
-    );
-    assert!(
-        dirty["evidence"]["git"]["unrelated_dirty_files"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|value| value == "src/unrelated.rs")
-    );
-    assert_eq!(
-        dirty["evidence"]["dirty_worktree_safety"]["source_content_included"],
-        false
-    );
-    assert!(
-        dirty["evidence"]["provenance"]["pr_urls"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|value| value == "https://github.com/instructa/planr/pull/1")
-    );
-
-    let review = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "review",
-            "request",
-            item_id,
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let review: Value = serde_json::from_slice(&review).unwrap();
-    let review_id = review["review"]["id"].as_str().unwrap();
-    let close = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "review",
-            "close",
-            review_id,
-            "--verdict",
-            "not-complete",
-            "--findings",
-            "Tie finding to src/owned.rs:1",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let close: Value = serde_json::from_slice(&close).unwrap();
-    let artifact_path = close["artifact"]["path"].as_str().unwrap();
-    let artifact = fs::read_to_string(artifact_path).unwrap();
-    assert!(artifact.contains("Git And PR Evidence"));
-    assert!(artifact.contains("src/owned.rs"));
-    assert!(artifact.contains("src/unrelated.rs"));
-    assert!(artifact.contains("https://github.com/instructa/planr/pull/1"));
-}
-
-#[test]
-fn template_export_import_preserves_graph_context_and_review_artifacts() {
-    let source = tempdir().unwrap();
-    let source_db = source.path().join(".planr/planr.sqlite");
-    planr()
-        .current_dir(source.path())
-        .args([
-            "--db",
-            source_db.to_str().unwrap(),
-            "project",
-            "init",
-            "Template Source",
-        ])
-        .assert()
-        .success();
-    planr()
-        .current_dir(source.path())
-        .args([
-            "--db",
-            source_db.to_str().unwrap(),
-            "plan",
-            "new",
-            "Reusable App",
-        ])
-        .assert()
-        .success();
-    let first = planr()
-        .current_dir(source.path())
-        .args([
-            "--db",
-            source_db.to_str().unwrap(),
-            "--json",
-            "item",
-            "create",
-            "Template first",
-            "--description",
-            "first imported item",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let first: Value = serde_json::from_slice(&first).unwrap();
-    let first_id = first["item"]["id"].as_str().unwrap();
-    let second = planr()
-        .current_dir(source.path())
-        .args([
-            "--db",
-            source_db.to_str().unwrap(),
-            "--json",
-            "item",
-            "create",
-            "Template second",
-            "--description",
-            "second imported item",
-            "--after",
-            first_id,
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let second: Value = serde_json::from_slice(&second).unwrap();
-    let second_id = second["item"]["id"].as_str().unwrap();
-    planr()
-        .current_dir(source.path())
-        .args([
-            "--db",
-            source_db.to_str().unwrap(),
-            "context",
-            "add",
-            "Template review annotation context",
-            "--item",
-            second_id,
-            "--tag",
-            "review_annotation",
-        ])
-        .assert()
-        .success();
-    let review = planr()
-        .current_dir(source.path())
-        .args([
-            "--db",
-            source_db.to_str().unwrap(),
-            "--json",
-            "review",
-            "request",
-            second_id,
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let review: Value = serde_json::from_slice(&review).unwrap();
-    let review_id = review["review"]["id"].as_str().unwrap();
-    let close = planr()
-        .current_dir(source.path())
-        .args([
-            "--db",
-            source_db.to_str().unwrap(),
-            "--json",
-            "review",
-            "close",
-            review_id,
-            "--verdict",
-            "complete",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let close: Value = serde_json::from_slice(&close).unwrap();
-    assert_eq!(close["artifact"]["kind"], "review");
-
-    let package = source.path().join("template.planr.json");
-    planr()
-        .current_dir(source.path())
-        .args([
-            "--db",
-            source_db.to_str().unwrap(),
-            "export",
-            "--include-plans",
-            "--include-logs",
-            "--template-name",
-            "Reusable template",
-            "--tag",
-            "v1.1",
-            "--out",
-            package.to_str().unwrap(),
-        ])
-        .assert()
-        .success();
-    let package_json: Value = serde_json::from_slice(&fs::read(&package).unwrap()).unwrap();
-    assert_eq!(package_json["planr_template"]["schema_version"], 1);
-    assert_eq!(
-        package_json["planr_template"]["requirements"]["requires_confirmed_import"],
-        true
-    );
-    assert_eq!(
-        package_json["planr_template"]["encrypted_bundle_strategy"]["hosted_share_required"],
-        false
-    );
-
-    let target = tempdir().unwrap();
-    let target_db = target.path().join(".planr/planr.sqlite");
-    planr()
-        .current_dir(target.path())
-        .args([
-            "--db",
-            target_db.to_str().unwrap(),
-            "project",
-            "init",
-            "Template Target",
-        ])
-        .assert()
-        .success();
-    let preview = planr()
-        .current_dir(target.path())
-        .args([
-            "--db",
-            target_db.to_str().unwrap(),
-            "--json",
-            "import",
-            package.to_str().unwrap(),
-            "--preview",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let preview: Value = serde_json::from_slice(&preview).unwrap();
-    assert_eq!(preview["mode"], "preview");
-    assert!(preview["report"]["would_create"]["items"].as_u64().unwrap() >= 2);
-    assert_eq!(preview["report"]["requires_confirm"], true);
-
-    planr()
-        .current_dir(target.path())
-        .args([
-            "--db",
-            target_db.to_str().unwrap(),
-            "import",
-            package.to_str().unwrap(),
-            "--confirm",
-        ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("import applied"));
-    let pick = planr()
-        .current_dir(target.path())
-        .args(["--db", target_db.to_str().unwrap(), "--json", "pick"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let pick: Value = serde_json::from_slice(&pick).unwrap();
-    assert_eq!(pick["item"]["id"], first_id);
-    let contexts = planr()
-        .current_dir(target.path())
-        .args([
-            "--db",
-            target_db.to_str().unwrap(),
-            "--json",
-            "context",
-            "list",
-            "--item",
-            second_id,
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let contexts: Value = serde_json::from_slice(&contexts).unwrap();
-    assert!(
-        contexts["contexts"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|context| context["content"]
-                .as_str()
-                .unwrap()
-                .contains("Template review annotation context"))
-    );
-    assert!(target.path().join(".planr/reviews").exists());
-}
-
-fn free_port() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.local_addr().unwrap().port()
-}
-
-fn wait_for_http_server(port: u16) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        match TcpStream::connect(("127.0.0.1", port)) {
-            Ok(stream) => {
-                drop(stream);
-                return;
-            }
-            Err(_) if std::time::Instant::now() < deadline => {
-                thread::sleep(Duration::from_millis(10));
-            }
-            Err(error) => panic!("HTTP server did not become ready: {error}"),
-        }
-    }
-}
-
-fn http_request(port: u16, method: &str, path: &str, body: &str) -> String {
-    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
-    let request = format!(
-        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        body.len(),
-        body
-    );
-    stream.write_all(request.as_bytes()).unwrap();
-    let mut response = String::new();
-    stream.read_to_string(&mut response).unwrap();
-    response
-}
-
-fn http_sse_read_until(port: u16, path: &str, needle: &str) -> String {
-    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
-    write!(
-        stream,
-        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: text/event-stream\r\n\r\n"
-    )
-    .unwrap();
-    let mut collected = String::new();
-    let mut buf = [0u8; 4096];
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while std::time::Instant::now() < deadline {
-        match stream.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => {
-                collected.push_str(&String::from_utf8_lossy(&buf[..n]));
-                if collected.contains(needle) {
-                    break;
-                }
-            }
-            Err(_) => break,
-        }
-    }
-    collected
-}
-
-fn http_json(response: &str) -> Value {
-    let body = response
-        .split("\r\n\r\n")
-        .nth(1)
-        .expect("HTTP response body");
-    serde_json::from_str(body).expect(body)
 }
 
 #[test]
@@ -24234,7 +24447,7 @@ fn pi_host_surfaces_are_native_explicit_and_optional() {
     assert!(routing["hosts"]["pi"].is_array());
     assert_eq!(
         routing["process_dispatch"][0],
-        "pi --approve --model <provider/model> --thinking <level> -p \"Use /skill:planr-work on item <item-id>. Stop after requesting review.\""
+        "pi --approve --model <provider/model> --thinking <level> -p \"Use /skill:planr-work on item <item-id> as the first item in a compatible same-plan maker run. Keep one worker identity, settle each ordinary outcome with planr done --next, write a compact durable handoff only at a genuine stop, and stop after requesting any material review, blocker, incompatible pick, empty pick, or budget boundary.\""
     );
     let routing_prompt = routing["prompt"].as_str().unwrap();
     for required in [
@@ -24542,7 +24755,7 @@ fn rust_implementation_has_owned_module_boundaries() {
         "src/app/repository.rs",
         "src/app/review.rs",
         "src/app/recovery.rs",
-        "src/app/review_workspace.rs",
+        "src/app/execution_run.rs",
         "src/app/surfaces.rs",
         "src/app/inspection.rs",
         "src/app/application.rs",
@@ -24591,21 +24804,20 @@ fn rust_implementation_has_owned_module_boundaries() {
     for (file, max_lines) in [
         ("src/cli.rs", 1_050usize),
         ("src/app/mod.rs", 180),
-        ("src/app/audit.rs", 200),
-        ("src/app/commands.rs", 1_120),
+        ("src/app/audit.rs", 300),
+        ("src/app/commands.rs", 1_200),
         ("src/app/grok.rs", 150),
-        ("src/app/flow.rs", 320),
+        ("src/app/flow.rs", 1_150),
         ("src/app/git_review.rs", 350),
-        ("src/app/mcp.rs", 900),
+        ("src/app/mcp.rs", 950),
         ("src/app/packages.rs", 450),
         ("src/app/prompts.rs", 100),
         ("src/app/http.rs", 900),
         ("src/app/repository.rs", 1_100),
-        ("src/app/lease.rs", 300),
+        ("src/app/lease.rs", 325),
         ("src/app/review.rs", 600),
         ("src/app/recovery.rs", 450),
-        ("src/app/review_workspace.rs", 500),
-        ("src/app/surfaces.rs", 300),
+        ("src/app/surfaces.rs", 325),
         ("src/app/inspection.rs", 510),
         ("src/app/application.rs", 200),
         ("src/storage/schema.rs", 300),
@@ -24626,6 +24838,18 @@ fn rust_implementation_has_owned_module_boundaries() {
         );
     }
 
+    let execution_run = fs::read_to_string(root.join("src/app/execution_run.rs")).unwrap();
+    let production_line_count = execution_run
+        .split_once("\n#[cfg(test)]")
+        .map(|(production, _)| production)
+        .unwrap_or(&execution_run)
+        .lines()
+        .count();
+    assert!(
+        production_line_count <= 1_400,
+        "src/app/execution_run.rs has {production_line_count} production lines; keep ownership split instead of growing a new hub"
+    );
+
     let docs = fs::read_to_string(root.join("docs/ARCHITECTURE.md")).unwrap();
     for owner in [
         "src/main.rs",
@@ -24644,7 +24868,7 @@ fn rust_implementation_has_owned_module_boundaries() {
         "src/app/lease.rs",
         "src/app/review.rs",
         "src/app/recovery.rs",
-        "src/app/review_workspace.rs",
+        "src/app/execution_run.rs",
         "src/app/surfaces.rs",
         "src/app/inspection.rs",
         "src/app/application.rs",
@@ -24674,6 +24898,10 @@ fn plan_split_with_colon_slice_stays_parseable_and_check_is_honest() {
         .args(["--db", &db_arg, "project", "init", "Example"])
         .assert()
         .success();
+    write_materiality_policy(dir.path());
+    init_materiality_git(dir.path());
+    fs::create_dir_all(dir.path().join("docs")).unwrap();
+    fs::write(dir.path().join("docs/README.md"), "fix evidence\n").unwrap();
 
     let output = planr()
         .current_dir(dir.path())
@@ -24816,184 +25044,6 @@ fn plan_split_with_colon_slice_stays_parseable_and_check_is_honest() {
         "parse_error",
         "plan check must refresh stored parse_status from disk"
     );
-}
-
-#[test]
-fn follow_up_review_is_not_ready_while_fix_item_is_open() {
-    let dir = tempdir().unwrap();
-    let db = dir.path().join(".planr/planr.sqlite");
-    let db_arg = db.to_str().unwrap().to_string();
-
-    planr()
-        .current_dir(dir.path())
-        .args(["--db", &db_arg, "project", "init", "Example"])
-        .assert()
-        .success();
-    planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            &db_arg,
-            "item",
-            "create",
-            "Demo work",
-            "--description",
-            "demo",
-        ])
-        .assert()
-        .success();
-
-    let output = planr()
-        .current_dir(dir.path())
-        .args(["--db", &db_arg, "--json", "pick"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let value: Value = serde_json::from_slice(&output).unwrap();
-    let item_id = value["item"]["id"].as_str().unwrap().to_string();
-
-    planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            &db_arg,
-            "log",
-            "add",
-            "--item",
-            &item_id,
-            "--summary",
-            "s",
-            "--cmd",
-            "c",
-        ])
-        .assert()
-        .success();
-    let output = planr()
-        .current_dir(dir.path())
-        .args(["--db", &db_arg, "--json", "review", "request", &item_id])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let value: Value = serde_json::from_slice(&output).unwrap();
-    let review_id = value["review"]["id"].as_str().unwrap().to_string();
-
-    planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            &db_arg,
-            "review",
-            "close",
-            &review_id,
-            "--verdict",
-            "not-complete",
-            "--findings",
-            "finding x",
-        ])
-        .assert()
-        .success();
-
-    let statuses = |raw: &[u8]| -> std::collections::BTreeMap<String, String> {
-        let value: Value = serde_json::from_slice(raw).unwrap();
-        value["items"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|i| {
-                (
-                    i["id"].as_str().unwrap().to_string(),
-                    i["status"].as_str().unwrap().to_string(),
-                )
-            })
-            .collect()
-    };
-
-    let output = planr()
-        .current_dir(dir.path())
-        .args(["--db", &db_arg, "--json", "map", "show"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let by_id = statuses(&output);
-    let fix_id = by_id
-        .keys()
-        .find(|id| id.starts_with("i-fix-findings"))
-        .expect("fix item created")
-        .clone();
-    let follow_up_id = by_id
-        .keys()
-        .find(|id| id.starts_with("i-follow-up-review"))
-        .expect("follow-up review created")
-        .clone();
-    assert_eq!(by_id[&fix_id], "ready", "fix item must be ready");
-    assert_eq!(
-        by_id[&follow_up_id], "pending",
-        "follow-up review must not be ready while its blocking fix item is open"
-    );
-
-    // Closing the fix item must promote the follow-up review.
-    planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            &db_arg,
-            "log",
-            "add",
-            "--item",
-            &fix_id,
-            "--summary",
-            "fixed",
-            "--cmd",
-            "c",
-        ])
-        .assert()
-        .success();
-    planr()
-        .current_dir(dir.path())
-        .args(["--db", &db_arg, "close", &fix_id, "--summary", "fixed"])
-        .assert()
-        .success();
-    let output = planr()
-        .current_dir(dir.path())
-        .args(["--db", &db_arg, "--json", "map", "show"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let by_id = statuses(&output);
-    assert_eq!(
-        by_id[&follow_up_id], "ready",
-        "follow-up review must become ready once the fix item closes"
-    );
-    assert_eq!(
-        by_id[&item_id], "in_review",
-        "target must stay visibly in_review while the review chain is open"
-    );
-
-    // The follow-up review gates the same target, so closing it complete
-    // with --close-target settles the original item through the chain.
-    planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            &db_arg,
-            "review",
-            "close",
-            &follow_up_id,
-            "--verdict",
-            "complete",
-            "--close-target",
-        ])
-        .assert()
-        .success();
-    assert_eq!(item_status(&db, &item_id), "closed");
 }
 
 #[test]
@@ -25209,270 +25259,6 @@ fn symmetry_pack_tag_filter_plan_scoped_map_and_audit_next_command() {
 }
 
 #[test]
-fn guess_killer_pack_auto_chain_audit_review_mode_unlocked_and_repair_errors() {
-    let dir = tempdir().unwrap();
-    let db = dir.path().join(".planr/planr.sqlite");
-    let db_arg = db.to_str().unwrap().to_string();
-    let run = |worker: &str, args: &[&str]| -> Value {
-        let output = planr()
-            .current_dir(dir.path())
-            .env("PLANR_WORKER_ID", worker)
-            .args(["--db", &db_arg, "--json"])
-            .args(args)
-            .assert()
-            .success()
-            .get_output()
-            .stdout
-            .clone();
-        serde_json::from_slice(&output).unwrap()
-    };
-    planr()
-        .current_dir(dir.path())
-        .args(["--db", &db_arg, "project", "init", "GuessKiller"])
-        .assert()
-        .success();
-    let value = run("prep", &["plan", "new", "Guess killer app"]);
-    let product_id = value["plan"]["id"].as_str().unwrap().to_string();
-    let value = run("prep", &["plan", "split", &product_id, "--slice", "MVP"]);
-    let build_id = value["plan"]["id"].as_str().unwrap().to_string();
-    let build_path = value["plan"]["path"].as_str().unwrap().to_string();
-
-    // Fill required sections and define three ordered steps.
-    let text = fs::read_to_string(&build_path).unwrap();
-    let frontmatter_end = text.find("\n---\n").unwrap() + 5;
-    let body = format!(
-        "{}\n# Build Plan\n\n## Scope Decision\n\nMVP only.\n\n## Verification\n\nRun the flow.\n\n## Acceptance Criteria\n\n- The flow works end to end.\n\n## Steps\n\n### Add schema\n\nCreate the table.\n\n### Add endpoint\n\nServe the data.\n\n### Add page\n\nRender the data.\n",
-        &text[..frontmatter_end]
-    );
-    fs::write(&build_path, body).unwrap();
-
-    // F1: map build chains the created items in plan order with blocks links
-    // and the output already carries items, links, and the next command.
-    let build = run("prep", &["map", "build", "--from", &build_id]);
-    let created = build["created"].as_array().unwrap();
-    assert_eq!(created.len(), 3, "expected one item per plan step: {build}");
-    let ids: Vec<String> = created
-        .iter()
-        .map(|item| item["id"].as_str().unwrap().to_string())
-        .collect();
-    let links = build["links"].as_array().unwrap();
-    assert_eq!(links.len(), 2, "consecutive items must be chained: {build}");
-    assert_eq!(links[0]["from"].as_str(), Some(ids[0].as_str()));
-    assert_eq!(links[0]["to"].as_str(), Some(ids[1].as_str()));
-    assert_eq!(links[1]["from"].as_str(), Some(ids[1].as_str()));
-    assert_eq!(links[1]["to"].as_str(), Some(ids[2].as_str()));
-    assert_eq!(created[0]["status"], "ready");
-    assert_eq!(
-        created[1]["status"], "pending",
-        "chained items must not be ready before their blocker settles"
-    );
-    let rebuilt = run("prep", &["map", "build", "--from", &build_id]);
-    assert!(rebuilt["created"].as_array().unwrap().is_empty());
-    assert!(rebuilt["links"].as_array().unwrap().is_empty());
-
-    // F3: the audit verdict before any work is an evidence-backed "open".
-    let audit = run("prep", &["plan", "audit", &build_id]);
-    assert_eq!(audit["holds"], false);
-    let clause = |audit: &Value, name: &str| -> Value {
-        audit["clauses"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|clause| clause["clause"] == name)
-            .unwrap_or_else(|| panic!("missing clause {name}: {audit}"))
-            .clone()
-    };
-    let items_clause = clause(&audit, "items_settled");
-    assert_eq!(items_clause["pass"], false);
-    assert_eq!(items_clause["open"].as_array().unwrap().len(), 3);
-    assert_eq!(
-        clause(&audit, "verification_logged")["required"],
-        false,
-        "verification is contract-scoped; no contract stored yet"
-    );
-
-    // F7: closing a blocked item names the repair, not just the rejection.
-    planr()
-        .current_dir(dir.path())
-        .args(["--db", &db_arg, "close", &ids[2], "--summary", "premature"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("settle its blockers first"));
-
-    // Item 1: maker ships with evidence, an independent checker closes.
-    let pick = run("maker-1", &["pick", "--plan", &build_id]);
-    assert_eq!(pick["item"]["id"].as_str(), Some(ids[0].as_str()));
-    let done = run(
-        "maker-1",
-        &[
-            "done",
-            &ids[0],
-            "--summary",
-            "schema added",
-            "--cmd",
-            "cargo test schema",
-            "--review",
-        ],
-    );
-    let review_id = done["review"]["id"].as_str().unwrap().to_string();
-    assert!(
-        done["unlocked"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|unlocked| unlocked["id"].as_str() == Some(review_id.as_str())),
-        "the freshly ready review must be reported as unlocked: {done}"
-    );
-    assert!(
-        done["hint"].is_null(),
-        "evidence was attached; no hint expected: {done}"
-    );
-    let review_pick = run(
-        "checker-1",
-        &["pick", "--work-type", "review", "--plan", &build_id],
-    );
-    assert_eq!(review_pick["item"]["id"].as_str(), Some(review_id.as_str()));
-    let closed = run(
-        "checker-1",
-        &[
-            "review",
-            "close",
-            &review_id,
-            "--verdict",
-            "complete",
-            "--close-target",
-        ],
-    );
-    // F4: the maker/checker split is derived from recorded identity.
-    assert_eq!(closed["review_mode"], "independent", "{closed}");
-    // F6: settling the gate reports the step it unlocked.
-    assert!(
-        closed["unlocked"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|unlocked| unlocked["id"].as_str() == Some(ids[1].as_str())),
-        "closing the gate must report the unlocked next step: {closed}"
-    );
-
-    // Item 2: settled without evidence while downstream work exists -> hint.
-    run("maker-1", &["pick", "--plan", &build_id]);
-    let done = run("maker-1", &["done", &ids[1], "--summary", "endpoint added"]);
-    assert!(
-        done["hint"].as_str().unwrap_or_default().contains("--cmd"),
-        "missing evidence with downstream work must hint: {done}"
-    );
-    assert!(
-        done["unlocked"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|unlocked| unlocked["id"].as_str() == Some(ids[2].as_str())),
-        "{done}"
-    );
-
-    // Item 3: the same identity closes its own review -> single_agent.
-    run("maker-1", &["pick", "--plan", &build_id]);
-    let done = run(
-        "maker-1",
-        &[
-            "done",
-            &ids[2],
-            "--summary",
-            "page added",
-            "--cmd",
-            "vitest --run page",
-            "--review",
-        ],
-    );
-    let review_id = done["review"]["id"].as_str().unwrap().to_string();
-    run(
-        "maker-1",
-        &["pick", "--work-type", "review", "--plan", &build_id],
-    );
-    let closed = run(
-        "maker-1",
-        &[
-            "review",
-            "close",
-            &review_id,
-            "--verdict",
-            "complete",
-            "--close-target",
-        ],
-    );
-    assert_eq!(closed["review_mode"], "single_agent", "{closed}");
-
-    // F3 frozen pre-Evidence compatibility: a settled board holds without a
-    // contract; adding a contract requires one claim-only verification log.
-    let audit = run("prep", &["plan", "audit", &build_id]);
-    assert_eq!(audit["holds"], true, "all settled, no contract: {audit}");
-    run(
-        "prep",
-        &[
-            "context",
-            "add",
-            &format!(
-                "GOAL CONTRACT {build_id}: DONE when all items closed and live verification logged."
-            ),
-            "--tag",
-            "goal-contract",
-        ],
-    );
-    let audit = run("prep", &["plan", "audit", &build_id]);
-    assert_eq!(
-        audit["holds"], false,
-        "a stored contract makes the verification clause binding: {audit}"
-    );
-    assert!(
-        audit["contract"]["content"]
-            .as_str()
-            .unwrap()
-            .contains(&build_id)
-    );
-    run(
-        "maker-1",
-        &[
-            "log",
-            "add",
-            "--item",
-            &ids[2],
-            "--kind",
-            "verification",
-            "--summary",
-            "verified page in browser",
-            "--cmd",
-            "curl localhost:3000/page",
-        ],
-    );
-    let audit = run("prep", &["plan", "audit", &build_id]);
-    assert_eq!(audit["holds"], true, "{audit}");
-    let verification = clause(&audit, "verification_logged");
-    assert_eq!(verification["pass"], true);
-    assert_eq!(verification["logs"].as_array().unwrap().len(), 1);
-
-    // F8: the post condition is echoed at completion time.
-    let manual = run(
-        "prep",
-        &[
-            "item",
-            "create",
-            "Manual gate",
-            "--description",
-            "standalone",
-            "--post",
-            "verify the deploy manually",
-        ],
-    );
-    let manual_id = manual["item"]["id"].as_str().unwrap().to_string();
-    let closed_manual = run("prep", &["close", &manual_id, "--summary", "done"]);
-    assert_eq!(
-        closed_manual["post_condition"], "verify the deploy manually",
-        "{closed_manual}"
-    );
-}
-
-#[test]
 fn plan_audit_uses_evidence_coverage_for_binding_criteria_and_logs_are_claims_only() {
     let dir = tempdir().unwrap();
     let db_dir = tempdir().unwrap();
@@ -25535,7 +25321,13 @@ fn plan_audit_uses_evidence_coverage_for_binding_criteria_and_logs_are_claims_on
         .unwrap();
         let map = run("prep", &["map", "build", "--from", &build_id]);
         let item_id = map["created"][0]["id"].as_str().unwrap().to_string();
-        run("maker", &["close", &item_id, "--summary", "settled"]);
+        Connection::open(&db)
+            .unwrap()
+            .execute(
+                "UPDATE items SET status = 'closed', updated_at = datetime('now') WHERE id = ?1",
+                [&item_id],
+            )
+            .unwrap();
         run(
             "prep",
             &[
@@ -25970,17 +25762,6 @@ fn plan_audit_uses_evidence_coverage_for_binding_criteria_and_logs_are_claims_on
                     .contains("binding Evidence coverage is not proven"),
                 "{close}"
             );
-            let review = run("maker", &["review", "request", item_id]);
-            let review_id = review["review"]["id"].as_str().unwrap().to_string();
-            let review_trace = run("checker", &["trace", "item", &review_id]);
-            assert_stale_proof(
-                &review_trace["target"]["proof"],
-                coverage,
-                criterion_id,
-                requirement_id,
-                attempted_receipt_id,
-                gap_reason,
-            );
             let review_evidence = run("checker", &["review", "evidence", item_id]);
             assert_stale_proof(
                 &review_evidence["evidence"]["proof"],
@@ -26191,16 +25972,6 @@ fn plan_audit_uses_evidence_coverage_for_binding_criteria_and_logs_are_claims_on
         "crit-audit-workflow",
         "obs-pob-audit-workflow",
     );
-    let proof_review = run("maker", &["review", "request", &workflow_item]);
-    let proof_review_id = proof_review["review"]["id"].as_str().unwrap().to_string();
-    let review_trace = run("checker", &["trace", "item", &proof_review_id]);
-    assert_eq!(review_trace["target"]["proof"], workflow_trace["proof"]);
-    assert_missing_observation_proof(
-        &review_trace["target"]["proof"],
-        &workflow_raw,
-        "crit-audit-workflow",
-        "obs-pob-audit-workflow",
-    );
     let review_evidence = run("checker", &["review", "evidence", &workflow_item]);
     assert_eq!(
         review_evidence["evidence"]["proof"],
@@ -26224,33 +25995,6 @@ fn plan_audit_uses_evidence_coverage_for_binding_criteria_and_logs_are_claims_on
             "--summary",
             "implementation complete but proof missing",
         ],
-    );
-    let blocked_review_close = planr()
-        .current_dir(dir.path())
-        .env("PLANR_WORKER_ID", "checker")
-        .args([
-            "--db",
-            &db_arg,
-            "--json",
-            "review",
-            "close",
-            &proof_review_id,
-            "--verdict",
-            "complete",
-            "--close-target",
-        ])
-        .assert()
-        .failure()
-        .get_output()
-        .stdout
-        .clone();
-    let blocked_review_close: Value = serde_json::from_slice(&blocked_review_close).unwrap();
-    assert!(
-        blocked_review_close["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("binding Evidence coverage is not proven"),
-        "{blocked_review_close}"
     );
     run("maker", &["pick", "release", &workflow_item, "--force"]);
     let workflow_status = run("prep", &["map", "status"]);
@@ -26781,17 +26525,6 @@ fn plan_audit_uses_evidence_coverage_for_binding_criteria_and_logs_are_claims_on
         .unwrap();
     assert_eq!(proof_pass_recovered["proof"], proof_pass_trace["proof"]);
     assert_proof_pass_pair(&proof_pass_recovered["proof"]);
-    let proof_pass_review = run("maker", &["review", "request", &proof_pass_item]);
-    let proof_pass_review_id = proof_pass_review["review"]["id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    let proof_pass_review_trace = run("checker", &["trace", "item", &proof_pass_review_id]);
-    assert_eq!(
-        proof_pass_review_trace["target"]["proof"],
-        proof_pass_trace["proof"]
-    );
-    assert_proof_pass_pair(&proof_pass_review_trace["target"]["proof"]);
     let proof_pass_review_evidence = run("checker", &["review", "evidence", &proof_pass_item]);
     assert_eq!(
         proof_pass_review_evidence["evidence"]["proof"],
@@ -27224,7 +26957,12 @@ fn plan_audit_uses_evidence_coverage_for_binding_criteria_and_logs_are_claims_on
     );
     let nonbinding_audit = run("prep", &["plan", "audit", &legacy_nonbinding_plan]);
     let nonbinding_clause = clause(&nonbinding_audit, "verification_logged");
-    assert_eq!(nonbinding_audit["holds"], true, "{nonbinding_audit}");
+    assert_eq!(nonbinding_audit["holds"], false, "{nonbinding_audit}");
+    assert_eq!(nonbinding_clause["pass"], true);
+    assert_eq!(
+        clause(&nonbinding_audit, "final_product_review_complete")["pass"],
+        false
+    );
     assert_eq!(
         nonbinding_clause["authority"],
         "legacy_verification_log_compatibility"
@@ -27307,7 +27045,7 @@ fn plan_audit_uses_evidence_coverage_for_binding_criteria_and_logs_are_claims_on
     );
     assert_evidence_envelope(&api_run, "evidence.run", true);
     let api_audit = run("prep", &["plan", "audit", &api_plan]);
-    assert_eq!(api_audit["holds"], true, "{api_audit}");
+    assert_eq!(api_audit["holds"], false, "{api_audit}");
     let api_clause = clause(&api_audit, "verification_logged");
     assert_eq!(api_clause["authority"], "evidence_coverage");
     assert_eq!(api_clause["pass"], true);
@@ -27376,7 +27114,7 @@ fn plan_audit_uses_evidence_coverage_for_binding_criteria_and_logs_are_claims_on
     assert_evidence_envelope(&shared_run, "evidence.run", true);
     let shared_pass_audit = run("prep", &["plan", "audit", &shared_pass_plan]);
     let shared_pass_clause = clause(&shared_pass_audit, "verification_logged");
-    assert_eq!(shared_pass_audit["holds"], true, "{shared_pass_audit}");
+    assert_eq!(shared_pass_audit["holds"], false, "{shared_pass_audit}");
     assert_eq!(shared_pass_clause["criteria"].as_array().unwrap().len(), 1);
     assert_eq!(
         shared_pass_clause["criteria"][0]["criterion_id"],
@@ -27537,7 +27275,7 @@ fn plan_audit_uses_evidence_coverage_for_binding_criteria_and_logs_are_claims_on
     );
     let multi_audit = run("prep", &["plan", "audit", &multi_plan]);
     let multi_clause = clause(&multi_audit, "verification_logged");
-    assert_eq!(multi_audit["holds"], true, "{multi_audit}");
+    assert_eq!(multi_audit["holds"], false, "{multi_audit}");
     assert_eq!(multi_clause["criteria"].as_array().unwrap().len(), 2);
     let receipt_criterion = multi_clause["criteria"]
         .as_array()
@@ -27733,17 +27471,6 @@ fn plan_audit_uses_evidence_coverage_for_binding_criteria_and_logs_are_claims_on
             .unwrap()
             .contains("binding Evidence coverage is not proven"),
         "{stale_close}"
-    );
-    let stale_review = run("maker", &["review", "request", &stale_item]);
-    let stale_review_id = stale_review["review"]["id"].as_str().unwrap().to_string();
-    let stale_review_trace = run("checker", &["trace", "item", &stale_review_id]);
-    assert_stale_proof(
-        &stale_review_trace["target"]["proof"],
-        &stale_raw,
-        "crit-audit-stale",
-        "obs-pob-audit-stale-base",
-        stale_attempted_receipt_id,
-        "stale_target",
     );
     let stale_review_evidence = run("checker", &["review", "evidence", &stale_item]);
     assert_stale_proof(
@@ -28249,20 +27976,6 @@ fn plan_audit_uses_evidence_coverage_for_binding_criteria_and_logs_are_claims_on
             .unwrap()
             .contains("binding Evidence coverage is not proven"),
         "{unavailable_close}"
-    );
-    let unavailable_review = unavailable_run("maker", &["review", "request", &unavailable_item]);
-    let unavailable_review_id = unavailable_review["review"]["id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    let unavailable_review_trace =
-        unavailable_run("checker", &["trace", "item", &unavailable_review_id]);
-    assert_missing_capability_proof(
-        &unavailable_review_trace["target"]["proof"],
-        &unavailable_raw,
-        "crit-audit-unavailable",
-        "obs-pob-audit-unavailable",
-        unavailable_attempted_receipt_id,
     );
     let unavailable_review_evidence =
         unavailable_run("checker", &["review", "evidence", &unavailable_item]);

@@ -92,7 +92,8 @@ impl App {
     }
 
     pub(crate) fn item_recovery(&self, item_id: &str) -> Result<Value> {
-        self.conn
+        let mut recovery = self
+            .conn
             .query_row(
                 "SELECT timeout_seconds, max_retries, retry_count, retry_backoff, retry_delay_ms
                  FROM items WHERE id = ?1",
@@ -107,7 +108,19 @@ impl App {
                     }))
                 },
             )
-            .map_err(Into::into)
+            .map_err(anyhow::Error::from)?;
+        let item = self.get_item(item_id)?;
+        recovery["execution_state"] = item
+            .plan_path
+            .as_deref()
+            .map(|path| self.plan_id_for_path(path))
+            .transpose()?
+            .flatten()
+            .map(|plan_id| self.canonical_execution_state_for_plan_value(&plan_id))
+            .transpose()?
+            .flatten()
+            .unwrap_or(Value::Null);
+        Ok(recovery)
     }
 
     pub(crate) fn item_conditions(&self, item_id: &str) -> Result<Value> {

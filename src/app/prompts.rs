@@ -30,7 +30,7 @@ impl App {
                 self.db_path.display(),
                 mcp_json_config(&self.db_path)
             ),
-            "http" => "Run `planr serve --port 7526`, open `http://127.0.0.1:7526/review` for the local review workspace, use `/v1/review-workspace` for review data, `/v1/events/stream` for SSE, and keep the server bound to localhost.".to_string(),
+            "http" => "Run `planr serve --port 7526`; use `/v1/plans/<plan-id>/final-product-review` for canonical ReviewGate projections, `/v1/review-gates/<gate-id>/findings/resolve` for maker repair settlement, `/v1/events/stream` for SSE, and keep the server bound to localhost.".to_string(),
             _ => unreachable!(),
         };
         self.emit(

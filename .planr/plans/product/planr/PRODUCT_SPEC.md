@@ -36,14 +36,14 @@ Planr turns broad product ideas and coding work into a coherent flow: product pl
 
 - A `planr` CLI.
 - A local SQLite map graph with items, links, picks, contexts, artifacts, logs, reviews, runs, and events.
-- A `.planr/` repo pack for plans, project context, review artifacts, and skill/prompt templates.
+- A `.planr/` repo pack for plans, project context, and skill/prompt templates; durable ReviewGate state remains in SQLite.
 - MCP server exposing tools, resources, and prompts for Claude Code, Cursor, Codex, Grok Build, and compatible MCP clients; Pi uses native Agent Skills and the CLI because its core intentionally omits MCP.
 - Optional HTTP/SSE local server for dashboard and automation clients.
 - Codex, Claude Code, Cursor, and explicitly opted-in Grok Build and Pi install/config helpers.
 - Import of existing `.planr` data.
 - Export/import of map graph and Markdown plan packs.
 - Explicit recovery sweeps for stale, timed-out, and retryable work.
-- Scoped Git/PR review evidence and a local browser review workspace.
+- Scoped Git/PR review evidence and durable FeatureRun/ReviewGate workflows.
 - Reusable template packages with preview-first import.
 - Prompt output for CLI, MCP, and HTTP agent setup without hidden global config edits.
 
@@ -79,7 +79,7 @@ idea -> product plan -> build plan -> map -> pick -> log -> review/evidence -> r
 - Review: approval or audit condition that blocks closure until satisfied.
 - Evidence: scoped Git, PR URL, file, command, test, and artifact proof attached to the item.
 - Recovery: explicit preview/apply operation for stale, timed-out, retryable, or condition-gated work.
-- Package: reusable local export/import bundle for graph state, plans, logs, contexts, and review artifacts.
+- Package: reusable local export/import bundle for graph state, plans, logs, contexts, and ReviewGate projections.
 - Close: log-backed completion of an item or parent slice.
 
 ## Core Objects And Vocabulary
@@ -92,7 +92,7 @@ idea -> product plan -> build plan -> map -> pick -> log -> review/evidence -> r
 - Context: project-wide discovery, decision, constraint, or pattern.
 - Log: proof bundle produced when an agent implements, verifies, reviews, or hands off work.
 - Run: one agent execution attempt against an item.
-- Review: approval node or policy requiring log before closure.
+- ReviewGate: durable independent audit state with immutable attempts, findings, leases, and acceptance before FeatureRun completion.
 
 ## Core User Journeys
 
@@ -113,7 +113,7 @@ idea -> product plan -> build plan -> map -> pick -> log -> review/evidence -> r
 
 ### Initialization
 
-- REQ-PROD-010: `planr project init` must create `.planr/`, `.planr/project/`, `.planr/plans/`, `.planr/reviews/`, and a local database without overwriting user content unless `--force` is provided.
+- REQ-PROD-010: `planr project init` must create `.planr/`, `.planr/project/`, `.planr/plans/`, and a local database without overwriting user content unless `--force` is provided.
 - REQ-PROD-011: `planr project init --client codex|claude|cursor|grok|pi|all` must print or apply integration instructions for the selected client; the legacy `all` selection excludes Grok and Pi so adoption remains explicit.
 - REQ-PROD-013: `planr install grok` must write only repository-local native Grok skills, agents, and portable MCP configuration; it must not install hooks, credentials, provider SDKs, or a project plugin.
 - REQ-PROD-014: `planr install pi` must write only repository-local native Pi skills and optional `pi-subagents` roles; it must not install MCP, extensions, hooks, settings, packages, credentials, or provider SDKs.
@@ -139,19 +139,19 @@ idea -> product plan -> build plan -> map -> pick -> log -> review/evidence -> r
 - REQ-PROD-041: Links must support hard blocking order and soft contextual relationships.
 - REQ-PROD-042: Item readiness must be computed from map graph state, not from Markdown checkboxes.
 - REQ-PROD-043: Picking a ready item must be atomic across concurrent agents.
-- REQ-PROD-044: Parent items must not close until required child code, fix, and review items are closed.
+- REQ-PROD-044: Parent items must not close until required executable children settle and required ReviewGates are accepted.
 
 ### Agent Execution
 
 - REQ-PROD-050: Planr must provide agent-specific prompts or MCP prompts for Codex, Claude Code, Cursor, Grok Build, and Pi.
 - REQ-PROD-051: Runs must record worker id, client, model/profile when available, item id, command surface, start/end time, and result status.
 - REQ-PROD-052: Item closure must require or allow a log entry with files changed, tests run, commands run, result summary, and blocked/unverified items.
-- REQ-PROD-053: Review findings must create fix items rather than failing ordinary code items.
+- REQ-PROD-053: Review findings must remain durable on the canonical ReviewGate and require explicit resolution before re-review.
 - REQ-PROD-054: `planr prompt` must expose CLI, MCP, and HTTP operating instructions without editing global configuration.
 
 ### Search And Recall
 
-- REQ-PROD-060: Planr must search items, plans, contexts, logs, and review artifacts.
+- REQ-PROD-060: Planr must search items, plans, contexts, and logs while ReviewGate state remains available through gate projections.
 - REQ-PROD-061: Picking an item must surface relevant upstream context and linked plan sections.
 - REQ-PROD-062: Recovery sweep must preview stale, timed-out, retryable, and condition-gated work before applying mutations.
 - REQ-PROD-063: Review evidence must distinguish item-scoped changed files from unrelated dirty worktree files.
@@ -183,7 +183,7 @@ Planr handles developer artifacts and may reference private code. It must minimi
 - Two or more agents can pick independent items without collision.
 - A reviewer can determine what changed, why, what was verified, and what remains.
 - A repo can be resumed after interruption using only Planr state and Git state.
-- A fresh consumer project can prove CLI, MCP, HTTP, review workspace, recovery, package, and installer behavior without relying on maintainer-only state.
+- A fresh consumer project can prove CLI, MCP, HTTP, ReviewGate, recovery, package, and installer behavior without relying on maintainer-only state.
 
 ## Analytics Constraints
 

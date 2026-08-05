@@ -5,7 +5,6 @@ use anyhow::{Result, anyhow};
 use rusqlite::params;
 use serde_json::{Value, json};
 use std::fs;
-use std::path::Path;
 
 mod eval;
 
@@ -59,11 +58,15 @@ impl App {
         let eval_comparisons = optional_nullable_array(data, "eval_comparisons")?;
         let eval_invalidations = optional_nullable_array(data, "eval_invalidations")?;
         let eval_evidence_refs = optional_nullable_array(data, "eval_evidence_refs")?;
-        let artifacts = required_array(data, "review_artifacts", "review_artifacts")?;
         self.validate_packaged_eval_identities(data)?;
         let mut conflicts = Vec::new();
         for item in items {
             let id = required_str(item, "id", "map.items[].id")?;
+            super::repository::item::validate_map_item_work_type(required_str(
+                item,
+                "work_type",
+                "map.items[].work_type",
+            )?)?;
             if self.get_item(id).is_ok() {
                 conflicts.push(json!({"type": "item", "id": id}));
             }
@@ -82,7 +85,6 @@ impl App {
                 "eval_comparisons": eval_comparisons.len(),
                 "eval_invalidations": eval_invalidations.len(),
                 "eval_evidence_refs": eval_evidence_refs.len(),
-                "review_artifacts": artifacts.len(),
             },
             "would_skip": conflicts,
             "agent_registry": self.registry_import_plan(data),
@@ -126,7 +128,6 @@ impl App {
         let eval_comparisons = optional_nullable_array(data, "eval_comparisons")?;
         let eval_invalidations = optional_nullable_array(data, "eval_invalidations")?;
         let eval_evidence_refs = optional_nullable_array(data, "eval_evidence_refs")?;
-        let artifacts = required_array(data, "review_artifacts", "review_artifacts")?;
         self.validate_packaged_eval_identities(data)?;
 
         self.conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
@@ -142,10 +143,21 @@ impl App {
             let mut imported_eval_comparisons = 0usize;
             let mut imported_eval_invalidations = 0usize;
             let mut imported_eval_evidence_refs = 0usize;
-            let mut imported_review_artifacts = 0usize;
             for item in items {
+                super::repository::item::validate_map_item_work_type(required_str(
+                    item,
+                    "work_type",
+                    "map.items[].work_type",
+                )?)?;
+            }
+            for item in items {
+                let metadata = item
+                    .get("metadata")
+                    .cloned()
+                    .filter(|value| !value.is_null())
+                    .unwrap_or_else(|| json!({}));
                 let changed = self.conn.execute(
-                    "INSERT OR IGNORE INTO items(id, project_id, parent_item_id, title, description, status, work_type, priority, worker_id, plan_path, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, datetime('now'), datetime('now'))",
+                    "INSERT OR IGNORE INTO items(id, project_id, parent_item_id, title, description, status, work_type, priority, worker_id, plan_path, metadata, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, datetime('now'), datetime('now'))",
                     params![
                         required_str(item, "id", "map.items[].id")?,
                         &project.id,
@@ -156,6 +168,7 @@ impl App {
                         required_str(item, "work_type", "map.items[].work_type")?,
                         required_i64(item, "priority", "map.items[].priority")?,
                         nullable_str(item, "plan_path", "map.items[].plan_path")?,
+                        metadata.to_string(),
                     ],
                 )?;
                 imported_items += changed;
@@ -272,10 +285,6 @@ impl App {
                     ],
                 )?;
             }
-            for package in artifacts {
-                imported_review_artifacts +=
-                    self.import_review_artifact_package(&project.id, package)?;
-            }
             for evidence_ref in eval_evidence_refs {
                 imported_eval_evidence_refs += self.conn.execute(
                     "INSERT OR IGNORE INTO eval_evidence_refs(id, project_id, target_kind, target_id, planr_attachment_kind, planr_attachment_id, item_id, closure_authority, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
@@ -316,7 +325,6 @@ impl App {
                 "eval_comparisons": imported_eval_comparisons,
                 "eval_invalidations": imported_eval_invalidations,
                 "eval_evidence_refs": imported_eval_evidence_refs,
-                "review_artifacts": imported_review_artifacts,
                 "agent_registry": agent_registry,
             }))
         })();
@@ -330,38 +338,6 @@ impl App {
                 Err(err)
             }
         }
-    }
-
-    fn import_review_artifact_package(&self, project_id: &str, package: &Value) -> Result<usize> {
-        let artifact = required_object(package, "artifact")?;
-        let name = required_str(artifact, "name", "review_artifacts[].artifact.name")?;
-        let safe_name = Path::new(name)
-            .file_name()
-            .and_then(|value| value.to_str())
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                anyhow!("invalid Planr package: review artifact name has no file name")
-            })?;
-        let path = self.root.join(".planr/reviews").join(safe_name);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let content = required_str(package, "content", "review_artifacts[].content")?;
-        fs::write(&path, content)?;
-        self.conn
-            .execute(
-                "INSERT OR IGNORE INTO artifacts(id, project_id, item_id, name, kind, path, content, mime_type, size_bytes, metadata, created_at) VALUES (?1, ?2, ?3, ?4, 'review', ?5, NULL, 'text/markdown', ?6, ?7, datetime('now'))",
-                params![
-                    required_str(artifact, "id", "review_artifacts[].artifact.id")?,
-                    project_id,
-                    nullable_str(artifact, "item_id", "review_artifacts[].artifact.item_id")?,
-                    safe_name,
-                    path.to_string_lossy(),
-                    content.len() as i64,
-                    json!({"imported": true}).to_string(),
-                ],
-            )
-            .map_err(Into::into)
     }
 }
 

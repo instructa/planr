@@ -20,7 +20,6 @@ export const legacyRedirects = [
   ['/docs/guides/review-and-fix-loop', '/docs/guides/review-and-fix-loops'],
   ['/docs/guides/interruptions-and-recovery', '/docs/guides/recover-interrupted-work'],
   ['/docs/guides/import-export-and-templates', '/docs/guides/packages-and-reuse'],
-  ['/docs/guides/local-review-workspace', '/docs/guides/recipes'],
   ['/docs/guides/host-hooks', '/docs/integrations'],
   ['/docs/guides/model-routing', '/docs/reference/configuration-and-storage'],
   ['/docs/reference/cli/index', '/docs/reference/cli'],
