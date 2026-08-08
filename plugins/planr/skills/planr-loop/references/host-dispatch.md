@@ -16,7 +16,7 @@ Load this only when the loop has subagents and must bind a provider-neutral Plan
   wait_agent({ timeout_ms: 3600000 })
   ```
 
-  `planr done --next` atomically settles the outcome, rolls a capped internal ExecutionBatch for the same maker when required, and leases only the next compatible code outcome from the same plan. A `batch_cap_reached` transition that already contains a successor batch and next packet is not a host stop and must not wake the root or trigger `followup_task`. Maker replacement remains reserved for a genuinely unavailable, context-lost, or ownership-incompatible maker.
+  `planr done --next` atomically settles the outcome, rolls a capped internal ExecutionBatch for the same maker when required, and leases only the next compatible code outcome from the same plan. A `batch_cap_reached` transition that already contains a successor batch and next packet is not a host stop and must not wake the root or trigger `followup_task`. A response with `next.reason: "verification_handoff_source_frozen"` is a stop: dispatch the packet's fresh-verifier command and do not route verification work back to the maker. Maker replacement remains reserved for a genuinely unavailable, context-lost, or ownership-incompatible maker.
 
   If that material review returns findings, a code pick for the responsible maker returns the same ReviewGate as `work_packet.kind: "outcome", mode: "finding_repair"`. Route that packet to the same live maker agent; no fix item is created:
 
@@ -45,7 +45,7 @@ Load this only when the loop has subagents and must bind a provider-neutral Plan
     task_name: "verifier_frozen_source",
     agent_type: "<routing.profile-or-default>",
     fork_turns: "none",
-    message: "Verification-only pass for plan <plan-id>. Keep one fresh verifier identity distinct from the maker. Your first command is planr pick --plan <plan-id> --work-type verification --json; continue only for work_packet.kind verification. Under that same lease run planr evidence readiness --scope plan --id <plan-id> --json, then execute only readiness.run_index.repository_path with planr evidence run --input. Product source is read-only by the canonical Evidence SOURCE_PATHS digest; source mismatch fails before trusted receipt commit with zero new receipts. Log receipts/artifacts, route product findings back to the responsible maker, and preserve exactly one final independent product ReviewGate."
+    message: "Verification-only pass for plan <plan-id>. Keep one fresh verifier identity distinct from the maker. Your first command is the handoff packet's lease_verifier command (`planr pick --plan <plan-id> --work-type verification --json`); continue only for work_packet.kind verification and its bound item_id/source_freeze/verification_lease. Under that same lease run the packet's readiness command, then execute only readiness.run_index.repository_path with planr evidence run --input. Product source is read-only by the canonical Evidence SOURCE_PATHS digest; source mismatch fails before trusted receipt commit with zero new receipts. Log receipts/artifacts, route product findings back to the responsible maker, and preserve exactly one final independent product ReviewGate."
   })
   wait_agent({ timeout_ms: 3600000 })
   ```

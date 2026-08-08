@@ -21005,6 +21005,179 @@ fn done_next_stops_at_review_gate_without_leasing_more_work() {
 }
 
 #[test]
+fn done_next_freezes_source_and_stops_before_verification_work() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "project",
+            "init",
+            "Verification Handoff",
+        ])
+        .assert()
+        .success();
+    let plan_path = dir.path().join("verification-handoff.plan.md");
+    fs::write(&plan_path, "# Verification Handoff\n").unwrap();
+    let conn = Connection::open(&db).unwrap();
+    let project_id: String = conn
+        .query_row("SELECT id FROM projects LIMIT 1", [], |row| row.get(0))
+        .unwrap();
+    conn.execute(
+        "INSERT INTO plans(id, project_id, stage, path, title, slug, parse_status, content_hash, created_at, updated_at)
+         VALUES ('plan-verification-handoff', ?1, 'build', ?2, 'Verification Handoff', 'verification-handoff', 'ok', 'sha256:verification-handoff', datetime('now'), datetime('now'))",
+        rusqlite::params![project_id, plan_path.to_string_lossy()],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO items(id, project_id, title, description, status, work_type, worker_id, plan_path, created_at, updated_at)
+         VALUES ('item-last-code-before-verification', ?1, 'Last code', 'settle implementation', 'picked', 'code', 'maker-verification-handoff', ?2, datetime('now'), datetime('now'))",
+        rusqlite::params![project_id, plan_path.to_string_lossy()],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO items(id, project_id, title, description, status, work_type, plan_path, created_at, updated_at)
+         VALUES ('item-verification-handoff', ?1, 'Verification', 'must not lease to maker code batch', 'ready', 'verification', ?2, datetime('now'), datetime('now'))",
+        rusqlite::params![project_id, plan_path.to_string_lossy()],
+    )
+    .unwrap();
+    drop(conn);
+    init_git_repo(dir.path());
+
+    let output = planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "maker-verification-handoff")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "done",
+            "item-last-code-before-verification",
+            "--summary",
+            "settled final implementation before verifier",
+            "--cmd",
+            "true",
+            "--tests",
+            "true",
+            "--next",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let done: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(done["next"]["item"], Value::Null);
+    assert_eq!(done["next"]["reason"], "verification_handoff_source_frozen");
+    assert_eq!(done["next"]["work_packet"]["kind"], "verification_handoff");
+    assert_eq!(
+        done["next"]["work_packet"]["verification_item_id"],
+        "item-verification-handoff"
+    );
+    assert_eq!(
+        done["next"]["work_packet"]["commands"]["lease_verifier"],
+        "planr pick --plan plan-verification-handoff --work-type verification --json"
+    );
+    assert_eq!(
+        done["next"]["work_packet"]["commands"]["readiness"],
+        "planr evidence readiness --scope plan --id plan-verification-handoff"
+    );
+    assert_eq!(
+        done["next"]["work_packet"]["source_freeze"]["feature_run"]["phase"],
+        "source_frozen"
+    );
+
+    planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "maker-verification-handoff")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "pick",
+            "--plan",
+            "plan-verification-handoff",
+            "--work-type",
+            "verification",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "verification_requires_fresh_independent_worker",
+        ));
+    planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "verifier-verification-handoff")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "pick",
+            "--plan",
+            "plan-verification-handoff",
+            "--work-type",
+            "verification",
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains(
+            "evidence readiness requires .planr/evidence.yaml",
+        ));
+    planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "reviewer-too-early")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "plan",
+            "final-review",
+            "plan-verification-handoff",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "final_product_review_requires_verification_phase:phase=source_frozen",
+        ));
+
+    let conn = Connection::open(&db).unwrap();
+    let verification_state: (String, Option<String>) = conn
+        .query_row(
+            "SELECT status, worker_id FROM items WHERE id = 'item-verification-handoff'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(verification_state, ("ready".to_string(), None));
+    let phase: String = conn
+        .query_row(
+            "SELECT phase FROM feature_runs WHERE plan_id = 'plan-verification-handoff'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(phase, "source_frozen");
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM feature_run_source_freezes",
+            [],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM execution_batches WHERE status = 'ended'",
+            [],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+}
+
+#[test]
 fn unplanned_materiality_records_missing_change_facts_without_a_review_gate() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");

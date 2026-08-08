@@ -44,7 +44,7 @@ planr review close <review-gate-id> \
 planr review show <review-gate-id> --json
 ```
 
-Planr records an immutable attempt and durable findings on the same ReviewGate. The FeatureRun remains gated. The responsible maker repairs only the named findings, records new evidence, and explicitly resolves their ids; the same gate then becomes ready for independent re-review. No workflow-only review or fix map items are created.
+Planr records an immutable attempt and durable findings on the same durable review gate. The FeatureRun remains gated. The responsible maker repairs only the named findings, records new evidence, and explicitly resolves their ids; the same gate then becomes ready for independent re-review. No workflow-only review or fix map items are created.
 
 ```bash
 export PLANR_WORKER_ID="feature-maker"

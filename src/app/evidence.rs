@@ -31,6 +31,7 @@ use crate::evidence::{
     },
 };
 use crate::execution::{BoundedProcessInput, CancellationToken, run_bounded_process};
+use crate::execution_run::{FeatureRunPhase, RunRole};
 use anyhow::{Context, Result, anyhow, bail};
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
@@ -2537,7 +2538,152 @@ impl App {
             "verdict": coverage.status.as_str(),
         });
         value["canonical_projection"] = canonical_coverage_projection(&value);
+        if matches!(scope, EvidenceCoverageScope::Plan)
+            && coverage.status.as_str() == "satisfied"
+            && !coverage.receipt_digests.is_empty()
+            && let Some(settlement) =
+                self.settle_verification_item_after_plan_coverage(id, value.clone())?
+        {
+            value["feature_run_verification_settlement"] = settlement;
+        }
         Ok(value)
+    }
+
+    fn settle_verification_item_after_plan_coverage(
+        &self,
+        plan_id: &str,
+        coverage_binding: Value,
+    ) -> Result<Option<Value>> {
+        let project = self.default_project()?;
+        let plan = self.get_plan(plan_id)?;
+        let repository = super::repository::execution_run::ExecutionRunRepository::new(&self.conn);
+        let Some(persisted) = repository.active_feature_run_for_plan(&project.id, plan_id)? else {
+            return Ok(None);
+        };
+        if persisted.run.phase != FeatureRunPhase::Verification {
+            return Ok(None);
+        }
+        let freeze = repository
+            .active_source_freeze(&persisted.run.id)?
+            .ok_or_else(|| {
+                anyhow!("verification_coverage_requires_active_source_freeze:{plan_id}")
+            })?;
+        let snapshot = capture_repository_snapshot(&self.root)
+            .map_err(|error| anyhow!("checking verification coverage source freeze: {error}"))?;
+        if snapshot.source.revision != freeze.source_revision
+            || snapshot.source.tree_digest.as_str() != freeze.source_digest
+        {
+            bail!("verification_coverage_source_freeze_stale:{}", freeze.id);
+        }
+        let verifier = persisted
+            .run
+            .role_owners
+            .iter()
+            .find(|owner| owner.role == RunRole::Verifier)
+            .ok_or_else(|| {
+                anyhow!(
+                    "verification_coverage_missing_verifier:{}",
+                    persisted.run.id
+                )
+            })?;
+        let current_worker = crate::util::worker_id();
+        if verifier.worker_id != current_worker {
+            bail!(
+                "verification_coverage_requires_verifier_lease:{}",
+                verifier.worker_id
+            );
+        }
+        let item_id = self
+            .conn
+            .query_row(
+                "SELECT id FROM items
+                 WHERE project_id = ?1
+                   AND plan_path = ?2
+                   AND work_type = 'verification'
+                   AND status IN ('picked','running')
+                   AND worker_id = ?3
+                 ORDER BY priority DESC, created_at
+                 LIMIT 1",
+                params![project.id, plan.path, current_worker],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        let Some(item_id) = item_id else {
+            let ready_exists: Option<String> = self
+                .conn
+                .query_row(
+                    "SELECT id FROM items
+                     WHERE project_id = ?1
+                       AND plan_path = ?2
+                       AND work_type = 'verification'
+                       AND status = 'ready'
+                     LIMIT 1",
+                    params![project.id, plan.path],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if ready_exists.is_some() {
+                bail!("verification_coverage_requires_verification_item_lease:{plan_id}");
+            }
+            return Ok(None);
+        };
+        self.conn
+            .execute_batch("BEGIN IMMEDIATE; SAVEPOINT settle_verification_item")?;
+        let result = (|| -> Result<Value> {
+            let log_id = self.add_log_entry(super::flow::LogInput {
+                item_id: &item_id,
+                kind: "completion",
+                summary: "canonical plan Evidence coverage satisfied verification outcome",
+                files: &[],
+                commands: &[format!(
+                    "planr evidence coverage --scope plan --id {plan_id}"
+                )],
+                tests: &[],
+                source: Some("evidence.coverage"),
+                profile: None,
+                route_observation: None,
+            })?;
+            let changed = self.conn.execute(
+                "UPDATE items
+                 SET status = 'closed', completed_at = datetime('now'), updated_at = datetime('now')
+                 WHERE id = ?1 AND status IN ('picked','running') AND worker_id = ?2",
+                params![item_id, current_worker],
+            )?;
+            if changed != 1 {
+                bail!("verification_item_close_conflict:{item_id}");
+            }
+            self.record_event(
+                "verification_item_closed",
+                Some(&item_id),
+                json!({
+                    "plan_id": plan_id,
+                    "run_id": persisted.run.id,
+                    "freeze_id": freeze.id,
+                    "log_id": log_id,
+                    "coverage": coverage_binding,
+                }),
+            )?;
+            Ok(json!({
+                "item_id": item_id,
+                "status": "closed",
+                "log_id": log_id,
+                "coverage": coverage_binding,
+                "next_action": format!("planr plan final-review {plan_id}"),
+            }))
+        })();
+        match result {
+            Ok(value) => {
+                self.conn
+                    .execute_batch("RELEASE settle_verification_item; COMMIT")?;
+                Ok(Some(value))
+            }
+            Err(error) => {
+                let _ = self.conn.execute_batch(
+                    "ROLLBACK TO settle_verification_item; RELEASE settle_verification_item; ROLLBACK",
+                );
+                Err(error)
+            }
+        }
     }
 
     pub(crate) fn evidence_plan_criterion_coverages_value(

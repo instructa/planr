@@ -5,6 +5,7 @@ use super::repository::execution_run::{
     BudgetObservationRecord, EvidenceInvalidationRecord, ExecutionRunRepository,
     PersistedFeatureRun, SourceFreezeRecord, SourceFreezeStatus,
 };
+use crate::cli::EvidenceCoverageScope;
 use crate::evidence::policy::capture_repository_snapshot;
 use crate::execution_run::{
     ExecutionBatch, ExecutionBatchStatus, FeatureRunHoldReason, FeatureRunPhase, PhaseTransition,
@@ -16,6 +17,7 @@ use crate::usage_policy::{
 };
 use crate::util::{short_id, worker_id};
 use anyhow::{Result, anyhow, bail};
+use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -465,10 +467,15 @@ impl App {
         peek: bool,
     ) -> Result<Option<Value>> {
         let project = self.default_project()?;
+        let plan = self.get_plan(plan_id)?;
         let repository = ExecutionRunRepository::new(&self.conn);
         let Some(run) = repository.active_feature_run_for_plan(&project.id, plan_id)? else {
             return Ok(None);
         };
+        let verification_item_id = self.ready_or_owned_verification_item_for_plan_path(
+            Some(plan.path.as_str()),
+            worker_id().as_str(),
+        )?;
         if run.run.phase == FeatureRunPhase::SourceFrozen {
             let freeze = repository
                 .active_source_freeze(&run.run.id)?
@@ -496,7 +503,7 @@ impl App {
             if peek {
                 return Ok(Some(
                     json!({"work_packet": {"kind": "verification", "execution_state": self.canonical_execution_state_value(&run.run.id, None)?,
-                    "source_freeze": freeze, "verification_lease": {"worker_id": verifier_worker_id, "generation": lease_generation}},
+                    "item_id": verification_item_id, "source_freeze": freeze, "verification_lease": {"worker_id": verifier_worker_id, "generation": lease_generation}},
                     "peek": true, "remaining": self.progress_value()?}),
                 ));
             }
@@ -526,13 +533,37 @@ impl App {
                 },
             )
             .map_err(|violation| anyhow!("verification_lease_transition:{violation:?}"))?;
-            if let Err(error) = repository.save_feature_run(&verification, run.revision) {
+            self.conn
+                .execute_batch("BEGIN IMMEDIATE; SAVEPOINT verification_pick")?;
+            let mut sealed_run_index = None;
+            let pick_result = (|| -> Result<()> {
+                if let Some(item_id) = verification_item_id.as_deref() {
+                    self.lease_verification_item(item_id, &verifier_worker_id)?;
+                }
+                repository.save_feature_run(&verification, run.revision)?;
+                let readiness =
+                    self.evidence_readiness_value(EvidenceCoverageScope::Plan, plan_id)?;
+                if readiness["status"] != "passed" {
+                    bail!("verification_pick_readiness_blocked:{plan_id}");
+                }
+                sealed_run_index = readiness.get("run_index").cloned();
+                if sealed_run_index.is_none() {
+                    bail!("verification_pick_missing_sealed_run_index:{plan_id}");
+                }
+                Ok(())
+            })();
+            if let Err(error) = pick_result {
+                let _ = self.conn.execute_batch(
+                    "ROLLBACK TO verification_pick; RELEASE verification_pick; ROLLBACK",
+                );
                 self.release_feature_run_budget(&reservation)?;
                 return Err(error);
             }
+            self.conn
+                .execute_batch("RELEASE verification_pick; COMMIT")?;
             return Ok(Some(
                 json!({"work_packet": {"kind": "verification", "execution_state": self.canonical_execution_state_value(&verification.id, None)?,
-                "source_freeze": freeze, "verification_lease": {"worker_id": verifier_worker_id, "generation": lease_generation}},
+                "item_id": verification_item_id, "source_freeze": freeze, "verification_lease": {"worker_id": verifier_worker_id, "generation": lease_generation}, "sealed_run_index": sealed_run_index},
                 "peek": false, "remaining": self.progress_value()?}),
             ));
         }
@@ -562,11 +593,83 @@ impl App {
                 FeatureRunBudgetAdmission::Reserved(_) => {}
             }
         }
+        let sealed_run_index = if peek {
+            None
+        } else {
+            let readiness = self.evidence_readiness_value(EvidenceCoverageScope::Plan, plan_id)?;
+            if readiness["status"] != "passed" {
+                bail!("verification_pick_readiness_blocked:{plan_id}");
+            }
+            let Some(run_index) = readiness.get("run_index").cloned() else {
+                bail!("verification_pick_missing_sealed_run_index:{plan_id}");
+            };
+            Some(run_index)
+        };
         Ok(Some(
             json!({"work_packet": {"kind": "verification", "execution_state": self.canonical_execution_state_value(&run.run.id, None)?,
-            "verifier_worker_id": verifier.worker_id, "verification_lease": {"worker_id": verifier.worker_id, "generation": verifier.lease_generation},
-            "source_freeze": repository.active_source_freeze(&run.run.id)?}, "peek": peek, "remaining": self.progress_value()?}),
+            "item_id": verification_item_id, "verifier_worker_id": verifier.worker_id, "verification_lease": {"worker_id": verifier.worker_id, "generation": verifier.lease_generation},
+            "source_freeze": repository.active_source_freeze(&run.run.id)?, "sealed_run_index": sealed_run_index}, "peek": peek, "remaining": self.progress_value()?}),
         ))
+    }
+
+    pub(crate) fn ready_verification_item_for_plan_path(
+        &self,
+        plan_path: Option<&str>,
+    ) -> Result<Option<String>> {
+        self.verification_item_for_plan_path(plan_path, None)
+    }
+
+    fn ready_or_owned_verification_item_for_plan_path(
+        &self,
+        plan_path: Option<&str>,
+        worker_id: &str,
+    ) -> Result<Option<String>> {
+        self.verification_item_for_plan_path(plan_path, Some(worker_id))
+    }
+
+    fn verification_item_for_plan_path(
+        &self,
+        plan_path: Option<&str>,
+        worker_id: Option<&str>,
+    ) -> Result<Option<String>> {
+        let Some(plan_path) = plan_path else {
+            return Ok(None);
+        };
+        self.conn
+            .query_row(
+                "SELECT id FROM items
+                 WHERE plan_path = ?1
+                   AND work_type = 'verification'
+                   AND (
+                     status = 'ready'
+                     OR (?2 IS NOT NULL AND status IN ('picked','running') AND worker_id = ?2)
+                   )
+                 ORDER BY CASE WHEN ?2 IS NOT NULL AND worker_id = ?2 THEN 0 ELSE 1 END, priority DESC, created_at
+                 LIMIT 1",
+                params![plan_path, worker_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    fn lease_verification_item(&self, item_id: &str, verifier_worker_id: &str) -> Result<()> {
+        let changed = self.conn.execute(
+            "UPDATE items
+             SET status = 'picked', worker_id = ?2, picked_at = datetime('now'),
+                 last_heartbeat_at = datetime('now'), updated_at = datetime('now')
+             WHERE id = ?1
+               AND work_type = 'verification'
+               AND (
+                 status = 'ready'
+                 OR (status IN ('picked','running') AND worker_id = ?2)
+               )",
+            params![item_id, verifier_worker_id],
+        )?;
+        if changed != 1 {
+            bail!("verification_item_not_leasable:{item_id}");
+        }
+        Ok(())
     }
 
     pub(crate) fn freeze_feature_run_source_value(&self, plan_id: &str) -> Result<Option<Value>> {
@@ -992,8 +1095,13 @@ fn parse_budget_phase_name(value: &str) -> Result<BudgetPhase> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::evidence::model::{
+        CapabilityBinding, PermissionState, RawResultRef, Sha256Digest, SourceBinding,
+        TrustedProvenance, TrustedReceiptInput, VantagePoint, build_trusted_receipt,
+    };
     use crate::storage::ensure_schema;
     use rusqlite::{Connection, params};
+    use serde_json::Map;
     use std::path::{Path, PathBuf};
 
     fn test_app(root: PathBuf) -> App {
@@ -1019,6 +1127,15 @@ mod tests {
                 params![id, worker_id()],
             )
             .expect("outcome item");
+    }
+
+    fn add_verification_item(app: &App, id: &str) {
+        app.conn
+            .execute(
+                "INSERT INTO items(id, project_id, title, description, status, work_type, plan_path, created_at, updated_at) VALUES (?1, 'project-a', ?1, 'verification', 'ready', 'verification', 'plan-a.md', datetime('now'), datetime('now'))",
+                params![id],
+            )
+            .expect("verification item");
     }
 
     fn write_budget_policy(root: &Path) {
@@ -1246,9 +1363,36 @@ allow_overwrite = true
     fn verification_fixture() -> (tempfile::TempDir, App, String, String) {
         let root = tempfile::tempdir().unwrap();
         write_budget_policy(root.path());
+        let policy_digest = write_ready_evidence_policy(root.path());
         initialize_git(root.path());
         let app = test_app(root.path().to_path_buf());
         add_outcome(&app, "item-phase");
+        app.conn
+            .execute(
+                "INSERT INTO proof_obligations(
+                  id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
+                  binding, observation_requirements_json, fixture_policy_json, freshness_policy_json,
+                  assurance_policy_json, retry_aggregation, policy_digest, config_digest,
+                  source_digest, supersedes_obligation_id, created_at, obligation_shape
+                ) VALUES (
+                  'pob-phase-ready', 'project-a', 'plan-a', 'item-phase', 'criterion-phase-ready', 1,
+                  'ready process', 1, ?1, '{}', '{}', '{}', 'all_applicable_pass', ?2, ?2, ?2, NULL,
+                  datetime('now'), 'semantic_v1'
+                )",
+                params![
+                    json!([{
+                        "id": "obs-phase-ready",
+                        "type": "com.example.ready.status",
+                        "subject": "ready process",
+                        "expected": {"status": "ready"},
+                        "target": {"kind": "process", "uri": "local://ready"},
+                        "payload_schema": {"schema_ref": "com.example.ready.status@v1"}
+                    }])
+                    .to_string(),
+                    policy_digest,
+                ],
+            )
+            .unwrap();
         let run = app
             .ensure_outcome_feature_run("item-phase")
             .unwrap()
@@ -1479,6 +1623,16 @@ allow_overwrite = true
             packet["work_packet"]["verification_lease"]["worker_id"],
             worker_id()
         );
+        assert_eq!(
+            packet["work_packet"]["sealed_run_index"]["schema_version"],
+            "planr.evidence.run-index.v1"
+        );
+        assert!(
+            packet["work_packet"]["sealed_run_index"]["repository_path"]
+                .as_str()
+                .unwrap()
+                .starts_with(".planr/evidence/runs/")
+        );
 
         let readiness = app
             .evidence_readiness_value(crate::cli::EvidenceCoverageScope::Plan, "plan-a")
@@ -1496,6 +1650,523 @@ allow_overwrite = true
                 .unwrap()
                 .starts_with("sha256:")
         );
+    }
+
+    fn seed_settlement_obligation(app: &App, policy_digest: &str) {
+        seed_settlement_obligation_with_freshness(app, policy_digest, json!({"invalidate_on": []}));
+    }
+
+    fn seed_settlement_obligation_with_freshness(
+        app: &App,
+        policy_digest: &str,
+        freshness_policy: Value,
+    ) {
+        app.conn
+            .execute(
+                "INSERT INTO proof_obligations(
+                  id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
+                  binding, observation_requirements_json, fixture_policy_json, freshness_policy_json,
+                  assurance_policy_json, retry_aggregation, policy_digest, config_digest,
+                  source_digest, supersedes_obligation_id, created_at, obligation_shape
+                ) VALUES (
+                  'pob-settle', 'project-a', 'plan-a', NULL, 'criterion-settle', 1,
+                  'settlement process', 1, ?1, ?2, ?3, '{}', 'latest_applicable_pass', ?4, ?5, ?6, NULL,
+                  datetime('now'), 'semantic_v1'
+                )",
+                params![
+                    json!([{
+                        "id": "obs-settle",
+                        "type": "com.example.ready.status",
+                        "subject": "settlement process",
+                        "expected": {"status": "ready", "schema_ref": "com.example.ready.status@v1"},
+                        "target": {"kind": "process", "uri": "local://ready"},
+                        "payload_schema": {"schema_ref": "com.example.ready.status@v1"}
+                    }])
+                    .to_string(),
+                    json!({"fixtures_allowed": false, "mocks_allowed": false}).to_string(),
+                    freshness_policy.to_string(),
+                    policy_digest,
+                    "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+                    "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+                ],
+            )
+            .unwrap();
+    }
+
+    fn seed_receipt_bound_settlement(app: &App, policy_digest: &str) -> String {
+        seed_settlement_obligation(app, policy_digest);
+        seed_receipt_for_existing_settlement_obligation(app, policy_digest)
+    }
+
+    fn seed_receipt_for_existing_settlement_obligation(app: &App, policy_digest: &str) -> String {
+        app.verification_work_packet_value("plan-a", false)
+            .unwrap()
+            .unwrap();
+        let (instance_id, manifest_id, manifest_digest): (String, String, String) = app
+            .conn
+            .query_row(
+                "SELECT id, manifest_id, manifest_digest FROM verification_capability_instances ORDER BY created_at, id LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        let receipt_id = "erec-settle";
+        let attempt_id = "eatt-settle";
+        app.conn
+            .execute(
+                "INSERT INTO evidence_attempts(
+                  id, project_id, obligation_id, capability_instance_id, attempt_status,
+                  execution_contract_digest, resolved_command_json, environment_digest,
+                  started_at, completed_at, exit_code, output_bounds_json, attempt_json, created_at
+                ) VALUES (
+                  ?1, 'project-a', 'pob-settle', ?2, 'passed',
+                  ?3, '{}', ?4, datetime('now'), datetime('now'), 0, '{}', ?5, datetime('now')
+                )",
+                params![
+                    attempt_id,
+                    instance_id,
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+                    json!({
+                        "id": attempt_id,
+                        "status": "passed",
+                        "exit": {"exit_code": 0, "signal": null, "error": null}
+                    })
+                    .to_string(),
+                ],
+            )
+            .unwrap();
+        let receipt = build_trusted_receipt(TrustedReceiptInput {
+            id: crate::evidence::EvidenceId::parse(receipt_id).unwrap(),
+            criterion_id: crate::evidence::EvidenceId::parse("criterion-settle").unwrap(),
+            obligation_id: crate::evidence::EvidenceId::parse("pob-settle").unwrap(),
+            source: SourceBinding {
+                revision: "0123456789abcdef0123456789abcdef01234567".to_string(),
+                tree_digest: Sha256Digest::parse(
+                    "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+                )
+                .unwrap(),
+                dirty: false,
+            },
+            target: crate::evidence::TargetBinding {
+                kind: "process".to_string(),
+                uri: Some("local://ready".to_string()),
+                digest: None,
+                deployment_id: None,
+            },
+            environment: crate::evidence::EnvironmentBinding {
+                kind: "local".to_string(),
+                id: crate::evidence::EvidenceId::parse("dev").unwrap(),
+                digest: Sha256Digest::parse(
+                    "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+                )
+                .unwrap(),
+            },
+            vantage_point: VantagePoint {
+                kind: "process_adapter".to_string(),
+                identity: manifest_id.clone(),
+            },
+            capability: CapabilityBinding {
+                manifest_id: crate::evidence::EvidenceId::parse(manifest_id).unwrap(),
+                manifest_digest: Sha256Digest::parse(manifest_digest).unwrap(),
+                instance_id: crate::evidence::EvidenceId::parse(instance_id).unwrap(),
+                instance_digest: Sha256Digest::parse(
+                    "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+                )
+                .unwrap(),
+            },
+            provenance: TrustedProvenance::planr_observed_execution(attempt_id).unwrap(),
+            observations: vec![crate::evidence::model::ObservationResult {
+                requirement_id: crate::evidence::EvidenceId::parse("obs-settle").unwrap(),
+                observation_type: crate::evidence::NamespacedIdentifier::parse(
+                    "com.example.ready.status",
+                )
+                .unwrap(),
+                outcome: crate::evidence::AttemptStatus::Passed,
+                predicate: Map::from_iter([
+                    ("status".to_string(), json!("ready")),
+                    (
+                        "schema_ref".to_string(),
+                        json!("com.example.ready.status@v1"),
+                    ),
+                ]),
+                actual: Map::from_iter([(
+                    "schema_ref".to_string(),
+                    json!("com.example.ready.status@v1"),
+                )]),
+            }],
+            attempt_ids: vec![crate::evidence::EvidenceId::parse(attempt_id).unwrap()],
+            retry_history: vec![],
+            artifacts: vec![],
+            raw_result: RawResultRef {
+                kind: "inline".to_string(),
+                digest: Sha256Digest::parse(
+                    "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+                )
+                .unwrap(),
+                artifact_id: None,
+                extra: Map::new(),
+            },
+            config_digest: Sha256Digest::parse(
+                "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+            )
+            .unwrap(),
+            fixture_disclosure: crate::evidence::FixtureDisclosure {
+                fixtures_used: false,
+                mocks_used: false,
+                fixture_refs: None,
+                mock_refs: None,
+            },
+            permissions: PermissionState {
+                network: "none".to_string(),
+                filesystem: "none".to_string(),
+                environment: None,
+                secrets: None,
+            },
+            sandbox: crate::evidence::model::SandboxState {
+                mode: "test".to_string(),
+                limits: crate::evidence::model::SandboxLimits {
+                    timeout_ms: 1,
+                    stdout_bytes: 0,
+                    stderr_bytes: 0,
+                },
+            },
+            proof_gaps: vec![],
+            started_at: "2026-07-28T12:00:00Z".to_string(),
+            ended_at: "2026-07-28T12:00:01Z".to_string(),
+        })
+        .unwrap();
+        let receipt_value = serde_json::to_value(&receipt).unwrap();
+        let receipt_digest = receipt_value["receipt_digest"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let trusted_binding = json!({
+            "source": receipt_value["source"],
+            "target": receipt_value["target"],
+            "environment": receipt_value["environment"],
+            "capability": receipt_value["capability"],
+            "policy_digest": policy_digest,
+            "policy_source": "repository",
+            "config_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+        });
+        app.conn
+            .execute(
+                "INSERT INTO evidence_receipts(
+                  id, project_id, obligation_id, attempt_id, receipt_status, receipt_digest,
+                  trusted_binding_json, observations_json, provenance_json, receipt_json, created_at
+                ) VALUES (?1, 'project-a', 'pob-settle', ?2, 'trusted', ?3, ?4, ?5, ?6, ?7, datetime('now'))",
+                params![
+                    receipt_id,
+                    attempt_id,
+                    receipt_digest,
+                    trusted_binding.to_string(),
+                    receipt_value["observations"].to_string(),
+                    receipt_value["provenance"].to_string(),
+                    receipt_value.to_string(),
+                ],
+            )
+            .unwrap();
+        receipt_digest
+    }
+
+    fn settlement_app() -> (tempfile::TempDir, App, String) {
+        let root = tempfile::tempdir().unwrap();
+        write_budget_policy(root.path());
+        let policy_digest = write_ready_evidence_policy(root.path());
+        initialize_git(root.path());
+        let app = test_app(root.path().to_path_buf());
+        add_outcome(&app, "item-settle-maker");
+        add_verification_item(&app, "item-settle-verification");
+        let run = app
+            .ensure_outcome_feature_run("item-settle-maker")
+            .unwrap()
+            .unwrap();
+        app.conn
+            .execute(
+                "UPDATE feature_run_role_leases SET worker_id = 'maker-other' WHERE run_id = ?1 AND role = 'maker' AND released_at IS NULL",
+                [&run.run.id],
+            )
+            .unwrap();
+        app.freeze_feature_run_source_value("plan-a")
+            .unwrap()
+            .unwrap();
+        (root, app, policy_digest)
+    }
+
+    #[test]
+    fn satisfied_plan_coverage_closes_verification_item_with_receipt_lineage() {
+        let (_root, app, policy_digest) = settlement_app();
+        let receipt_digest = seed_receipt_bound_settlement(&app, &policy_digest);
+
+        let coverage = app
+            .evidence_coverage_value(crate::cli::EvidenceCoverageScope::Plan, "plan-a")
+            .unwrap();
+
+        assert_eq!(coverage["status"], "satisfied");
+        let settlement = &coverage["feature_run_verification_settlement"];
+        assert_eq!(settlement["item_id"], "item-settle-verification");
+        assert_eq!(
+            settlement["coverage"]["coverage_id"],
+            coverage["coverage_id"]
+        );
+        assert_eq!(
+            settlement["coverage"]["receipt_digests"],
+            coverage["receipt_digests"]
+        );
+        assert_eq!(
+            settlement["coverage"]["receipt_lineage"],
+            coverage["receipt_lineage"]
+        );
+        assert!(
+            coverage["receipt_digests"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|digest| digest.as_str() == Some(receipt_digest.as_str()))
+        );
+        let item_status: String = app
+            .conn
+            .query_row(
+                "SELECT status FROM items WHERE id = 'item-settle-verification'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(item_status, "closed");
+        let event: String = app
+            .conn
+            .query_row(
+                "SELECT payload FROM events WHERE item_id = 'item-settle-verification' AND event_type = 'verification_item_closed' ORDER BY id DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let event: Value = serde_json::from_str(&event).unwrap();
+        assert_eq!(event["coverage"]["coverage_id"], coverage["coverage_id"]);
+        assert_eq!(
+            event["coverage"]["receipt_digests"],
+            coverage["receipt_digests"]
+        );
+        assert_eq!(
+            event["coverage"]["receipt_lineage"],
+            coverage["receipt_lineage"]
+        );
+    }
+
+    #[test]
+    fn settlement_does_not_close_without_satisfied_leased_coverage() {
+        let (_root, app, policy_digest) = settlement_app();
+        seed_settlement_obligation(&app, &policy_digest);
+        app.verification_work_packet_value("plan-a", false).unwrap();
+        let missing = app
+            .evidence_coverage_value(crate::cli::EvidenceCoverageScope::Plan, "plan-a")
+            .unwrap();
+        assert_ne!(missing["status"], "satisfied");
+        assert!(missing.get("feature_run_verification_settlement").is_none());
+        let item_status: String = app
+            .conn
+            .query_row(
+                "SELECT status FROM items WHERE id = 'item-settle-verification'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(item_status, "picked");
+
+        let (_root, app, policy_digest) = settlement_app();
+        seed_receipt_bound_settlement(&app, &policy_digest);
+        app.conn
+            .execute(
+                "UPDATE feature_run_role_leases SET worker_id = 'other-verifier' WHERE role = 'verifier'",
+                [],
+            )
+            .unwrap();
+        let error = app
+            .evidence_coverage_value(crate::cli::EvidenceCoverageScope::Plan, "plan-a")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("verification_coverage_requires_verifier_lease"));
+        let item_status: String = app
+            .conn
+            .query_row(
+                "SELECT status FROM items WHERE id = 'item-settle-verification'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(item_status, "picked");
+    }
+
+    #[test]
+    fn stale_source_and_close_conflict_do_not_persist_verification_settlement() {
+        let (root, app, policy_digest) = settlement_app();
+        seed_settlement_obligation(&app, &policy_digest);
+        seed_receipt_for_existing_settlement_obligation(&app, &policy_digest);
+        std::fs::write(root.path().join("after-freeze.txt"), "stale\n").unwrap();
+        let stale = app
+            .evidence_coverage_value(crate::cli::EvidenceCoverageScope::Plan, "plan-a")
+            .unwrap_err()
+            .to_string();
+        assert!(stale.contains("verification_coverage_source_freeze_stale"));
+        assert_eq!(
+            app.conn
+                .query_row(
+                    "SELECT status FROM items WHERE id = 'item-settle-verification'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "picked"
+        );
+        assert_eq!(
+            app.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM events WHERE item_id = 'item-settle-verification' AND event_type = 'verification_item_closed'",
+                    [],
+                    |row| row.get::<_, u64>(0),
+                )
+                .unwrap(),
+            0
+        );
+
+        let (_root, app, policy_digest) = settlement_app();
+        seed_receipt_bound_settlement(&app, &policy_digest);
+        app.conn
+            .execute_batch(
+                "CREATE TRIGGER test_conflict_after_settlement_log
+                 AFTER INSERT ON logs
+                 WHEN NEW.item_id = 'item-settle-verification'
+                   AND NEW.summary = 'canonical plan Evidence coverage satisfied verification outcome'
+                 BEGIN
+                   UPDATE items
+                   SET status = 'closed'
+                   WHERE id = 'item-settle-verification';
+                 END;",
+            )
+            .unwrap();
+        let conflict = app
+            .evidence_coverage_value(crate::cli::EvidenceCoverageScope::Plan, "plan-a")
+            .unwrap_err()
+            .to_string();
+        assert!(conflict.contains("verification_item_close_conflict"));
+        assert_eq!(
+            app.conn
+                .query_row(
+                    "SELECT status FROM items WHERE id = 'item-settle-verification'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "picked"
+        );
+        assert_eq!(
+            app.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM events WHERE item_id = 'item-settle-verification' AND event_type = 'verification_item_closed'",
+                    [],
+                    |row| row.get::<_, u64>(0),
+                )
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            app.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM logs WHERE item_id = 'item-settle-verification' AND summary = 'canonical plan Evidence coverage satisfied verification outcome'",
+                    [],
+                    |row| row.get::<_, u64>(0),
+                )
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn waived_only_plan_coverage_does_not_close_verification_item() {
+        let (_root, app, policy_digest) = settlement_app();
+        seed_settlement_obligation(&app, &policy_digest);
+        app.verification_work_packet_value("plan-a", false)
+            .unwrap()
+            .unwrap();
+        seed_waiver_for_settlement_obligation(&app);
+        let waived = app
+            .evidence_coverage_value(crate::cli::EvidenceCoverageScope::Plan, "plan-a")
+            .unwrap();
+        assert_eq!(waived["status"], "waived");
+        assert!(waived["receipt_digests"].as_array().unwrap().is_empty());
+        assert!(!waived["waiver_digests"].as_array().unwrap().is_empty());
+        assert!(waived.get("feature_run_verification_settlement").is_none());
+        assert_eq!(
+            app.conn
+                .query_row(
+                    "SELECT status FROM items WHERE id = 'item-settle-verification'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "picked"
+        );
+        assert_eq!(
+            app.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM events WHERE item_id = 'item-settle-verification' AND event_type = 'verification_item_closed'",
+                    [],
+                    |row| row.get::<_, u64>(0),
+                )
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            app.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM logs WHERE item_id = 'item-settle-verification' AND summary = 'canonical plan Evidence coverage satisfied verification outcome'",
+                    [],
+                    |row| row.get::<_, u64>(0),
+                )
+                .unwrap(),
+            0
+        );
+    }
+
+    fn seed_waiver_for_settlement_obligation(app: &App) {
+        let source = capture_repository_snapshot(Path::new(".")).unwrap().source;
+        let waiver_json = json!({
+            "id": "waiver-settle",
+            "schema_version": crate::evidence::model::EVIDENCE_CONTRACT_V1,
+            "scope": {"kind": "plan", "id": "plan-a"},
+            "observation_ids": ["obs-settle"],
+            "source": source,
+            "target": {"kind": "process", "uri": "local://ready"},
+            "reason": "temporary exact-source verifier waiver",
+            "created_by": "reviewer",
+            "created_at": "2026-08-08T00:00:00Z",
+            "expires_at": "2099-01-01T00:00:00Z",
+            "approval_ref": "item-waiver-approval",
+            "audit_trail": [{"event": "created", "at": "2026-08-08T00:00:00Z"}]
+        });
+        let waiver_digest = crate::canonical_json::sha256_json_digest(&waiver_json).unwrap();
+        app.conn
+            .execute(
+                "INSERT INTO items(id, project_id, title, description, status, work_type, worker_id, plan_path, approval_status, approved_by, created_at, updated_at, completed_at)
+                 VALUES ('item-waiver-approval', 'project-a', 'waiver approval', 'approved waiver', 'closed', 'approval', 'reviewer', 'plan-a.md', 'approved', 'reviewer', datetime('now'), datetime('now'), datetime('now'))",
+                [],
+            )
+            .unwrap();
+        app.conn
+            .execute(
+                "INSERT INTO evidence_waivers(
+                  id, project_id, approval_item_id, obligation_id, observation_id,
+                  scope_kind, scope_id, waiver_digest, reason, expires_at, created_by,
+                  waiver_json, created_at
+                ) VALUES (
+                  'waiver-settle', 'project-a', 'item-waiver-approval', 'pob-settle', 'obs-settle',
+                  'plan', 'plan-a', ?1, 'temporary exact-source verifier waiver',
+                  '2099-01-01T00:00:00Z', 'reviewer', ?2, '2026-08-08T00:00:00Z'
+                )",
+                params![waiver_digest, waiver_json.to_string()],
+            )
+            .unwrap();
     }
 
     #[test]

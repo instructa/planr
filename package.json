@@ -1,6 +1,6 @@
 {
   "name": "planr",
-  "version": "1.10.0-alpha.3",
+  "version": "1.10.0-alpha.4",
   "description": "Local-first planning and execution coordination for coding agents.",
   "license": "MIT",
   "repository": {
@@ -34,6 +34,7 @@
     "verify:release-script": "node scripts/test-release-script.mjs",
     "verify:change-classifier": "node scripts/test-verification-policy.mjs",
     "verify:runner": "node scripts/test-verification-runner.mjs",
+    "verify:ac014-runner": "node scripts/test-ac014-fresh-arm-runner.mjs",
     "verify:ci-router": "node scripts/test-ci-router.mjs",
     "verify:docs-deployment": "node scripts/test-docs-deployment.mjs",
     "classify:changes": "node scripts/classify-changes.mjs",
