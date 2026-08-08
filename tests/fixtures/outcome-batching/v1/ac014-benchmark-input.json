@@ -419,5 +419,75 @@
       "count": 1,
       "mode": "independent"
     }
+  },
+  "fix13_fix14_history": {
+    "status": "immutable_artifacts_bound",
+    "repository_search": "Fix13 and Fix14 measured result records are present in the referenced planr-dogfood artifact roots and are bound here by immutable result and monitor digests",
+    "reuse_policy": {
+      "fix13": "do_not_resume_or_reuse",
+      "fix14": "do_not_resume_or_reuse"
+    },
+    "records": [
+      {
+        "label": "fix13",
+        "artifact_root": "/Users/kregenrek/projects/planr-dogfood/outcome-batching-ac014-current-fix13/.planr/artifacts/ac014",
+        "benchmark_result_sha256": "f0b3151af7902c6bf4701a90b561ca9fe12e15eb226ced4fea1241310e8bcb7f",
+        "monitor_status_sha256": "e843cbf68a72d5b75bc95cc7294a8027d30f9098cd7b6a70cee1fbbe308ac376",
+        "verdict": "invalid",
+        "stop_reason": "external_monitor_session_root_mismatch",
+        "root_session_id": "019fe082-132a-7e23-9149-75dfe677ee28",
+        "root_session_sha256": "eebdfd9606152cd8cf6b2317c71c0664c288b29239237d5d8c62b54439a58b33",
+        "wall_time_seconds": 62.126,
+        "total_tokens": 208381,
+        "tool_call_envelopes": 7,
+        "oracle_status": "not_started",
+        "retry_allowed": false
+      },
+      {
+        "label": "fix14",
+        "artifact_root": "/Users/kregenrek/projects/planr-dogfood/outcome-batching-ac014-current-fix14/.planr/artifacts/ac014",
+        "benchmark_result_sha256": "cc9f59d4b55766ed7d0b60a551a516982868af56cd6e2fcb9a97e43319989f21",
+        "monitor_status_sha256": "daa413bdde1308285c378a95c2e46728123f24e7eccb1601df71e7c847a73373",
+        "verdict": "failed",
+        "stop_reason": "objective_wall_ceiling_exceeded",
+        "root_session_id": "019fe084-cb01-7ab2-a607-a79f74d316f0",
+        "root_session_sha256": "12801ffbd1e10a1406dc81a905a09f7047d24a685caf8956acf2142bc250b856",
+        "maker_session_id": "019fe086-3d01-7ac3-be92-5c07367408a2",
+        "maker_session_sha256": "e589de827ec64ae174ed7dedc8de0a6583651274cbd04bf3666ef193bef74e58",
+        "wall_time_seconds": 998.594,
+        "trigger_wall_time_seconds": 998.076,
+        "total_tokens": 3358661,
+        "tool_call_envelopes": 59,
+        "oracle_status": "not_started",
+        "retry_allowed": false
+      }
+    ],
+    "required_result_record": "any later AC-014 evidence must be appended as a new immutable result with raw session ids, sha256 transcripts, wall time, tokens, tool-call envelopes, oracle status, and stop reason; existing Fix13/Fix14 records remain unchanged"
+  },
+  "alpha4_experiment_contract": {
+    "candidate_version": "1.10.0-alpha.4",
+    "baseline_policy": "clone_or_copy_declared_baseline_only_then_project_relocate",
+    "matched_surface": {
+      "cli_version": "0.146.0",
+      "model": "gpt-5.6-sol",
+      "effort": "medium",
+      "spec": "identical",
+      "oracle": "identical",
+      "surface": "identical"
+    },
+    "unchanged_ceilings": {
+      "wall_time_seconds": 998.015,
+      "total_tokens": 5977896,
+      "tool_call_envelopes": 93
+    },
+    "admission": {
+      "fresh_root_required": true,
+      "path_relocation_required": true,
+      "code_to_verification_handoff_required": true,
+      "fresh_verifier_required": true,
+      "single_final_product_review_required": true,
+      "retry_allowed": false
+    },
+    "result_policy": "write one immutable result whether passed, failed, or externally invalid"
   }
 }

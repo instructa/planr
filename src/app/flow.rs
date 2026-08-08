@@ -891,35 +891,6 @@ impl App {
         }))
     }
 
-    pub(crate) fn settlement_extras_human(extras: &Value) -> String {
-        let mut human = Self::unlocked_human(
-            extras["unlocked"]
-                .as_array()
-                .map(Vec::as_slice)
-                .unwrap_or(&[]),
-        );
-        if let Some(post) = extras["post_condition"].as_str() {
-            human.push_str(&format!("\npost condition to verify: {post}"));
-        }
-        if let Some(hint) = extras["hint"].as_str() {
-            human.push_str(&format!("\nhint: {hint}"));
-        }
-        if let Some(language) = extras["proof"]["completion_language"].as_str() {
-            human.push_str(&format!("\nproof: {language}"));
-        }
-        human
-    }
-
-    pub(crate) fn progress_human(progress: &Value) -> String {
-        let ready = progress["counts"]["ready"].as_i64().unwrap_or(0);
-        format!(
-            " [{}/{} settled · {} ready]",
-            progress["settled"], progress["total"], ready
-        )
-    }
-
-    /// `planr done`: completion log, canonical outcome settlement, then an
-    /// optional typed next pick — one transaction, same evidence.
     pub(crate) fn done(&self, args: DoneArgs) -> Result<()> {
         let escalation = Self::done_escalation(&args)?;
         let route_observation = args
@@ -945,9 +916,6 @@ impl App {
         self.conn
             .execute_batch("BEGIN IMMEDIATE; SAVEPOINT settlement_done")?;
         let settlement = (|| -> Result<(bool, Value, String, bool, Value, Option<Value>)> {
-            // A never-picked ready item is adopted (leased retroactively) so the
-            // completion carries worker attribution and the review transition
-            // cannot be skipped.
             let adopted = self.adopt_ready_item(&item_id)?;
             let materiality = self.settlement_materiality(
                 &item_id,
@@ -1013,18 +981,18 @@ impl App {
                         "review_gate": run_transition["review_gate"],
                     }))
                 } else {
+                    let compatible_code_ready = self
+                        .peek_next_ready_item_filtered(&PickFilter {
+                            exclude: None,
+                            work_type: Some("code"),
+                            plan_path: item.plan_path.as_deref(),
+                        })?
+                        .is_some();
                     if run_transition["transition"] == "batch_cap_reached" {
                         let plan_id = plan_id.as_deref().ok_or_else(|| {
                             anyhow!("batch_roll_requires_planned_outcome:{item_id}")
                         })?;
-                        let compatible_ready = self
-                            .peek_next_ready_item_filtered(&PickFilter {
-                                exclude: None,
-                                work_type: Some("code"),
-                                plan_path: item.plan_path.as_deref(),
-                            })?
-                            .is_some();
-                        if compatible_ready {
+                        if compatible_code_ready {
                             let rollover =
                                 self.roll_feature_run_batch_value(plan_id, &worker_id())?;
                             run_transition["successor_batch_id"] =
@@ -1032,7 +1000,19 @@ impl App {
                             run_transition["rollover"] = rollover;
                         }
                     }
-                    Some(self.next_pick_value(None, Some("code"), plan_id.as_deref())?)
+                    if compatible_code_ready {
+                        Some(self.next_pick_value(None, Some("code"), plan_id.as_deref())?)
+                    } else if let Some(verification_item_id) =
+                        self.ready_verification_item_for_plan_path(item.plan_path.as_deref())?
+                    {
+                        Some(json!({
+                            "item": null,
+                            "reason": "verification_handoff_pending_source_freeze",
+                            "verification_item_id": verification_item_id,
+                        }))
+                    } else {
+                        Some(self.next_pick_value(None, Some("code"), plan_id.as_deref())?)
+                    }
                 }
             } else {
                 None
@@ -1046,7 +1026,7 @@ impl App {
                 next,
             ))
         })();
-        let (adopted, materiality, log_id, review_required, run_transition, fused_next) =
+        let (adopted, materiality, log_id, review_required, run_transition, mut fused_next) =
             match settlement {
                 Ok(value) => {
                     self.conn.execute_batch("RELEASE settlement_done; COMMIT")?;
@@ -1059,6 +1039,36 @@ impl App {
                     return Err(error);
                 }
             };
+        if args.next
+            && fused_next.as_ref().and_then(|next| next["reason"].as_str())
+                == Some("verification_handoff_pending_source_freeze")
+        {
+            let plan_id = plan_id
+                .as_deref()
+                .ok_or_else(|| anyhow!("verification_handoff_requires_plan:{item_id}"))?;
+            let source_freeze = self
+                .freeze_feature_run_source_value(plan_id)?
+                .ok_or_else(|| anyhow!("verification_handoff_source_freeze_missing:{plan_id}"))?;
+            let verification_item_id = fused_next
+                .as_ref()
+                .and_then(|next| next["verification_item_id"].as_str())
+                .map(ToOwned::to_owned);
+            fused_next = Some(json!({
+                "item": null,
+                "reason": "verification_handoff_source_frozen",
+                "work_packet": {
+                    "kind": "verification_handoff",
+                    "plan_id": plan_id,
+                    "verification_item_id": verification_item_id,
+                    "source_freeze": source_freeze,
+                    "commands": {
+                        "lease_verifier": format!("planr pick --plan {plan_id} --work-type verification --json"),
+                        "readiness": format!("planr evidence readiness --scope plan --id {plan_id}"),
+                    },
+                    "next_action": "lease_verifier_then_run_readiness",
+                }
+            }));
+        }
         let extras = self.settlement_extras(
             &item_id,
             &ready_before,
@@ -1067,9 +1077,6 @@ impl App {
         let next = if args.next {
             fused_next
         } else {
-            // Without --next, name the exact follow-up command (plan-scoped
-            // when the item belongs to a plan) so the settlement output
-            // still ends in an action, not a dead end.
             let plan_flag = item
                 .plan_path
                 .as_deref()
@@ -1105,6 +1112,9 @@ impl App {
                     Some(next_id) => human.push_str(&format!("; picked {next_id}")),
                     None if next["reason"] == "review_gate_pending_independent_lease" => {
                         human.push_str("; review gate awaits an independent reviewer")
+                    }
+                    None if next["reason"] == "verification_handoff_source_frozen" => {
+                        human.push_str("; source frozen for verification handoff")
                     }
                     None => human.push_str("; no ready item"),
                 }

@@ -684,7 +684,7 @@ impl App {
                             .unwrap_or_default()
                     ),
                     None if pick["work_packet"]["kind"] == "verification" => format!(
-                        "{}\n{} verification for run {}",
+                        "{}\n{} verification{} for run {}",
                         Self::canonical_execution_state_human(
                             &pick["work_packet"]["execution_state"],
                         ),
@@ -693,6 +693,10 @@ impl App {
                         } else {
                             "picked"
                         },
+                        pick["work_packet"]["item_id"]
+                            .as_str()
+                            .map(|id| format!(" item {id}"))
+                            .unwrap_or_default(),
                         pick["work_packet"]["execution_state"]["feature_run"]["id"]
                             .as_str()
                             .unwrap_or_default()

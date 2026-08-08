@@ -18,7 +18,6 @@ import {
   buildEvidencePolicy,
   canonicalJson,
   obligation as sharedObligation,
-  scenarioRunInput,
   sha256,
   sha256Json,
 } from '../apps/docs/scripts/evidence-fixture-builder.mjs';
@@ -389,7 +388,7 @@ function assertAc014BenchmarkInput(input) {
   );
   assert.equal(
     stoppedFix6.first_avoidable_cause,
-    'stable maker reuse removed session-boundary churn, but the single maker accumulated a large repeated context and then performed the final source-digest Evidence rebind; the token ceiling was exceeded before the first build or browser receipt was collected',
+    'stable maker reuse removed session-boundary churn, but the single maker accumulated a large repeated context and then performed the final source-digest Evidence update; the token ceiling was exceeded before the first build or browser receipt was collected',
   );
   assert.equal(
     stoppedFix6.next_experiment,
@@ -471,6 +470,42 @@ function assertAc014BenchmarkInput(input) {
   assert.equal(protocol.final_product_review.required, true);
   assert.equal(protocol.final_product_review.count, 1);
   assert.equal(protocol.final_product_review.mode, 'independent');
+  const fix13Fix14 = input.fix13_fix14_history;
+  assert.equal(fix13Fix14?.status, 'immutable_artifacts_bound');
+  assert.equal(fix13Fix14.reuse_policy.fix13, 'do_not_resume_or_reuse');
+  assert.equal(fix13Fix14.reuse_policy.fix14, 'do_not_resume_or_reuse');
+  assert.equal(fix13Fix14.records.length, 2);
+  const fix13 = fix13Fix14.records.find((record) => record.label === 'fix13');
+  const fix14 = fix13Fix14.records.find((record) => record.label === 'fix14');
+  assert.equal(fix13.benchmark_result_sha256, 'f0b3151af7902c6bf4701a90b561ca9fe12e15eb226ced4fea1241310e8bcb7f');
+  assert.equal(fix13.monitor_status_sha256, 'e843cbf68a72d5b75bc95cc7294a8027d30f9098cd7b6a70cee1fbbe308ac376');
+  assert.equal(fix13.verdict, 'invalid');
+  assert.equal(fix13.stop_reason, 'external_monitor_session_root_mismatch');
+  assert.equal(fix13.root_session_sha256, 'eebdfd9606152cd8cf6b2317c71c0664c288b29239237d5d8c62b54439a58b33');
+  assert.equal(fix13.retry_allowed, false);
+  assert.equal(fix14.benchmark_result_sha256, 'cc9f59d4b55766ed7d0b60a551a516982868af56cd6e2fcb9a97e43319989f21');
+  assert.equal(fix14.monitor_status_sha256, 'daa413bdde1308285c378a95c2e46728123f24e7eccb1601df71e7c847a73373');
+  assert.equal(fix14.verdict, 'failed');
+  assert.equal(fix14.stop_reason, 'objective_wall_ceiling_exceeded');
+  assert.equal(fix14.root_session_sha256, '12801ffbd1e10a1406dc81a905a09f7047d24a685caf8956acf2142bc250b856');
+  assert.equal(fix14.maker_session_sha256, 'e589de827ec64ae174ed7dedc8de0a6583651274cbd04bf3666ef193bef74e58');
+  assert.equal(fix14.retry_allowed, false);
+  assert.match(fix13Fix14.required_result_record, /raw session ids/);
+  const alpha4 = input.alpha4_experiment_contract;
+  assert.equal(alpha4?.candidate_version, '1.10.0-alpha.4');
+  assert.deepEqual(alpha4.matched_surface, input.required_match);
+  assert.deepEqual(alpha4.unchanged_ceilings, {
+    wall_time_seconds: 998.015,
+    total_tokens: 5977896,
+    tool_call_envelopes: 93,
+  });
+  assert.equal(alpha4.admission.fresh_root_required, true);
+  assert.equal(alpha4.admission.path_relocation_required, true);
+  assert.equal(alpha4.admission.code_to_verification_handoff_required, true);
+  assert.equal(alpha4.admission.fresh_verifier_required, true);
+  assert.equal(alpha4.admission.single_final_product_review_required, true);
+  assert.equal(alpha4.admission.retry_allowed, false);
+  assert.equal(alpha4.result_policy, 'write one immutable result whether passed, failed, or externally invalid');
 }
 
 function thresholdResult({
@@ -598,6 +633,8 @@ function buildAc014Receipt() {
     },
     stopped_fix_runs: benchmarkInput.stopped_fix_runs,
     post_fix7_protocol: benchmarkInput.post_fix7_protocol,
+    fix13_fix14_history: benchmarkInput.fix13_fix14_history,
+    alpha4_experiment_contract: benchmarkInput.alpha4_experiment_contract,
     neutral_product_oracle: benchmarkInput.oracle_output.neutral_product_oracle,
     thresholds: thresholdResults,
     process_shape: {
@@ -670,14 +707,12 @@ async function buildExpectedFiles(policy, migration, report, receipt, specs) {
   for (const spec of specs) {
     addJson(files, `.planr/evidence/schemas/${spec.schema.type}.schema.json`, spec.schema);
     addJson(files, `.planr/evidence/adapters/${spec.id}.manifest.json`, spec.manifest);
-    const runInput = scenarioRunInput({
-      obligationId: spec.obligationId,
-      capabilityInstanceId: 'placeholder',
+    const runInput = {
+      obligation_id: spec.obligationId,
       target: spec.target,
-    });
-    delete runInput.capability_instance_id;
-    runInput.manifest_id = spec.id;
-    runInput.env = { PLANR_OUTCOME_BATCHING_REPORT_DIGEST: report.report_digest };
+      manifest_id: spec.id,
+      env: { PLANR_OUTCOME_BATCHING_REPORT_DIGEST: report.report_digest },
+    };
     addJson(files, path.relative(repositoryRoot, path.join(inputsRoot, `${spec.obligationId}.run.json`)), runInput);
   }
   return files;

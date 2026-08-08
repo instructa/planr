@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.10.0-alpha.4] - 2026-08-08
+
+### Added
+
+- Add a repository-owned AC-014 fresh-arm runner and deterministic proof fixtures for fresh-root relocation, path-bound Evidence regeneration, session resolution, monitor ceilings, and immutable benchmark result recording.
+- Add the alpha.4 AC-014 experiment contract with unchanged model, effort, product spec, oracle, browser surface, and ceilings, plus explicit Fix13/Fix14 non-reuse history.
+
+### Changed
+
+- Stop compatible maker batching at a typed source-frozen verification handoff instead of leasing verification-classified map work to the implementation maker.
+- Bind verification work packets to the ready verification item, active source freeze, distinct verifier lease, and sealed run input so exact-source Evidence coverage owns verification settlement.
+
+### Fixed
+
+- Reject stale-source coverage, same-worker verification, missing verification item leases, and duplicate final product review paths without creating covering receipts.
+- Align CLI rendering, MCP-facing DTOs, and shipped Planr skills with the code -> freeze -> fresh verifier -> final review transition.
+
+### Migration Notes
+
+- Existing alpha.3 benchmark records remain immutable. Do not resume or reuse Fix13/Fix14 attempts; append any later result as a new immutable AC-014 result with raw session ids, transcript hashes, wall time, tokens, tool-call envelopes, oracle status, and stop reason.
+- Candidate preparation is versioned source only. Publication still requires the exact alpha.4 source to pass the canonical verification policy, the fresh AC-014 arm, release evaluation, independent final product review, and explicit release approval.
+
 ## [1.10.0-alpha.3] - 2026-08-05
 
 ### Added
@@ -613,7 +635,8 @@ Initial Planr product release.
 - Tag-driven release pipeline with multi-target builds (darwin/linux, arm64/x86_64) and Homebrew tap automation.
 - Skill workflow documentation for Codex, Claude Code, Cursor, and MCP-only clients.
 
-[Unreleased]: https://github.com/instructa/planr/compare/v1.10.0-alpha.3...HEAD
+[Unreleased]: https://github.com/instructa/planr/compare/v1.10.0-alpha.4...HEAD
+[1.10.0-alpha.4]: https://github.com/instructa/planr/compare/v1.10.0-alpha.3...v1.10.0-alpha.4
 [1.10.0-alpha.3]: https://github.com/instructa/planr/compare/v1.10.0-alpha.2...v1.10.0-alpha.3
 [1.10.0-alpha.2]: https://github.com/instructa/planr/compare/v1.10.0-alpha.1...v1.10.0-alpha.2
 [1.10.0-alpha.1]: https://github.com/instructa/planr/compare/v1.9.0...v1.10.0-alpha.1

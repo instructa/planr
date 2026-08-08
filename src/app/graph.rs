@@ -119,6 +119,33 @@ impl App {
         format!("\nunlocked: {names}")
     }
 
+    pub(crate) fn settlement_extras_human(extras: &Value) -> String {
+        let mut human = Self::unlocked_human(
+            extras["unlocked"]
+                .as_array()
+                .map(Vec::as_slice)
+                .unwrap_or(&[]),
+        );
+        if let Some(post) = extras["post_condition"].as_str() {
+            human.push_str(&format!("\npost condition to verify: {post}"));
+        }
+        if let Some(hint) = extras["hint"].as_str() {
+            human.push_str(&format!("\nhint: {hint}"));
+        }
+        if let Some(language) = extras["proof"]["completion_language"].as_str() {
+            human.push_str(&format!("\nproof: {language}"));
+        }
+        human
+    }
+
+    pub(crate) fn progress_human(progress: &Value) -> String {
+        let ready = progress["counts"]["ready"].as_i64().unwrap_or(0);
+        format!(
+            " [{}/{} settled · {} ready]",
+            progress["settled"], progress["total"], ready
+        )
+    }
+
     pub(crate) fn graph_status_value(&self) -> Result<Value> {
         let cycles = self.graph_cycles()?;
         Ok(json!({

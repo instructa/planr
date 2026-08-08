@@ -7,6 +7,7 @@ use super::repository::execution_run::{
 };
 use crate::canonical_json::sha256_json_digest;
 use crate::cli::{RunBatchCommand, RunCommand};
+use crate::evidence::coverage::evaluate_plan_coverage;
 use crate::execution_run::{
     DEFAULT_BATCH_OUTCOME_CAP, ExecutionBatch, ExecutionBatchStatus, FeatureRun, FeatureRunPhase,
     FeatureRunStatus, MakerReplacement, MakerReplacementReason, PhaseTransition,
@@ -19,7 +20,9 @@ use crate::usage_policy::{
 };
 use crate::util::{short_id, worker_id};
 use anyhow::{Result, anyhow, bail};
+use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 #[derive(Clone, Debug)]
 pub(crate) struct OutcomeSettlement<'a> {
@@ -759,6 +762,34 @@ impl App {
                 phase,
                 plan_id
             );
+        }
+        let verification_item: Option<(String, String)> = self
+            .conn
+            .query_row(
+                "SELECT id, status FROM items
+                 WHERE project_id = ?1
+                   AND plan_path = ?2
+                   AND work_type = 'verification'
+                 ORDER BY priority DESC, created_at
+                 LIMIT 1",
+                params![self.default_project()?.id, plan.path],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        if let Some((item_id, status)) = verification_item {
+            if status != "closed" {
+                bail!("final_product_review_requires_closed_verification_item:{item_id}");
+            }
+            let evaluated_at = OffsetDateTime::now_utc().format(&Rfc3339)?;
+            let project = self.default_project()?;
+            let coverage = evaluate_plan_coverage(&self.conn, &project.id, plan_id, &evaluated_at)
+                .map_err(|err| anyhow!("{err}"))?;
+            if coverage.status.as_str() != "satisfied" {
+                bail!(
+                    "final_product_review_requires_satisfied_exact_source_coverage:{plan_id}:{}",
+                    coverage.status.as_str()
+                );
+            }
         }
         let source_revision = run
             .run

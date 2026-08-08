@@ -29,7 +29,7 @@ Run the verification required by the plan. Record exact commands and meaningful 
 
 ## Outcome batching
 
-When the dispatch asks for a compatible same-plan maker run, keep the same worker identity and settle one picked item at a time with `planr done --next`. Planr atomically rolls each internal three-outcome ExecutionBatch for the same maker and leases only compatible code work from the same plan. Stop when settlement opens a material ReviewGate, ownership or scope becomes incompatible, work blocks, the pick is empty, or a budget boundary is reached. Record a compact durable handoff only at that genuine stop, with settled item ids, changed files, commands/tests, pending source-freeze blockers, and the next compatible pick command.
+When the dispatch asks for a bounded compatible same-plan batch, keep the same worker identity and settle one picked item at a time with `planr done --next`. Planr atomically rolls each internal three-outcome ExecutionBatch for the same maker and leases only compatible code work from the same plan. Stop when settlement opens a material ReviewGate, returns `next.reason: "verification_handoff_source_frozen"`, ownership or scope becomes incompatible, work blocks, the pick is empty, or a budget boundary is reached. Record a compact durable handoff only at that genuine stop, with settled item ids, changed files, commands/tests, source-freeze status, and the exact next command from the packet.
 
 ```bash
 export PLANR_WORKER_ID="maker-outcomes-1"
