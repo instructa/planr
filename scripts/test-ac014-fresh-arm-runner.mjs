@@ -1,17 +1,20 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { runFreshArmForTest } from "./ac014-fresh-arm-runner.mjs";
 
 const repoRoot = path.dirname(path.dirname(new URL(import.meta.url).pathname));
 const root = mkdtempSync(path.join(tmpdir(), "planr-ac014-runner-"));
@@ -63,11 +66,10 @@ const fixedContract = {
 };
 
 const fresh = path.join(root, "fresh");
-const passed = run(config({
+const passed = await run(config({
   fresh_root: fresh,
-  codex_command: codexCommand(codexStubPath),
   oracle_command: [oracleStubPath],
-}), path.join(root, "result.json"), callsPath);
+}), path.join(root, "result.json"), callsPath, codexCommand(codexStubPath));
 assert.equal(passed.status, 0, passed.output);
 const result = JSON.parse(readFileSync(path.join(root, "result.json"), "utf8"));
 assert.equal(result.status, "passed");
@@ -82,6 +84,26 @@ assert.equal(result.observed_contract.model, "gpt-5.6-sol");
 assert.equal(result.observed_contract.effort, "medium");
 assert.equal(result.observed_contract.surface, "identical");
 assert.equal(result.observed_contract.cli_version, "0.147.0");
+assert.equal(result.codex.launch_identity.subcommand, "exec");
+assert.equal(result.codex.launch_identity.json, true);
+assert.equal(result.codex.launch_identity.model, "gpt-5.6-sol");
+assert.equal(result.codex.launch_identity.effort_config, 'model_reasoning_effort="medium"');
+assert.equal(result.codex.launch_identity.bypass_approvals_and_sandbox, true);
+assert.equal(result.codex.launch_identity.bypass_hook_trust, true);
+assert.equal(result.codex.launch_identity.color, "never");
+assert.equal(result.codex.launch_identity.prompt_delivery.sha256, fixedContract.prompt_digest);
+assert.equal(result.codex.launch_identity.prompt_delivery.byte_length, readFileSync(path.join(baseline, "prompt.txt")).byteLength);
+assert.equal(result.codex.launch_identity.argv.at(-1), `<prompt ${fixedContract.prompt_digest} bytes:${readFileSync(path.join(baseline, "prompt.txt")).byteLength}>`);
+assert.equal(result.codex.command.at(-1), `<prompt ${fixedContract.prompt_digest} bytes:${readFileSync(path.join(baseline, "prompt.txt")).byteLength}>`);
+assert.equal(result.commands.some((command) => command.command.includes("exact AC-014 prompt")), false);
+assert.equal(result.codex.launch_identity.environment.codex_home, codexHome);
+assert.equal(result.codex.launch_identity.environment.node_realpath, realpathSync(process.execPath));
+assert.equal(result.codex.launch_identity.environment.injection_variables_absent, true);
+const preflight = JSON.parse(readFileSync(path.join(fresh, ".planr", "artifacts", "ac014", "PREFLIGHT.json"), "utf8"));
+assert.equal(preflight.codex_launch_identity.model, "gpt-5.6-sol");
+assert.equal(preflight.codex_launch_identity.effort_config, 'model_reasoning_effort="medium"');
+assert.equal(preflight.codex_launch_identity.prompt_delivery.sha256, fixedContract.prompt_digest);
+assert.equal(preflight.codex_launch_identity.environment.codex_home, codexHome);
 assert.equal(result.validation.all_paths_local, true);
 assert.equal(result.validation.descendant_counts["item-parent"], 1);
 assert.deepEqual(result.sessions.map((session) => session.id), ["session-child", "session-root"]);
@@ -110,15 +132,44 @@ writeExecutable(falsePositiveStubPath, stubCodexSession({
   childSessionId: falsePositiveChild,
   embeddedParentSessionId: falsePositiveRoot,
 }));
-const falsePositiveRun = run(config({
+const falsePositiveRun = await run(config({
   fresh_root: path.join(root, "fresh-false-positive"),
-  codex_command: codexCommand(falsePositiveStubPath),
   oracle_command: [oracleStubPath],
-}), path.join(root, "false-positive-result.json"), path.join(root, "calls-false-positive.jsonl"));
+}), path.join(root, "false-positive-result.json"), path.join(root, "calls-false-positive.jsonl"), codexCommand(falsePositiveStubPath));
 assert.equal(falsePositiveRun.status, 0, falsePositiveRun.output);
 const falsePositiveResult = JSON.parse(readFileSync(path.join(root, "false-positive-result.json"), "utf8"));
 assert.deepEqual(falsePositiveResult.sessions.map((session) => session.id), [falsePositiveRoot, falsePositiveChild]);
 assert.equal(falsePositiveResult.sessions.find((session) => session.id === falsePositiveChild).parent, falsePositiveRoot);
+
+const transcriptFixtureDir = path.join(repoRoot, "tests", "fixtures", "ac014", "failed-transcript-min");
+const transcriptManifest = JSON.parse(readFileSync(path.join(transcriptFixtureDir, "manifest.json"), "utf8"));
+for (const file of transcriptManifest.files) {
+  assert.equal(sha256File(path.join(transcriptFixtureDir, file.path)).slice("sha256:".length), file.sha256);
+}
+assert.equal(transcriptManifest.source_files[0].extracted_lines[0].record_sha256, "d64ebb3bb4881a0f7666cb7b2f969d986790a5f371d937517683aa4c85f16bf1");
+assert.equal(transcriptManifest.source_files[1].extracted_lines[0].snapshot_sha256, "6763f85949efc84e4565f06ad958074c7be062bbf1092ba14712aa9aa0303613");
+assert.equal(transcriptManifest.source_files[1].extracted_lines[1].record_sha256, "2452e0bce2b8dba0df12c0cf9c0d4e01dcc0e9aba2748010f124e487b79c54f9");
+const oldMatches = oldRecursiveJsonlSessions(transcriptFixtureDir).filter((session) => session.id === transcriptManifest.root_session_id);
+assert.deepEqual(oldMatches.map((session) => session.path).sort(), [
+  "history.jsonl",
+  "sessions/2026/08/08/rollout-2026-08-08T12-22-48-019fe0e5-8cef-7210-aea7-40722b23874e.jsonl",
+]);
+const fixtureReplayStubPath = path.join(root, "codex-fixture-replay-stub.mjs");
+const fixtureCodexHome = path.join(root, "codex-home-fixture");
+mkdirSync(fixtureCodexHome, { recursive: true });
+writeExecutable(fixtureReplayStubPath, stubCodexFixtureReplay(transcriptFixtureDir, transcriptManifest.files.map((file) => file.path), fixtureCodexHome));
+const fixtureReplayRun = await run(config({
+  fresh_root: path.join(root, "fresh-fixture-replay"),
+  oracle_command: [oracleStubPath],
+  codex_home: fixtureCodexHome,
+  root_session_id: transcriptManifest.root_session_id,
+}), path.join(root, "fixture-replay-result.json"), path.join(root, "calls-fixture-replay.jsonl"), codexCommand(fixtureReplayStubPath));
+assert.equal(fixtureReplayRun.status, 1);
+const fixtureReplay = JSON.parse(readFileSync(path.join(root, "fixture-replay-result.json"), "utf8"));
+assert.match(fixtureReplay.error, /observed identity is missing: model/);
+assert.doesNotMatch(fixtureReplay.error, /duplicate Codex session id/);
+assert.equal(fixtureReplay.sessions[0].id, transcriptManifest.root_session_id);
+assert.equal(fixtureReplay.sessions.length, 1);
 
 const calls = readFileSync(callsPath, "utf8").trim().split("\n").map(JSON.parse);
 assert.deepEqual(calls.slice(0, 2).map((call) => call.command), ["project relocate", "project relocate"]);
@@ -135,11 +186,10 @@ writeExecutable(staleCliStubPath, stubCodexSession({
   childTools: 3,
   cliVersion: "0.146.0",
 }));
-const staleCli = run(config({
+const staleCli = await run(config({
   fresh_root: path.join(root, "fresh-stale-cli"),
-  codex_command: codexCommand(staleCliStubPath),
   oracle_command: [oracleStubPath],
-}), path.join(root, "stale-cli-result.json"), path.join(root, "calls-stale-cli.jsonl"));
+}), path.join(root, "stale-cli-result.json"), path.join(root, "calls-stale-cli.jsonl"), codexCommand(staleCliStubPath));
 assert.equal(staleCli.status, 1);
 assert.match(staleCli.output, /observed identity mismatch: cli_version/);
 
@@ -151,12 +201,11 @@ writeExecutable(slowOverStubPath, stubCodexSession({
   childTools: 0,
   sleepMs: 5000,
 }));
-const interrupted = run(config({
+const interrupted = await run(config({
   fresh_root: path.join(root, "fresh-over-ceiling"),
-  codex_command: codexCommand(slowOverStubPath),
   oracle_command: [oracleStubPath],
   monitor_poll_ms: 5,
-}), path.join(root, "over-ceiling-result.json"), path.join(root, "calls-over.jsonl"));
+}), path.join(root, "over-ceiling-result.json"), path.join(root, "calls-over.jsonl"), codexCommand(slowOverStubPath));
 assert.equal(interrupted.status, 1);
 const overCeiling = JSON.parse(readFileSync(path.join(root, "over-ceiling-result.json"), "utf8"));
 assert.equal(overCeiling.failure_class, "product");
@@ -165,22 +214,20 @@ assert.equal(overCeiling.ceilings.checks.total_tokens.status, "failed");
 assert.equal(overCeiling.codex.interrupted.ceiling, "total_tokens");
 assert.equal(statSync(path.join(root, "fresh-over-ceiling", ".planr", "artifacts", "ac014", "monitor-status.json")).isFile(), true);
 
-const suppliedMetrics = run(config({
+const suppliedMetrics = await run(config({
   fresh_root: path.join(root, "fresh-supplied-metrics"),
-  codex_command: codexCommand(codexStubPath),
   oracle_command: [oracleStubPath],
   metrics: { wall_time_seconds: 1, total_tokens: 1, tool_call_envelopes: 1 },
-}), path.join(root, "supplied-metrics-result.json"), path.join(root, "calls-supplied-metrics.jsonl"));
+}), path.join(root, "supplied-metrics-result.json"), path.join(root, "calls-supplied-metrics.jsonl"), codexCommand(codexStubPath));
 assert.equal(suppliedMetrics.status, 1);
 assert.equal(JSON.parse(readFileSync(path.join(root, "supplied-metrics-result.json"), "utf8")).failure_class, "admission");
 assertCompleteArtifactSet(path.join(root, "fresh-supplied-metrics"));
 
-const mismatch = run(config({
+const mismatch = await run(config({
   fresh_root: path.join(root, "fresh-contract-mismatch"),
-  codex_command: codexCommand(codexStubPath),
   oracle_command: [oracleStubPath],
   fixed_contract: { ...fixedContract, model: "gpt-4" },
-}), path.join(root, "contract-mismatch-result.json"), path.join(root, "calls-contract.jsonl"));
+}), path.join(root, "contract-mismatch-result.json"), path.join(root, "calls-contract.jsonl"), codexCommand(codexStubPath));
 assert.equal(mismatch.status, 1);
 assert.match(JSON.parse(readFileSync(path.join(root, "contract-mismatch-result.json"), "utf8")).error, /observed identity mismatch: model/);
 
@@ -193,11 +240,10 @@ writeExecutable(tuiStubPath, stubCodexSession({
   rootOriginator: "codex-tui",
   rootSource: "cli",
 }));
-const tuiSurface = run(config({
+const tuiSurface = await run(config({
   fresh_root: path.join(root, "fresh-tui-surface"),
-  codex_command: codexCommand(tuiStubPath),
   oracle_command: [oracleStubPath],
-}), path.join(root, "tui-surface-result.json"), path.join(root, "calls-tui-surface.jsonl"));
+}), path.join(root, "tui-surface-result.json"), path.join(root, "calls-tui-surface.jsonl"), codexCommand(tuiStubPath));
 assert.equal(tuiSurface.status, 1);
 assert.match(JSON.parse(readFileSync(path.join(root, "tui-surface-result.json"), "utf8")).error, /observed identity mismatch: surface/);
 
@@ -210,11 +256,10 @@ writeExecutable(partialOriginatorStubPath, stubCodexSession({
   rootOriginator: "codex_exec",
   rootSource: "cli",
 }));
-const partialOriginator = run(config({
+const partialOriginator = await run(config({
   fresh_root: path.join(root, "fresh-partial-originator-surface"),
-  codex_command: codexCommand(partialOriginatorStubPath),
   oracle_command: [oracleStubPath],
-}), path.join(root, "partial-originator-surface-result.json"), path.join(root, "calls-partial-originator-surface.jsonl"));
+}), path.join(root, "partial-originator-surface-result.json"), path.join(root, "calls-partial-originator-surface.jsonl"), codexCommand(partialOriginatorStubPath));
 assert.equal(partialOriginator.status, 1);
 assert.match(JSON.parse(readFileSync(path.join(root, "partial-originator-surface-result.json"), "utf8")).error, /observed identity mismatch: surface/);
 
@@ -227,22 +272,109 @@ writeExecutable(partialSourceStubPath, stubCodexSession({
   rootOriginator: "codex-tui",
   rootSource: "exec",
 }));
-const partialSource = run(config({
+const partialSource = await run(config({
   fresh_root: path.join(root, "fresh-partial-source-surface"),
-  codex_command: codexCommand(partialSourceStubPath),
   oracle_command: [oracleStubPath],
-}), path.join(root, "partial-source-surface-result.json"), path.join(root, "calls-partial-source-surface.jsonl"));
+}), path.join(root, "partial-source-surface-result.json"), path.join(root, "calls-partial-source-surface.jsonl"), codexCommand(partialSourceStubPath));
 assert.equal(partialSource.status, 1);
 assert.match(JSON.parse(readFileSync(path.join(root, "partial-source-surface-result.json"), "utf8")).error, /observed identity mismatch: surface/);
+
+const suppliedCodexCommand = await run(config({
+  fresh_root: path.join(root, "fresh-supplied-codex-command"),
+  codex_command: codexCommand(codexStubPath),
+  oracle_command: [oracleStubPath],
+}), path.join(root, "supplied-codex-command-result.json"), path.join(root, "calls-supplied-codex-command.jsonl"), codexCommand(codexStubPath));
+assert.equal(suppliedCodexCommand.status, 1);
+assert.match(JSON.parse(readFileSync(path.join(root, "supplied-codex-command-result.json"), "utf8")).error, /codex_command is not accepted/);
+
+const wrongSubcommand = await run(config({
+  fresh_root: path.join(root, "fresh-wrong-subcommand"),
+  oracle_command: [oracleStubPath],
+}), path.join(root, "wrong-subcommand-result.json"), path.join(root, "calls-wrong-subcommand.jsonl"), codexCommand(codexStubPath, { subcommand: "run" }));
+assert.equal(wrongSubcommand.status, 1);
+assert.match(JSON.parse(readFileSync(path.join(root, "wrong-subcommand-result.json"), "utf8")).error, /Codex subcommand mismatch/);
+
+const wrongModel = await run(config({
+  fresh_root: path.join(root, "fresh-wrong-model-launch"),
+  oracle_command: [oracleStubPath],
+}), path.join(root, "wrong-model-launch-result.json"), path.join(root, "calls-wrong-model-launch.jsonl"), codexCommand(codexStubPath, { model: "gpt-4" }));
+assert.equal(wrongModel.status, 1);
+assert.match(JSON.parse(readFileSync(path.join(root, "wrong-model-launch-result.json"), "utf8")).error, /Codex model launch mismatch/);
+
+const wrongEffort = await run(config({
+  fresh_root: path.join(root, "fresh-wrong-effort-launch"),
+  oracle_command: [oracleStubPath],
+}), path.join(root, "wrong-effort-launch-result.json"), path.join(root, "calls-wrong-effort-launch.jsonl"), codexCommand(codexStubPath, { effortConfig: 'model_reasoning_effort="high"' }));
+assert.equal(wrongEffort.status, 1);
+assert.match(JSON.parse(readFileSync(path.join(root, "wrong-effort-launch-result.json"), "utf8")).error, /Codex effort launch mismatch/);
+
+const missingBypass = await run(config({
+  fresh_root: path.join(root, "fresh-missing-bypass-launch"),
+  oracle_command: [oracleStubPath],
+}), path.join(root, "missing-bypass-launch-result.json"), path.join(root, "calls-missing-bypass-launch.jsonl"), codexCommand(codexStubPath, { approvalsBypass: null }));
+assert.equal(missingBypass.status, 1);
+assert.match(JSON.parse(readFileSync(path.join(root, "missing-bypass-launch-result.json"), "utf8")).error, /approvals\/sandbox bypass flag mismatch/);
+
+const wrongHookTrust = await run(config({
+  fresh_root: path.join(root, "fresh-wrong-hook-trust-launch"),
+  oracle_command: [oracleStubPath],
+}), path.join(root, "wrong-hook-trust-launch-result.json"), path.join(root, "calls-wrong-hook-trust-launch.jsonl"), codexCommand(codexStubPath, { hookTrustBypass: "--hook-trust" }));
+assert.equal(wrongHookTrust.status, 1);
+assert.match(JSON.parse(readFileSync(path.join(root, "wrong-hook-trust-launch-result.json"), "utf8")).error, /hook trust bypass flag mismatch/);
+
+const wrongColor = await run(config({
+  fresh_root: path.join(root, "fresh-wrong-color-launch"),
+  oracle_command: [oracleStubPath],
+}), path.join(root, "wrong-color-launch-result.json"), path.join(root, "calls-wrong-color-launch.jsonl"), codexCommand(codexStubPath, { color: "always" }));
+assert.equal(wrongColor.status, 1);
+assert.match(JSON.parse(readFileSync(path.join(root, "wrong-color-launch-result.json"), "utf8")).error, /Codex color launch mismatch/);
+
+const missingPrompt = await run(config({
+  fresh_root: path.join(root, "fresh-missing-prompt-launch"),
+  oracle_command: [oracleStubPath],
+}), path.join(root, "missing-prompt-launch-result.json"), path.join(root, "calls-missing-prompt-launch.jsonl"), codexCommand(codexStubPath, { prompt: null }));
+assert.equal(missingPrompt.status, 1);
+assert.match(JSON.parse(readFileSync(path.join(root, "missing-prompt-launch-result.json"), "utf8")).error, /prompt positional argument is missing|argv shape mismatch/);
+
+const codexEnvPath = await run(config({
+  fresh_root: path.join(root, "fresh-codex-env-path"),
+  oracle_command: [oracleStubPath],
+  codex_env: { PATH: path.dirname(codexStubPath) },
+}), path.join(root, "codex-env-path-result.json"), path.join(root, "calls-codex-env-path.jsonl"), codexCommand(codexStubPath));
+assert.equal(codexEnvPath.status, 1);
+assert.match(JSON.parse(readFileSync(path.join(root, "codex-env-path-result.json"), "utf8")).error, /codex_env may not set executable injection variable: PATH/);
+
+const codexEnvHome = await run(config({
+  fresh_root: path.join(root, "fresh-codex-env-home"),
+  oracle_command: [oracleStubPath],
+  codex_env: { CODEX_HOME: path.join(root, "other-codex-home") },
+}), path.join(root, "codex-env-home-result.json"), path.join(root, "calls-codex-env-home.jsonl"), codexCommand(codexStubPath));
+assert.equal(codexEnvHome.status, 1);
+assert.match(JSON.parse(readFileSync(path.join(root, "codex-env-home-result.json"), "utf8")).error, /codex_env may not set executable injection variable: CODEX_HOME/);
+
+const codexEnvNodeOptions = await run(config({
+  fresh_root: path.join(root, "fresh-codex-env-node-options"),
+  oracle_command: [oracleStubPath],
+  codex_env: { NODE_OPTIONS: "--require ./inject.js" },
+}), path.join(root, "codex-env-node-options-result.json"), path.join(root, "calls-codex-env-node-options.jsonl"), codexCommand(codexStubPath));
+assert.equal(codexEnvNodeOptions.status, 1);
+assert.match(JSON.parse(readFileSync(path.join(root, "codex-env-node-options-result.json"), "utf8")).error, /codex_env may not set executable injection variable: NODE_OPTIONS/);
+
+const codexEnvNodePath = await run(config({
+  fresh_root: path.join(root, "fresh-codex-env-node-path"),
+  oracle_command: [oracleStubPath],
+  codex_env: { NODE_PATH: path.join(root, "node-path") },
+}), path.join(root, "codex-env-node-path-result.json"), path.join(root, "calls-codex-env-node-path.jsonl"), codexCommand(codexStubPath));
+assert.equal(codexEnvNodePath.status, 1);
+assert.match(JSON.parse(readFileSync(path.join(root, "codex-env-node-path-result.json"), "utf8")).error, /codex_env may not set executable injection variable: NODE_PATH/);
 
 const reusedFresh = path.join(root, "fresh-reused");
 mkdirSync(reusedFresh);
 writeFileSync(path.join(reusedFresh, "sentinel.txt"), "do not mutate\n");
-const reused = run(config({
+const reused = await run(config({
   fresh_root: reusedFresh,
-  codex_command: codexCommand(codexStubPath),
   oracle_command: [oracleStubPath],
-}), path.join(root, "reused-result.json"), path.join(root, "calls-reused.jsonl"));
+}), path.join(root, "reused-result.json"), path.join(root, "calls-reused.jsonl"), codexCommand(codexStubPath));
 assert.equal(reused.status, 1);
 assert.match(JSON.parse(readFileSync(path.join(root, "reused-result.json"), "utf8")).error, /must be a new non-existing path/);
 assert.equal(readFileSync(path.join(reusedFresh, "sentinel.txt"), "utf8"), "do not mutate\n");
@@ -254,25 +386,23 @@ execFileSync("cp", ["-R", `${baseline}/.`, artifactBaseline]);
 mkdirSync(path.join(artifactBaseline, ".planr", "artifacts", "ac014"), { recursive: true });
 writeFileSync(path.join(artifactBaseline, ".planr", "artifacts", "ac014", "BENCHMARK_RESULT.json"), "{}\n");
 const artifactOverwriteFresh = path.join(root, "fresh-artifact-overwrite");
-const artifactOverwrite = run(config({
+const artifactOverwrite = await run(config({
   baseline_root: artifactBaseline,
   fresh_root: artifactOverwriteFresh,
-  codex_command: codexCommand(codexStubPath),
   oracle_command: [oracleStubPath],
-}), path.join(root, "artifact-overwrite-result.json"), path.join(root, "calls-artifact-overwrite.jsonl"));
+}), path.join(root, "artifact-overwrite-result.json"), path.join(root, "calls-artifact-overwrite.jsonl"), codexCommand(codexStubPath));
 assert.equal(artifactOverwrite.status, 1);
 assert.equal(JSON.parse(readFileSync(path.join(root, "artifact-overwrite-result.json"), "utf8")).failure_class, "instrumentation");
 assert.equal(readFileSync(path.join(artifactOverwriteFresh, ".planr", "artifacts", "ac014", "BENCHMARK_RESULT.json"), "utf8"), "{}\n");
 assertCompleteArtifactSet(path.join(root, ".planr-ac014-failures", "fresh-artifact-overwrite"));
 
 const publicationDeadlineFresh = path.join(root, "fresh-publication-deadline");
-const publicationDeadline = run(config({
+const publicationDeadline = await run(config({
   fresh_root: publicationDeadlineFresh,
-  codex_command: codexCommand(codexStubPath),
   oracle_command: [oracleStubPath],
   test_stage_write_delay_ms: 1,
   test_stage_deadline_elapsed_wall_seconds: fixedCeilings.wall_time_seconds + 0.001,
-}), path.join(root, "publication-deadline-result.json"), path.join(root, "calls-publication-deadline.jsonl"));
+}), path.join(root, "publication-deadline-result.json"), path.join(root, "calls-publication-deadline.jsonl"), codexCommand(codexStubPath));
 assert.equal(publicationDeadline.status, 1);
 const publicationDeadlineResult = JSON.parse(readFileSync(path.join(root, "publication-deadline-result.json"), "utf8"));
 assert.equal(publicationDeadlineResult.status, "failed");
@@ -284,24 +414,22 @@ assertCompleteArtifactSet(publicationDeadlineFresh);
 
 const cycleStubPath = path.join(root, "codex-cycle-stub.mjs");
 writeExecutable(cycleStubPath, stubCodexCycle());
-const cycle = run(config({
+const cycle = await run(config({
   fresh_root: path.join(root, "fresh-cycle"),
-  codex_command: codexCommand(cycleStubPath),
   oracle_command: [oracleStubPath],
-}), path.join(root, "cycle-result.json"), path.join(root, "calls-cycle.jsonl"));
+}), path.join(root, "cycle-result.json"), path.join(root, "calls-cycle.jsonl"), codexCommand(cycleStubPath));
 assert.equal(cycle.status, 1);
 assert.match(JSON.parse(readFileSync(path.join(root, "cycle-result.json"), "utf8")).error, /cyclic Codex session lineage/);
 
 const outsideStubPath = path.join(root, "planr-outside-stub.mjs");
 writeExecutable(outsideStubPath, stubPlanr({ outsidePath: true }));
 const outsideContract = { ...fixedContract, candidate_binary_sha256: sha256File(outsideStubPath) };
-const outside = run(config({
+const outside = await run(config({
   fresh_root: path.join(root, "fresh-outside"),
   planr_bin: outsideStubPath,
   fixed_contract: outsideContract,
-  codex_command: codexCommand(codexStubPath),
   oracle_command: [oracleStubPath],
-}), path.join(root, "outside-result.json"), path.join(root, "calls-outside.jsonl"));
+}), path.join(root, "outside-result.json"), path.join(root, "calls-outside.jsonl"), codexCommand(codexStubPath));
 assert.equal(outside.status, 1);
 const outsideResult = JSON.parse(readFileSync(path.join(root, "outside-result.json"), "utf8"));
 assert.equal(outsideResult.failure_class, "instrumentation");
@@ -328,31 +456,51 @@ function config(overrides) {
   };
 }
 
-function codexCommand(file) {
-  return [file, "--model", "gpt-5.6-sol", "--effort", "medium", "--surface", "identical"];
+function codexCommand(file, {
+  subcommand = "exec",
+  model = "gpt-5.6-sol",
+  effortConfig = 'model_reasoning_effort="medium"',
+  approvalsBypass = "--dangerously-bypass-approvals-and-sandbox",
+  hookTrustBypass = "--dangerously-bypass-hook-trust",
+  color = "never",
+  prompt = readFileSync(path.join(baseline, "prompt.txt"), "utf8"),
+} = {}) {
+  return [
+    file,
+    subcommand,
+    "--json",
+    "--model",
+    model,
+    "-c",
+    effortConfig,
+    ...(approvalsBypass === null ? [] : [approvalsBypass]),
+    ...(hookTrustBypass === null ? [] : [hookTrustBypass]),
+    "--color",
+    color,
+    ...(prompt === null ? [] : [prompt]),
+  ];
 }
 
-function run(input, resultPath, callsFile) {
+async function run(input, resultPath, callsFile, testCodexCommand = codexCommand(codexStubPath)) {
   const inputPath = `${resultPath}.input.json`;
   writeFileSync(inputPath, JSON.stringify(input));
-  const outcome = spawnSync("node", [
-    path.join(repoRoot, "scripts/ac014-fresh-arm-runner.mjs"),
-    "--input",
-    inputPath,
-    "--result",
-    resultPath,
-  ], {
-    encoding: "utf8",
-    env: { ...process.env, PLANR_STUB_CALLS: callsFile },
-  });
-  let resultText = "";
+  const previousCalls = process.env.PLANR_STUB_CALLS;
   try {
-    resultText = readFileSync(resultPath, "utf8");
-  } catch {
-    resultText = "<no result file>";
+    process.env.PLANR_STUB_CALLS = callsFile;
+    const result = await runFreshArmForTest(input, { testCodexCommand });
+    const resultText = `${JSON.stringify(result, null, 2)}\n`;
+    writeFileSync(resultPath, resultText);
+    return {
+      status: result.status === "passed" ? 0 : 1,
+      output: resultText,
+    };
+  } finally {
+    if (previousCalls === undefined) {
+      delete process.env.PLANR_STUB_CALLS;
+    } else {
+      process.env.PLANR_STUB_CALLS = previousCalls;
+    }
   }
-  outcome.output = `${outcome.stderr}\n${outcome.stdout}\n${resultText}`;
-  return outcome;
 }
 
 function writeExecutable(file, contents) {
@@ -373,6 +521,47 @@ function assertCompleteArtifactSet(freshRoot) {
     assert.equal(statSync(file).isFile(), true);
     assert.equal(manifest.get(name), sha256File(file));
   }
+}
+
+function oldRecursiveJsonlSessions(rootDir) {
+  return allFixtureFiles(rootDir)
+    .filter((file) => file.endsWith(".jsonl"))
+    .map((file) => {
+      let id = idFromFixtureFilename(file);
+      for (const line of readFileSync(file, "utf8").split("\n").filter(Boolean)) {
+        const record = JSON.parse(line);
+        const payload = record.payload && typeof record.payload === "object" ? record.payload : record;
+        if (record.type === "session_meta" || payload.type === "session_meta") {
+          id = payload.id ?? payload.thread_id ?? payload.threadId ?? payload.session_id ?? id;
+        } else {
+          id = payload.session_id ?? record.session_id ?? id;
+        }
+      }
+      return { path: path.relative(rootDir, file), id };
+    })
+    .filter((session) => session.id);
+}
+
+function idFromFixtureFilename(file) {
+  const match = path.basename(file).match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/u);
+  return match?.[1] ?? null;
+}
+
+function allFixtureFiles(rootDir) {
+  const files = [];
+  const stack = [rootDir];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const candidate = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(candidate);
+      } else if (entry.isFile()) {
+        files.push(candidate);
+      }
+    }
+  }
+  return files;
 }
 
 function stubPlanr({ outsidePath }) {
@@ -441,6 +630,20 @@ appendFileSync(childSession, JSON.stringify({ type: "turn_context", payload: { m
 appendFileSync(childSession, JSON.stringify({ type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { total_tokens: ${childTokens} }, last_token_usage: { total_tokens: 777777777 } }, tool_call_envelopes: ${childTools} } }) + "\\n");
 appendFileSync(childSession, JSON.stringify({ session_id: ${JSON.stringify(childSessionId)}, type: "custom_tool_call", id: "child-call" }) + "\\n");` : ""}
 ${sleepMs > 0 ? `await new Promise((resolve) => setTimeout(resolve, ${sleepMs}));` : ""}
+`;
+}
+
+function stubCodexFixtureReplay(fixtureDir, files, home) {
+  return `#!/usr/bin/env node
+import { copyFileSync, mkdirSync } from "node:fs";
+import path from "node:path";
+const home = ${JSON.stringify(home)};
+const fixtureDir = ${JSON.stringify(fixtureDir)};
+for (const file of ${JSON.stringify(files)}) {
+  const destination = path.join(home, file);
+  mkdirSync(path.dirname(destination), { recursive: true });
+  copyFileSync(path.join(fixtureDir, file), destination);
+}
 `;
 }
 

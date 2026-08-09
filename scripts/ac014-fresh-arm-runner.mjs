@@ -18,6 +18,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 const EXPECTED = Object.freeze({
   candidate_version: "1.10.0-alpha.4",
@@ -25,6 +26,15 @@ const EXPECTED = Object.freeze({
   effort: "medium",
   surface: "identical",
   cli_version: "0.147.0",
+  codex_launch_path: "/opt/homebrew/bin/codex",
+  codex_executable_realpath: "/opt/homebrew/lib/node_modules/@openai/codex/bin/codex.js",
+  codex_subcommand: "exec",
+  codex_json: true,
+  codex_bypass_approvals_and_sandbox: true,
+  codex_bypass_hook_trust: true,
+  codex_color: "never",
+  codex_effort_config: "model_reasoning_effort=\"medium\"",
+  codex_node_realpath: realpathSync(process.execPath),
   oracle_id: "sparziele-exact-product-flow-v1",
   ceilings: Object.freeze({
     wall_time_seconds: 998.015,
@@ -33,39 +43,51 @@ const EXPECTED = Object.freeze({
   }),
 });
 
-const argv = process.argv.slice(2);
-const inputPath = valueAfter("--input");
-const resultPath = valueAfter("--result");
-if (!inputPath) {
-  throw new Error("usage: node scripts/ac014-fresh-arm-runner.mjs --input <run.json> [--result <result.json>]");
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  const result = await runCli(process.argv.slice(2));
+  if (result.status !== "passed") {
+    process.exitCode = 1;
+  }
 }
 
-const startedAt = new Date().toISOString();
-const input = readJson(inputPath);
-const transcript = [];
-
-let result;
-try {
-  result = await runFreshArm(input, transcript);
-} catch (error) {
-  writeFailureArtifacts(input, error, transcript);
-  result = classifiedResult(error, transcript);
-}
-result.started_at = startedAt;
-result.finished_at = new Date().toISOString();
-
-const serialized = `${JSON.stringify(result, null, 2)}\n`;
-if (resultPath) {
-  mkdirSync(path.dirname(path.resolve(resultPath)), { recursive: true });
-  writeFileSync(resultPath, serialized, { flag: "wx", mode: 0o600 });
-} else {
-  process.stdout.write(serialized);
-}
-if (result.status !== "passed") {
-  process.exitCode = 1;
+async function runCli(argv) {
+  const inputPath = valueAfter("--input", argv);
+  const resultPath = valueAfter("--result", argv);
+  if (!inputPath) {
+    throw new Error("usage: node scripts/ac014-fresh-arm-runner.mjs --input <run.json> [--result <result.json>]");
+  }
+  const input = readJson(inputPath);
+  const result = await runFreshArmEntry(input);
+  const serialized = `${JSON.stringify(result, null, 2)}\n`;
+  if (resultPath) {
+    mkdirSync(path.dirname(path.resolve(resultPath)), { recursive: true });
+    writeFileSync(resultPath, serialized, { flag: "wx", mode: 0o600 });
+  } else {
+    process.stdout.write(serialized);
+  }
+  return result;
 }
 
-async function runFreshArm(config, commands) {
+export async function runFreshArmForTest(input, options = {}) {
+  return runFreshArmEntry(input, { testCodexCommand: options.testCodexCommand ?? null });
+}
+
+async function runFreshArmEntry(input, options = {}) {
+  const startedAt = new Date().toISOString();
+  const transcript = [];
+  let result;
+  try {
+    result = await runFreshArm(input, transcript, options);
+  } catch (error) {
+    writeFailureArtifacts(input, error, transcript);
+    result = classifiedResult(error, transcript);
+  }
+  result.started_at = startedAt;
+  result.finished_at = new Date().toISOString();
+  return result;
+}
+
+async function runFreshArm(config, commands, options = {}) {
   requireSchema(config);
   if ("replace_fresh_root" in config) {
     throw admission("AC-014 fresh_root must never be destructively replaced");
@@ -147,9 +169,10 @@ async function runFreshArm(config, commands) {
 
   const codexHome = canonicalExistingDir(config.codex_home ?? process.env.CODEX_HOME, "CODEX_HOME");
   const armMonitor = createArmMonitor(config);
+  const codexCommand = codexLaunchCommand(config, freshCanonical, options);
   let codex;
   try {
-    codex = await runMonitoredCommand(config, freshCanonical, codexHome, commands, "codex", config.codex_command, armMonitor);
+    codex = await runMonitoredCommand(config, freshCanonical, codexHome, commands, "codex", codexCommand, armMonitor);
   } catch (error) {
     const payload = artifactPayload(preview, applied, validation, evidenceMigration, preCodexContract, null, [], null, null, armMonitor);
     writeImmutableArtifacts(config, freshCanonical, payload, "external_invalid", "codex_failed", armMonitor);
@@ -374,11 +397,15 @@ async function runMonitoredCommand(config, freshRoot, codexHome, commands, phase
     index === 0 ? path.resolve(part) : String(part)
   );
   assertExecutable(command[0]);
+  const launch_identity = phase === "codex" ? codexLaunchIdentity(command) : null;
+  const artifactCommand = phase === "codex" ? redactCodexCommand(command) : command;
   const startedTick = performance.now();
-  const phaseEnv = phase === "oracle" ? config.oracle_env : config.codex_env;
+  const phaseEnv = phase === "oracle"
+    ? { ...process.env, ...(config.oracle_env ?? {}) }
+    : codexSpawnEnv(config, codexHome);
   const child = spawn(command[0], command.slice(1), {
     cwd: freshRoot,
-    env: { ...process.env, ...(phaseEnv ?? {}) },
+    env: phaseEnv,
     stdio: ["ignore", "pipe", "pipe"],
   });
   let stdout = "";
@@ -413,16 +440,18 @@ async function runMonitoredCommand(config, freshRoot, codexHome, commands, phase
   const exit = await exitPromise;
   const durationSeconds = Math.round(((performance.now() - startedTick) / 1000) * 1000) / 1000;
   commands.push({
-    command: command.join(" "),
+    command: artifactCommand.join(" "),
     phase,
     cwd: ".",
+    launch_identity: phase === "codex" ? { ...launch_identity, environment: codexEnvironmentIdentity(phaseEnv) } : launch_identity,
     status: exit.code,
     signal: exit.signal,
     stdout_digest: `sha256:${createHash("sha256").update(stdout).digest("hex")}`,
     stderr: trim(stderr),
   });
   const result = {
-    command: command.map((part, index) => (index === 0 ? path.basename(part) : part)),
+    command: artifactCommand.map((part, index) => (index === 0 ? path.basename(part) : part)),
+    launch_identity: phase === "codex" ? { ...launch_identity, environment: codexEnvironmentIdentity(phaseEnv) } : launch_identity,
     exit_code: exit.code,
     signal: exit.signal,
     elapsed_wall_seconds: durationSeconds,
@@ -433,12 +462,185 @@ async function runMonitoredCommand(config, freshRoot, codexHome, commands, phase
   }
   if (exit.code !== 0) {
     throw instrumentation(`AC-014 ${phase} command failed`, {
-      command: command.join(" "),
+      command: artifactCommand.join(" "),
       status: exit.code,
       stderr: trim(stderr),
     });
   }
   return result;
+}
+
+function codexLaunchCommand(config, freshRoot, options = {}) {
+  if ("codex_command" in config) {
+    throw admission("AC-014 codex_command is not accepted from run config; the runner owns the exact Codex launch identity");
+  }
+  if (options.testCodexCommand) {
+    return requiredCommand(options.testCodexCommand, "testCodexCommand");
+  }
+  const promptPath = resolveFreshPath(requiredString(config.prompt_path, "prompt_path"), freshRoot, "prompt_path", true);
+  const prompt = readFileSync(promptPath, "utf8");
+  return [
+    EXPECTED.codex_launch_path,
+    EXPECTED.codex_subcommand,
+    "--json",
+    "--model",
+    EXPECTED.model,
+    "-c",
+    EXPECTED.codex_effort_config,
+    "--dangerously-bypass-approvals-and-sandbox",
+    "--dangerously-bypass-hook-trust",
+    "--color",
+    EXPECTED.codex_color,
+    prompt,
+  ];
+}
+
+function codexLaunchIdentity(command) {
+  const executableRealpath = realpathSync(command[0]);
+  const launchPath = path.resolve(command[0]);
+  const testOnly = launchPath !== EXPECTED.codex_launch_path;
+  if (!testOnly && command[0] !== EXPECTED.codex_launch_path) {
+    throw admission(`AC-014 Codex launch path mismatch: ${command[0]}`);
+  }
+  if (!testOnly && executableRealpath !== EXPECTED.codex_executable_realpath) {
+    throw admission(`AC-014 Codex executable realpath mismatch: ${executableRealpath}`);
+  }
+  const subcommand = command[1] ?? null;
+  const jsonFlag = command[2] ?? null;
+  const modelFlag = command[3] ?? null;
+  const model = command[4] ?? null;
+  const effortFlag = command[5] ?? null;
+  const effortConfig = command[6] ?? null;
+  const bypassApprovalsAndSandbox = command[7] ?? null;
+  const bypassHookTrust = command[8] ?? null;
+  const colorFlag = command[9] ?? null;
+  const color = command[10] ?? null;
+  const prompt = command[11] ?? null;
+  if (subcommand !== EXPECTED.codex_subcommand) {
+    throw admission(`AC-014 Codex subcommand mismatch: ${subcommand ?? "<missing>"}`);
+  }
+  if (jsonFlag !== "--json") {
+    throw admission(`AC-014 Codex json flag mismatch: ${jsonFlag ?? "<missing>"}`);
+  }
+  if (modelFlag !== "--model") {
+    throw admission(`AC-014 Codex model flag mismatch: ${modelFlag ?? "<missing>"}`);
+  }
+  if (model !== EXPECTED.model) {
+    throw admission(`AC-014 Codex model launch mismatch: ${model ?? "<missing>"}`);
+  }
+  if (effortFlag !== "-c") {
+    throw admission(`AC-014 Codex effort flag mismatch: ${effortFlag ?? "<missing>"}`);
+  }
+  if (effortConfig !== EXPECTED.codex_effort_config) {
+    throw admission(`AC-014 Codex effort launch mismatch: ${effortConfig ?? "<missing>"}`);
+  }
+  if (bypassApprovalsAndSandbox !== "--dangerously-bypass-approvals-and-sandbox") {
+    throw admission(`AC-014 Codex approvals/sandbox bypass flag mismatch: ${bypassApprovalsAndSandbox ?? "<missing>"}`);
+  }
+  if (bypassHookTrust !== "--dangerously-bypass-hook-trust") {
+    throw admission(`AC-014 Codex hook trust bypass flag mismatch: ${bypassHookTrust ?? "<missing>"}`);
+  }
+  if (colorFlag !== "--color" || color !== EXPECTED.codex_color) {
+    throw admission(`AC-014 Codex color launch mismatch: ${colorFlag ?? "<missing>"} ${color ?? "<missing>"}`);
+  }
+  if (typeof prompt !== "string" || prompt.length === 0) {
+    throw admission("AC-014 Codex prompt positional argument is missing");
+  }
+  if (command.length !== 12) {
+    throw admission(`AC-014 Codex argv shape mismatch: expected 12 entries, observed ${command.length}`);
+  }
+  const promptBytes = Buffer.from(prompt, "utf8");
+  return {
+    executable_realpath: executableRealpath,
+    launch_path: launchPath,
+    argv: redactCodexCommand(command).map(String),
+    subcommand,
+    json: true,
+    model,
+    effort_config: effortConfig,
+    bypass_approvals_and_sandbox: true,
+    bypass_hook_trust: true,
+    color,
+    prompt_delivery: {
+      method: "positional_arg",
+      argv_index: 11,
+      sha256: `sha256:${createHash("sha256").update(promptBytes).digest("hex")}`,
+      byte_length: promptBytes.length,
+    },
+    test_only: testOnly,
+  };
+}
+
+function redactCodexCommand(command) {
+  return command.map((part, index) => (index === 11 ? `<prompt sha256:${createHash("sha256").update(Buffer.from(String(part), "utf8")).digest("hex")} bytes:${Buffer.byteLength(String(part), "utf8")}>` : part));
+}
+
+function codexSpawnEnv(config, codexHome) {
+  const requested = config.codex_env ?? {};
+  if (requested && typeof requested !== "object") {
+    throw admission("AC-014 codex_env must be an object when provided");
+  }
+  const rejected = [
+    "NODE_OPTIONS",
+    "NODE_PATH",
+    "PATH",
+    "CODEX_HOME",
+    "DYLD_INSERT_LIBRARIES",
+    "DYLD_LIBRARY_PATH",
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+  ];
+  for (const key of rejected) {
+    if (Object.prototype.hasOwnProperty.call(requested, key)) {
+      throw admission(`AC-014 codex_env may not set executable injection variable: ${key}`);
+    }
+  }
+  for (const key of rejected.filter((name) => name !== "PATH" && name !== "CODEX_HOME")) {
+    if (process.env[key]) {
+      throw admission(`AC-014 ambient executable injection variable is not allowed for Codex launch: ${key}`);
+    }
+  }
+  const env = { ...process.env, ...requested };
+  env.CODEX_HOME = codexHome;
+  env.PATH = frozenNodePath(process.env.PATH ?? "");
+  if (realpathSync(codexHome) !== codexHome) {
+    throw admission(`AC-014 CODEX_HOME realpath mismatch: ${codexHome}`);
+  }
+  validateNodeResolution(env.PATH);
+  return env;
+}
+
+function frozenNodePath(ambientPath) {
+  const nodeDir = path.dirname(EXPECTED.codex_node_realpath);
+  const parts = ambientPath.split(path.delimiter).filter((part) => part && path.resolve(part) !== nodeDir);
+  return [nodeDir, ...parts].join(path.delimiter);
+}
+
+function validateNodeResolution(pathValue) {
+  const output = spawnSync("node", ["-e", "process.stdout.write(process.execPath)"], {
+    encoding: "utf8",
+    env: { PATH: pathValue },
+  });
+  if (output.status !== 0) {
+    throw admission(`AC-014 node resolution failed for Codex launch: ${trim(output.stderr)}`);
+  }
+  const resolved = realpathSync(output.stdout.trim());
+  if (resolved !== EXPECTED.codex_node_realpath) {
+    throw admission(`AC-014 node resolution mismatch for Codex launch: ${resolved}`);
+  }
+}
+
+function codexEnvironmentIdentity(env) {
+  const nodePath = spawnSync("node", ["-e", "process.stdout.write(process.execPath)"], {
+    encoding: "utf8",
+    env: { PATH: env.PATH },
+  }).stdout.trim();
+  return {
+    codex_home: env.CODEX_HOME,
+    path_sha256: `sha256:${createHash("sha256").update(env.PATH).digest("hex")}`,
+    node_realpath: realpathSync(nodePath),
+    injection_variables_absent: true,
+  };
 }
 
 function usageMetricsFromSessions(sessions, wallSeconds) {
@@ -450,7 +652,8 @@ function usageMetricsFromSessions(sessions, wallSeconds) {
 }
 
 function discoverCodexSessionTree(codexHome, freshRoot, rootSessionId, { allowEmpty = false } = {}) {
-  const files = allFiles(codexHome).filter((file) => file.endsWith(".jsonl"));
+  const sessionsRoot = path.join(codexHome, "sessions");
+  const files = existsSync(sessionsRoot) ? allFiles(sessionsRoot).filter((file) => file.endsWith(".jsonl")) : [];
   const sessions = files.map((file) => parseSessionFile(codexHome, file)).filter(Boolean);
   const seen = new Map();
   for (const session of sessions) {
@@ -691,6 +894,7 @@ function writeImmutableArtifacts(config, freshRoot, result, status, stopReason, 
       ...base,
       expected_contract: EXPECTED,
       observed_contract: result.observed_contract ?? null,
+      codex_launch_identity: result.codex?.launch_identity ?? null,
       relocation: {
         preview: result.preview ?? result.relocation?.preview ?? null,
         applied: result.applied ?? result.relocation?.applied ?? null,
@@ -921,16 +1125,16 @@ function observeEffectiveContract(config, staticContract, sessions) {
   };
   for (const [key, value] of Object.entries(observed)) {
     if (!value) {
-      throw admission(`AC-014 observed identity is missing: ${key}`);
+      throw admission(`AC-014 observed identity is missing: ${key}`, { observed_contract: observed, sessions });
     }
     if (expected[key] !== value) {
-      throw admission(`AC-014 observed identity mismatch: ${key}`);
+      throw admission(`AC-014 observed identity mismatch: ${key}`, { observed_contract: observed, sessions });
     }
   }
   for (const [key, value] of Object.entries(EXPECTED)) {
-    if (key === "ceilings") continue;
+    if (!["candidate_version", "model", "effort", "surface", "cli_version", "oracle_id"].includes(key)) continue;
     if (observed[key] !== value) {
-      throw admission(`AC-014 fixed runner identity mismatch: ${key}`);
+      throw admission(`AC-014 fixed runner identity mismatch: ${key}`, { observed_contract: observed, sessions });
     }
   }
   return observed;
@@ -1047,6 +1251,9 @@ function requireSchema(config) {
   if (config.schema_version !== "planr.ac014.fresh_arm_run.v1") {
     throw admission("schema_version must be planr.ac014.fresh_arm_run.v1");
   }
+  if ("codex_command" in config) {
+    throw admission("AC-014 codex_command is not accepted from run config; the runner owns the exact Codex launch identity");
+  }
 }
 
 function canonicalExistingDir(value, label) {
@@ -1161,7 +1368,7 @@ function trim(value) {
   return (value ?? "").trim().slice(0, 1000);
 }
 
-function valueAfter(flag) {
+function valueAfter(flag, argv) {
   const index = argv.indexOf(flag);
   return index === -1 ? null : argv[index + 1];
 }
