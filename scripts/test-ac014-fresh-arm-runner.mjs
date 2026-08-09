@@ -57,7 +57,7 @@ const fixedContract = {
   model: "gpt-5.6-sol",
   effort: "medium",
   surface: "identical",
-  cli_version: "0.146.0",
+  cli_version: "0.147.0",
   oracle_id: "sparziele-exact-product-flow-v1",
   oracle_sha256: sha256File(oracleStubPath),
 };
@@ -81,7 +81,7 @@ assert.equal(result.observed_contract.spec_digest, fixedContract.spec_digest);
 assert.equal(result.observed_contract.model, "gpt-5.6-sol");
 assert.equal(result.observed_contract.effort, "medium");
 assert.equal(result.observed_contract.surface, "identical");
-assert.equal(result.observed_contract.cli_version, "0.146.0");
+assert.equal(result.observed_contract.cli_version, "0.147.0");
 assert.equal(result.validation.all_paths_local, true);
 assert.equal(result.validation.descendant_counts["item-parent"], 1);
 assert.deepEqual(result.sessions.map((session) => session.id), ["session-child", "session-root"]);
@@ -92,10 +92,33 @@ assert.equal(result.ceilings.checks.total_tokens.status, "passed");
 assert.equal(result.ceilings.checks.tool_call_envelopes.status, "passed");
 assert.equal(result.oracle.status, "passed");
 assert.equal(result.evidence_migration.input, ".planr/evidence-migration.json");
+assert.equal(result.sessions.find((session) => session.id === "session-child").parent, "session-root");
 assert.equal(statSync(path.join(fresh, ".planr", "artifacts", "ac014", "PREFLIGHT.json")).isFile(), true);
 assert.equal(statSync(path.join(fresh, ".planr", "artifacts", "ac014", "BENCHMARK_RESULT.json")).isFile(), true);
 assert.equal(statSync(path.join(fresh, ".planr", "artifacts", "ac014", "monitor-status.json")).isFile(), true);
 assertCompleteArtifactSet(fresh);
+
+const falsePositiveRoot = "019fe0e5-8cef-7210-aea7-40722b23874e";
+const falsePositiveChild = "019fe0e5-8cef-7210-aea7-40722b23874f";
+const falsePositiveStubPath = path.join(root, "codex-false-positive-stub.mjs");
+writeExecutable(falsePositiveStubPath, stubCodexSession({
+  rootTokens: 5977800,
+  childTokens: 96,
+  rootTools: 90,
+  childTools: 3,
+  rootSessionId: falsePositiveRoot,
+  childSessionId: falsePositiveChild,
+  embeddedParentSessionId: falsePositiveRoot,
+}));
+const falsePositiveRun = run(config({
+  fresh_root: path.join(root, "fresh-false-positive"),
+  codex_command: codexCommand(falsePositiveStubPath),
+  oracle_command: [oracleStubPath],
+}), path.join(root, "false-positive-result.json"), path.join(root, "calls-false-positive.jsonl"));
+assert.equal(falsePositiveRun.status, 0, falsePositiveRun.output);
+const falsePositiveResult = JSON.parse(readFileSync(path.join(root, "false-positive-result.json"), "utf8"));
+assert.deepEqual(falsePositiveResult.sessions.map((session) => session.id), [falsePositiveRoot, falsePositiveChild]);
+assert.equal(falsePositiveResult.sessions.find((session) => session.id === falsePositiveChild).parent, falsePositiveRoot);
 
 const calls = readFileSync(callsPath, "utf8").trim().split("\n").map(JSON.parse);
 assert.deepEqual(calls.slice(0, 2).map((call) => call.command), ["project relocate", "project relocate"]);
@@ -103,6 +126,22 @@ assert.equal(calls[0].cwd, fresh);
 assert.equal(calls[0].args.includes("--apply"), false);
 assert.equal(calls[1].args.includes("--apply"), true);
 assert.equal(calls.filter((call) => call.command === "evidence migrate").length, 2);
+
+const staleCliStubPath = path.join(root, "codex-stale-cli-stub.mjs");
+writeExecutable(staleCliStubPath, stubCodexSession({
+  rootTokens: 5977800,
+  childTokens: 96,
+  rootTools: 90,
+  childTools: 3,
+  cliVersion: "0.146.0",
+}));
+const staleCli = run(config({
+  fresh_root: path.join(root, "fresh-stale-cli"),
+  codex_command: codexCommand(staleCliStubPath),
+  oracle_command: [oracleStubPath],
+}), path.join(root, "stale-cli-result.json"), path.join(root, "calls-stale-cli.jsonl"));
+assert.equal(staleCli.status, 1);
+assert.match(staleCli.output, /observed identity mismatch: cli_version/);
 
 const slowOverStubPath = path.join(root, "codex-over-stub.mjs");
 writeExecutable(slowOverStubPath, stubCodexSession({
@@ -372,22 +411,35 @@ function destinationFromDb(args) {
 `;
 }
 
-function stubCodexSession({ rootTokens, childTokens, rootTools, childTools, sleepMs = 0, rootOriginator = "codex_exec", rootSource = "exec" }) {
+function stubCodexSession({
+  rootTokens,
+  childTokens,
+  rootTools,
+  childTools,
+  sleepMs = 0,
+  rootOriginator = "codex_exec",
+  rootSource = "exec",
+  cliVersion = "0.147.0",
+  rootSessionId = "session-root",
+  childSessionId = "session-child",
+  embeddedParentSessionId = "session-root",
+}) {
   return `#!/usr/bin/env node
 import { appendFileSync } from "node:fs";
 import path from "node:path";
 const home = ${JSON.stringify(codexHome)};
 const cwd = process.cwd();
-const rootSession = path.join(home, "sessions", "session-root.jsonl");
-appendFileSync(rootSession, JSON.stringify({ type: "event_msg", payload: { type: "session_meta", id: "session-root", cwd, role: "root", cli_version: "0.146.0", originator: ${JSON.stringify(rootOriginator)}, source: ${JSON.stringify(rootSource)} } }) + "\\n");
+const rootSession = path.join(home, "sessions", ${JSON.stringify(rootSessionId)} + ".jsonl");
+appendFileSync(rootSession, JSON.stringify({ type: "event_msg", payload: { type: "session_meta", id: ${JSON.stringify(rootSessionId)}, cwd, role: "root", cli_version: ${JSON.stringify(cliVersion)}, originator: ${JSON.stringify(rootOriginator)}, source: ${JSON.stringify(rootSource)} } }) + "\\n");
 appendFileSync(rootSession, JSON.stringify({ type: "turn_context", payload: { model: "gpt-5.6-sol", effort: "medium" } }) + "\\n");
 appendFileSync(rootSession, JSON.stringify({ type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { total_tokens: ${rootTokens} }, last_token_usage: { total_tokens: 999999999 } }, tool_call_envelopes: ${rootTools} } }) + "\\n");
-appendFileSync(rootSession, JSON.stringify({ session_id: "session-root", type: "function_call", id: "root-call" }) + "\\n");
-${childTokens > 0 ? `const childSession = path.join(home, "sessions", "session-child.jsonl");
-appendFileSync(childSession, JSON.stringify({ type: "event_msg", payload: { type: "session_meta", session_id: "session-root", id: "session-child", cwd, role: "subagent", cli_version: "0.146.0", originator: "codex_exec", source: { subagent: { thread_spawn: { parent_thread_id: "session-root" } } } } }) + "\\n");
+appendFileSync(rootSession, JSON.stringify({ session_id: ${JSON.stringify(rootSessionId)}, type: "function_call", id: "root-call" }) + "\\n");
+${childTokens > 0 ? `const childSession = path.join(home, "sessions", ${JSON.stringify(childSessionId)} + ".jsonl");
+appendFileSync(childSession, JSON.stringify({ type: "event_msg", payload: { type: "session_meta", session_id: ${JSON.stringify(rootSessionId)}, id: ${JSON.stringify(childSessionId)}, cwd, role: "subagent", cli_version: ${JSON.stringify(cliVersion)}, originator: "codex_exec", source: { subagent: { thread_spawn: { parent_thread_id: ${JSON.stringify(rootSessionId)} } } } } }) + "\\n");
+appendFileSync(childSession, JSON.stringify({ type: "event_msg", payload: { session_id: ${JSON.stringify(embeddedParentSessionId)}, source: { subagent: { thread_spawn: { parent_thread_id: ${JSON.stringify(embeddedParentSessionId)} } } } } }) + "\\n");
 appendFileSync(childSession, JSON.stringify({ type: "turn_context", payload: { model: "gpt-5.6-sol", effort: "medium" } }) + "\\n");
 appendFileSync(childSession, JSON.stringify({ type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { total_tokens: ${childTokens} }, last_token_usage: { total_tokens: 777777777 } }, tool_call_envelopes: ${childTools} } }) + "\\n");
-appendFileSync(childSession, JSON.stringify({ session_id: "session-child", type: "custom_tool_call", id: "child-call" }) + "\\n");` : ""}
+appendFileSync(childSession, JSON.stringify({ session_id: ${JSON.stringify(childSessionId)}, type: "custom_tool_call", id: "child-call" }) + "\\n");` : ""}
 ${sleepMs > 0 ? `await new Promise((resolve) => setTimeout(resolve, ${sleepMs}));` : ""}
 `;
 }
@@ -398,6 +450,6 @@ import { appendFileSync } from "node:fs";
 import path from "node:path";
 const home = ${JSON.stringify(codexHome)};
 const cwd = process.cwd();
-appendFileSync(path.join(home, "sessions", "session-root.jsonl"), JSON.stringify({ type: "event_msg", payload: { type: "session_meta", id: "session-root", cwd, cli_version: "0.146.0", originator: "codex_exec", source: { subagent: { thread_spawn: { parent_thread_id: "session-root" } } } } }) + "\\n");
+appendFileSync(path.join(home, "sessions", "session-root.jsonl"), JSON.stringify({ type: "event_msg", payload: { type: "session_meta", id: "session-root", cwd, cli_version: "0.147.0", originator: "codex_exec", source: { subagent: { thread_spawn: { parent_thread_id: "session-root" } } } } }) + "\\n");
 `;
 }

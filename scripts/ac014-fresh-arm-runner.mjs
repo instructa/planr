@@ -24,7 +24,7 @@ const EXPECTED = Object.freeze({
   model: "gpt-5.6-sol",
   effort: "medium",
   surface: "identical",
-  cli_version: "0.146.0",
+  cli_version: "0.147.0",
   oracle_id: "sparziele-exact-product-flow-v1",
   ceilings: Object.freeze({
     wall_time_seconds: 998.015,
@@ -502,7 +502,7 @@ function parseSessionFile(root, file) {
   let role = null;
   let cliVersion = null;
   let surface = null;
-  let turnContext = null;
+  let turnContextRecord = null;
   let latestTokens = 0;
   let latestToolEnvelopeTotal = 0;
   const uniqueToolCalls = new Set();
@@ -514,14 +514,17 @@ function parseSessionFile(root, file) {
     } catch {
       continue;
     }
-    const meta = sessionMeta(value);
-    id = meta.id ?? id;
-    parent = meta.parent ?? parent;
-    cwd = meta.cwd ?? cwd;
-    role = meta.role ?? role;
-    cliVersion = meta.cli_version ?? cliVersion;
-    surface = meta.surface ?? surface;
-    turnContext = meta.turn_context ?? turnContext;
+    const meta = ownSessionMeta(value);
+    if (meta) {
+      id = meta.id ?? id;
+      cwd = meta.cwd ?? cwd;
+      role = meta.role ?? role;
+      cliVersion = meta.cli_version ?? cliVersion;
+      surface = meta.surface ?? surface;
+      turnContextRecord = meta.turn_context ?? turnContextRecord;
+    }
+    parent = parentFromRecord(value) ?? parent;
+    turnContextRecord = turnContext(value) ?? turnContextRecord;
     latestTokens = Math.max(latestTokens, tokenTotal(value));
     latestToolEnvelopeTotal = Math.max(
       latestToolEnvelopeTotal,
@@ -536,7 +539,7 @@ function parseSessionFile(root, file) {
     role,
     cli_version: cliVersion,
     surface,
-    turn_context: turnContext,
+    turn_context: turnContextRecord,
     cwd,
     path: path.relative(root, file),
     bytes: bytes.length,
@@ -548,31 +551,29 @@ function parseSessionFile(root, file) {
   };
 }
 
-function sessionMeta(value) {
+function ownSessionMeta(value) {
   const payload = value?.payload && typeof value.payload === "object" ? value.payload : value;
-  if (value?.type === "session_meta" || payload?.type === "session_meta" || payload?.source?.subagent?.thread_spawn) {
-    return {
-      id: stringField(payload, "id") ?? stringField(payload, "thread_id") ?? stringField(payload, "threadId") ?? stringField(payload, "session_id"),
-      parent: payload?.source?.subagent?.thread_spawn?.parent_thread_id
-        ?? payload?.source?.subagent?.thread_spawn?.parentThreadId
-        ?? stringField(payload, "parent_thread_id")
-        ?? stringField(payload, "parentThreadId"),
-      cwd: stringField(payload, "cwd") ?? stringField(payload, "working_directory") ?? stringField(payload, "workingDirectory"),
-      role: stringField(payload, "role") ?? stringField(payload, "agent_role") ?? stringField(payload, "agentRole"),
-      cli_version: stringField(payload, "cli_version") ?? stringField(payload, "cliVersion"),
-      surface: surfaceFromSessionMeta(payload),
-      turn_context: turnContext(payload),
-    };
-  }
+  if (value?.type !== "session_meta" && payload?.type !== "session_meta") return null;
   return {
-    id: stringField(value, "session_id") ?? stringField(value, "sessionId") ?? stringField(value, "thread_id") ?? stringField(value, "threadId"),
-    parent: stringField(value, "parent_thread_id") ?? stringField(value, "parentThreadId") ?? stringField(value, "parent_id") ?? stringField(value, "parentId"),
-    cwd: stringField(value, "cwd") ?? stringField(value, "working_directory") ?? stringField(value, "workingDirectory"),
-    role: stringField(value, "role") ?? stringField(value, "agent_role") ?? stringField(value, "agentRole"),
-    cli_version: stringField(value, "cli_version") ?? stringField(value, "cliVersion"),
-    surface: surfaceFromSessionMeta(value),
-    turn_context: turnContext(value),
+    id: stringField(payload, "id") ?? stringField(payload, "thread_id") ?? stringField(payload, "threadId") ?? stringField(payload, "session_id"),
+    cwd: stringField(payload, "cwd") ?? stringField(payload, "working_directory") ?? stringField(payload, "workingDirectory"),
+    role: stringField(payload, "role") ?? stringField(payload, "agent_role") ?? stringField(payload, "agentRole"),
+    cli_version: stringField(payload, "cli_version") ?? stringField(payload, "cliVersion"),
+    surface: surfaceFromSessionMeta(payload),
+    turn_context: turnContext(payload),
   };
+}
+
+function parentFromRecord(value) {
+  const payload = value?.payload && typeof value.payload === "object" ? value.payload : value;
+  return payload?.source?.subagent?.thread_spawn?.parent_thread_id
+    ?? payload?.source?.subagent?.thread_spawn?.parentThreadId
+    ?? stringField(payload, "parent_thread_id")
+    ?? stringField(payload, "parentThreadId")
+    ?? stringField(value, "parent_thread_id")
+    ?? stringField(value, "parentThreadId")
+    ?? stringField(value, "parent_id")
+    ?? stringField(value, "parentId");
 }
 
 function turnContext(value) {
