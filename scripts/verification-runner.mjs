@@ -3,12 +3,14 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
+  cpSync,
   lstatSync,
   mkdirSync,
   readFileSync,
   readlinkSync,
   readdirSync,
   realpathSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
@@ -17,7 +19,7 @@ import { classifyChanges, parseGitNameStatus, POLICY_DIGEST, POLICY_VERSION } fr
 
 export const RECEIPT_SCHEMA = "planr.verification-receipt.v3";
 export const LINUX_TARGET_RECEIPT_SCHEMA = "planr.linux-target-receipt.v1";
-export const RUNNER_VERSION = "1.2.1";
+export const RUNNER_VERSION = "1.2.2";
 
 const LINUX_TARGETS = deepFreeze({
   "linux-x86_64": { cargoTarget: "x86_64-unknown-linux-musl", hostArchitecture: "x64" },
@@ -183,16 +185,22 @@ export function runVerification({
   receiptPath,
   artifactPaths = DEFAULT_ARTIFACTS,
   linuxTargetReceipts = [],
+  artifactRoot,
   execute = executeCommand,
   now = () => new Date(),
   monotonicNow = () => performance.now(),
 }) {
   assertSelection(selection);
   const root = canonicalRoot(repoRoot);
+  const artifactBundleRoot = artifactRoot ? safeArtifactBundleRoot(root, artifactRoot) : null;
   const startedAt = now().toISOString();
   const startedTick = monotonicNow();
   const outputPaths = selection.selectedGates.flatMap((gate) => artifactPaths[gate] ?? []);
-  const source = currentSourceIdentity(root, selection, { allowedDirtyPaths: outputPaths });
+  const allowedDirtyPaths = [
+    ...outputPaths,
+    ...(artifactRoot ? [artifactRoot] : []),
+  ];
+  const source = currentSourceIdentity(root, selection, { allowedDirtyPaths });
   const commandResults = [];
   let priorFailure = false;
 
@@ -211,7 +219,7 @@ export function runVerification({
     }
   }
 
-  const sourceAfterExecution = currentSourceIdentity(root, selection, { allowedDirtyPaths: outputPaths });
+  const sourceAfterExecution = currentSourceIdentity(root, selection, { allowedDirtyPaths });
   assertEqual(sourceAfterExecution.revision, source.revision, "source revision changed during verification");
   assertEqual(sourceAfterExecution.stateDigest, source.stateDigest, "source inputs changed during verification");
 
@@ -240,17 +248,20 @@ export function runVerification({
   };
   validateReceiptShape(receipt);
   if (receiptPath) writeReceipt(root, receiptPath, receipt);
+  if (artifactBundleRoot) preserveArtifacts(root, artifactBundleRoot, artifacts);
   return receipt;
 }
 
-export function verifyReceipt(receipt, { selection, repoRoot = process.cwd(), artifactPaths = DEFAULT_ARTIFACTS, receiptPath } = {}) {
+export function verifyReceipt(receipt, { selection, repoRoot = process.cwd(), artifactPaths = DEFAULT_ARTIFACTS, receiptPath, artifactRoot } = {}) {
   validateReceiptShape(receipt);
   assertSelection(selection);
   const root = canonicalRoot(repoRoot);
+  const artifactBundleRoot = artifactRoot ? safeArtifactBundleRoot(root, artifactRoot, { mustExist: true }) : null;
   if (receiptPath) assertReceiptPathBinding(root, receiptPath, receipt);
   const allowedDirtyPaths = [
     ...selection.selectedGates.flatMap((gate) => artifactPaths[gate] ?? []),
     ...(receiptPath ? [receiptPath] : []),
+    ...(artifactRoot ? [artifactRoot] : []),
   ];
   const expectedSource = currentSourceIdentity(root, selection, { allowedDirtyPaths });
   assertEqual(receipt.policy.version, POLICY_VERSION, "receipt policy version is stale");
@@ -289,7 +300,7 @@ export function verifyReceipt(receipt, { selection, repoRoot = process.cwd(), ar
     "receipt artifact set mismatch",
   );
   for (const artifact of receipt.artifacts) {
-    const current = artifactRecord(root, artifact.gate, artifact.path);
+    const current = artifactRecord(root, artifact.gate, artifact.path, { artifactBundleRoot });
     assertEqual(current.present, true, `artifact is missing: ${artifact.path}`);
     assertEqual(current.digest, artifact.digest, `artifact changed: ${artifact.path}`);
     assertEqual(current.files, artifact.files, `artifact file count changed: ${artifact.path}`);
@@ -415,8 +426,10 @@ function sourcePathRecord(root, relativePath) {
   return { path: relativePath, kind: "file", digest: digest(readFileSync(resolved)) };
 }
 
-function artifactRecord(root, gate, relativePath) {
-  const resolved = safeRepositoryPath(root, relativePath);
+function artifactRecord(root, gate, relativePath, { artifactBundleRoot = null } = {}) {
+  const resolved = artifactBundleRoot
+    ? safeArtifactBundlePath(root, artifactBundleRoot, relativePath)
+    : safeRepositoryPath(root, relativePath);
   if (!existsSync(resolved)) return { gate, path: relativePath, present: false, digest: null, files: 0, bytes: 0 };
   const records = [];
   walkArtifact(resolved, relativePath, records);
@@ -429,6 +442,57 @@ function artifactRecord(root, gate, relativePath) {
     files: records.length,
     bytes: records.reduce((sum, record) => sum + record.bytes, 0),
   };
+}
+
+function safeArtifactBundleRoot(root, relativePath, { mustExist = false } = {}) {
+  const resolved = safeRepositoryPath(root, relativePath);
+  const segments = relativePath.split("/");
+  if (
+    segments.length < 4
+    || segments[0] !== ".planr"
+    || segments[1] !== "artifacts"
+    || segments[2] !== "verification"
+  ) {
+    throw new Error("artifact root must be under .planr/artifacts/verification");
+  }
+  for (const candidate of [path.join(root, ".planr"), path.join(root, ".planr/artifacts"), path.join(root, ".planr/artifacts/verification"), resolved]) {
+    if (existsSync(candidate) && lstatSync(candidate).isSymbolicLink()) {
+      throw new Error("artifact root must not contain symbolic-link aliases");
+    }
+  }
+  const tracked = spawnSync("git", ["ls-files", "--error-unmatch", "--", relativePath], {
+    cwd: root,
+    encoding: "utf8",
+  });
+  if (tracked.status === 0) throw new Error("artifact root must not be a tracked source path");
+  if (mustExist && (!existsSync(resolved) || !lstatSync(resolved).isDirectory())) {
+    throw new Error("artifact root must identify an existing directory");
+  }
+  return resolved;
+}
+
+function safeArtifactBundlePath(root, artifactBundleRoot, relativePath) {
+  safeRepositoryPath(root, relativePath);
+  const resolved = path.resolve(artifactBundleRoot, relativePath);
+  if (resolved !== artifactBundleRoot && !resolved.startsWith(`${artifactBundleRoot}${path.sep}`)) {
+    throw new Error("artifact bundle path escapes artifact root");
+  }
+  if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) {
+    throw new Error("artifact bundle path escapes repository");
+  }
+  return resolved;
+}
+
+function preserveArtifacts(root, artifactBundleRoot, artifacts) {
+  rmSync(artifactBundleRoot, { recursive: true, force: true });
+  mkdirSync(artifactBundleRoot, { recursive: true });
+  for (const artifact of artifacts) {
+    if (!artifact.present) continue;
+    const source = safeRepositoryPath(root, artifact.path);
+    const destination = safeArtifactBundlePath(root, artifactBundleRoot, artifact.path);
+    mkdirSync(path.dirname(destination), { recursive: true });
+    cpSync(source, destination, { recursive: true });
+  }
 }
 
 function walkArtifact(absolutePath, relativePath, records) {
@@ -491,6 +555,75 @@ function assertSelection(selection) {
     || !Array.isArray(selection.liveVerification?.paths)
   ) throw new Error("selection is incomplete");
   for (const gate of selection.selectedGates) if (!GATE_COMMANDS[gate]) throw new Error(`unknown verification gate: ${gate}`);
+}
+
+export function selectionFromInput(input, { baseRevision = null, headRevision = null } = {}) {
+  if (isPersistedSelection(input)) return validatePersistedSelection(input);
+  const changes = Array.isArray(input) ? input : input?.changes;
+  if (changes?.some?.((change) => Array.isArray(change?.paths))) {
+    throw new Error("persisted normalized selection requires the complete selection envelope");
+  }
+  return classifyChanges(changes, { baseRevision, headRevision });
+}
+
+function isPersistedSelection(input) {
+  return Boolean(
+    input
+    && typeof input === "object"
+    && !Array.isArray(input)
+    && input.schemaVersion === 1
+    && typeof input.changedFilesDigest === "string"
+    && Array.isArray(input.changes)
+    && Array.isArray(input.selectedGates),
+  );
+}
+
+function validatePersistedSelection(selection) {
+  assertSelection(selection);
+  if (selection.changedFilesDigest !== digest(selection.changes)) {
+    throw new Error("persisted selection changed-file digest mismatch");
+  }
+  const canonicalSelection = classifyChanges(rawChangesFromPersistedSelection(selection), {
+    baseRevision: selection.baseRevision ?? null,
+    headRevision: selection.headRevision ?? null,
+  });
+  for (const key of [
+    "schemaVersion",
+    "policyVersion",
+    "policyDigest",
+    "baseRevision",
+    "headRevision",
+    "changedFilesDigest",
+    "profile",
+    "escalatedToFull",
+    "escalationReasons",
+    "matchedPathClasses",
+    "selectedGates",
+    "liveVerification",
+    "reasons",
+    "changes",
+    "pathMatches",
+  ]) {
+    assertEqual(canonicalJson(selection[key]), canonicalJson(canonicalSelection[key]), `persisted selection ${key} mismatch`);
+  }
+  return deepFreeze(structuredClone(selection));
+}
+
+function rawChangesFromPersistedSelection(selection) {
+  return selection.changes.map((change, index) => {
+    if (!change || typeof change !== "object" || Array.isArray(change)) {
+      throw new Error(`persisted selection changes[${index}] must be an object`);
+    }
+    if (!Array.isArray(change.paths)) {
+      throw new Error(`persisted selection changes[${index}].paths must be an array`);
+    }
+    if (change.status === "renamed" || change.status === "copied") {
+      if (change.paths.length !== 2) throw new Error(`persisted selection ${change.status} change must contain two paths`);
+      return { status: change.status, oldPath: change.paths[0], newPath: change.paths[1] };
+    }
+    if (change.paths.length !== 1) throw new Error(`persisted selection ${change.status} change must contain one path`);
+    return { status: change.status, path: change.paths[0] };
+  });
 }
 
 function safeRepositoryPath(root, relativePath) {
@@ -630,7 +763,7 @@ function selectionFromCli(values, root) {
   let changes;
   if (inputPath) {
     const input = JSON.parse(readFileSync(safeRepositoryPath(root, inputPath), "utf8"));
-    changes = Array.isArray(input) ? input : input.changes;
+    return applySelectionOptions(selectionFromInput(input, { baseRevision: base ?? null, headRevision: head }), { explicitProfile, requestedGates: values.get("--gates") });
   } else if (base || explicitProfile) {
     base ??= `${head}^`;
     changes = head === "worktree"
@@ -639,11 +772,13 @@ function selectionFromCli(values, root) {
   } else {
     throw new Error("--input, --base, or --profile is required");
   }
-  let selection = classifyChanges(changes, { baseRevision: base ?? null, headRevision: head });
+  return applySelectionOptions(classifyChanges(changes, { baseRevision: base ?? null, headRevision: head }), { explicitProfile, requestedGates: values.get("--gates") });
+}
+
+function applySelectionOptions(selection, { explicitProfile, requestedGates }) {
   if (explicitProfile && explicitProfile !== selection.profile) {
     throw new Error(`explicit profile ${explicitProfile} does not match classified profile ${selection.profile}`);
   }
-  const requestedGates = values.get("--gates");
   if (requestedGates) selection = selectVerificationGates(selection, requestedGates.split(","));
   return selection;
 }
@@ -681,7 +816,7 @@ function main() {
         return JSON.parse(readFileSync(safeReceiptPath(root, targetReceiptPath, { mustExist: true }), "utf8"));
       })
       : [];
-    const receipt = runVerification({ selection, repoRoot: root, receiptPath, linuxTargetReceipts });
+    const receipt = runVerification({ selection, repoRoot: root, receiptPath, artifactRoot: values.get("--artifact-root"), linuxTargetReceipts });
     process.stdout.write(`${JSON.stringify({ verdict: receipt.verdict, receipt: receiptPath, receiptDigest: receiptDigest(receipt), sourceRevision: receipt.source.revision })}\n`);
     if (receipt.verdict !== "pass") process.exitCode = 1;
     return;
@@ -691,10 +826,10 @@ function main() {
     if (!receiptPath) throw new Error("verify requires --receipt");
     const selection = selectionFromCli(values, root);
     const receipt = JSON.parse(readFileSync(safeReceiptPath(root, receiptPath, { mustExist: true }), "utf8"));
-    process.stdout.write(`${JSON.stringify({ ...verifyReceipt(receipt, { selection, repoRoot: root, receiptPath }), receiptDigest: receiptDigest(receipt) })}\n`);
+    process.stdout.write(`${JSON.stringify({ ...verifyReceipt(receipt, { selection, repoRoot: root, receiptPath, artifactRoot: values.get("--artifact-root") }), receiptDigest: receiptDigest(receipt) })}\n`);
     return;
   }
-  throw new Error(`usage: verification-runner.mjs <run|run-linux-target|verify-linux-target|verify> --receipt ${RECEIPT_OUTPUT_DIRECTORY}/NAME.json (--input PATH | --base REV | --profile PROFILE) [--head REV]`);
+  throw new Error(`usage: verification-runner.mjs <run|run-linux-target|verify-linux-target|verify> --receipt ${RECEIPT_OUTPUT_DIRECTORY}/NAME.json (--input PATH | --base REV | --profile PROFILE) [--head REV] [--artifact-root .planr/artifacts/verification/NAME]`);
 }
 
 if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {

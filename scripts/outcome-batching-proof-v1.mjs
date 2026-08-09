@@ -190,7 +190,7 @@ function gap(status, commands, evidence) {
 function assertAc014BenchmarkInput(input) {
   assert.equal(input.schema_version, 'planr.outcome_batching.ac014_benchmark_input.v1');
   assert.equal(input.spec.digest, 'sha256:cde84864a4708343de26d291585812a66de896a54495502d3c89b0b1a403c64f');
-  assert.equal(input.required_match.cli_version, '0.146.0');
+  assert.equal(input.required_match.cli_version, '0.147.0');
   assert.equal(input.required_match.model, 'gpt-5.6-sol');
   assert.equal(input.required_match.effort, 'medium');
   for (const field of ['spec', 'oracle', 'surface']) {
@@ -474,9 +474,11 @@ function assertAc014BenchmarkInput(input) {
   assert.equal(fix13Fix14?.status, 'immutable_artifacts_bound');
   assert.equal(fix13Fix14.reuse_policy.fix13, 'do_not_resume_or_reuse');
   assert.equal(fix13Fix14.reuse_policy.fix14, 'do_not_resume_or_reuse');
-  assert.equal(fix13Fix14.records.length, 2);
+  assert.equal(fix13Fix14.reuse_policy.alpha4_external_invalid, 'do_not_resume_or_reuse');
+  assert.equal(fix13Fix14.records.length, 3);
   const fix13 = fix13Fix14.records.find((record) => record.label === 'fix13');
   const fix14 = fix13Fix14.records.find((record) => record.label === 'fix14');
+  const alpha4ExternalInvalid = fix13Fix14.records.find((record) => record.label === 'alpha4_external_invalid');
   assert.equal(fix13.benchmark_result_sha256, 'f0b3151af7902c6bf4701a90b561ca9fe12e15eb226ced4fea1241310e8bcb7f');
   assert.equal(fix13.monitor_status_sha256, 'e843cbf68a72d5b75bc95cc7294a8027d30f9098cd7b6a70cee1fbbe308ac376');
   assert.equal(fix13.verdict, 'invalid');
@@ -490,6 +492,13 @@ function assertAc014BenchmarkInput(input) {
   assert.equal(fix14.root_session_sha256, '12801ffbd1e10a1406dc81a905a09f7047d24a685caf8956acf2142bc250b856');
   assert.equal(fix14.maker_session_sha256, 'e589de827ec64ae174ed7dedc8de0a6583651274cbd04bf3666ef193bef74e58');
   assert.equal(fix14.retry_allowed, false);
+  assert.equal(alpha4ExternalInvalid.benchmark_result_sha256, 'ef10a5d6a8fa14e17eee809bd28fa8a5c8d14ac0bf622ca1afcce5b4da630708');
+  assert.equal(alpha4ExternalInvalid.monitor_status_sha256, '452709847b1d876c01e7998df9cae76b46258f3839b037ecba25c9e5cb2a7e94');
+  assert.equal(alpha4ExternalInvalid.status, 'external_invalid');
+  assert.equal(alpha4ExternalInvalid.stop_reason, 'codex_failed');
+  assert.equal(alpha4ExternalInvalid.candidate_sha, '2f9d2a081e432b66f1d67ba24d66ef9e898e8145');
+  assert.equal(alpha4ExternalInvalid.candidate_binary_sha256, 'sha256:ef5663fc07163261e586f19acf19254d56a4b94cd637043ad9cc10dc88593b52');
+  assert.equal(alpha4ExternalInvalid.retry_allowed, false);
   assert.match(fix13Fix14.required_result_record, /raw session ids/);
   const alpha4 = input.alpha4_experiment_contract;
   assert.equal(alpha4?.candidate_version, '1.10.0-alpha.4');

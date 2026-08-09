@@ -3093,12 +3093,30 @@ fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_m
         .stdout(predicate::str::contains("unsupported major version"));
 }
 
-fn start_static_http_server(port: u16) -> thread::JoinHandle<()> {
-    thread::spawn(move || {
-        let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
+struct StaticHttpServer {
+    shutdown: mpsc::Sender<()>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl Drop for StaticHttpServer {
+    fn drop(&mut self) {
+        let _ = self.shutdown.send(());
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn start_static_http_server() -> (u16, StaticHttpServer) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (shutdown, receiver) = mpsc::channel();
+    let handle = thread::spawn(move || {
         listener.set_nonblocking(true).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(20);
-        while Instant::now() < deadline {
+        loop {
+            if receiver.try_recv().is_ok() {
+                break;
+            }
             match listener.accept() {
                 Ok((mut stream, _)) => {
                     let mut buffer = [0_u8; 1024];
@@ -3117,7 +3135,14 @@ fn start_static_http_server(port: u16) -> thread::JoinHandle<()> {
                 Err(_) => break,
             }
         }
-    })
+    });
+    (
+        port,
+        StaticHttpServer {
+            shutdown,
+            handle: Some(handle),
+        },
+    )
 }
 
 fn add_evidence_obligation_value(dir: &Path, db: &Path, id: &str, obligation: &Value) -> Value {
@@ -7196,8 +7221,7 @@ fn evidence_e2e_scenarios_cover_api_queue_stale_retry_unavailable_and_browser_ga
     let dir = tempdir().unwrap();
     let db_dir = tempdir().unwrap();
     let db = db_dir.path().join("planr.sqlite");
-    let curl_port = free_port();
-    let _curl_server = start_static_http_server(curl_port);
+    let (curl_port, _curl_server) = start_static_http_server();
     wait_for_http_server(curl_port);
     write_evidence_policy_fixture(dir.path());
     write_queue_extension_fixture(dir.path());

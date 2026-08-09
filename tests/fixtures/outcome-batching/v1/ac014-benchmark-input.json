@@ -6,7 +6,7 @@
     "oracle": "sparziele-exact-product-flow-v1"
   },
   "required_match": {
-    "cli_version": "0.146.0",
+    "cli_version": "0.147.0",
     "model": "gpt-5.6-sol",
     "effort": "medium",
     "spec": "identical",
@@ -425,7 +425,8 @@
     "repository_search": "Fix13 and Fix14 measured result records are present in the referenced planr-dogfood artifact roots and are bound here by immutable result and monitor digests",
     "reuse_policy": {
       "fix13": "do_not_resume_or_reuse",
-      "fix14": "do_not_resume_or_reuse"
+      "fix14": "do_not_resume_or_reuse",
+      "alpha4_external_invalid": "do_not_resume_or_reuse"
     },
     "records": [
       {
@@ -460,6 +461,22 @@
         "tool_call_envelopes": 59,
         "oracle_status": "not_started",
         "retry_allowed": false
+      },
+      {
+        "label": "alpha4_external_invalid",
+        "artifact_root": "/Users/kregenrek/projects/planr-dogfood/outcome-batching-ac014-alpha4/.planr/artifacts/ac014",
+        "benchmark_result_sha256": "ef10a5d6a8fa14e17eee809bd28fa8a5c8d14ac0bf622ca1afcce5b4da630708",
+        "monitor_status_sha256": "452709847b1d876c01e7998df9cae76b46258f3839b037ecba25c9e5cb2a7e94",
+        "verdict": "failed",
+        "status": "external_invalid",
+        "stop_reason": "codex_failed",
+        "candidate_sha": "2f9d2a081e432b66f1d67ba24d66ef9e898e8145",
+        "candidate_binary_sha256": "sha256:ef5663fc07163261e586f19acf19254d56a4b94cd637043ad9cc10dc88593b52",
+        "wall_time_seconds": null,
+        "total_tokens": 0,
+        "tool_call_envelopes": 0,
+        "oracle_status": "not_started",
+        "retry_allowed": false
       }
     ],
     "required_result_record": "any later AC-014 evidence must be appended as a new immutable result with raw session ids, sha256 transcripts, wall time, tokens, tool-call envelopes, oracle status, and stop reason; existing Fix13/Fix14 records remain unchanged"
@@ -468,7 +485,7 @@
     "candidate_version": "1.10.0-alpha.4",
     "baseline_policy": "clone_or_copy_declared_baseline_only_then_project_relocate",
     "matched_surface": {
-      "cli_version": "0.146.0",
+      "cli_version": "0.147.0",
       "model": "gpt-5.6-sol",
       "effort": "medium",
       "spec": "identical",

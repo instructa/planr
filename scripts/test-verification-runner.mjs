@@ -10,6 +10,7 @@ import {
   runLinuxTargetVerification,
   runVerification,
   selectVerificationGates,
+  selectionFromInput,
   verifyLinuxTargetReceipt,
   verifyReceipt,
   worktreeChanges,
@@ -50,6 +51,56 @@ assert.equal(calls.filter((call) => call.join(" ").includes("security:check")).l
 assert.equal(receipt.selection.liveVerification.browser, false, "interactive docs receipts remain Chrome-free in CI");
 assert.equal(new Set(calls.map(JSON.stringify)).size, calls.length, "runner de-duplicates exact commands");
 assert.deepEqual(verifyReceipt(receipt, { selection: docsSelection, repoRoot: root }).verdict, "pass");
+
+const d076SelectionInput = classifyChanges([
+  { status: "M", path: "scripts/ac014-fresh-arm-runner.mjs" },
+  { status: "M", path: "scripts/outcome-batching-proof-v1.mjs" },
+  { status: "M", path: "scripts/test-ac014-fresh-arm-runner.mjs" },
+  { status: "M", path: "tests/e2e.rs" },
+  { status: "A", path: "tests/fixtures/ac014/failed-transcript-min/history.jsonl" },
+  { status: "A", path: "tests/fixtures/ac014/failed-transcript-min/manifest.json" },
+  { status: "A", path: "tests/fixtures/ac014/failed-transcript-min/sessions/2026/08/08/rollout-2026-08-08T12-22-48-019fe0e5-8cef-7210-aea7-40722b23874e.jsonl" },
+  { status: "M", path: "tests/fixtures/outcome-batching/v1/ac014-benchmark-input.json" },
+], {
+  baseRevision: "06a0fdaa3ec2981374dec9b5062d13d6bb70f435",
+  headRevision: "d076723ab2ceab5669981d371edd9d15bb8d7eac",
+});
+const persistedD076Selection = selectionFromInput(structuredClone(d076SelectionInput));
+assert.deepEqual(persistedD076Selection, d076SelectionInput, "persisted normalized selections are preserved exactly");
+assert.deepEqual(
+  persistedD076Selection.changes.flatMap(({ paths }) => paths),
+  [
+    "scripts/ac014-fresh-arm-runner.mjs",
+    "scripts/outcome-batching-proof-v1.mjs",
+    "scripts/test-ac014-fresh-arm-runner.mjs",
+    "tests/e2e.rs",
+    "tests/fixtures/ac014/failed-transcript-min/history.jsonl",
+    "tests/fixtures/ac014/failed-transcript-min/manifest.json",
+    "tests/fixtures/ac014/failed-transcript-min/sessions/2026/08/08/rollout-2026-08-08T12-22-48-019fe0e5-8cef-7210-aea7-40722b23874e.jsonl",
+    "tests/fixtures/outcome-batching/v1/ac014-benchmark-input.json",
+  ],
+  "the d076 persisted selection keeps all eight bound paths",
+);
+assert.equal(persistedD076Selection.changedFilesDigest, d076SelectionInput.changedFilesDigest);
+assert.throws(
+  () => selectionFromInput({ changes: structuredClone(d076SelectionInput.changes) }),
+  /complete selection envelope/,
+  "normalized persisted changes without their selection envelope fail closed",
+);
+const digestMismatchSelection = structuredClone(d076SelectionInput);
+digestMismatchSelection.changedFilesDigest = `sha256:${"0".repeat(64)}`;
+assert.throws(
+  () => selectionFromInput(digestMismatchSelection),
+  /changed-file digest mismatch/,
+  "persisted selection digest drift fails closed",
+);
+const gateMismatchSelection = structuredClone(d076SelectionInput);
+gateMismatchSelection.selectedGates = gateMismatchSelection.selectedGates.filter((gate) => gate !== "rust-test");
+assert.throws(
+  () => selectionFromInput(gateMismatchSelection),
+  /selectedGates mismatch/,
+  "persisted selection gate drift fails closed",
+);
 const receiptPath = ".planr/receipts/verification-receipt.json";
 mkdirSync(path.dirname(path.join(root, receiptPath)), { recursive: true });
 writeFileSync(path.join(root, receiptPath), `${JSON.stringify(receipt)}\n`);
@@ -165,6 +216,49 @@ writeFileSync(path.join(root, "apps/docs/components/card.tsx"), "export const Ca
 writeFileSync(path.join(root, "apps/docs/out/index.html"), "<h1>Altered</h1>\n");
 assert.throws(() => verifyReceipt(receipt, { selection: docsSelection, repoRoot: root }), /artifact changed/);
 writeFileSync(path.join(root, "apps/docs/out/index.html"), "<h1>Planr</h1>\n");
+
+const bundledReceipt = runVerification({
+  selection: docsSelection,
+  repoRoot: root,
+  artifactRoot: ".planr/artifacts/verification/docs-replay",
+  execute: () => ({ status: 0 }),
+});
+assert.equal(
+  verifyReceipt(bundledReceipt, {
+    selection: docsSelection,
+    repoRoot: root,
+    artifactRoot: ".planr/artifacts/verification/docs-replay",
+  }).verdict,
+  "pass",
+  "artifact bundles replay against the preserved docs output",
+);
+writeFileSync(path.join(root, "apps/docs/out/index.html"), "<h1>Mutated after bundle</h1>\n");
+assert.throws(
+  () => verifyReceipt(bundledReceipt, { selection: docsSelection, repoRoot: root }),
+  /source worktree must be clean|artifact changed/,
+  "normal verification cannot replay without the preserved artifact root",
+);
+assert.equal(
+  verifyReceipt(bundledReceipt, {
+    selection: docsSelection,
+    repoRoot: root,
+    artifactRoot: ".planr/artifacts/verification/docs-replay",
+  }).verdict,
+  "pass",
+  "preserved artifact bundles keep exact receipt replayable after live output changes",
+);
+assert.throws(
+  () => runVerification({
+    selection: docsSelection,
+    repoRoot: root,
+    artifactRoot: "apps/docs/out",
+    execute: () => ({ status: 0 }),
+  }),
+  /artifact root must be under \.planr\/artifacts\/verification/,
+  "artifact bundles cannot be written over tracked or live source paths",
+);
+writeFileSync(path.join(root, "apps/docs/out/index.html"), "<h1>Planr</h1>\n");
+rmSync(path.join(root, ".planr/artifacts/verification/docs-replay"), { recursive: true, force: true });
 
 for (const mutation of [
   (value) => ({ ...value, environment: { PATH: process.env.PATH } }),
