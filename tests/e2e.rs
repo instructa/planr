@@ -14819,11 +14819,17 @@ fn canonical_verification_task_builds_a_sealed_verifier_packet_without_retagging
     obligation["fixture_policy"]["fixtures_allowed"] = json!(true);
     obligation["observations"][0]["payload_schema"] =
         json!({"schema_ref": "schema://com.example.health.status"});
+    let mut incomplete_obligation = obligation.clone();
+    incomplete_obligation["id"] = json!("pob-canonical-verifier-packet-missing-schema");
+    incomplete_obligation["observations"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("payload_schema");
     add_evidence_obligation_value(
         dir.path(),
         &db,
-        "pob-canonical-verifier-packet",
-        &obligation,
+        "pob-canonical-verifier-packet-missing-schema",
+        &incomplete_obligation,
     );
     let capability_instance_id = policy["object"]["registry"]["probes"][0]["instance_id"]
         .as_str()
@@ -14896,6 +14902,61 @@ fn canonical_verification_task_builds_a_sealed_verifier_packet_without_retagging
         done["next"]["work_packet"]["verification_item_id"],
         verification_id
     );
+
+    let blocked_pick = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", "canonical-verifier-incomplete-binding")
+            .args([
+                "--db",
+                &db_arg,
+                "--json",
+                "pick",
+                "--plan",
+                &plan_id,
+                "--work-type",
+                "verification",
+            ])
+            .assert()
+            .failure()
+            .get_output()
+            .stdout,
+    );
+    assert_eq!(
+        blocked_pick["error"]["message"],
+        format!("verification_pick_readiness_blocked:{plan_id}")
+    );
+    let conn = Connection::open(&db).unwrap();
+    let rolled_back: (String, Option<String>, String, i64) = conn
+        .query_row(
+            "SELECT items.status, items.worker_id, feature_runs.phase,
+                    (SELECT COUNT(*) FROM feature_run_role_leases
+                     WHERE run_id = feature_runs.id AND role = 'verifier' AND released_at IS NULL)
+             FROM items JOIN plans ON plans.path = items.plan_path
+             JOIN feature_runs ON feature_runs.plan_id = plans.id
+             WHERE items.id = ?1",
+            [&verification_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        rolled_back,
+        ("ready".into(), None, "source_frozen".into(), 0)
+    );
+    drop(conn);
+
+    obligation["supersedes"] = json!("pob-canonical-verifier-packet-missing-schema");
+    add_evidence_obligation_value(
+        dir.path(),
+        &db,
+        "pob-canonical-verifier-packet",
+        &obligation,
+    );
+    fs::remove_file(
+        dir.path()
+            .join("pob-canonical-verifier-packet.obligation.json"),
+    )
+    .unwrap();
 
     let packet = single_json_document(
         &planr()
