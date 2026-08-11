@@ -16,6 +16,33 @@ use rusqlite::params;
 use serde_json::{Value, json};
 
 impl App {
+    fn accepted_risk_bound_freeze(
+        &self,
+        repository: &ExecutionRunRepository<'_>,
+        run_id: &str,
+        gate: &ReviewGateRecord,
+        source_revision: &str,
+        source_digest: &str,
+    ) -> Result<Option<SourceFreezeRecord>> {
+        let Some(binding) = repository.review_source_binding(&gate.id)? else {
+            return Ok(None);
+        };
+        let freeze = repository
+            .active_source_freeze(run_id)?
+            .ok_or_else(|| anyhow!("accepted_risk_bound_source_freeze_missing:{}", gate.id))?;
+        if binding.freeze_id != freeze.id
+            || binding.source_revision != freeze.source_revision
+            || binding.source_digest != freeze.source_digest
+            || gate.source_revision.as_deref() != Some(binding.source_revision.as_str())
+        {
+            bail!("accepted_risk_bound_source_freeze_mismatch:{}", gate.id);
+        }
+        if source_revision != binding.source_revision || source_digest != binding.source_digest {
+            bail!("accepted_risk_bound_source_freeze_stale:{}", gate.id);
+        }
+        Ok(Some(freeze))
+    }
+
     pub(crate) fn accepted_risk_verification_handoff_locked(
         &self,
         persisted: PersistedFeatureRun,
@@ -30,12 +57,20 @@ impl App {
         if scope.plan_path.as_deref() != Some(plan.path.as_str()) {
             bail!("risk_checkpoint_scope_plan_mismatch:{}", gate.id);
         }
+        let repository = ExecutionRunRepository::new(&self.conn);
         if persisted.run.phase == FeatureRunPhase::SourceFrozen {
-            let freeze = ExecutionRunRepository::new(&self.conn)
+            let freeze = repository
                 .active_source_freeze(&persisted.run.id)?
                 .ok_or_else(|| anyhow!("source_frozen_run_missing_freeze:{}", persisted.run.id))?;
             let snapshot = capture_repository_snapshot(&self.root)
                 .map_err(|error| anyhow!("checking accepted-risk source freeze: {error}"))?;
+            self.accepted_risk_bound_freeze(
+                &repository,
+                &persisted.run.id,
+                gate,
+                &snapshot.source.revision,
+                snapshot.source.tree_digest.as_str(),
+            )?;
             if snapshot.source.revision != freeze.source_revision
                 || snapshot.source.tree_digest.as_str() != freeze.source_digest
             {
@@ -80,14 +115,21 @@ impl App {
         };
         let snapshot = capture_repository_snapshot(&self.root)
             .map_err(|error| anyhow!("capturing accepted-risk source freeze: {error}"))?;
-        let freeze = SourceFreezeRecord {
+        let bound_freeze = self.accepted_risk_bound_freeze(
+            &repository,
+            &persisted.run.id,
+            gate,
+            &snapshot.source.revision,
+            snapshot.source.tree_digest.as_str(),
+        )?;
+        let create_freeze = bound_freeze.is_none();
+        let freeze = bound_freeze.unwrap_or_else(|| SourceFreezeRecord {
             id: short_id("freeze"),
             run_id: persisted.run.id.clone(),
             source_revision: snapshot.source.revision.clone(),
             source_digest: snapshot.source.tree_digest.as_str().to_string(),
             status: SourceFreezeStatus::Active,
-        };
-        let repository = ExecutionRunRepository::new(&self.conn);
+        });
         self.reconcile_active_phase_wall(&persisted.run.id, BudgetPhase::Implementation)?;
         if let Some(batch_id) = persisted.run.active_batch_id.as_deref() {
             let batch = repository.batch(batch_id)?;
@@ -108,7 +150,9 @@ impl App {
         )
         .map_err(|violation| anyhow!("accepted_risk_source_freeze_transition:{violation:?}"))?;
         repository.save_feature_run(&frozen, persisted.revision)?;
-        repository.freeze_source(&freeze)?;
+        if create_freeze {
+            repository.freeze_source(&freeze)?;
+        }
         let released = self.conn.execute(
             "UPDATE items SET status = 'ready', worker_id = NULL, pick_token = NULL,
                     picked_at = NULL, last_heartbeat_at = NULL, updated_at = datetime('now')

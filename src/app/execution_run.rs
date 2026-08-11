@@ -1394,7 +1394,9 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::super::repository::execution_run::{SourceFreezeRecord, SourceFreezeStatus};
+    use super::super::repository::execution_run::{
+        ReviewSourceBindingRecord, SourceFreezeRecord, SourceFreezeStatus,
+    };
     use super::*;
     use crate::evidence::policy::capture_repository_snapshot;
     use crate::storage::ensure_schema;
@@ -1480,6 +1482,36 @@ mod tests {
         }
     }
 
+    fn bind_risk_gate_to_active_freeze(app: &App, gate_id: &str) -> SourceFreezeRecord {
+        let repository = ExecutionRunRepository::new(&app.conn);
+        let gate = repository.review_gate(gate_id).expect("risk gate");
+        let snapshot = capture_repository_snapshot(&app.root).expect("source snapshot");
+        let freeze = SourceFreezeRecord {
+            id: short_id("freeze"),
+            run_id: gate.run_id,
+            source_revision: snapshot.source.revision,
+            source_digest: snapshot.source.tree_digest.as_str().to_string(),
+            status: SourceFreezeStatus::Active,
+        };
+        repository.freeze_source(&freeze).expect("bound freeze");
+        app.conn
+            .execute(
+                "UPDATE review_gates SET source_revision = ?1 WHERE id = ?2",
+                params![freeze.source_revision, gate_id],
+            )
+            .expect("gate source revision");
+        repository
+            .create_review_source_binding(&ReviewSourceBindingRecord {
+                gate_id: gate_id.to_string(),
+                freeze_id: freeze.id.clone(),
+                source_revision: freeze.source_revision.clone(),
+                source_digest: freeze.source_digest.clone(),
+                receipt_lineage: json!({"kind": "product_repair"}),
+            })
+            .expect("review source binding");
+        freeze
+    }
+
     fn materiality(review: bool) -> Value {
         json!({
             "decision": {
@@ -1508,6 +1540,7 @@ mod tests {
             })
             .expect("risk settlement");
         let gate_id = settled["review_gate"]["id"].as_str().unwrap();
+        bind_risk_gate_to_active_freeze(&app, gate_id);
         app.review_gate_pick_value_for_worker("plan-a", false, "checker-risk")
             .expect("review pick")
             .expect("review packet");
@@ -1543,6 +1576,162 @@ mod tests {
     }
 
     #[test]
+    fn accepted_reopened_risk_gate_reuses_bound_freeze_and_projects_exact_handoff() {
+        let root = tempfile::tempdir().expect("root");
+        initialize_test_git(root.path());
+        let app = test_app_at(root.path().to_path_buf());
+        add_outcome(&app, "item-risk-bound");
+        add_ready_verification(&app, "item-risk-verification");
+        app.outcome_work_packet("item-risk-bound")
+            .expect("maker packet");
+        let settled = app
+            .settle_feature_run_outcome(OutcomeSettlement {
+                item_id: "item-risk-bound",
+                summary: "protected repaired outcome",
+                materiality: &materiality(true),
+                escalation: None,
+            })
+            .expect("risk settlement");
+        let gate_id = settled["review_gate"]["id"].as_str().unwrap();
+        let bound = bind_risk_gate_to_active_freeze(&app, gate_id);
+        app.review_gate_pick_value_for_worker("plan-a", false, "checker-risk")
+            .expect("review pick")
+            .expect("review packet");
+        let accepted = app
+            .complete_review_gate_value(gate_id, ReviewVerdict::Accepted, &[], Some("checker-risk"))
+            .expect("accepted review");
+        assert_eq!(
+            accepted["verification_handoff"]["work_packet"]["source_freeze"]["id"],
+            bound.id
+        );
+        assert_eq!(accepted["execution_state"]["phase"], "source_frozen");
+        assert!(accepted["execution_state"]["owner"].is_null());
+        assert_eq!(
+            accepted["execution_state"]["review_source_binding"]["freeze_id"],
+            bound.id
+        );
+        assert_eq!(
+            app.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM feature_run_source_freezes WHERE run_id = ?1",
+                    [&bound.run_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .expect("freeze count"),
+            1
+        );
+        let repeated = app
+            .resume_accepted_risk_verification_handoff_value("plan-a")
+            .expect("idempotent recovery")
+            .expect("handoff");
+        assert_eq!(repeated["work_packet"]["source_freeze"]["id"], bound.id);
+    }
+
+    #[test]
+    fn accepted_reopened_risk_gate_rejects_missing_mismatched_and_stale_bound_freezes() {
+        for failure in ["missing", "mismatch", "stale"] {
+            let root = tempfile::tempdir().expect("root");
+            initialize_test_git(root.path());
+            let app = test_app_at(root.path().to_path_buf());
+            add_outcome(&app, "item-risk-bound-negative");
+            add_ready_verification(&app, "item-risk-verification");
+            app.outcome_work_packet("item-risk-bound-negative")
+                .expect("maker packet");
+            let settled = app
+                .settle_feature_run_outcome(OutcomeSettlement {
+                    item_id: "item-risk-bound-negative",
+                    summary: "protected repaired outcome",
+                    materiality: &materiality(true),
+                    escalation: None,
+                })
+                .expect("risk settlement");
+            let gate_id = settled["review_gate"]["id"].as_str().unwrap();
+            let repository = ExecutionRunRepository::new(&app.conn);
+            let gate = repository.review_gate(gate_id).expect("gate");
+            let snapshot = capture_repository_snapshot(&app.root).expect("snapshot");
+            let freeze = SourceFreezeRecord {
+                id: short_id("freeze"),
+                run_id: gate.run_id.clone(),
+                source_revision: snapshot.source.revision.clone(),
+                source_digest: snapshot.source.tree_digest.as_str().to_string(),
+                status: SourceFreezeStatus::Active,
+            };
+            repository.freeze_source(&freeze).expect("active freeze");
+            app.conn
+                .execute(
+                    "UPDATE review_gates SET source_revision = ?1 WHERE id = ?2",
+                    params![freeze.source_revision, gate_id],
+                )
+                .expect("gate source");
+            repository
+                .create_review_source_binding(&ReviewSourceBindingRecord {
+                    gate_id: gate_id.to_string(),
+                    freeze_id: freeze.id.clone(),
+                    source_revision: freeze.source_revision.clone(),
+                    source_digest: freeze.source_digest.clone(),
+                    receipt_lineage: json!({}),
+                })
+                .expect("binding");
+            if failure == "missing" || failure == "mismatch" {
+                app.conn
+                    .execute(
+                        "UPDATE feature_run_source_freezes SET status = 'invalidated' WHERE id = ?1",
+                        [&freeze.id],
+                    )
+                    .expect("invalidate bound freeze fixture");
+            }
+            if failure == "mismatch" {
+                repository
+                    .freeze_source(&SourceFreezeRecord {
+                        id: short_id("freeze"),
+                        run_id: gate.run_id.clone(),
+                        source_revision: freeze.source_revision.clone(),
+                        source_digest: freeze.source_digest.clone(),
+                        status: SourceFreezeStatus::Active,
+                    })
+                    .expect("mismatched active freeze");
+            }
+            if failure == "stale" {
+                fs::write(root.path().join("plan-a.md"), "# Changed\n").expect("stale source");
+            }
+            app.review_gate_pick_value_for_worker("plan-a", false, "checker-risk")
+                .expect("review pick")
+                .expect("review packet");
+            let error = app
+                .complete_review_gate_value(
+                    gate_id,
+                    ReviewVerdict::Accepted,
+                    &[],
+                    Some("checker-risk"),
+                )
+                .unwrap_err();
+            assert!(
+                error.to_string().contains(match failure {
+                    "missing" => "review_source_binding_missing_active_freeze:",
+                    "mismatch" => "review_source_binding_source_freeze_stale:",
+                    _ => "review_source_binding_source_freeze_stale:",
+                }),
+                "{failure}: {error}"
+            );
+            assert_eq!(
+                repository
+                    .review_gate(gate_id)
+                    .expect("rolled back gate")
+                    .status,
+                ReviewGateStatus::Leased
+            );
+            assert_eq!(
+                repository
+                    .feature_run(&gate.run_id)
+                    .expect("rolled back run")
+                    .run
+                    .phase,
+                FeatureRunPhase::RiskReview
+            );
+        }
+    }
+
+    #[test]
     fn accepted_risk_gate_waits_for_remaining_code_and_rejects_wrong_plan_scope() {
         let root = tempfile::tempdir().expect("root");
         initialize_test_git(root.path());
@@ -1566,6 +1755,7 @@ mod tests {
             })
             .expect("risk settlement");
         let gate_id = settled["review_gate"]["id"].as_str().unwrap();
+        bind_risk_gate_to_active_freeze(&app, gate_id);
         app.review_gate_pick_value_for_worker("plan-a", false, "checker-risk")
             .expect("review pick")
             .expect("review packet");
@@ -1654,6 +1844,7 @@ mod tests {
             })
             .expect("risk settlement");
         let gate_id = settled["review_gate"]["id"].as_str().unwrap();
+        bind_risk_gate_to_active_freeze(&app, gate_id);
         app.review_gate_pick_value_for_worker("plan-a", false, "checker-risk")
             .expect("review pick")
             .expect("review packet");
