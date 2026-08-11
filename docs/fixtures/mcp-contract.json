@@ -62,6 +62,7 @@
     "planr_evidence_coverage",
     "planr_evidence_explain",
     "planr_evidence_readiness",
+    "planr_evidence_recover_settlement",
     "planr_eval_suite_check",
     "planr_eval_run",
     "planr_eval_show",

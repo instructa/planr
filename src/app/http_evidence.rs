@@ -147,6 +147,15 @@ impl App {
                         .and_then(|id| self.evidence_readiness_value(scope, id))
                 }),
             ),
+            ("POST", "/v1/evidence/recover-settlement") => http_evidence_json(
+                "evidence.recover_settlement",
+                self.recover_verification_settlement_value(
+                    body_json
+                        .get("input")
+                        .cloned()
+                        .unwrap_or_else(|| body_json.clone()),
+                ),
+            ),
             _ => Err(anyhow!("route not found: {method} {path}")),
         }
     }

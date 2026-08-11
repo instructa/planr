@@ -274,6 +274,54 @@ Create or show the one plan-scoped final product review after outcome work and m
 }
 ```
 
+## `planr_run_restart`
+
+Retire one plan's active FeatureRun only when its immutable v2 budget contract is incompatible
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "plan": {
+      "description": "Plan id",
+      "type": "string"
+    },
+    "reason": {
+      "description": "Typed restart reason",
+      "enum": [
+        "incompatible-budget"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "plan",
+    "reason"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_run_resolve_budget_hold`
+
+Resume one compatible budget-held FeatureRun only after its persisted reservation, deadline, phase, lease generation, and owner are revalidated
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "plan": {
+      "description": "Plan id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "plan"
+  ],
+  "type": "object"
+}
+```
+
 ## `planr_plan_link`
 
 Link a plan source to an item
@@ -1351,6 +1399,26 @@ Check active Evidence obligations, payload schemas, registered capabilities, and
   "required": [
     "scope",
     "id"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_evidence_recover_settlement`
+
+Recover an exact verified FeatureRun stranded before maker continuation
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "input": {
+      "description": "planr.evidence.recover_settlement.v1 payload",
+      "type": "object"
+    }
+  },
+  "required": [
+    "input"
   ],
   "type": "object"
 }

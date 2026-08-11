@@ -1071,17 +1071,6 @@ impl App {
             );
         }
         let run = repository.feature_run(&run_id)?;
-        if run.run.phase != FeatureRunPhase::Verification {
-            let phase = serde_json::to_value(run.run.phase)?
-                .as_str()
-                .unwrap_or("unknown")
-                .to_string();
-            bail!(
-                "final_product_review_requires_verification_phase:phase={}: run `planr pick --plan {} --work-type verification --json`",
-                phase,
-                plan_id
-            );
-        }
         let verification_item: Option<(String, String)> = self
             .conn
             .query_row(
@@ -1095,6 +1084,18 @@ impl App {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
+        let verification_closed = verification_item
+            .as_ref()
+            .is_some_and(|(_, status)| status == "closed");
+        if run.run.phase != FeatureRunPhase::Verification
+            && !(run.run.phase == FeatureRunPhase::SourceFrozen && verification_closed)
+        {
+            bail!(
+                "final_product_review_requires_verification_phase:phase={}: run `planr pick --plan {} --work-type verification --json`",
+                serde_json::to_string(&run.run.phase)?.trim_matches('"'),
+                plan_id
+            );
+        }
         if let Some((item_id, status)) = verification_item {
             if status != "closed" {
                 bail!("final_product_review_requires_closed_verification_item:{item_id}");

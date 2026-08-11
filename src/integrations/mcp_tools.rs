@@ -398,6 +398,12 @@ pub fn mcp_tools() -> Vec<Value> {
             &["scope", "id"],
         ),
         tool(
+            "planr_evidence_recover_settlement",
+            "Recover an exact verified FeatureRun stranded before maker continuation",
+            json!({"input": prop("object", "planr.evidence.recover_settlement.v1 payload")}),
+            &["input"],
+        ),
+        tool(
             "planr_eval_suite_check",
             "Store or verify an immutable eval suite snapshot",
             json!({"input": prop("object", "Suite snapshot object with digest and normalized_manifest"), "source_path": prop("string", "Optional source path for the suite manifest")}),

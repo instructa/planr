@@ -928,7 +928,10 @@ Usage: planr run [OPTIONS] <COMMAND>
 
 Commands:
   batch
-  help   Print this message or the help of the given subcommand(s)
+  restart
+  resolve-budget-hold
+  settle-repair
+  help                 Print this message or the help of the given subcommand(s)
 
 Options:
       --db <DB>   Path to Planr SQLite database
@@ -993,6 +996,51 @@ Options:
           Print help
 ```
 
+#### `planr run restart`
+
+```text
+Usage: planr run restart [OPTIONS] --plan <PLAN> --reason <REASON>
+
+Options:
+      --db <DB>          Path to Planr SQLite database
+      --plan <PLAN>
+      --json             Emit JSON output
+      --reason <REASON>  [possible values: incompatible-budget]
+      --no-color         Disable color in human output
+  -h, --help             Print help
+```
+
+#### `planr run resolve-budget-hold`
+
+```text
+Usage: planr run resolve-budget-hold [OPTIONS] --plan <PLAN>
+
+Options:
+      --db <DB>      Path to Planr SQLite database
+      --plan <PLAN>
+      --json         Emit JSON output
+      --no-color     Disable color in human output
+  -h, --help         Print help
+```
+
+#### `planr run settle-repair`
+
+```text
+Usage: planr run settle-repair [OPTIONS] --plan <PLAN> --invalidation <INVALIDATION> --summary <SUMMARY>
+
+Options:
+      --db <DB>                      Path to Planr SQLite database
+      --plan <PLAN>
+      --invalidation <INVALIDATION>
+      --json                         Emit JSON output
+      --no-color                     Disable color in human output
+      --summary <SUMMARY>
+      --files <FILES>
+      --cmd <CMD>
+      --tests <TESTS>
+  -h, --help                         Print help
+```
+
 ### `planr pick`
 
 ```text
@@ -1026,11 +1074,12 @@ Arguments:
   <ITEM_ID>
 
 Options:
-      --db <DB>   Path to Planr SQLite database
+      --db <DB>          Path to Planr SQLite database
       --force
-      --json      Emit JSON output
-      --no-color  Disable color in human output
-  -h, --help      Print help
+      --json             Emit JSON output
+      --repair <REPAIR>  Route a verification admission blocker back to the recorded maker
+      --no-color         Disable color in human output
+  -h, --help             Print help
 ```
 
 #### `planr pick heartbeat`
@@ -1632,20 +1681,21 @@ Manage trusted Evidence policy, obligations, readiness, migrations, capabilities
 Usage: planr evidence [OPTIONS] <COMMAND>
 
 Commands:
-  policy           Parse and report the repository Evidence policy
-  obligation       Add, list, or show proof obligations
-  capability       List or show registered verification capabilities
-  run              Run a registered process capability against a stored obligation
-  import           Validate and persist an artifact import without creating trusted receipts
-  host-capture     Validate and persist a fresh external Codex host capture as trusted Evidence
-  attempts         List or show process attempts
-  receipts         List or show trusted receipts
-  coverage         Evaluate and persist coverage for an Evidence scope
-  explain          Explain coverage, candidates, and durable records for an Evidence scope
-  readiness        Check that active obligations have compatible schemas and available capabilities before goal work
-  migrate          Preview or apply explicit pre-Evidence plan migration into binding Evidence obligations
-  classifications  Show canonical Evidence gap classifications and legacy/operator aliases
-  help             Print this message or the help of the given subcommand(s)
+  policy              Parse and report the repository Evidence policy
+  obligation          Add, list, or show proof obligations
+  capability          List or show registered verification capabilities
+  run                 Run a registered process capability against a stored obligation
+  import              Validate and persist an artifact import without creating trusted receipts
+  host-capture        Validate and persist a fresh external Codex host capture as trusted Evidence
+  attempts            List or show process attempts
+  receipts            List or show trusted receipts
+  coverage            Evaluate and persist coverage for an Evidence scope
+  explain             Explain coverage, candidates, and durable records for an Evidence scope
+  readiness           Check that active obligations have compatible schemas and available capabilities before goal work
+  recover-settlement  Recover a verified run stranded before maker continuation
+  migrate             Preview or apply explicit pre-Evidence plan migration into binding Evidence obligations
+  classifications     Show canonical Evidence gap classifications and legacy/operator aliases
+  help                Print this message or the help of the given subcommand(s)
 
 Options:
       --db <DB>   Path to Planr SQLite database
@@ -1929,6 +1979,21 @@ Options:
       --db <DB>        Path to Planr SQLite database
       --scope <SCOPE>  [possible values: obligation, criterion, item, plan]
       --id <ID>
+      --json           Emit JSON output
+      --no-color       Disable color in human output
+  -h, --help           Print help
+```
+
+#### `planr evidence recover-settlement`
+
+```text
+Recover a verified run stranded before maker continuation
+
+Usage: planr evidence recover-settlement [OPTIONS] --input <INPUT>
+
+Options:
+      --db <DB>        Path to Planr SQLite database
+      --input <INPUT>
       --json           Emit JSON output
       --no-color       Disable color in human output
   -h, --help           Print help

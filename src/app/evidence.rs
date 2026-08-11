@@ -35,8 +35,10 @@ use crate::evidence::{
 };
 use crate::execution::{BoundedProcessInput, CancellationToken, run_bounded_process};
 use crate::execution_run::{
-    FeatureRunPhase, PhaseTransition, PhaseTransitionCause, RunRole, apply_phase_transition,
+    ExecutionBatch, ExecutionBatchStatus, FeatureRunPhase, PhaseTransition, PhaseTransitionCause,
+    RoleOwner, RunRole, apply_phase_transition,
 };
+use crate::util::short_id;
 use anyhow::{Context, Result, anyhow, bail};
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
@@ -288,6 +290,14 @@ impl App {
                 self.evidence_readiness_value(args.scope, &args.id),
                 "evidence readiness".to_string(),
             ),
+            EvidenceCommand::RecoverSettlement(args) => {
+                let value = read_json_file(&args.input)?;
+                (
+                    "evidence.recover_settlement",
+                    self.recover_verification_settlement_value(value),
+                    "verification settlement recovery".to_string(),
+                )
+            }
             EvidenceCommand::Migrate(args) => {
                 let value = read_json_file(&args.input)?;
                 (
@@ -2634,6 +2644,86 @@ impl App {
             if changed != 1 {
                 bail!("verification_item_close_conflict:{item_id}");
             }
+            self.promote_ready()?;
+            let next_code_item_id =
+                self.peek_next_ready_item_filtered(&super::lease::PickFilter {
+                    exclude: None,
+                    work_type: Some("code"),
+                    plan_path: Some(plan.path.as_str()),
+                })?;
+            self.reconcile_active_phase_wall(
+                &persisted.run.id,
+                crate::usage_policy::BudgetPhase::Verification,
+            )?;
+            let coverage_id = coverage_binding["coverage_id"].as_str().unwrap_or(plan_id);
+            let (phase, next_action) = if next_code_item_id.is_some() {
+                let maker_worker_id = self.conn.query_row(
+                    "SELECT worker_id FROM feature_run_role_leases
+                     WHERE run_id = ?1 AND role = 'maker'
+                     ORDER BY lease_generation DESC LIMIT 1",
+                    [&persisted.run.id],
+                    |row| row.get::<_, String>(0),
+                )?;
+                let maker_generation = self.conn.query_row(
+                    "SELECT COALESCE(MAX(lease_generation), 0) + 1
+                     FROM feature_run_role_leases WHERE run_id = ?1 AND role = 'maker'",
+                    [&persisted.run.id],
+                    |row| row.get::<_, u64>(0),
+                )?;
+                let mut implementation = apply_phase_transition(
+                    &persisted.run,
+                    &PhaseTransition {
+                        to: FeatureRunPhase::Implementation,
+                        cause: PhaseTransitionCause::VerificationPassed,
+                        reference: format!("evidence_coverage:{coverage_id}"),
+                        owner: Some(RoleOwner {
+                            role: RunRole::Maker,
+                            worker_id: maker_worker_id.clone(),
+                            lease_generation: maker_generation,
+                        }),
+                    },
+                )
+                .map_err(|violation| {
+                    anyhow!("verification_continuation_transition:{violation:?}")
+                })?;
+                let batch = ExecutionBatch {
+                    id: short_id("batch"),
+                    run_id: persisted.run.id.clone(),
+                    maker_worker_id,
+                    status: ExecutionBatchStatus::Active,
+                    settled_outcome_ids: Vec::new(),
+                    replacement: None,
+                };
+                implementation.active_batch_id = Some(batch.id.clone());
+                implementation.batch_outcome_count = 0;
+                repository.save_feature_run_with_new_batch(
+                    &implementation,
+                    persisted.revision,
+                    &batch,
+                )?;
+                (
+                    FeatureRunPhase::Implementation,
+                    format!("planr pick --plan {plan_id} --work-type code --json"),
+                )
+            } else {
+                let source_frozen = apply_phase_transition(
+                    &persisted.run,
+                    &PhaseTransition {
+                        to: FeatureRunPhase::SourceFrozen,
+                        cause: PhaseTransitionCause::VerificationPassed,
+                        reference: format!("evidence_coverage:{coverage_id}"),
+                        owner: None,
+                    },
+                )
+                .map_err(|violation| {
+                    anyhow!("verification_final_review_transition:{violation:?}")
+                })?;
+                repository.save_feature_run(&source_frozen, persisted.revision)?;
+                (
+                    FeatureRunPhase::SourceFrozen,
+                    format!("planr plan final-review {plan_id}"),
+                )
+            };
             self.record_event(
                 "verification_item_closed",
                 Some(&item_id),
@@ -2643,6 +2733,8 @@ impl App {
                     "freeze_id": freeze.id,
                     "log_id": log_id,
                     "coverage": coverage_binding,
+                    "phase": phase,
+                    "next_code_item_id": next_code_item_id,
                 }),
             )?;
             Ok(json!({
@@ -2650,7 +2742,9 @@ impl App {
                 "status": "closed",
                 "log_id": log_id,
                 "coverage": coverage_binding,
-                "next_action": format!("planr plan final-review {plan_id}"),
+                "phase": phase,
+                "next_code_item_id": next_code_item_id,
+                "next_action": next_action,
             }))
         })();
         match result {

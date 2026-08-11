@@ -108,6 +108,12 @@ impl App {
                         .and_then(|id| self.evidence_readiness_value(scope, id))
                 }),
             )),
+            "planr_evidence_recover_settlement" => Ok(mcp_evidence_json(
+                "evidence.recover_settlement",
+                self.recover_verification_settlement_value(
+                    args.get("input").cloned().unwrap_or_else(|| args.clone()),
+                ),
+            )),
             _ => Err(anyhow!("unknown Planr MCP tool: {name}")),
         }
     }

@@ -330,7 +330,7 @@ pub fn is_legal_phase_transition(
         ) | (
             FeatureRunPhase::Verification,
             FeatureRunPhase::Implementation,
-            PhaseTransitionCause::ProductFinding
+            PhaseTransitionCause::ProductFinding | PhaseTransitionCause::VerificationPassed
         ) | (
             FeatureRunPhase::Verification,
             FeatureRunPhase::SourceFrozen,
@@ -1073,6 +1073,43 @@ mod tests {
     }
 
     #[test]
+    fn satisfied_verification_can_return_to_implementation_without_dual_ownership() {
+        let source_frozen = apply_phase_transition(
+            &run(),
+            &transition(
+                FeatureRunPhase::SourceFrozen,
+                PhaseTransitionCause::ImplementationSettled,
+                None,
+            ),
+        )
+        .unwrap();
+        let verification = apply_phase_transition(
+            &source_frozen,
+            &transition(
+                FeatureRunPhase::Verification,
+                PhaseTransitionCause::VerificationStarted,
+                Some(owner(RunRole::Verifier, "verifier-a", 2)),
+            ),
+        )
+        .unwrap();
+        let implementation = apply_phase_transition(
+            &verification,
+            &transition(
+                FeatureRunPhase::Implementation,
+                PhaseTransitionCause::VerificationPassed,
+                Some(owner(RunRole::Maker, "maker-a", 2)),
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(implementation.phase, FeatureRunPhase::Implementation);
+        assert_eq!(
+            implementation.role_owners,
+            vec![owner(RunRole::Maker, "maker-a", 2)]
+        );
+    }
+
+    #[test]
     fn incompatible_budget_retirement_is_typed_and_preserves_run_history() {
         for incompatibility in [
             FeatureRunBudgetContractCompatibility::Missing,
@@ -1357,7 +1394,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(legal_count, 40);
+        assert_eq!(legal_count, 41);
     }
 
     #[test]

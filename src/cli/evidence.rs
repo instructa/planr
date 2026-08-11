@@ -31,6 +31,8 @@ pub(crate) enum EvidenceCommand {
     Explain(EvidenceCoverageArgs),
     /// Check that active obligations have compatible schemas and available capabilities before goal work.
     Readiness(EvidenceCoverageArgs),
+    /// Recover a verified run stranded before maker continuation.
+    RecoverSettlement(EvidenceInputArgs),
     /// Preview or apply explicit pre-Evidence plan migration into binding Evidence obligations.
     Migrate(EvidenceMigrationArgs),
     /// Show canonical Evidence gap classifications and legacy/operator aliases.

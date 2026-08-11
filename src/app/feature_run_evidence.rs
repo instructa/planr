@@ -3409,6 +3409,363 @@ allow_overwrite = true
         (root, app, policy_digest)
     }
 
+    fn stranded_recovery_app() -> (tempfile::TempDir, App, Value) {
+        let (root, app, policy_digest) = settlement_app();
+        app.conn
+            .execute(
+                "UPDATE items SET status = 'closed', completed_at = datetime('now')
+                 WHERE id = 'item-settle-maker'",
+                [],
+            )
+            .unwrap();
+        seed_receipt_bound_settlement(&app, &policy_digest);
+        app.evidence_coverage_value(EvidenceCoverageScope::Plan, "plan-a")
+            .expect("initial canonical settlement");
+        add_outcome(&app, "item-after-verification");
+        let repository = ExecutionRunRepository::new(&app.conn);
+        let settled = repository
+            .active_feature_run_for_plan("project-a", "plan-a")
+            .unwrap()
+            .unwrap();
+        let freeze = repository
+            .active_source_freeze(&settled.run.id)
+            .unwrap()
+            .unwrap();
+        let binding: String = app
+            .conn
+            .query_row(
+                "SELECT trusted_binding_json FROM evidence_receipts WHERE id = 'erec-settle'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let mut binding: Value = serde_json::from_str(&binding).unwrap();
+        binding["source"]["revision"] = json!(freeze.source_revision);
+        binding["source"]["tree_digest"] = json!(freeze.source_digest);
+        app.conn
+            .execute_batch("DROP TRIGGER evidence_receipts_no_update")
+            .unwrap();
+        app.conn
+            .execute(
+                "UPDATE evidence_receipts SET trusted_binding_json = ?1 WHERE id = 'erec-settle'",
+                [binding.to_string()],
+            )
+            .unwrap();
+        app.conn
+            .execute(
+                "UPDATE feature_run_role_leases SET worker_id = ?2
+                 WHERE run_id = ?1 AND role = 'maker'",
+                params![settled.run.id, worker_id()],
+            )
+            .unwrap();
+        let verifier_generation: u64 = app
+            .conn
+            .query_row(
+                "SELECT COALESCE(MAX(lease_generation), 0) + 1
+                 FROM feature_run_role_leases WHERE run_id = ?1 AND role = 'verifier'",
+                [&settled.run.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        app.conn
+            .execute(
+                "INSERT INTO feature_run_role_leases(run_id, role, worker_id, lease_generation)
+                 VALUES (?1, 'verifier', 'stranded-verifier', ?2)",
+                params![settled.run.id, verifier_generation],
+            )
+            .unwrap();
+        app.conn
+            .execute(
+                "UPDATE feature_runs SET phase = 'verification', revision = revision + 1,
+                 updated_at = datetime('now') WHERE id = ?1",
+                [&settled.run.id],
+            )
+            .unwrap();
+        let input = json!({
+            "schema": "planr.evidence.recover_settlement.v1",
+            "plan_id": "plan-a",
+            "run_id": settled.run.id,
+            "freeze_id": freeze.id,
+            "receipt_id": "erec-settle",
+            "verifier_worker_id": "stranded-verifier",
+            "verifier_generation": verifier_generation,
+            "next_item_id": "item-after-verification",
+        });
+        (root, app, input)
+    }
+
+    #[test]
+    fn exact_stranded_settlement_recovery_is_atomic_and_idempotent() {
+        let (_root, app, input) = stranded_recovery_app();
+
+        let recovered = app
+            .recover_verification_settlement_value(input.clone())
+            .expect("recover split verifier and maker state");
+        assert_eq!(recovered["created"], true);
+        assert_eq!(
+            recovered["execution_state"]["feature_run"]["phase"],
+            "implementation"
+        );
+        assert_eq!(
+            recovered["execution_state"]["feature_run"]["role_owners"][0]["role"],
+            "maker"
+        );
+        assert_eq!(
+            recovered["execution_state"]["feature_run"]["role_owners"][0]["worker_id"],
+            worker_id()
+        );
+        let item: (String, String) = app
+            .conn
+            .query_row(
+                "SELECT status, worker_id FROM items WHERE id = 'item-after-verification'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(item, ("picked".into(), worker_id()));
+
+        let repeated = app
+            .recover_verification_settlement_value(input)
+            .expect("repeat converges");
+        assert_eq!(repeated["created"], false);
+        let events: i64 = app
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE event_type = 'verification_settlement_recovered'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(events, 1);
+    }
+
+    #[test]
+    fn stranded_settlement_recovery_rejects_stale_identity_without_writes() {
+        let (_root, app, mut input) = stranded_recovery_app();
+        input["verifier_generation"] = json!(999);
+
+        let error = app
+            .recover_verification_settlement_value(input)
+            .expect_err("stale verifier generation fails closed");
+        assert!(
+            error
+                .to_string()
+                .contains("verification_settlement_recovery_verifier_mismatch")
+        );
+        let phase: String = app
+            .conn
+            .query_row(
+                "SELECT phase FROM feature_runs WHERE plan_id = 'plan-a'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(phase, "verification");
+        let events: i64 = app
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE event_type = 'verification_settlement_recovered'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(events, 0);
+    }
+
+    #[test]
+    fn stranded_settlement_recovery_rejects_untrusted_state_shapes() {
+        for case in [
+            "missing_receipt",
+            "waived",
+            "wrong_owner",
+            "active_adapter",
+            "blocked_graph",
+        ] {
+            let (_root, app, mut input) = stranded_recovery_app();
+            match case {
+                "missing_receipt" => input["receipt_id"] = json!("missing-receipt"),
+                "waived" => {
+                    app.conn
+                        .execute(
+                            "UPDATE coverage_verdicts SET waiver_digest_set = '[\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"]'
+                             WHERE scope_kind = 'plan' AND scope_id = 'plan-a'",
+                            [],
+                        )
+                        .unwrap();
+                }
+                "wrong_owner" => {
+                    app.conn
+                        .execute(
+                            "UPDATE items SET worker_id = 'other-maker'
+                             WHERE id = 'item-after-verification'",
+                            [],
+                        )
+                        .unwrap();
+                }
+                "active_adapter" => {
+                    app.conn
+                        .execute_batch("DROP TRIGGER evidence_attempts_no_update")
+                        .unwrap();
+                    app.conn
+                        .execute(
+                            "UPDATE evidence_attempts SET completed_at = NULL
+                             WHERE id = 'eatt-settle'",
+                            [],
+                        )
+                        .unwrap();
+                }
+                "blocked_graph" => {
+                    app.conn
+                        .execute(
+                            "INSERT INTO items(id, project_id, title, description, status, work_type, plan_path, created_at, updated_at)
+                             VALUES ('unresolved-blocker', 'project-a', 'blocker', 'blocker', 'ready', 'docs', 'plan-a.md', datetime('now'), datetime('now'))",
+                            [],
+                        )
+                        .unwrap();
+                    app.conn
+                        .execute(
+                            "INSERT INTO links(from_item, to_item, kind, condition)
+                             VALUES ('unresolved-blocker', 'item-after-verification', 'blocks', 'all')",
+                            [],
+                        )
+                        .unwrap();
+                }
+                _ => unreachable!(),
+            }
+
+            app.recover_verification_settlement_value(input)
+                .unwrap_err();
+            let state: (String, i64) = app
+                .conn
+                .query_row(
+                    "SELECT phase,
+                        (SELECT COUNT(*) FROM events WHERE event_type = 'verification_settlement_recovered')
+                     FROM feature_runs WHERE plan_id = 'plan-a'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(state, ("verification".into(), 0), "case {case}");
+        }
+    }
+
+    #[test]
+    fn stranded_settlement_recovery_rolls_back_late_transition_failure() {
+        let (_root, app, input) = stranded_recovery_app();
+        app.conn
+            .execute_batch(
+                "CREATE TRIGGER reject_recovery_transition
+                 BEFORE UPDATE OF phase ON feature_runs
+                 WHEN OLD.phase = 'verification' AND NEW.phase = 'implementation'
+                 BEGIN SELECT RAISE(ABORT, 'forced recovery transition failure'); END;",
+            )
+            .unwrap();
+
+        let error = app
+            .recover_verification_settlement_value(input)
+            .expect_err("late transition failure rolls back");
+        assert!(
+            error
+                .to_string()
+                .contains("forced recovery transition failure")
+        );
+        let active_verifier: i64 = app
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM feature_run_role_leases
+                 WHERE role = 'verifier' AND released_at IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let active_maker: i64 = app
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM feature_run_role_leases
+                 WHERE role = 'maker' AND released_at IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!((active_verifier, active_maker), (1, 0));
+    }
+
+    #[test]
+    fn concurrent_stranded_settlement_recovery_converges_once() {
+        let (root, app, input) = stranded_recovery_app();
+        let database_path = app.db_path.clone();
+        drop(app);
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let mut handles = Vec::new();
+        for _ in 0..2 {
+            let database_path = database_path.clone();
+            let repository_root = root.path().to_path_buf();
+            let input = input.clone();
+            let barrier = barrier.clone();
+            handles.push(std::thread::spawn(move || {
+                let conn = Connection::open(&database_path).unwrap();
+                conn.busy_timeout(std::time::Duration::from_secs(5))
+                    .unwrap();
+                let app = App::new(conn, repository_root, database_path, true, false);
+                barrier.wait();
+                app.recover_verification_settlement_value(input).unwrap()["created"]
+                    .as_bool()
+                    .unwrap()
+            }));
+        }
+        let mut created = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect::<Vec<_>>();
+        created.sort();
+        assert_eq!(created, vec![false, true]);
+
+        let conn = Connection::open(database_path).unwrap();
+        let events: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE event_type = 'verification_settlement_recovered'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(events, 1);
+    }
+
+    #[test]
+    fn stranded_settlement_recovery_mcp_and_http_share_the_typed_result() {
+        let (_mcp_root, mcp_app, mcp_input) = stranded_recovery_app();
+        let mcp = mcp_app
+            .mcp_evidence_tool_call(
+                "planr_evidence_recover_settlement",
+                json!({"input": mcp_input}),
+            )
+            .unwrap();
+        let mcp_envelope: Value =
+            serde_json::from_str(mcp["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            mcp_envelope["object"]["schema"],
+            "planr.evidence.recover_settlement.result.v1"
+        );
+        assert_eq!(mcp_envelope["object"]["created"], true);
+
+        let (_http_root, http_app, http_input) = stranded_recovery_app();
+        let (status, body) = http_app
+            .http_evidence_route(
+                "POST",
+                "/v1/evidence/recover-settlement",
+                "",
+                &json!({"input": http_input}),
+            )
+            .unwrap();
+        let http_envelope: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(status, "200 OK");
+        assert_eq!(
+            http_envelope["object"]["schema"],
+            mcp_envelope["object"]["schema"]
+        );
+        assert_eq!(http_envelope["object"]["created"], true);
+    }
+
     #[test]
     fn satisfied_plan_coverage_closes_verification_item_with_receipt_lineage() {
         let (root, app, policy_digest) = settlement_app();
@@ -3449,6 +3806,14 @@ allow_overwrite = true
             )
             .unwrap();
         assert_eq!(item_status, "closed");
+        let repository = ExecutionRunRepository::new(&app.conn);
+        let settled_run = repository
+            .active_feature_run_for_plan("project-a", "plan-a")
+            .unwrap()
+            .unwrap();
+        assert_eq!(settled_run.run.phase, FeatureRunPhase::SourceFrozen);
+        assert!(settled_run.run.role_owners.is_empty());
+        assert_eq!(settlement["next_action"], "planr plan final-review plan-a");
         let event: String = app
             .conn
             .query_row(
@@ -3556,7 +3921,6 @@ allow_overwrite = true
                 .to_string()
                 .contains("review_reverification_source_stale")
         );
-        let repository = ExecutionRunRepository::new(&app.conn);
         let gate = repository.review_gate(&gate_id).unwrap();
         assert_eq!(gate.status, ReviewGateStatus::ChangesRequested);
         std::fs::remove_file(stale_path).unwrap();
@@ -3638,6 +4002,168 @@ allow_overwrite = true
         );
         let ready_gate = repository.review_gate(&gate_id).unwrap();
         assert_eq!(ready_gate.status, ReviewGateStatus::Pending);
+    }
+
+    #[test]
+    fn satisfied_plan_coverage_atomically_resumes_remaining_code_without_leasing_it() {
+        let (_root, app, policy_digest) = settlement_app();
+        seed_receipt_bound_settlement(&app, &policy_digest);
+        app.conn
+            .execute(
+                "UPDATE items SET status = 'closed', worker_id = NULL,
+                     completed_at = datetime('now'), updated_at = datetime('now')
+                 WHERE id = 'item-settle-maker'",
+                [],
+            )
+            .unwrap();
+        app.conn
+            .execute(
+                "INSERT INTO items(id, project_id, title, description, status, work_type, plan_path, created_at, updated_at)
+                 VALUES ('item-after-verification', 'project-a', 'classification', 'remaining code', 'pending', 'code', 'plan-a.md', datetime('now'), datetime('now'))",
+                [],
+            )
+            .unwrap();
+        app.conn
+            .execute(
+                "INSERT INTO links(from_item, to_item, kind, condition)
+                 VALUES ('item-settle-verification', 'item-after-verification', 'blocks', 'all')",
+                [],
+            )
+            .unwrap();
+
+        let coverage = app
+            .evidence_coverage_value(crate::cli::EvidenceCoverageScope::Plan, "plan-a")
+            .unwrap();
+        let settlement = &coverage["feature_run_verification_settlement"];
+        assert_eq!(settlement["phase"], "implementation");
+        assert_eq!(settlement["next_code_item_id"], "item-after-verification");
+        assert_eq!(
+            settlement["next_action"],
+            "planr pick --plan plan-a --work-type code --json"
+        );
+
+        let repository = ExecutionRunRepository::new(&app.conn);
+        let run = repository
+            .active_feature_run_for_plan("project-a", "plan-a")
+            .unwrap()
+            .unwrap();
+        assert_eq!(run.run.phase, FeatureRunPhase::Implementation);
+        assert_eq!(run.run.role_owners.len(), 1);
+        assert_eq!(run.run.role_owners[0].role, RunRole::Maker);
+        assert_eq!(run.run.role_owners[0].worker_id, "maker-other");
+        let batch = repository
+            .batch(run.run.active_batch_id.as_deref().unwrap())
+            .unwrap();
+        assert_eq!(batch.batch.status, ExecutionBatchStatus::Active);
+        assert_eq!(batch.batch.maker_worker_id, "maker-other");
+        let next: (String, Option<String>) = app
+            .conn
+            .query_row(
+                "SELECT status, worker_id FROM items WHERE id = 'item-after-verification'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(next, ("ready".to_string(), None));
+        let active_roles: Vec<(String, String)> = app
+            .conn
+            .prepare(
+                "SELECT role, worker_id FROM feature_run_role_leases
+                 WHERE run_id = ?1 AND released_at IS NULL ORDER BY role",
+            )
+            .unwrap()
+            .query_map([&run.run.id], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(
+            active_roles,
+            vec![("maker".to_string(), "maker-other".to_string())]
+        );
+        let active_verification_budgets: u64 = app
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM feature_run_budget_reservations
+                 WHERE run_id = ?1 AND phase = 'verification' AND status = 'active'",
+                [&run.run.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(active_verification_budgets, 0);
+    }
+
+    #[test]
+    fn post_verification_transition_failure_rolls_back_item_graph_log_and_roles() {
+        let (_root, app, policy_digest) = settlement_app();
+        seed_receipt_bound_settlement(&app, &policy_digest);
+        app.conn
+            .execute(
+                "INSERT INTO items(id, project_id, title, description, status, work_type, plan_path, created_at, updated_at)
+                 VALUES ('item-after-verification', 'project-a', 'classification', 'remaining code', 'pending', 'code', 'plan-a.md', datetime('now'), datetime('now'))",
+                [],
+            )
+            .unwrap();
+        app.conn
+            .execute(
+                "INSERT INTO links(from_item, to_item, kind, condition)
+                 VALUES ('item-settle-verification', 'item-after-verification', 'blocks', 'all')",
+                [],
+            )
+            .unwrap();
+        app.conn
+            .execute_batch(
+                "CREATE TRIGGER reject_post_verification_continuation
+                 BEFORE UPDATE ON feature_runs
+                 WHEN OLD.phase = 'verification' AND NEW.phase = 'implementation'
+                 BEGIN
+                   SELECT RAISE(ABORT, 'injected post-verification transition failure');
+                 END;",
+            )
+            .unwrap();
+
+        let error = app
+            .evidence_coverage_value(crate::cli::EvidenceCoverageScope::Plan, "plan-a")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("injected post-verification transition failure"));
+        assert_eq!(
+            app.conn
+                .query_row(
+                    "SELECT status FROM items WHERE id = 'item-settle-verification'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "picked"
+        );
+        assert_eq!(
+            app.conn
+                .query_row(
+                    "SELECT status FROM items WHERE id = 'item-after-verification'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "pending"
+        );
+        assert_eq!(
+            app.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM logs WHERE item_id = 'item-settle-verification'",
+                    [],
+                    |row| row.get::<_, u64>(0),
+                )
+                .unwrap(),
+            0
+        );
+        let repository = ExecutionRunRepository::new(&app.conn);
+        let run = repository
+            .active_feature_run_for_plan("project-a", "plan-a")
+            .unwrap()
+            .unwrap();
+        assert_eq!(run.run.phase, FeatureRunPhase::Verification);
+        assert_eq!(run.run.role_owners.len(), 1);
+        assert_eq!(run.run.role_owners[0].role, RunRole::Verifier);
     }
 
     #[test]

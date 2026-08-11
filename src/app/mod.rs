@@ -41,6 +41,7 @@ mod repository;
 mod review;
 pub(crate) mod stop;
 mod surfaces;
+mod verification_settlement_recovery;
 
 pub(crate) use eval_surface::EvalCliExit;
 pub(crate) use evidence::EvidenceCliExit;
