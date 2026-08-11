@@ -931,3 +931,31 @@ Dependencies:
 
 Do not do:
 - Do not ship install script that silently edits global agent config.
+
+### TASK-V2-BUDGET-001: Build Immutable FeatureRun Budget Authority
+
+Goal:
+Make every Planr 2.0 FeatureRun budget deterministic from run creation through release.
+
+Requirements:
+- Persist exactly one canonical budget contract atomically with each FeatureRun.
+- Require explicit bounded or unbounded mode; bounded runs and admitted tasks have complete wall-seconds, tool-call, and token maxima.
+- Protect exact maker, verification, review, repair, and release allocations with checked reserve and deadline arithmetic.
+- Anchor wall time to persisted run start and retain per-dimension observation provenance.
+- Reuse one `planr.execution_state.v2` budget projection across every public surface and host packet.
+- Remove mutable-policy decisions, fabricated allowances, synthesized active-run state, and compatibility budget shapes.
+
+Acceptance criteria:
+- Policy mutation after run start cannot change contract digest or admission.
+- Missing or invalid budget state holds before dispatch.
+- Earlier phases cannot consume protected later-phase capacity.
+- Estimated or declared values never become trusted observations.
+- CLI, MCP, HTTP, and work packets expose byte-equivalent budget values and deadlines.
+- Missing, invalid, and digest-mismatched active contracts produce byte-equivalent typed holds before peek or mutating dispatch.
+- Explicit plan-scoped restart retires only an incompatible run, is optimistic and idempotent, preserves all history, and creates neither a contract nor a successor run.
+- Explicit plan-scoped budget-hold resolution resumes only a compatible run whose existing reservation, deadline, phase, owner, and lease generation revalidate atomically; every unrepaired cause stays held.
+- The next ordinary pick creates one distinct FeatureRun and exactly one v2 contract through the existing atomic run-start path.
+
+Do not do:
+- Do not make host adapters policy owners or add provider-specific budget branches.
+- Do not migrate active Planr 1.x FeatureRuns or synthesize their missing budget contracts.

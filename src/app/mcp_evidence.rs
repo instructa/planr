@@ -115,7 +115,14 @@ impl App {
 
 fn mcp_evidence_json(command: &str, result: Result<Value>) -> Value {
     match result {
-        Ok(object) => mcp_json(super::evidence::evidence_success_envelope(command, object)),
+        Ok(object) => {
+            let envelope = super::evidence::evidence_success_envelope(command, object);
+            let mut response = mcp_json(&envelope);
+            if super::evidence::evidence_envelope_exit_code(&envelope) != 0 {
+                response["isError"] = json!(true);
+            }
+            response
+        }
         Err(error) => {
             let envelope = super::evidence::evidence_error_envelope(command, &error);
             json!({

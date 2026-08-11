@@ -1,6 +1,7 @@
 use super::{
     App, LogInput, ReviewAnnotationInput, application::ArtifactInput, recovery::ItemRecoveryInput,
 };
+use crate::execution_run::FeatureRunRestartReason;
 use crate::integrations::{mcp_json, mcp_resources, mcp_tools};
 use crate::planpack::{build_plan_body, product_plan_files};
 use crate::util::{append_line, item_id, now_string, required_arg, write_if_missing};
@@ -221,6 +222,19 @@ impl App {
             "planr_plan_audit" => Ok(mcp_json(self.plan_audit_value(required_arg(&args, "id")?)?)),
             "planr_plan_final_review" => Ok(mcp_json(
                 self.ensure_plan_final_product_review_value(required_arg(&args, "id")?)?,
+            )),
+            "planr_run_restart" => {
+                let reason = match required_arg(&args, "reason")? {
+                    "incompatible-budget" => FeatureRunRestartReason::IncompatibleBudget,
+                    value => bail!("invalid restart reason: {value}"),
+                };
+                Ok(mcp_json(self.restart_feature_run_value(
+                    required_arg(&args, "plan")?,
+                    reason,
+                )?))
+            }
+            "planr_run_resolve_budget_hold" => Ok(mcp_json(
+                self.resolve_feature_run_budget_hold_value(required_arg(&args, "plan")?)?,
             )),
             "planr_plan_link" => {
                 let source_id = required_arg(&args, "source_id")?;

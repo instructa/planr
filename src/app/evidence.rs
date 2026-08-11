@@ -1,5 +1,8 @@
 use super::App;
-use super::feature_run_evidence::{FeatureRunBudgetAdmission, FeatureRunBudgetReservation};
+use super::repository::execution_run::{
+    ExecutionRunRepository, FinalReviewSourceBindingRecord, FindingStatus, ReviewGateKind,
+    ReviewGateStatus,
+};
 use crate::cli::{
     EvidenceCapabilityCommand, EvidenceCommand, EvidenceCoverageScope, EvidenceHostCaptureCommand,
     EvidenceObligationCommand,
@@ -31,7 +34,9 @@ use crate::evidence::{
     },
 };
 use crate::execution::{BoundedProcessInput, CancellationToken, run_bounded_process};
-use crate::execution_run::{FeatureRunPhase, RunRole};
+use crate::execution_run::{
+    FeatureRunPhase, PhaseTransition, PhaseTransitionCause, RunRole, apply_phase_transition,
+};
 use anyhow::{Context, Result, anyhow, bail};
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
@@ -1358,6 +1363,7 @@ impl App {
             .filter(|runs| !runs.is_empty())
             .ok_or_else(|| EvidenceCommandError::bad_request("evidence run-index has no runs"))?;
         let mut results = Vec::with_capacity(runs.len());
+        let mut product_findings = Vec::new();
         for (expected_index, run) in runs.iter().enumerate() {
             if run["index"].as_u64() != Some(expected_index as u64) {
                 return Err(EvidenceCommandError::bad_request(
@@ -1368,13 +1374,54 @@ impl App {
             let input = run.get("input").cloned().ok_or_else(|| {
                 EvidenceCommandError::bad_request("evidence run-index entry requires input")
             })?;
-            results.push(self.evidence_run_single_value(input)?);
+            let obligation_id = string_field(&input, "obligation_id")?;
+            let result = self.evidence_run_single_value_with_routing(input, false)?;
+            let product_failed = result["receipt"]["proof_gaps"]
+                .as_array()
+                .is_some_and(|gaps| {
+                    gaps.iter().any(|gap| {
+                        gap.as_str() == Some("product_failed")
+                            || gap.get("reason").and_then(Value::as_str) == Some("product_failed")
+                    })
+                });
+            if product_failed {
+                let lease = result["feature_run_lease"].as_object().ok_or_else(|| {
+                    anyhow!("sealed product finding is missing its FeatureRun lease")
+                })?;
+                product_findings.push((
+                    expected_index,
+                    string_field(&Value::Object(lease.clone()), "run_id")?,
+                    string_field(&Value::Object(lease.clone()), "freeze_id")?,
+                    obligation_id,
+                ));
+            }
+            results.push(result);
         }
+        if let Some((_, run_id, freeze_id, _)) = product_findings.first() {
+            if product_findings
+                .iter()
+                .any(|(_, candidate_run_id, candidate_freeze_id, _)| {
+                    candidate_run_id != run_id || candidate_freeze_id != freeze_id
+                })
+            {
+                bail!("sealed product findings span multiple FeatureRun leases");
+            }
+            let obligation_ids = product_findings
+                .iter()
+                .map(|(_, _, _, obligation_id)| obligation_id.clone())
+                .collect::<Vec<_>>();
+            let finding =
+                self.route_evidence_product_findings_value(run_id, freeze_id, &obligation_ids)?;
+            for (index, _, _, _) in product_findings {
+                results[index]["product_finding"] = finding.clone();
+            }
+        }
+        let verdict = evidence_run_index_verdict(&results);
         Ok(json!({
             "schema_version": "planr.evidence.run-index.result.v1",
             "run_index_digest": declared_digest,
-            "status": "passed",
-            "verdict": "passed",
+            "status": verdict,
+            "verdict": verdict,
             "results": results,
         }))
     }
@@ -1549,6 +1596,14 @@ impl App {
     }
 
     fn evidence_run_single_value(&self, value: Value) -> Result<Value> {
+        self.evidence_run_single_value_with_routing(value, true)
+    }
+
+    fn evidence_run_single_value_with_routing(
+        &self,
+        value: Value,
+        route_product_finding: bool,
+    ) -> Result<Value> {
         reject_trusted_receipt_input(&value)?;
         if value.get("feature_run_binding").is_some() {
             return Err(EvidenceCommandError::bad_request(
@@ -1696,26 +1751,6 @@ impl App {
                 return Ok(reused);
             }
         }
-        let projected_wall_seconds = execution_contract.timeout_ms.saturating_add(999) / 1000;
-        let budget_reservation = if let Some(lease) = lease.as_ref() {
-            let run =
-                crate::app::repository::execution_run::ExecutionRunRepository::new(&self.conn)
-                    .feature_run(&lease.run_id)?;
-            match self.admit_feature_run_budget(
-                &run,
-                crate::usage_policy::BudgetPhase::Verification,
-                &format!("evidence.process:{}", crate::util::short_id("boundary")),
-                Some(projected_wall_seconds.max(1)),
-                Some(1),
-                false,
-                "evidence.process_adapter",
-            )? {
-                FeatureRunBudgetAdmission::Held(hold) => return Ok(hold),
-                FeatureRunBudgetAdmission::Reserved(reservation) => Some(reservation),
-            }
-        } else {
-            None
-        };
         let guard = |conn: &rusqlite::Connection| -> Result<()> {
             let Some(lease) = lease.as_ref() else {
                 return Ok(());
@@ -1743,9 +1778,6 @@ impl App {
             },
             &guard,
         );
-        if let Some(reservation) = budget_reservation.as_ref() {
-            self.reconcile_feature_run_budget(reservation, Some(1))?;
-        }
         let output = output?;
         let verdict = evidence_run_verdict(
             output.attempt.status,
@@ -1772,7 +1804,7 @@ impl App {
                         || gap.get("reason").and_then(Value::as_str) == Some("product_failed")
                 })
             });
-        let product_finding = if product_failed {
+        let product_finding = if product_failed && route_product_finding {
             lease
                 .as_ref()
                 .map(|lease| {
@@ -1830,7 +1862,7 @@ impl App {
     }
 
     pub(crate) fn evidence_host_capture_import_value(&self, value: Value) -> Result<Value> {
-        self.evidence_host_capture_import_value_with_observed_run(value, None, None, None)
+        self.evidence_host_capture_import_value_with_observed_run(value, None, None)
     }
 
     pub(crate) fn evidence_host_capture_run_value(&self, value: Value) -> Result<Value> {
@@ -1869,43 +1901,13 @@ impl App {
         let obligation = self.load_proof_obligation(&string_field(&value, "obligation_id")?)?;
         let lease =
             self.resolve_feature_run_evidence_lease(&project.id, obligation.plan_id.as_str())?;
-        let mut budget_reservation = None;
-        let mut budget_hold = None;
         let workflow_started_at = Instant::now();
-        let observed_run = match run_planr_observed_host_capture(self, &value, |timeout_ms| {
-            let Some(lease) = lease.as_ref() else {
-                return Ok(true);
-            };
-            let run =
-                crate::app::repository::execution_run::ExecutionRunRepository::new(&self.conn)
-                    .feature_run(&lease.run_id)?;
-            match self.admit_feature_run_budget(
-                &run,
-                crate::usage_policy::BudgetPhase::Verification,
-                &format!("evidence.host:{}", crate::util::short_id("boundary")),
-                Some(timeout_ms.saturating_add(999) / 1000),
-                Some(1),
-                false,
-                "evidence.host_capture",
-            )? {
-                FeatureRunBudgetAdmission::Held(hold) => budget_hold = Some(hold),
-                FeatureRunBudgetAdmission::Reserved(reservation) => {
-                    budget_reservation = Some(reservation)
-                }
+        let observed_run = run_planr_observed_host_capture(self, &value, |_timeout_ms| {
+            if let Some(lease) = lease.as_ref() {
+                self.validate_feature_run_evidence_lease(&self.conn, lease)?;
             }
-            Ok(budget_hold.is_none())
-        }) {
-            Ok(run) => run,
-            Err(error) => {
-                if let Some(hold) = budget_hold {
-                    return Ok(hold);
-                }
-                if let Some(reservation) = budget_reservation.as_ref() {
-                    self.reconcile_feature_run_budget(reservation, Some(1))?;
-                }
-                return Err(error);
-            }
-        };
+            Ok(true)
+        })?;
         let workflow_timeout_ms = observed_run.workflow_timeout_ms;
         let mut import_input = json!({
             "schema_version": "planr.evidence.host_capture.import.v1",
@@ -1924,7 +1926,6 @@ impl App {
         self.evidence_host_capture_import_value_with_observed_run(
             import_input,
             Some(observed_run),
-            budget_reservation,
             Some((workflow_started_at, workflow_timeout_ms)),
         )
     }
@@ -1933,7 +1934,6 @@ impl App {
         &self,
         value: Value,
         observed_run: Option<ObservedHostCaptureRun>,
-        supplied_budget_reservation: Option<FeatureRunBudgetReservation>,
         workflow_deadline: Option<(Instant, u64)>,
     ) -> Result<Value> {
         reject_trusted_receipt_input(&value)?;
@@ -1972,28 +1972,7 @@ impl App {
         let obligation = self.load_proof_obligation(&obligation_id)?;
         let lease =
             self.resolve_feature_run_evidence_lease(&project.id, obligation.plan_id.as_str())?;
-        let budget_reservation = if supplied_budget_reservation.is_some() {
-            supplied_budget_reservation
-        } else if let Some(lease) = lease.as_ref() {
-            let run =
-                crate::app::repository::execution_run::ExecutionRunRepository::new(&self.conn)
-                    .feature_run(&lease.run_id)?;
-            match self.admit_feature_run_budget(
-                &run,
-                crate::usage_policy::BudgetPhase::Verification,
-                &format!("evidence.host:{}", crate::util::short_id("boundary")),
-                Some(30),
-                Some(1),
-                false,
-                "evidence.host_capture",
-            )? {
-                FeatureRunBudgetAdmission::Held(hold) => return Ok(hold),
-                FeatureRunBudgetAdmission::Reserved(reservation) => Some(reservation),
-            }
-        } else {
-            None
-        };
-        let result = (|| -> Result<Value> {
+        (|| -> Result<Value> {
             let import_root =
                 resolve_evidence_input_path(&self.root, &string_field(&value, "import_root")?);
             let experiment_id = value
@@ -2431,11 +2410,7 @@ impl App {
                 "verdict": "trusted",
                 "feature_run_lease": lease,
             }))
-        })();
-        if let Some(reservation) = budget_reservation.as_ref() {
-            self.reconcile_feature_run_budget(reservation, Some(1))?;
-        }
-        result
+        })()
     }
 
     pub(crate) fn evidence_attempts_value(
@@ -2554,6 +2529,14 @@ impl App {
         plan_id: &str,
         coverage_binding: Value,
     ) -> Result<Option<Value>> {
+        let current_worker = crate::util::worker_id();
+        if let Some(settlement) = self.settle_review_finding_reverification(
+            plan_id,
+            coverage_binding.clone(),
+            &current_worker,
+        )? {
+            return Ok(Some(settlement));
+        }
         let project = self.default_project()?;
         let plan = self.get_plan(plan_id)?;
         let repository = super::repository::execution_run::ExecutionRunRepository::new(&self.conn);
@@ -2586,7 +2569,6 @@ impl App {
                     persisted.run.id
                 )
             })?;
-        let current_worker = crate::util::worker_id();
         if verifier.worker_id != current_worker {
             bail!(
                 "verification_coverage_requires_verifier_lease:{}",
@@ -2681,6 +2663,184 @@ impl App {
                 let _ = self.conn.execute_batch(
                     "ROLLBACK TO settle_verification_item; RELEASE settle_verification_item; ROLLBACK",
                 );
+                Err(error)
+            }
+        }
+    }
+
+    fn settle_review_finding_reverification(
+        &self,
+        plan_id: &str,
+        coverage_binding: Value,
+        verifier_worker_id: &str,
+    ) -> Result<Option<Value>> {
+        self.conn
+            .execute_batch("BEGIN IMMEDIATE; SAVEPOINT settle_review_finding_reverification")?;
+        let result = (|| -> Result<Option<Value>> {
+            let project = self.default_project()?;
+            let repository = ExecutionRunRepository::new(&self.conn);
+            let Some(current) = repository.active_feature_run_for_plan(&project.id, plan_id)?
+            else {
+                return Ok(None);
+            };
+            let run_id = current.run.id.as_str();
+            let Some(gate) = repository
+                .review_gates_for_run(run_id, false)?
+                .into_iter()
+                .find(|gate| gate.kind == ReviewGateKind::FinalProduct)
+            else {
+                return Ok(None);
+            };
+            let findings = repository.findings(&gate.id)?;
+            if findings.is_empty() {
+                return Ok(None);
+            }
+            if findings
+                .iter()
+                .any(|finding| finding.status != FindingStatus::Resolved)
+            {
+                if current.run.phase == FeatureRunPhase::Verification {
+                    bail!("review_reverification_findings_not_resolved:{}", gate.id);
+                }
+                return Ok(None);
+            }
+            if !matches!(
+                current.run.phase,
+                FeatureRunPhase::Verification | FeatureRunPhase::SourceFrozen
+            ) {
+                return Ok(None);
+            }
+
+            let evaluated_at = timestamp()?;
+            let coverage = evaluate_plan_coverage(&self.conn, &project.id, plan_id, &evaluated_at)
+                .map_err(|error| anyhow!("{error}"))?;
+            let mut locked_coverage = json!({
+                "coverage": coverage.verdict,
+                "coverage_id": coverage.id,
+                "status": coverage.status.as_str(),
+                "receipt_digests": coverage.receipt_digests,
+                "waiver_digests": coverage.waiver_digests,
+                "receipt_lineage": coverage.receipt_lineage,
+                "verdict": coverage.status.as_str(),
+            });
+            locked_coverage["canonical_projection"] =
+                canonical_coverage_projection(&locked_coverage);
+            for field in [
+                "coverage_id",
+                "status",
+                "receipt_digests",
+                "waiver_digests",
+                "receipt_lineage",
+            ] {
+                if coverage_binding[field] != locked_coverage[field] {
+                    bail!("review_reverification_coverage_changed:{plan_id}:{field}");
+                }
+            }
+            if locked_coverage["status"] != "satisfied"
+                || locked_coverage["receipt_digests"]
+                    .as_array()
+                    .is_none_or(Vec::is_empty)
+                || locked_coverage["waiver_digests"]
+                    .as_array()
+                    .is_some_and(|values| !values.is_empty())
+            {
+                bail!("review_reverification_requires_unwaived_satisfied_coverage:{plan_id}");
+            }
+
+            let freeze = repository
+                .active_source_freeze(run_id)?
+                .ok_or_else(|| anyhow!("review_reverification_freeze_missing:{run_id}"))?;
+            let binding = FinalReviewSourceBindingRecord {
+                gate_id: gate.id.clone(),
+                freeze_id: freeze.id.clone(),
+                source_revision: freeze.source_revision.clone(),
+                source_digest: freeze.source_digest.clone(),
+                receipt_lineage: locked_coverage["receipt_lineage"].clone(),
+            };
+
+            if gate.status == ReviewGateStatus::Pending {
+                if current.run.phase != FeatureRunPhase::SourceFrozen {
+                    bail!(
+                        "review_reverification_idempotence_phase_conflict:{}",
+                        gate.id
+                    );
+                }
+                let stored = repository
+                    .final_review_source_binding(&gate.id)?
+                    .ok_or_else(|| anyhow!("review_reverification_binding_missing:{}", gate.id))?;
+                if stored != binding {
+                    bail!("review_reverification_idempotence_conflict:{}", gate.id);
+                }
+                return Ok(Some(json!({
+                    "mode": "review_finding_reverification",
+                    "review_gate_id": gate.id,
+                    "status": "already_settled",
+                    "source_freeze": freeze,
+                    "coverage": locked_coverage,
+                    "next_action": format!("planr pick --plan {plan_id} --work-type review --json"),
+                })));
+            }
+            if gate.status != ReviewGateStatus::ChangesRequested {
+                bail!("review_reverification_gate_not_repairing:{}", gate.id);
+            }
+            if current.run.phase != FeatureRunPhase::Verification {
+                bail!("review_reverification_phase_conflict:{run_id}");
+            }
+            let verifier = current
+                .run
+                .role_owners
+                .iter()
+                .find(|owner| owner.role == RunRole::Verifier)
+                .ok_or_else(|| anyhow!("review_reverification_verifier_missing:{run_id}"))?;
+            if verifier.worker_id != verifier_worker_id {
+                bail!("review_reverification_verifier_conflict:{run_id}");
+            }
+            let snapshot = capture_repository_snapshot(&self.root)
+                .map_err(|error| anyhow!("review_reverification_source_capture:{error}"))?;
+            if snapshot.source.revision != freeze.source_revision
+                || snapshot.source.tree_digest.as_str() != freeze.source_digest
+            {
+                bail!("review_reverification_source_stale:{}", freeze.id);
+            }
+            repository.rebind_final_review_gate_source(&binding)?;
+            repository.set_review_gate_status(
+                &gate.id,
+                ReviewGateStatus::ChangesRequested,
+                ReviewGateStatus::Pending,
+            )?;
+            self.reconcile_active_phase_wall(run_id, crate::usage_policy::BudgetPhase::Repair)?;
+            self.reconcile_active_phase_wall(
+                run_id,
+                crate::usage_policy::BudgetPhase::Verification,
+            )?;
+            let review_ready = apply_phase_transition(
+                &current.run,
+                &PhaseTransition {
+                    to: FeatureRunPhase::SourceFrozen,
+                    cause: PhaseTransitionCause::VerificationPassed,
+                    reference: format!("review_gate:{}", gate.id),
+                    owner: None,
+                },
+            )
+            .map_err(|violation| anyhow!("review_reverification_transition:{violation:?}"))?;
+            repository.save_feature_run(&review_ready, current.revision)?;
+            Ok(Some(json!({
+                "mode": "review_finding_reverification",
+                "review_gate_id": gate.id,
+                "status": "settled",
+                "source_freeze": freeze,
+                "coverage": locked_coverage,
+                "next_action": format!("planr pick --plan {plan_id} --work-type review --json"),
+            })))
+        })();
+        match result {
+            Ok(value) => {
+                self.conn
+                    .execute_batch("RELEASE settle_review_finding_reverification; COMMIT")?;
+                Ok(value)
+            }
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK TO settle_review_finding_reverification; RELEASE settle_review_finding_reverification; ROLLBACK");
                 Err(error)
             }
         }
@@ -3066,6 +3226,22 @@ fn evidence_run_verdict(status: AttemptStatus, exit: &Value, raw_result: &Value)
         })
         .unwrap_or_else(|| status.as_str())
         .to_string()
+}
+
+fn evidence_run_index_verdict(results: &[Value]) -> &'static str {
+    let mut verdict = "passed";
+    for result in results {
+        match result["verdict"].as_str() {
+            Some("passed" | "trusted" | "valid" | "satisfied" | "waived") => {}
+            Some("timed_out") => return "timed_out",
+            Some("aborted") => return "aborted",
+            Some("unavailable") => return "unavailable",
+            Some("inconclusive") if verdict == "passed" => verdict = "inconclusive",
+            Some("failed" | "verifier_failed" | "skipped") | None => verdict = "failed",
+            Some(_) => verdict = "failed",
+        }
+    }
+    verdict
 }
 
 pub(crate) fn evidence_success_envelope(command: &str, object: Value) -> Value {
@@ -4387,6 +4563,27 @@ mod tests {
             evidence_success_envelope("evidence.run", json!({"verdict": "blocked"}))["exit"]["code"],
             EVIDENCE_BLOCKED
         );
+        assert_eq!(
+            evidence_run_index_verdict(&[json!({"verdict": "passed"})]),
+            "passed"
+        );
+        for (outcome, expected, exit) in [
+            ("failed", "failed", EVIDENCE_UNSATISFIED),
+            ("inconclusive", "inconclusive", EVIDENCE_UNSATISFIED),
+            ("timed_out", "timed_out", EVIDENCE_BLOCKED),
+            ("aborted", "aborted", EVIDENCE_BLOCKED),
+            ("unavailable", "unavailable", EVIDENCE_BLOCKED),
+        ] {
+            let verdict = evidence_run_index_verdict(&[
+                json!({"verdict": "passed"}),
+                json!({"verdict": outcome}),
+            ]);
+            assert_eq!(verdict, expected);
+            assert_eq!(
+                evidence_success_envelope("evidence.run", json!({"verdict": verdict}))["exit"]["code"],
+                exit
+            );
+        }
     }
 
     #[test]

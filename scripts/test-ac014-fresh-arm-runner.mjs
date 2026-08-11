@@ -42,6 +42,16 @@ execFileSync("git", ["config", "user.name", "Planr Test"], { cwd: baseline });
 execFileSync("git", ["add", "."], { cwd: baseline });
 execFileSync("git", ["commit", "-m", "fixture"], { cwd: baseline, stdio: "ignore" });
 const candidateSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: baseline, encoding: "utf8" }).trim();
+const planrCandidate = path.join(root, "planr-candidate");
+mkdirSync(planrCandidate);
+writeFileSync(path.join(planrCandidate, "README.md"), "# exact Planr candidate\n");
+execFileSync("git", ["init"], { cwd: planrCandidate, stdio: "ignore" });
+execFileSync("git", ["config", "user.email", "planr@example.invalid"], { cwd: planrCandidate });
+execFileSync("git", ["config", "user.name", "Planr Test"], { cwd: planrCandidate });
+execFileSync("git", ["add", "."], { cwd: planrCandidate });
+execFileSync("git", ["commit", "-m", "fixture"], { cwd: planrCandidate, stdio: "ignore" });
+const planrCandidateSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: planrCandidate, encoding: "utf8" }).trim();
+const planrCandidateTree = execFileSync("git", ["rev-parse", "HEAD^{tree}"], { cwd: planrCandidate, encoding: "utf8" }).trim();
 
 const callsPath = path.join(root, "calls.jsonl");
 const stubPath = path.join(root, "planr-stub.mjs");
@@ -65,19 +75,43 @@ const fixedContract = {
   oracle_sha256: sha256File(oracleStubPath),
 };
 
+const controlHandoff = {
+  schema_version: "planr.ac014.control_handoff.v1",
+  plan_id: "pln-canonical-arm",
+  preflight_item_id: "item-preflight",
+  verification_item_id: "item-verification",
+  obligation_id: "pob-canonical-arm",
+  policy_digest: `sha256:${"a".repeat(64)}`,
+  review_required: true,
+  planr_candidate: {
+    root: planrCandidate,
+    source_revision: planrCandidateSha,
+    source_tree: planrCandidateTree,
+    binary_sha256: sha256File(stubPath),
+    accepted_fix_review_gate_id: "i-review-verifier-phase-fix",
+  },
+};
+
 const fresh = path.join(root, "fresh");
 const passed = await run(config({
   fresh_root: fresh,
   oracle_command: [oracleStubPath],
+  evidence_prepare_commands: [[
+    process.execPath,
+    "-e",
+    "require('node:fs').writeFileSync('.planr/evidence-prepared', 'ok')",
+  ]],
 }), path.join(root, "result.json"), callsPath, codexCommand(codexStubPath));
 assert.equal(passed.status, 0, passed.output);
 const result = JSON.parse(readFileSync(path.join(root, "result.json"), "utf8"));
 assert.equal(result.status, "passed");
 assert.equal(result.retry, false);
 assert.equal(result.copied_from_declared_baseline_only, true);
+assert.deepEqual(result.control_handoff, controlHandoff);
 assert.equal(statSync(path.join(fresh, "README.md")).isFile(), true);
 assert.equal(result.observed_contract.candidate_sha, candidateSha);
 assert.equal(result.observed_contract.candidate_binary_sha256, fixedContract.candidate_binary_sha256);
+assert.deepEqual(result.observed_contract.planr_candidate, controlHandoff.planr_candidate);
 assert.equal(result.observed_contract.prompt_digest, fixedContract.prompt_digest);
 assert.equal(result.observed_contract.spec_digest, fixedContract.spec_digest);
 assert.equal(result.observed_contract.model, "gpt-5.6-sol");
@@ -100,6 +134,7 @@ assert.equal(result.codex.launch_identity.environment.codex_home, codexHome);
 assert.equal(result.codex.launch_identity.environment.node_realpath, realpathSync(process.execPath));
 assert.equal(result.codex.launch_identity.environment.injection_variables_absent, true);
 const preflight = JSON.parse(readFileSync(path.join(fresh, ".planr", "artifacts", "ac014", "PREFLIGHT.json"), "utf8"));
+assert.deepEqual(preflight.control_handoff, controlHandoff);
 assert.equal(preflight.codex_launch_identity.model, "gpt-5.6-sol");
 assert.equal(preflight.codex_launch_identity.effort_config, 'model_reasoning_effort="medium"');
 assert.equal(preflight.codex_launch_identity.prompt_delivery.sha256, fixedContract.prompt_digest);
@@ -114,6 +149,9 @@ assert.equal(result.ceilings.checks.total_tokens.status, "passed");
 assert.equal(result.ceilings.checks.tool_call_envelopes.status, "passed");
 assert.equal(result.oracle.status, "passed");
 assert.equal(result.evidence_migration.input, ".planr/evidence-migration.json");
+assert.equal(result.evidence_migration.preparation.length, 1);
+assert.equal(result.evidence_migration.preparation[0].status, 0);
+assert.equal(readFileSync(path.join(fresh, ".planr", "evidence-prepared"), "utf8"), "ok");
 assert.equal(result.sessions.find((session) => session.id === "session-child").parent, "session-root");
 assert.equal(statSync(path.join(fresh, ".planr", "artifacts", "ac014", "PREFLIGHT.json")).isFile(), true);
 assert.equal(statSync(path.join(fresh, ".planr", "artifacts", "ac014", "BENCHMARK_RESULT.json")).isFile(), true);
@@ -130,7 +168,8 @@ writeExecutable(falsePositiveStubPath, stubCodexSession({
   childTools: 3,
   rootSessionId: falsePositiveRoot,
   childSessionId: falsePositiveChild,
-  embeddedParentSessionId: falsePositiveRoot,
+  embeddedParentSessionId: falsePositiveChild,
+  inheritedSecondSessionMeta: true,
 }));
 const falsePositiveRun = await run(config({
   fresh_root: path.join(root, "fresh-false-positive"),
@@ -140,6 +179,90 @@ assert.equal(falsePositiveRun.status, 0, falsePositiveRun.output);
 const falsePositiveResult = JSON.parse(readFileSync(path.join(root, "false-positive-result.json"), "utf8"));
 assert.deepEqual(falsePositiveResult.sessions.map((session) => session.id), [falsePositiveRoot, falsePositiveChild]);
 assert.equal(falsePositiveResult.sessions.find((session) => session.id === falsePositiveChild).parent, falsePositiveRoot);
+assert.deepEqual(falsePositiveResult.sessions.find((session) => session.id === falsePositiveChild).turn_context, { model: "gpt-5.6-sol", effort: "medium" });
+
+const sharedHistoryStubPath = path.join(root, "codex-shared-history-stub.mjs");
+writeExecutable(sharedHistoryStubPath, stubCodexSession({
+  rootTokens: 5977800,
+  childTokens: 96,
+  rootTools: 90,
+  childTools: 3,
+  extraUnrelatedDuplicate: true,
+}));
+const sharedHistoryRun = await run(config({
+  fresh_root: path.join(root, "fresh-shared-history"),
+  oracle_command: [oracleStubPath],
+}), path.join(root, "shared-history-result.json"), path.join(root, "calls-shared-history.jsonl"), codexCommand(sharedHistoryStubPath));
+assert.equal(sharedHistoryRun.status, 0, sharedHistoryRun.output);
+const sharedHistory = JSON.parse(readFileSync(path.join(root, "shared-history-result.json"), "utf8"));
+assert.deepEqual(sharedHistory.sessions.map((session) => session.path).sort(), ["sessions/session-child.jsonl", "sessions/session-root.jsonl"]);
+
+const missingCodexHomeInput = config({
+  fresh_root: path.join(root, "fresh-missing-codex-home"),
+  oracle_command: [oracleStubPath],
+});
+delete missingCodexHomeInput.codex_home;
+const missingCodexHome = await run(missingCodexHomeInput, path.join(root, "missing-codex-home-result.json"), path.join(root, "calls-missing-codex-home.jsonl"), codexCommand(codexStubPath));
+assert.equal(missingCodexHome.status, 1);
+assert.match(JSON.parse(readFileSync(path.join(root, "missing-codex-home-result.json"), "utf8")).error, /isolated persistent benchmark CODEX_HOME/);
+
+const activeSharedCodexHome = path.join(root, "active-shared-codex-home");
+mkdirSync(activeSharedCodexHome);
+const activeSharedCodexHomeRun = await withEnv("CODEX_HOME", activeSharedCodexHome, () => run(config({
+  fresh_root: path.join(root, "fresh-active-shared-codex-home"),
+  oracle_command: [oracleStubPath],
+  codex_home: activeSharedCodexHome,
+}), path.join(root, "active-shared-codex-home-result.json"), path.join(root, "calls-active-shared-codex-home.jsonl"), codexCommand(codexStubPath)));
+assert.equal(activeSharedCodexHomeRun.status, 1);
+assert.match(JSON.parse(readFileSync(path.join(root, "active-shared-codex-home-result.json"), "utf8")).error, /active shared Codex profile/);
+
+const defaultHome = path.join(root, "default-home");
+const defaultSharedCodexHome = path.join(defaultHome, ".codex");
+mkdirSync(defaultSharedCodexHome, { recursive: true });
+const defaultSharedCodexHomeRun = await withEnv("HOME", defaultHome, () => run(config({
+  fresh_root: path.join(root, "fresh-default-shared-codex-home"),
+  oracle_command: [oracleStubPath],
+  codex_home: defaultSharedCodexHome,
+}), path.join(root, "default-shared-codex-home-result.json"), path.join(root, "calls-default-shared-codex-home.jsonl"), codexCommand(codexStubPath)));
+assert.equal(defaultSharedCodexHomeRun.status, 1);
+assert.match(JSON.parse(readFileSync(path.join(root, "default-shared-codex-home-result.json"), "utf8")).error, /active shared Codex profile/);
+
+const userSharedCodexHome = path.join(process.env.HOME ?? "", ".codex-kevin");
+if (existsSync(userSharedCodexHome)) {
+  const userSharedCodexHomeRun = await run(config({
+    fresh_root: path.join(root, "fresh-user-shared-codex-home"),
+    oracle_command: [oracleStubPath],
+    codex_home: userSharedCodexHome,
+  }), path.join(root, "user-shared-codex-home-result.json"), path.join(root, "calls-user-shared-codex-home.jsonl"), codexCommand(codexStubPath));
+  assert.equal(userSharedCodexHomeRun.status, 1);
+  assert.match(JSON.parse(readFileSync(path.join(root, "user-shared-codex-home-result.json"), "utf8")).error, /active shared Codex profile/);
+}
+
+const nestedCodexHome = path.join(baseline, "nested-codex-home");
+mkdirSync(nestedCodexHome);
+const nestedCodexHomeRun = await run(config({
+  fresh_root: path.join(root, "fresh-nested-codex-home"),
+  oracle_command: [oracleStubPath],
+  codex_home: nestedCodexHome,
+}), path.join(root, "nested-codex-home-result.json"), path.join(root, "calls-nested-codex-home.jsonl"), codexCommand(codexStubPath));
+assert.equal(nestedCodexHomeRun.status, 1);
+assert.match(JSON.parse(readFileSync(path.join(root, "nested-codex-home-result.json"), "utf8")).error, /codex_home must be isolated/);
+
+const cleanupPidFile = path.join(root, "cleanup-child.pid");
+const cleanupStubPath = path.join(root, "codex-cleanup-stub.mjs");
+writeExecutable(cleanupStubPath, stubCodexMonitorFailureWithDescendant(cleanupPidFile));
+const cleanupRun = await run(config({
+  fresh_root: path.join(root, "fresh-cleanup"),
+  oracle_command: [oracleStubPath],
+  monitor_poll_ms: 5,
+  root_session_id: "session-root",
+}), path.join(root, "cleanup-result.json"), path.join(root, "calls-cleanup.jsonl"), codexCommand(cleanupStubPath));
+assert.equal(cleanupRun.status, 1);
+assert.match(JSON.parse(readFileSync(path.join(root, "cleanup-result.json"), "utf8")).error, /cyclic Codex session lineage/);
+const cleanupPid = Number.parseInt(readFileSync(cleanupPidFile, "utf8"), 10);
+assert.equal(Number.isInteger(cleanupPid), true);
+await sleep(1200);
+assert.equal(isPidAlive(cleanupPid), false);
 
 const transcriptFixtureDir = path.join(repoRoot, "tests", "fixtures", "ac014", "failed-transcript-min");
 const transcriptManifest = JSON.parse(readFileSync(path.join(transcriptFixtureDir, "manifest.json"), "utf8"));
@@ -407,16 +530,76 @@ assert.equal(publicationDeadline.status, 1);
 const publicationDeadlineResult = JSON.parse(readFileSync(path.join(root, "publication-deadline-result.json"), "utf8"));
 assert.equal(publicationDeadlineResult.status, "failed");
 assert.equal(publicationDeadlineResult.failure_class, "product");
+assert.equal(publicationDeadlineResult.sessions.length, 2);
+assert.equal(publicationDeadlineResult.sessions.reduce((sum, session) => sum + session.usage.total_tokens, 0), 5977896);
+assert.equal(publicationDeadlineResult.sessions.reduce((sum, session) => sum + session.usage.tool_call_envelopes, 0), 93);
+assert.equal(publicationDeadlineResult.oracle, null);
 const committedDeadlineResult = JSON.parse(readFileSync(path.join(publicationDeadlineFresh, ".planr", "artifacts", "ac014", "BENCHMARK_RESULT.json"), "utf8"));
 assert.equal(committedDeadlineResult.status, "failed");
+assert.equal(committedDeadlineResult.verdict, "failed");
 assert.equal(committedDeadlineResult.stop_reason, "deadline_exceeded");
+assert.equal(committedDeadlineResult.oracle, null);
+const publicationDeadlineMonitor = JSON.parse(readFileSync(path.join(publicationDeadlineFresh, ".planr", "artifacts", "ac014", "monitor-status.json"), "utf8"));
+assert.equal(publicationDeadlineMonitor.status, "failed");
+assert.equal(publicationDeadlineMonitor.verdict, "failed");
+assert.equal(publicationDeadlineMonitor.stop_reason, "deadline_exceeded");
+assert.equal(publicationDeadlineMonitor.oracle, null);
 assertCompleteArtifactSet(publicationDeadlineFresh);
+
+const finalizationDeadlineStubPath = path.join(root, "codex-finalization-deadline-stub.mjs");
+writeExecutable(finalizationDeadlineStubPath, stubCodexSession({
+  rootTokens: 3000000,
+  childTokens: 600000,
+  grandchildTokens: 9041,
+  rootTools: 40,
+  childTools: 10,
+  grandchildTools: 6,
+}));
+const finalizationDeadlineFresh = path.join(root, "fresh-finalization-deadline");
+const finalizationDeadline = await run(config({
+  fresh_root: finalizationDeadlineFresh,
+  oracle_command: [oracleStubPath],
+  test_post_session_deadline_elapsed_wall_seconds: fixedCeilings.wall_time_seconds + 0.1,
+}), path.join(root, "finalization-deadline-result.json"), path.join(root, "calls-finalization-deadline.jsonl"), codexCommand(finalizationDeadlineStubPath));
+assert.equal(finalizationDeadline.status, 1);
+const finalizationDeadlineResult = JSON.parse(readFileSync(path.join(root, "finalization-deadline-result.json"), "utf8"));
+assert.equal(finalizationDeadlineResult.status, "failed");
+assert.equal(finalizationDeadlineResult.failure_class, "product");
+assert.equal(finalizationDeadlineResult.retry, false);
+assert.match(finalizationDeadlineResult.error, /deadline exceeded during artifact_finalization/);
+assert.equal(finalizationDeadlineResult.sessions.length, 3);
+assert.equal(finalizationDeadlineResult.sessions.reduce((sum, session) => sum + session.usage.total_tokens, 0), 3609041);
+assert.equal(finalizationDeadlineResult.sessions.reduce((sum, session) => sum + session.usage.tool_call_envelopes, 0), 56);
+assert.equal(finalizationDeadlineResult.ceilings.checks.wall_time_seconds.status, "failed");
+assert.equal(finalizationDeadlineResult.ceilings.checks.total_tokens.observed, 3609041);
+assert.equal(finalizationDeadlineResult.ceilings.checks.total_tokens.status, "passed");
+assert.equal(finalizationDeadlineResult.ceilings.checks.tool_call_envelopes.observed, 56);
+assert.equal(finalizationDeadlineResult.ceilings.checks.tool_call_envelopes.status, "passed");
+assert.equal(finalizationDeadlineResult.oracle, null);
+const committedFinalizationDeadline = JSON.parse(readFileSync(path.join(finalizationDeadlineFresh, ".planr", "artifacts", "ac014", "BENCHMARK_RESULT.json"), "utf8"));
+assert.equal(committedFinalizationDeadline.status, "failed");
+assert.equal(committedFinalizationDeadline.stop_reason, "deadline_exceeded");
+assert.equal(committedFinalizationDeadline.sessions.length, 3);
+assert.equal(committedFinalizationDeadline.sessions.reduce((sum, session) => sum + session.usage.total_tokens, 0), 3609041);
+assert.equal(committedFinalizationDeadline.sessions.reduce((sum, session) => sum + session.usage.tool_call_envelopes, 0), 56);
+assert.equal(committedFinalizationDeadline.ceilings.checks.wall_time_seconds.status, "failed");
+assert.equal(committedFinalizationDeadline.ceilings.checks.total_tokens.observed, 3609041);
+assert.equal(committedFinalizationDeadline.ceilings.checks.tool_call_envelopes.observed, 56);
+assert.equal(committedFinalizationDeadline.oracle, null);
+const finalizationDeadlineMonitor = JSON.parse(readFileSync(path.join(finalizationDeadlineFresh, ".planr", "artifacts", "ac014", "monitor-status.json"), "utf8"));
+assert.equal(finalizationDeadlineMonitor.status, "failed");
+assert.equal(finalizationDeadlineMonitor.stop_reason, "deadline_exceeded");
+assert.equal(finalizationDeadlineMonitor.sessions.length, 3);
+assert.equal(finalizationDeadlineMonitor.ceilings.checks.wall_time_seconds.status, "failed");
+assert.equal(finalizationDeadlineMonitor.oracle, null);
+assertCompleteArtifactSet(finalizationDeadlineFresh);
 
 const cycleStubPath = path.join(root, "codex-cycle-stub.mjs");
 writeExecutable(cycleStubPath, stubCodexCycle());
 const cycle = await run(config({
   fresh_root: path.join(root, "fresh-cycle"),
   oracle_command: [oracleStubPath],
+  root_session_id: "session-root",
 }), path.join(root, "cycle-result.json"), path.join(root, "calls-cycle.jsonl"), codexCommand(cycleStubPath));
 assert.equal(cycle.status, 1);
 assert.match(JSON.parse(readFileSync(path.join(root, "cycle-result.json"), "utf8")).error, /cyclic Codex session lineage/);
@@ -428,6 +611,13 @@ const outside = await run(config({
   fresh_root: path.join(root, "fresh-outside"),
   planr_bin: outsideStubPath,
   fixed_contract: outsideContract,
+  control_handoff: {
+    ...controlHandoff,
+    planr_candidate: {
+      ...controlHandoff.planr_candidate,
+      binary_sha256: sha256File(outsideStubPath),
+    },
+  },
   oracle_command: [oracleStubPath],
 }), path.join(root, "outside-result.json"), path.join(root, "calls-outside.jsonl"), codexCommand(codexStubPath));
 assert.equal(outside.status, 1);
@@ -450,6 +640,7 @@ function config(overrides) {
     codex_surface: "identical",
     oracle_id: "sparziele-exact-product-flow-v1",
     fixed_contract: fixedContract,
+    control_handoff: controlHandoff,
     ceilings: fixedCeilings,
     monitor_poll_ms: 20,
     ...overrides,
@@ -484,6 +675,10 @@ function codexCommand(file, {
 async function run(input, resultPath, callsFile, testCodexCommand = codexCommand(codexStubPath)) {
   const inputPath = `${resultPath}.input.json`;
   writeFileSync(inputPath, JSON.stringify(input));
+  if (input.codex_home === codexHome) {
+    rmSync(path.join(codexHome, "sessions"), { recursive: true, force: true });
+    mkdirSync(path.join(codexHome, "sessions"), { recursive: true });
+  }
   const previousCalls = process.env.PLANR_STUB_CALLS;
   try {
     process.env.PLANR_STUB_CALLS = callsFile;
@@ -603,8 +798,10 @@ function destinationFromDb(args) {
 function stubCodexSession({
   rootTokens,
   childTokens,
+  grandchildTokens = 0,
   rootTools,
   childTools,
+  grandchildTools = 0,
   sleepMs = 0,
   rootOriginator = "codex_exec",
   rootSource = "exec",
@@ -612,6 +809,8 @@ function stubCodexSession({
   rootSessionId = "session-root",
   childSessionId = "session-child",
   embeddedParentSessionId = "session-root",
+  extraUnrelatedDuplicate = false,
+  inheritedSecondSessionMeta = false,
 }) {
   return `#!/usr/bin/env node
 import { appendFileSync } from "node:fs";
@@ -624,11 +823,19 @@ appendFileSync(rootSession, JSON.stringify({ type: "turn_context", payload: { mo
 appendFileSync(rootSession, JSON.stringify({ type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { total_tokens: ${rootTokens} }, last_token_usage: { total_tokens: 999999999 } }, tool_call_envelopes: ${rootTools} } }) + "\\n");
 appendFileSync(rootSession, JSON.stringify({ session_id: ${JSON.stringify(rootSessionId)}, type: "function_call", id: "root-call" }) + "\\n");
 ${childTokens > 0 ? `const childSession = path.join(home, "sessions", ${JSON.stringify(childSessionId)} + ".jsonl");
-appendFileSync(childSession, JSON.stringify({ type: "event_msg", payload: { type: "session_meta", session_id: ${JSON.stringify(rootSessionId)}, id: ${JSON.stringify(childSessionId)}, cwd, role: "subagent", cli_version: ${JSON.stringify(cliVersion)}, originator: "codex_exec", source: { subagent: { thread_spawn: { parent_thread_id: ${JSON.stringify(rootSessionId)} } } } } }) + "\\n");
+appendFileSync(childSession, JSON.stringify({ type: "event_msg", payload: { type: "session_meta", session_id: ${JSON.stringify(rootSessionId)}, id: ${JSON.stringify(childSessionId)}, cwd, role: "subagent", cli_version: ${JSON.stringify(cliVersion)}, originator: "codex_exec", source: { subagent: { thread_spawn: { parent_thread_id: ${JSON.stringify(rootSessionId)} } } }, turn_context: { model: "gpt-5.6-sol", effort: "medium" } } }) + "\\n");
+${inheritedSecondSessionMeta ? `appendFileSync(childSession, JSON.stringify({ type: "event_msg", payload: { type: "session_meta", session_id: ${JSON.stringify(embeddedParentSessionId)}, id: ${JSON.stringify(childSessionId)}, cwd, role: "subagent", cli_version: ${JSON.stringify(cliVersion)}, originator: "codex_exec", source: { subagent: { thread_spawn: { parent_thread_id: ${JSON.stringify(embeddedParentSessionId)} } } }, turn_context: { model: "gpt-4.1", effort: "high" } } }) + "\\n");` : ""}
 appendFileSync(childSession, JSON.stringify({ type: "event_msg", payload: { session_id: ${JSON.stringify(embeddedParentSessionId)}, source: { subagent: { thread_spawn: { parent_thread_id: ${JSON.stringify(embeddedParentSessionId)} } } } } }) + "\\n");
 appendFileSync(childSession, JSON.stringify({ type: "turn_context", payload: { model: "gpt-5.6-sol", effort: "medium" } }) + "\\n");
 appendFileSync(childSession, JSON.stringify({ type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { total_tokens: ${childTokens} }, last_token_usage: { total_tokens: 777777777 } }, tool_call_envelopes: ${childTools} } }) + "\\n");
 appendFileSync(childSession, JSON.stringify({ session_id: ${JSON.stringify(childSessionId)}, type: "custom_tool_call", id: "child-call" }) + "\\n");` : ""}
+${grandchildTokens > 0 ? `const grandchildSession = path.join(home, "sessions", "session-grandchild.jsonl");
+appendFileSync(grandchildSession, JSON.stringify({ type: "event_msg", payload: { type: "session_meta", session_id: ${JSON.stringify(childSessionId)}, id: "session-grandchild", cwd, role: "subagent", cli_version: ${JSON.stringify(cliVersion)}, originator: "codex_exec", source: { subagent: { thread_spawn: { parent_thread_id: ${JSON.stringify(childSessionId)} } } }, turn_context: { model: "gpt-5.6-sol", effort: "medium" } } }) + "\\n");
+appendFileSync(grandchildSession, JSON.stringify({ type: "turn_context", payload: { model: "gpt-5.6-sol", effort: "medium" } }) + "\\n");
+appendFileSync(grandchildSession, JSON.stringify({ type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { total_tokens: ${grandchildTokens} }, last_token_usage: { total_tokens: 555555555 } }, tool_call_envelopes: ${grandchildTools} } }) + "\\n");
+appendFileSync(grandchildSession, JSON.stringify({ session_id: "session-grandchild", type: "custom_tool_call", id: "grandchild-call" }) + "\\n");` : ""}
+${extraUnrelatedDuplicate ? `const unrelated = path.join(home, "sessions", "old-unrelated-duplicate.jsonl");
+appendFileSync(unrelated, JSON.stringify({ type: "event_msg", payload: { type: "session_meta", id: ${JSON.stringify(childSessionId)}, cwd: "/old/shared/profile", role: "old", cli_version: ${JSON.stringify(cliVersion)}, originator: "codex_exec", source: "exec" } }) + "\\n");` : ""}
 ${sleepMs > 0 ? `await new Promise((resolve) => setTimeout(resolve, ${sleepMs}));` : ""}
 `;
 }
@@ -655,4 +862,45 @@ const home = ${JSON.stringify(codexHome)};
 const cwd = process.cwd();
 appendFileSync(path.join(home, "sessions", "session-root.jsonl"), JSON.stringify({ type: "event_msg", payload: { type: "session_meta", id: "session-root", cwd, cli_version: "0.147.0", originator: "codex_exec", source: { subagent: { thread_spawn: { parent_thread_id: "session-root" } } } } }) + "\\n");
 `;
+}
+
+function stubCodexMonitorFailureWithDescendant(pidFile) {
+  return `#!/usr/bin/env node
+import { appendFileSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import path from "node:path";
+const home = ${JSON.stringify(codexHome)};
+const cwd = process.cwd();
+const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 5000);"], { stdio: "ignore" });
+writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));
+appendFileSync(path.join(home, "sessions", "session-root.jsonl"), JSON.stringify({ type: "event_msg", payload: { type: "session_meta", id: "session-root", cwd, cli_version: "0.147.0", originator: "codex_exec", source: { subagent: { thread_spawn: { parent_thread_id: "session-root" } } } } }) + "\\n");
+await new Promise((resolve) => setTimeout(resolve, 5000));
+`;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function withEnv(name, value, callback) {
+  const previous = process.env[name];
+  try {
+    process.env[name] = value;
+    return await callback();
+  } finally {
+    if (previous === undefined) {
+      delete process.env[name];
+    } else {
+      process.env[name] = previous;
+    }
+  }
+}
+
+function isPidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }

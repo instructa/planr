@@ -1,12 +1,18 @@
 use crate::execution_run::{
-    ExecutionBatch, ExecutionBatchStatus, FeatureRun, FeatureRunHoldReason, FeatureRunPhase,
-    FeatureRunStatus, FeatureRunTerminalReason, MakerReplacement, MakerReplacementReason,
-    RoleOwner, RunRole, owner_for_role, validate_feature_run,
+    ExecutionBatch, ExecutionBatchStatus, FeatureRun, FeatureRunBudgetContractCompatibility,
+    FeatureRunHoldReason, FeatureRunPhase, FeatureRunRestartDisposition,
+    FeatureRunRestartTransition, FeatureRunStatus, FeatureRunTerminalReason, MakerReplacement,
+    MakerReplacementReason, RoleOwner, RunRole, owner_for_role, validate_feature_run,
 };
-use crate::usage_policy::{BudgetPhase, MeteringMode};
+use crate::usage_policy::{
+    BudgetPhase, ExecutionBudget, FEATURE_RUN_BUDGET_CONTRACT_SCHEMA, FeatureRunBudgetContract,
+    FeatureRunBudgetMode, MeteringMode, feature_run_budget_contract_digest,
+    validate_execution_budget, validate_feature_run_budget_contract,
+};
 use anyhow::{Context, Result, anyhow, bail};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 pub(crate) struct ExecutionRunRepository<'conn> {
     conn: &'conn Connection,
@@ -17,6 +23,7 @@ pub(crate) struct PersistedFeatureRun {
     pub(crate) project_id: String,
     pub(crate) run: FeatureRun,
     pub(crate) revision: u64,
+    pub(crate) budget_projection_at_unix_ms: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -93,6 +100,15 @@ pub(crate) struct ReviewAttemptRecord {
     pub(crate) artifacts: Vec<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub(crate) struct FinalReviewSourceBindingRecord {
+    pub(crate) gate_id: String,
+    pub(crate) freeze_id: String,
+    pub(crate) source_revision: String,
+    pub(crate) source_digest: String,
+    pub(crate) receipt_lineage: Value,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum FindingStatus {
@@ -117,13 +133,48 @@ pub(crate) struct FindingRecord {
 pub(crate) struct BudgetObservationRecord {
     pub(crate) id: String,
     pub(crate) run_id: String,
+    pub(crate) reservation_id: Option<String>,
+    pub(crate) sequence: Option<u64>,
     pub(crate) phase: BudgetPhase,
     pub(crate) metering: MeteringMode,
+    pub(crate) wall_metering: Option<MeteringMode>,
+    pub(crate) tool_calls_metering: Option<MeteringMode>,
+    pub(crate) tokens_metering: Option<MeteringMode>,
     pub(crate) wall_seconds: Option<u64>,
     pub(crate) tokens: Option<u64>,
     pub(crate) tool_calls: Option<u64>,
     pub(crate) credits_micros: Option<u64>,
     pub(crate) provenance: String,
+    pub(crate) adapter_id: Option<String>,
+    pub(crate) observed_at_unix_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct BudgetReservationRecord {
+    pub(crate) id: String,
+    pub(crate) run_id: String,
+    pub(crate) phase: BudgetPhase,
+    pub(crate) boundary_key: String,
+    pub(crate) owner_role: RunRole,
+    pub(crate) owner_worker_id: String,
+    pub(crate) lease_generation: u64,
+    pub(crate) execution_budget: Option<ExecutionBudget>,
+    pub(crate) started_at_unix_ms: u64,
+    pub(crate) provenance: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum BudgetReservationStatus {
+    Active,
+    Reconciled,
+    Released,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct PersistedBudgetReservation {
+    pub(crate) reservation: BudgetReservationRecord,
+    pub(crate) status: BudgetReservationStatus,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -152,6 +203,17 @@ pub(crate) struct EvidenceInvalidationRecord {
     pub(crate) affected_evidence_ids: Vec<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct ProductRepairSettlementRecord {
+    pub(crate) invalidation_id: String,
+    pub(crate) run_id: String,
+    pub(crate) responsible_maker_id: String,
+    pub(crate) verification_item_id: String,
+    pub(crate) selective_obligation_ids: Vec<String>,
+    pub(crate) settlement: serde_json::Value,
+    pub(crate) source_freeze_id: String,
+}
+
 impl<'conn> ExecutionRunRepository<'conn> {
     pub(crate) const fn new(conn: &'conn Connection) -> Self {
         Self { conn }
@@ -177,11 +239,13 @@ impl<'conn> ExecutionRunRepository<'conn> {
         &self,
         project_id: &str,
         run: &FeatureRun,
+        budget_contract: &FeatureRunBudgetContract,
         initial_batch: Option<&ExecutionBatch>,
     ) -> Result<PersistedFeatureRun> {
         validate_feature_run(run)
             .map_err(|violation| anyhow!("invalid feature run: {violation:?}"))?;
         require_nonempty("project_id", project_id)?;
+        validate_budget_contract_for_run(run, budget_contract)?;
         match (run.active_batch_id.as_deref(), initial_batch) {
             (Some(active_batch_id), Some(batch))
                 if batch.id == active_batch_id && batch.run_id == run.id => {}
@@ -194,7 +258,7 @@ impl<'conn> ExecutionRunRepository<'conn> {
         }
         let tx = Transaction::new_unchecked(self.conn, TransactionBehavior::Immediate)?;
         tx.execute(
-            "INSERT INTO feature_runs(id, project_id, plan_id, status, phase, policy_digest, source_revision, active_batch_id, outcomes_settled, batch_outcome_count, held_from_phase, hold_reason, terminal_reason, revision) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 0)",
+            "INSERT INTO feature_runs(id, project_id, plan_id, status, phase, policy_digest, budget_contract_digest, source_revision, active_batch_id, outcomes_settled, batch_outcome_count, held_from_phase, hold_reason, terminal_reason, revision) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 0)",
             params![
                 run.id,
                 project_id,
@@ -202,6 +266,7 @@ impl<'conn> ExecutionRunRepository<'conn> {
                 feature_run_status_str(run.status),
                 feature_run_phase_str(run.phase),
                 run.policy_digest,
+                budget_contract.digest,
                 run.source_revision,
                 run.active_batch_id,
                 run.outcomes_settled,
@@ -211,6 +276,7 @@ impl<'conn> ExecutionRunRepository<'conn> {
                 run.terminal_reason.map(terminal_reason_str),
             ],
         )?;
+        insert_budget_contract(&tx, budget_contract)?;
         insert_initial_role_leases(&tx, &run.id, &run.role_owners)?;
         if let Some(batch) = initial_batch {
             insert_batch(&tx, batch)?;
@@ -219,11 +285,365 @@ impl<'conn> ExecutionRunRepository<'conn> {
         self.feature_run(&run.id)
     }
 
+    pub(crate) fn budget_contract(&self, run_id: &str) -> Result<FeatureRunBudgetContract> {
+        let (bound_digest, schema, digest, contract_json): (String, String, String, String) = self
+            .conn
+            .query_row(
+                "SELECT feature_runs.budget_contract_digest, contract.schema, contract.digest, contract.contract_json FROM feature_runs JOIN feature_run_budget_contracts AS contract ON contract.run_id = feature_runs.id WHERE feature_runs.id = ?1",
+                [run_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .with_context(|| format!("FeatureRun budget contract not found: {run_id}"))?;
+        let contract: FeatureRunBudgetContract = serde_json::from_str(&contract_json)
+            .with_context(|| format!("invalid persisted FeatureRun budget contract: {run_id}"))?;
+        if bound_digest != digest
+            || contract.schema != schema
+            || contract.digest != digest
+            || contract.run_id != run_id
+        {
+            bail!("feature_run_budget_contract_integrity_mismatch:{run_id}");
+        }
+        let diagnostics = validate_feature_run_budget_contract(&contract);
+        if !diagnostics.is_empty() {
+            bail!("feature_run_budget_contract_invalid:{run_id}:{diagnostics:?}");
+        }
+        Ok(contract)
+    }
+
+    pub(crate) fn budget_contract_compatibility(
+        &self,
+        run_id: &str,
+    ) -> Result<FeatureRunBudgetContractCompatibility> {
+        budget_contract_compatibility_in(self.conn, run_id)
+    }
+
+    pub(crate) fn retire_incompatible_feature_run(
+        &self,
+        transition: &FeatureRunRestartTransition,
+        expected_run_revision: u64,
+        operator_worker_id: &str,
+    ) -> Result<PersistedFeatureRun> {
+        if transition.disposition != FeatureRunRestartDisposition::Retired {
+            bail!("feature_run_restart_transition_not_applicable");
+        }
+        require_nonempty("operator_worker_id", operator_worker_id)?;
+        let tx = Transaction::new_unchecked(self.conn, TransactionBehavior::Immediate)?;
+        let repository = ExecutionRunRepository::new(&tx);
+        let current = repository.feature_run(&transition.retired_run.id)?;
+        if current.revision != expected_run_revision {
+            bail!("feature_run_revision_conflict:{}", current.run.id);
+        }
+        let current_compatibility = budget_contract_compatibility_in(&tx, &current.run.id)?;
+        if current_compatibility != transition.incompatibility {
+            bail!(
+                "feature_run_budget_compatibility_changed:{}",
+                current.run.id
+            );
+        }
+        let recomputed = crate::execution_run::retire_incompatible_feature_run(
+            &current.run,
+            &transition.request,
+            current_compatibility,
+        )
+        .map_err(|violation| anyhow!("feature_run_restart_rejected:{violation:?}"))?;
+        if recomputed != *transition {
+            bail!("feature_run_restart_transition_stale:{}", current.run.id);
+        }
+
+        if let Some(batch_id) = transition.ended_batch_id.as_deref() {
+            let persisted_batch = repository.batch(batch_id)?;
+            if persisted_batch.batch.run_id != current.run.id
+                || persisted_batch.batch.status == ExecutionBatchStatus::Ended
+            {
+                bail!("feature_run_restart_batch_not_active:{batch_id}");
+            }
+            let mut ended_batch = persisted_batch.batch;
+            ended_batch.status = ExecutionBatchStatus::Ended;
+            ended_batch.replacement = None;
+            repository.save_batch(&ended_batch, persisted_batch.revision)?;
+        }
+        repository.save_feature_run(&transition.retired_run, expected_run_revision)?;
+        let payload = serde_json::to_string(transition)?;
+        tx.execute(
+            "INSERT INTO events(project_id, item_id, worker_id, event_type, payload, timestamp) VALUES (?1, NULL, ?2, 'feature_run_incompatible_budget_retired', ?3, datetime('now'))",
+            params![current.project_id, operator_worker_id, payload],
+        )?;
+        tx.commit()?;
+        self.feature_run(&transition.retired_run.id)
+    }
+
+    pub(crate) fn latest_incompatible_feature_run_restart(
+        &self,
+        project_id: &str,
+        plan_id: &str,
+    ) -> Result<Option<FeatureRunRestartTransition>> {
+        let payload = self
+            .conn
+            .query_row(
+                "SELECT payload FROM events WHERE project_id = ?1 AND event_type = 'feature_run_incompatible_budget_retired' AND json_extract(payload, '$.request.plan_id') = ?2 ORDER BY id DESC LIMIT 1",
+                params![project_id, plan_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        payload
+            .map(|payload| serde_json::from_str(&payload).map_err(Into::into))
+            .transpose()
+    }
+
+    pub(crate) fn create_budget_reservation(
+        &self,
+        reservation: &BudgetReservationRecord,
+    ) -> Result<()> {
+        require_nonempty("budget_reservation.id", &reservation.id)?;
+        require_nonempty("budget_reservation.run_id", &reservation.run_id)?;
+        require_nonempty("budget_reservation.boundary_key", &reservation.boundary_key)?;
+        require_nonempty(
+            "budget_reservation.owner_worker_id",
+            &reservation.owner_worker_id,
+        )?;
+        require_nonempty("budget_reservation.provenance", &reservation.provenance)?;
+        if reservation.started_at_unix_ms == 0 || reservation.lease_generation == 0 {
+            bail!(
+                "budget_reservation_invalid_clock_or_lease:{}",
+                reservation.id
+            );
+        }
+        let contract = self.budget_contract(&reservation.run_id)?;
+        match (contract.mode, reservation.execution_budget) {
+            (FeatureRunBudgetMode::Bounded, Some(execution_budget)) => {
+                let diagnostics = validate_execution_budget(&execution_budget);
+                if !diagnostics.is_empty()
+                    || ExecutionBudget::new(
+                        reservation.started_at_unix_ms,
+                        execution_budget.maxima(),
+                    )? != execution_budget
+                {
+                    bail!(
+                        "budget_reservation_invalid_execution_budget:{}",
+                        reservation.id
+                    );
+                }
+            }
+            (FeatureRunBudgetMode::Unbounded, None) => {}
+            (FeatureRunBudgetMode::Bounded, None) => {
+                bail!(
+                    "bounded_budget_reservation_missing_execution_budget:{}",
+                    reservation.id
+                )
+            }
+            (FeatureRunBudgetMode::Unbounded, Some(_)) => {
+                bail!(
+                    "unbounded_budget_reservation_has_execution_budget:{}",
+                    reservation.id
+                )
+            }
+        }
+        let owner_matches = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM feature_run_role_leases WHERE run_id = ?1 AND role = ?2 AND worker_id = ?3 AND lease_generation = ?4 AND released_at IS NULL)",
+            params![
+                reservation.run_id,
+                role_str(reservation.owner_role),
+                reservation.owner_worker_id,
+                reservation.lease_generation,
+            ],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !owner_matches {
+            bail!("budget_reservation_owner_mismatch:{}", reservation.id);
+        }
+        let execution_budget = reservation.execution_budget;
+        self.conn.execute(
+            "INSERT INTO feature_run_budget_reservations(id, run_id, contract_digest, phase, boundary_key, owner_role, owner_worker_id, lease_generation, status, reserved_wall_seconds, reserved_tokens, reserved_tool_calls, deadline_unix_ms, started_at_unix_ms, provenance) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'active', ?9, ?10, ?11, ?12, ?13, ?14)",
+            params![
+                reservation.id,
+                reservation.run_id,
+                contract.digest,
+                budget_phase_str(reservation.phase),
+                reservation.boundary_key,
+                role_str(reservation.owner_role),
+                reservation.owner_worker_id,
+                reservation.lease_generation,
+                execution_budget.map(|value| value.max_wall_seconds),
+                execution_budget.map(|value| value.max_tokens),
+                execution_budget.map(|value| value.max_tool_calls),
+                execution_budget.map(|value| value.deadline_unix_ms),
+                reservation.started_at_unix_ms,
+                reservation.provenance,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn active_budget_reservation(
+        &self,
+        run_id: &str,
+        boundary_key: &str,
+    ) -> Result<Option<BudgetReservationRecord>> {
+        self.budget_reservations(run_id).map(|reservations| {
+            reservations
+                .into_iter()
+                .find(|persisted| {
+                    persisted.status == BudgetReservationStatus::Active
+                        && persisted.reservation.boundary_key == boundary_key
+                })
+                .map(|persisted| persisted.reservation)
+        })
+    }
+
+    pub(crate) fn budget_reservations(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<PersistedBudgetReservation>> {
+        let contract = self.budget_contract(run_id)?;
+        let mut statement = self.conn.prepare(
+            "SELECT id, contract_digest, phase, boundary_key, owner_role, owner_worker_id,
+                    lease_generation, status, reserved_wall_seconds, reserved_tokens,
+                    reserved_tool_calls, deadline_unix_ms, started_at_unix_ms,
+                    provenance
+             FROM feature_run_budget_reservations
+             WHERE run_id = ?1
+             ORDER BY started_at_unix_ms, id",
+        )?;
+        let rows = statement.query_map([run_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, Option<u64>>(6)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, Option<u64>>(8)?,
+                row.get::<_, Option<u64>>(9)?,
+                row.get::<_, Option<u64>>(10)?,
+                row.get::<_, Option<u64>>(11)?,
+                row.get::<_, u64>(12)?,
+                row.get::<_, String>(13)?,
+            ))
+        })?;
+        rows.map(|row| {
+            let (
+                id,
+                contract_digest,
+                phase,
+                boundary_key,
+                owner_role,
+                owner_worker_id,
+                lease_generation,
+                status,
+                reserved_wall_seconds,
+                reserved_tokens,
+                reserved_tool_calls,
+                deadline_unix_ms,
+                started_at_unix_ms,
+                provenance,
+            ) = row?;
+            if contract_digest.as_deref() != Some(contract.digest.as_str())
+                || owner_role.as_deref().is_none_or(str::is_empty)
+                || owner_worker_id.as_deref().is_none_or(str::is_empty)
+                || lease_generation.is_none()
+            {
+                bail!("budget_reservation_invalid_v2_identity:{id}");
+            }
+            let execution_budget = match (
+                reserved_wall_seconds,
+                reserved_tool_calls,
+                reserved_tokens,
+                deadline_unix_ms,
+            ) {
+                (
+                    Some(max_wall_seconds),
+                    Some(max_tool_calls),
+                    Some(max_tokens),
+                    Some(deadline_unix_ms),
+                ) => Some(ExecutionBudget {
+                    max_wall_seconds,
+                    max_tool_calls,
+                    max_tokens,
+                    deadline_unix_ms,
+                }),
+                (None, None, None, None) => None,
+                _ => bail!("budget_reservation_incomplete_execution_budget:{id}"),
+            };
+            let reservation = BudgetReservationRecord {
+                id,
+                run_id: run_id.to_string(),
+                phase: parse_budget_phase(&phase)?,
+                boundary_key,
+                owner_role: parse_role(owner_role.as_deref().expect("checked owner role"))?,
+                owner_worker_id: owner_worker_id.expect("checked owner worker"),
+                lease_generation: lease_generation.expect("checked lease generation"),
+                execution_budget,
+                started_at_unix_ms,
+                provenance,
+            };
+            if let Some(execution_budget) = execution_budget {
+                let diagnostics = validate_execution_budget(&execution_budget);
+                if !diagnostics.is_empty()
+                    || ExecutionBudget::new(started_at_unix_ms, execution_budget.maxima())?
+                        != execution_budget
+                {
+                    bail!(
+                        "budget_reservation_invalid_execution_budget:{}",
+                        reservation.id
+                    );
+                }
+            }
+            Ok(PersistedBudgetReservation {
+                reservation,
+                status: parse_budget_reservation_status(&status)?,
+            })
+        })
+        .collect()
+    }
+
+    pub(crate) fn release_budget_reservation(
+        &self,
+        reservation_id: &str,
+        run_id: &str,
+    ) -> Result<()> {
+        let changed = self.conn.execute(
+            "UPDATE feature_run_budget_reservations
+             SET status = 'released', finished_at = datetime('now')
+             WHERE id = ?1 AND run_id = ?2 AND status = 'active'",
+            params![reservation_id, run_id],
+        )?;
+        if changed != 1 {
+            bail!("budget_reservation_not_active:{reservation_id}");
+        }
+        Ok(())
+    }
+
+    pub(crate) fn reconcile_budget_reservation(
+        &self,
+        reservation_id: &str,
+        run_id: &str,
+    ) -> Result<()> {
+        let changed = self.conn.execute(
+            "UPDATE feature_run_budget_reservations
+             SET status = 'reconciled', finished_at = datetime('now')
+             WHERE id = ?1 AND run_id = ?2 AND status = 'active'",
+            params![reservation_id, run_id],
+        )?;
+        if changed != 1 {
+            bail!("budget_reservation_not_active:{reservation_id}");
+        }
+        Ok(())
+    }
+
     pub(crate) fn feature_run(&self, run_id: &str) -> Result<PersistedFeatureRun> {
         let row = self
             .conn
             .query_row(
-                "SELECT project_id, plan_id, status, phase, policy_digest, source_revision, active_batch_id, outcomes_settled, batch_outcome_count, held_from_phase, hold_reason, terminal_reason, revision FROM feature_runs WHERE id = ?1",
+                "SELECT project_id, plan_id, status, phase, policy_digest, source_revision, active_batch_id, outcomes_settled, batch_outcome_count, held_from_phase, hold_reason, terminal_reason, revision,
+                        MAX(
+                            CAST(strftime('%s', updated_at) AS INTEGER) * 1000 + 999,
+                            COALESCE((SELECT json_extract(contract_json, '$.started_at_unix_ms') FROM feature_run_budget_contracts WHERE run_id = ?1), 0),
+                            COALESCE((SELECT MAX(started_at_unix_ms) FROM feature_run_budget_reservations WHERE run_id = ?1), 0),
+                            COALESCE((SELECT MAX(observed_at_unix_ms) FROM feature_run_budget_observations WHERE run_id = ?1), 0)
+                        )
+                 FROM feature_runs WHERE id = ?1",
                 [run_id],
                 |row| {
                     Ok(RawRunRow {
@@ -240,6 +660,7 @@ impl<'conn> ExecutionRunRepository<'conn> {
                         hold_reason: row.get(10)?,
                         terminal_reason: row.get(11)?,
                         revision: row.get(12)?,
+                        budget_projection_at_unix_ms: row.get(13)?,
                     })
                 },
             )
@@ -279,6 +700,10 @@ impl<'conn> ExecutionRunRepository<'conn> {
             project_id: row.project_id,
             run,
             revision: to_u64(row.revision, "revision")?,
+            budget_projection_at_unix_ms: to_u64(
+                row.budget_projection_at_unix_ms,
+                "budget_projection_at_unix_ms",
+            )?,
         })
     }
 
@@ -653,6 +1078,77 @@ impl<'conn> ExecutionRunRepository<'conn> {
         Ok(())
     }
 
+    pub(crate) fn create_final_review_source_binding(
+        &self,
+        binding: &FinalReviewSourceBindingRecord,
+    ) -> Result<()> {
+        require_nonempty("final_review_binding.freeze_id", &binding.freeze_id)?;
+        require_nonempty(
+            "final_review_binding.source_revision",
+            &binding.source_revision,
+        )?;
+        require_nonempty("final_review_binding.source_digest", &binding.source_digest)?;
+        self.conn.execute(
+            "INSERT INTO final_review_source_bindings(gate_id, freeze_id, source_revision, source_digest, receipt_lineage_json) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![binding.gate_id, binding.freeze_id, binding.source_revision, binding.source_digest, serde_json::to_string(&binding.receipt_lineage)?],
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn rebind_final_review_gate_source(
+        &self,
+        binding: &FinalReviewSourceBindingRecord,
+    ) -> Result<()> {
+        require_nonempty(
+            "final_review_binding.source_revision",
+            &binding.source_revision,
+        )?;
+        require_nonempty("final_review_binding.source_digest", &binding.source_digest)?;
+        let updated = self.conn.execute(
+            "UPDATE review_gates SET source_revision = ?1, updated_at = datetime('now') WHERE id = ?2 AND kind = 'final_product' AND status = 'changes_requested'",
+            params![binding.source_revision, binding.gate_id],
+        )?;
+        if updated != 1 {
+            bail!("final_review_gate_rebind_rejected:{}", binding.gate_id);
+        }
+        self.conn.execute(
+            "INSERT INTO final_review_source_bindings(gate_id, freeze_id, source_revision, source_digest, receipt_lineage_json) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(gate_id) DO UPDATE SET freeze_id = excluded.freeze_id, source_revision = excluded.source_revision, source_digest = excluded.source_digest, receipt_lineage_json = excluded.receipt_lineage_json, created_at = datetime('now')",
+            params![binding.gate_id, binding.freeze_id, binding.source_revision, binding.source_digest, serde_json::to_string(&binding.receipt_lineage)?],
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn final_review_source_binding(
+        &self,
+        gate_id: &str,
+    ) -> Result<Option<FinalReviewSourceBindingRecord>> {
+        self.conn
+            .query_row(
+                "SELECT freeze_id, source_revision, source_digest, receipt_lineage_json FROM final_review_source_bindings WHERE gate_id = ?1",
+                [gate_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .optional()?
+            .map(|raw| {
+                Ok(FinalReviewSourceBindingRecord {
+                    gate_id: gate_id.to_string(),
+                    freeze_id: raw.0,
+                    source_revision: raw.1,
+                    source_digest: raw.2,
+                    receipt_lineage: serde_json::from_str(&raw.3)?,
+                })
+            })
+            .transpose()
+    }
+
     pub(crate) fn append_review_attempt(
         &self,
         attempt: &ReviewAttemptRecord,
@@ -872,18 +1368,55 @@ impl<'conn> ExecutionRunRepository<'conn> {
         observation: &BudgetObservationRecord,
     ) -> Result<()> {
         require_nonempty("budget.provenance", &observation.provenance)?;
+        if observation.reservation_id.is_some() {
+            if observation.sequence.is_none()
+                || observation.wall_metering.is_none()
+                || observation.tool_calls_metering.is_none()
+                || observation.tokens_metering.is_none()
+                || observation
+                    .adapter_id
+                    .as_deref()
+                    .is_none_or(|value| value.trim().is_empty())
+                || observation.observed_at_unix_ms.is_none()
+            {
+                bail!(
+                    "budget_observation_incomplete_ledger_identity:{}",
+                    observation.id
+                );
+            }
+            let wall_metering = observation.wall_metering.expect("checked wall metering");
+            let tool_calls_metering = observation
+                .tool_calls_metering
+                .expect("checked tool-call metering");
+            let tokens_metering = observation.tokens_metering.expect("checked token metering");
+            let aggregate_metering = wall_metering.min(tool_calls_metering).min(tokens_metering);
+            if observation.metering != aggregate_metering
+                || !observation_dimension_is_consistent(wall_metering, observation.wall_seconds)
+                || !observation_dimension_is_consistent(tool_calls_metering, observation.tool_calls)
+                || !observation_dimension_is_consistent(tokens_metering, observation.tokens)
+            {
+                bail!("budget_observation_provenance_mismatch:{}", observation.id);
+            }
+        }
         self.conn.execute(
-            "INSERT INTO feature_run_budget_observations(id, run_id, phase, metering, wall_seconds, tokens, tool_calls, credits_micros, provenance) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO feature_run_budget_observations(id, run_id, reservation_id, sequence, phase, metering, wall_metering, tool_calls_metering, tokens_metering, wall_seconds, tokens, tool_calls, credits_micros, provenance, adapter_id, observed_at_unix_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 observation.id,
                 observation.run_id,
+                observation.reservation_id,
+                observation.sequence,
                 budget_phase_str(observation.phase),
                 metering_str(observation.metering),
+                observation.wall_metering.map(metering_str),
+                observation.tool_calls_metering.map(metering_str),
+                observation.tokens_metering.map(metering_str),
                 observation.wall_seconds,
                 observation.tokens,
                 observation.tool_calls,
                 observation.credits_micros,
                 observation.provenance,
+                observation.adapter_id,
+                observation.observed_at_unix_ms,
             ],
         )?;
         Ok(())
@@ -891,32 +1424,65 @@ impl<'conn> ExecutionRunRepository<'conn> {
 
     pub(crate) fn budget_observations(&self, run_id: &str) -> Result<Vec<BudgetObservationRecord>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, phase, metering, wall_seconds, tokens, tool_calls, credits_micros, provenance FROM feature_run_budget_observations WHERE run_id = ?1 ORDER BY observed_at, id",
+            "SELECT id, reservation_id, sequence, phase, metering, wall_metering, tool_calls_metering, tokens_metering, wall_seconds, tokens, tool_calls, credits_micros, provenance, adapter_id, observed_at_unix_ms FROM feature_run_budget_observations WHERE run_id = ?1 ORDER BY observed_at, id",
         )?;
         stmt.query_map([run_id], |row| {
             Ok((
                 row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, Option<i64>>(3)?,
-                row.get::<_, Option<i64>>(4)?,
-                row.get::<_, Option<i64>>(5)?,
-                row.get::<_, Option<i64>>(6)?,
-                row.get::<_, String>(7)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<i64>>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, Option<String>>(7)?,
+                row.get::<_, Option<i64>>(8)?,
+                row.get::<_, Option<i64>>(9)?,
+                row.get::<_, Option<i64>>(10)?,
+                row.get::<_, Option<i64>>(11)?,
+                row.get::<_, String>(12)?,
+                row.get::<_, Option<String>>(13)?,
+                row.get::<_, Option<i64>>(14)?,
             ))
         })?
         .map(|row| {
-            let (id, phase, metering, wall, tokens, tools, credits, provenance) = row?;
+            let (
+                id,
+                reservation_id,
+                sequence,
+                phase,
+                metering,
+                wall_metering,
+                tool_calls_metering,
+                tokens_metering,
+                wall,
+                tokens,
+                tools,
+                credits,
+                provenance,
+                adapter_id,
+                observed_at_unix_ms,
+            ) = row?;
             Ok(BudgetObservationRecord {
                 id,
                 run_id: run_id.to_string(),
+                reservation_id,
+                sequence: optional_u64(sequence, "sequence")?,
                 phase: parse_budget_phase(&phase)?,
                 metering: parse_metering(&metering)?,
+                wall_metering: wall_metering.as_deref().map(parse_metering).transpose()?,
+                tool_calls_metering: tool_calls_metering
+                    .as_deref()
+                    .map(parse_metering)
+                    .transpose()?,
+                tokens_metering: tokens_metering.as_deref().map(parse_metering).transpose()?,
                 wall_seconds: optional_u64(wall, "wall_seconds")?,
                 tokens: optional_u64(tokens, "tokens")?,
                 tool_calls: optional_u64(tools, "tool_calls")?,
                 credits_micros: optional_u64(credits, "credits_micros")?,
                 provenance,
+                adapter_id,
+                observed_at_unix_ms: optional_u64(observed_at_unix_ms, "observed_at_unix_ms")?,
             })
         })
         .collect()
@@ -1009,6 +1575,85 @@ impl<'conn> ExecutionRunRepository<'conn> {
         })
         .collect()
     }
+
+    pub(crate) fn product_repair_settlement(
+        &self,
+        invalidation_id: &str,
+    ) -> Result<Option<ProductRepairSettlementRecord>> {
+        let raw = self
+            .conn
+            .query_row(
+                "SELECT run_id, responsible_maker_id, verification_item_id,
+                        selective_obligation_ids_json, settlement_json, source_freeze_id
+                 FROM feature_run_product_repair_settlements WHERE invalidation_id = ?1",
+                [invalidation_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                    ))
+                },
+            )
+            .optional()?;
+        raw.map(|raw| {
+            Ok(ProductRepairSettlementRecord {
+                invalidation_id: invalidation_id.to_string(),
+                run_id: raw.0,
+                responsible_maker_id: raw.1,
+                verification_item_id: raw.2,
+                selective_obligation_ids: serde_json::from_str(&raw.3)?,
+                settlement: serde_json::from_str(&raw.4)?,
+                source_freeze_id: raw.5,
+            })
+        })
+        .transpose()
+    }
+
+    pub(crate) fn product_repair_settlement_for_source_freeze(
+        &self,
+        run_id: &str,
+        source_freeze_id: &str,
+    ) -> Result<Option<ProductRepairSettlementRecord>> {
+        let invalidation_id = self
+            .conn
+            .query_row(
+                "SELECT invalidation_id FROM feature_run_product_repair_settlements
+                 WHERE run_id = ?1 AND source_freeze_id = ?2",
+                params![run_id, source_freeze_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        invalidation_id
+            .map(|id| self.product_repair_settlement(&id))
+            .transpose()
+            .map(Option::flatten)
+    }
+
+    pub(crate) fn record_product_repair_settlement(
+        &self,
+        settlement: &ProductRepairSettlementRecord,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO feature_run_product_repair_settlements(
+               invalidation_id, run_id, responsible_maker_id, verification_item_id,
+               selective_obligation_ids_json, settlement_json, source_freeze_id
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                settlement.invalidation_id,
+                settlement.run_id,
+                settlement.responsible_maker_id,
+                settlement.verification_item_id,
+                serde_json::to_string(&settlement.selective_obligation_ids)?,
+                serde_json::to_string(&settlement.settlement)?,
+                settlement.source_freeze_id,
+            ],
+        )?;
+        Ok(())
+    }
 }
 
 fn invalidate_source_in(
@@ -1062,6 +1707,7 @@ struct RawRunRow {
     hold_reason: Option<String>,
     terminal_reason: Option<String>,
     revision: i64,
+    budget_projection_at_unix_ms: i64,
 }
 
 struct RawBatchRow {
@@ -1221,6 +1867,84 @@ fn insert_batch(conn: &Connection, batch: &ExecutionBatch) -> Result<()> {
             replacement.map(|value| value.reference.as_str()),
             replacement.map(|value| value.explanation.as_str()),
         ],
+    )?;
+    Ok(())
+}
+
+fn validate_budget_contract_for_run(
+    run: &FeatureRun,
+    contract: &FeatureRunBudgetContract,
+) -> Result<()> {
+    if contract.run_id != run.id {
+        bail!("feature_run_budget_contract_run_mismatch:{}", run.id);
+    }
+    let diagnostics = validate_feature_run_budget_contract(contract);
+    if !diagnostics.is_empty() {
+        bail!(
+            "feature_run_budget_contract_invalid:{}:{diagnostics:?}",
+            run.id
+        );
+    }
+    Ok(())
+}
+
+fn budget_contract_compatibility_in(
+    conn: &Connection,
+    run_id: &str,
+) -> Result<FeatureRunBudgetContractCompatibility> {
+    let row = conn
+        .query_row(
+            "SELECT runs.budget_contract_digest, contract.schema, contract.digest, contract.contract_json
+             FROM feature_runs AS runs
+             LEFT JOIN feature_run_budget_contracts AS contract ON contract.run_id = runs.id
+             WHERE runs.id = ?1",
+            [run_id],
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ))
+            },
+        )
+        .with_context(|| format!("feature run not found: {run_id}"))?;
+    let (Some(bound_digest), Some(schema), Some(digest), Some(contract_json)) = row else {
+        return Ok(FeatureRunBudgetContractCompatibility::Missing);
+    };
+    let Ok(contract) = serde_json::from_str::<FeatureRunBudgetContract>(&contract_json) else {
+        return Ok(FeatureRunBudgetContractCompatibility::Invalid);
+    };
+    if schema != FEATURE_RUN_BUDGET_CONTRACT_SCHEMA
+        || contract.schema != FEATURE_RUN_BUDGET_CONTRACT_SCHEMA
+        || contract.run_id != run_id
+    {
+        return Ok(FeatureRunBudgetContractCompatibility::Invalid);
+    }
+    let Ok(canonical_digest) = feature_run_budget_contract_digest(&contract) else {
+        return Ok(FeatureRunBudgetContractCompatibility::Invalid);
+    };
+    if bound_digest != digest || contract.digest != digest || canonical_digest != digest {
+        return Ok(FeatureRunBudgetContractCompatibility::DigestMismatch);
+    }
+    if !validate_feature_run_budget_contract(&contract).is_empty() {
+        return Ok(FeatureRunBudgetContractCompatibility::Invalid);
+    }
+    Ok(FeatureRunBudgetContractCompatibility::Compatible)
+}
+
+const fn observation_dimension_is_consistent(metering: MeteringMode, value: Option<u64>) -> bool {
+    match metering {
+        MeteringMode::Unavailable => value.is_none(),
+        MeteringMode::Estimated | MeteringMode::Trusted => value.is_some(),
+    }
+}
+
+fn insert_budget_contract(conn: &Connection, contract: &FeatureRunBudgetContract) -> Result<()> {
+    let contract_json = serde_json::to_string(contract)?;
+    conn.execute(
+        "INSERT INTO feature_run_budget_contracts(run_id, schema, digest, contract_json) VALUES (?1, ?2, ?3, ?4)",
+        params![contract.run_id, contract.schema, contract.digest, contract_json],
     )?;
     Ok(())
 }
@@ -1465,6 +2189,10 @@ string_enum!(budget_phase_str, parse_budget_phase, BudgetPhase, {
 string_enum!(metering_str, parse_metering, MeteringMode, {
     MeteringMode::Unavailable => "unavailable", MeteringMode::Estimated => "estimated", MeteringMode::Trusted => "trusted"
 });
+string_enum!(budget_reservation_status_str, parse_budget_reservation_status, BudgetReservationStatus, {
+    BudgetReservationStatus::Active => "active", BudgetReservationStatus::Reconciled => "reconciled",
+    BudgetReservationStatus::Released => "released"
+});
 string_enum!(source_freeze_status_str, parse_source_freeze_status, SourceFreezeStatus, {
     SourceFreezeStatus::Active => "active", SourceFreezeStatus::Invalidated => "invalidated"
 });
@@ -1473,10 +2201,14 @@ string_enum!(source_freeze_status_str, parse_source_freeze_status, SourceFreezeS
 mod tests {
     use super::*;
     use crate::execution_run::{
-        FeatureRunHoldReason, PhaseTransition, PhaseTransitionCause, apply_phase_transition,
-        replace_batch_maker, roll_batch_for_same_maker,
+        FeatureRunHoldReason, FeatureRunRestartReason, FeatureRunRestartRequest, PhaseTransition,
+        PhaseTransitionCause, apply_phase_transition, replace_batch_maker,
+        retire_incompatible_feature_run, roll_batch_for_same_maker,
     };
     use crate::storage::{ensure_schema, open_db};
+    use crate::usage_policy::{
+        BudgetAmounts, BudgetProvenance, FeatureRunPhaseReserves, MeteringProvenance,
+    };
     use serde_json::json;
     use std::sync::{Arc, Barrier};
     use std::thread;
@@ -1517,6 +2249,539 @@ mod tests {
             settled_outcome_ids: Vec::new(),
             replacement: None,
         }
+    }
+
+    fn budget_contract(run_id: &str) -> FeatureRunBudgetContract {
+        FeatureRunBudgetContract::unbounded(
+            run_id,
+            1_700_000_000_000,
+            BudgetProvenance {
+                wall_seconds: MeteringProvenance::Trusted,
+                tool_calls: MeteringProvenance::Unavailable,
+                tokens: MeteringProvenance::Unavailable,
+            },
+        )
+        .expect("test budget contract")
+    }
+
+    fn bounded_budget_contract(run_id: &str) -> FeatureRunBudgetContract {
+        let limits = BudgetAmounts {
+            wall_seconds: 100,
+            tool_calls: 50,
+            tokens: 1_000,
+        };
+        FeatureRunBudgetContract::bounded(
+            run_id,
+            1_700_000_000_000,
+            limits,
+            FeatureRunPhaseReserves {
+                maker: limits,
+                verification: BudgetAmounts::ZERO,
+                review: BudgetAmounts::ZERO,
+                repair: BudgetAmounts::ZERO,
+                release: BudgetAmounts::ZERO,
+            },
+            BudgetProvenance {
+                wall_seconds: MeteringProvenance::Trusted,
+                tool_calls: MeteringProvenance::Trusted,
+                tokens: MeteringProvenance::Trusted,
+            },
+        )
+        .expect("bounded test budget contract")
+    }
+
+    fn seed_incompatible_run(conn: &Connection, run_id: &str) {
+        let batch_id = format!("batch-{run_id}");
+        conn.execute_batch("BEGIN IMMEDIATE")
+            .expect("begin legacy run seed");
+        conn.execute(
+            "INSERT INTO feature_runs(id, project_id, plan_id, status, phase, policy_digest, active_batch_id) VALUES (?1, 'project-a', 'plan-a', 'active', 'implementation', 'sha256:legacy', ?2)",
+            params![run_id, batch_id],
+        )
+        .expect("legacy run");
+        conn.execute(
+            "INSERT INTO execution_batches(id, run_id, maker_worker_id, status) VALUES (?1, ?2, 'maker-a', 'active')",
+            params![batch_id, run_id],
+        )
+        .expect("legacy batch");
+        conn.execute(
+            "INSERT INTO feature_run_role_leases(run_id, role, worker_id, lease_generation) VALUES (?1, 'maker', 'maker-a', 1)",
+            [run_id],
+        )
+        .expect("legacy lease");
+        conn.execute_batch("COMMIT")
+            .expect("commit legacy run seed");
+    }
+
+    #[test]
+    fn budget_storage_contract_is_atomic_insert_only_and_tamper_evident() {
+        let conn = Connection::open_in_memory().expect("database");
+        ensure_schema(&conn).expect("schema");
+        let repo = ExecutionRunRepository::new(&conn);
+        let run = feature_run("run-budget-storage");
+        let contract = budget_contract(&run.id);
+        repo.create_feature_run("project-a", &run, &contract, Some(&batch(&run.id)))
+            .expect("atomic FeatureRun and contract");
+        assert_eq!(
+            repo.budget_contract(&run.id).expect("load contract"),
+            contract
+        );
+        assert!(
+            conn.execute(
+                "UPDATE feature_run_budget_contracts SET schema = 'tampered' WHERE run_id = ?1",
+                [&run.id],
+            )
+            .is_err()
+        );
+        assert!(
+            conn.execute(
+                "DELETE FROM feature_run_budget_contracts WHERE run_id = ?1",
+                [&run.id],
+            )
+            .is_err()
+        );
+        assert!(
+            conn.execute(
+                "UPDATE feature_runs SET budget_contract_digest = 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' WHERE id = ?1",
+                [&run.id],
+            )
+            .is_err()
+        );
+
+        let rollback_run = feature_run("run-budget-rollback");
+        conn.execute_batch(
+            "CREATE TRIGGER fail_budget_storage_batch BEFORE INSERT ON execution_batches WHEN NEW.run_id = 'run-budget-rollback' BEGIN SELECT RAISE(ABORT, 'injected budget storage rollback'); END;",
+        )
+        .expect("rollback trigger");
+        assert!(
+            repo.create_feature_run(
+                "project-a",
+                &rollback_run,
+                &budget_contract(&rollback_run.id),
+                Some(&batch(&rollback_run.id)),
+            )
+            .is_err()
+        );
+        for table in [
+            "feature_runs",
+            "feature_run_budget_contracts",
+            "feature_run_role_leases",
+            "execution_batches",
+        ] {
+            let count: i64 = conn
+                .query_row(
+                    &format!(
+                        "SELECT COUNT(*) FROM {table} WHERE {} = ?1",
+                        if table == "feature_runs" {
+                            "id"
+                        } else {
+                            "run_id"
+                        }
+                    ),
+                    [&rollback_run.id],
+                    |row| row.get(0),
+                )
+                .expect("rollback count");
+            assert_eq!(count, 0, "{table} rolled back");
+        }
+
+        let mut corrupt = budget_contract("run-corrupt-contract");
+        corrupt.digest =
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into();
+        assert!(
+            repo.create_feature_run(
+                "project-a",
+                &feature_run("run-corrupt-contract"),
+                &corrupt,
+                Some(&batch("run-corrupt-contract")),
+            )
+            .is_err()
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM feature_runs WHERE id = 'run-corrupt-contract'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("corrupt rollback"),
+            0
+        );
+    }
+
+    #[test]
+    fn incompatible_feature_run_retirement_is_atomic_and_preserves_history() {
+        let conn = Connection::open_in_memory().expect("database");
+        ensure_schema(&conn).expect("schema");
+        seed_incompatible_run(&conn, "run-incompatible");
+        conn.execute(
+            "INSERT INTO execution_run_outcomes(id, run_id, batch_id, item_id, ordinal, outcome_json) VALUES ('outcome-history', 'run-incompatible', 'batch-run-incompatible', 'item-history', 1, '{}')",
+            [],
+        )
+        .expect("outcome history");
+        conn.execute(
+            "INSERT INTO review_gates(id, run_id, scope_kind, scope_id, kind, status, responsible_maker_id) VALUES ('gate-history', 'run-incompatible', 'outcome', 'item-history', 'risk_checkpoint', 'changes_requested', 'maker-a')",
+            [],
+        )
+        .expect("review gate history");
+        conn.execute(
+            "INSERT INTO review_attempts(id, gate_id, attempt_number, reviewer_worker_id, reviewer_mode, verdict, source_revision, artifacts_json) VALUES ('attempt-history', 'gate-history', 1, 'reviewer-a', 'independent', 'changes_requested', 'sha256:source', '[]')",
+            [],
+        )
+        .expect("review attempt history");
+        conn.execute(
+            "INSERT INTO review_findings(id, run_id, gate_id, attempt_id, severity, target, owner_worker_id, status, invalidated_evidence_ids_json) VALUES ('finding-history', 'run-incompatible', 'gate-history', 'attempt-history', 'high', 'src/history.rs', 'maker-a', 'open', '[]')",
+            [],
+        )
+        .expect("finding history");
+        conn.execute(
+            "INSERT INTO feature_run_budget_reservations(id, run_id, phase, boundary_key, status, started_at_unix_ms, provenance) VALUES ('reservation-history', 'run-incompatible', 'implementation', 'implementation:item-history', 'active', 1700000000000, 'legacy.history')",
+            [],
+        )
+        .expect("metering reservation history");
+        conn.execute(
+            "INSERT INTO feature_run_budget_observations(id, run_id, phase, metering, wall_seconds, provenance) VALUES ('observation-history', 'run-incompatible', 'implementation', 'trusted', 4, 'legacy.history')",
+            [],
+        )
+        .expect("metering observation history");
+        conn.execute(
+            "INSERT INTO logs(id, project_id, item_id, run_id, kind, summary, created_at) VALUES ('log-history', 'project-a', 'item-history', 'run-incompatible', 'completion', 'history', datetime('now'))",
+            [],
+        )
+        .expect("log history");
+
+        let history_tables = [
+            "execution_run_outcomes",
+            "review_gates",
+            "review_attempts",
+            "review_findings",
+            "feature_run_budget_reservations",
+            "feature_run_budget_observations",
+            "logs",
+        ];
+        let before = history_tables
+            .iter()
+            .map(|table| (*table, count(&conn, table)))
+            .collect::<Vec<_>>();
+        let repository = ExecutionRunRepository::new(&conn);
+        let persisted = repository
+            .feature_run("run-incompatible")
+            .expect("active legacy run");
+        let compatibility = repository
+            .budget_contract_compatibility(&persisted.run.id)
+            .expect("compatibility diagnosis");
+        assert_eq!(
+            compatibility,
+            FeatureRunBudgetContractCompatibility::Missing
+        );
+        let transition = retire_incompatible_feature_run(
+            &persisted.run,
+            &FeatureRunRestartRequest {
+                plan_id: "plan-a".into(),
+                reason: FeatureRunRestartReason::IncompatibleBudget,
+            },
+            compatibility,
+        )
+        .expect("pure retirement");
+        assert!(
+            repository
+                .retire_incompatible_feature_run(
+                    &transition,
+                    persisted.revision + 1,
+                    "operator-stale",
+                )
+                .unwrap_err()
+                .to_string()
+                .contains("feature_run_revision_conflict")
+        );
+        assert_eq!(
+            repository
+                .feature_run("run-incompatible")
+                .expect("stale write rolled back")
+                .run
+                .status,
+            FeatureRunStatus::Active
+        );
+        let retired = repository
+            .retire_incompatible_feature_run(&transition, persisted.revision, "operator-a")
+            .expect("atomic retirement");
+
+        assert_eq!(retired.run.status, FeatureRunStatus::Cancelled);
+        assert_eq!(
+            retired.run.terminal_reason,
+            Some(FeatureRunTerminalReason::PolicyCancelled)
+        );
+        assert_eq!(retired.run.active_batch_id, None);
+        assert!(retired.run.role_owners.is_empty());
+        assert_eq!(
+            conn.query_row(
+                "SELECT status FROM execution_batches WHERE id = 'batch-run-incompatible'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("ended batch"),
+            "ended"
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM feature_run_role_leases WHERE run_id = 'run-incompatible' AND released_at IS NULL",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("released leases"),
+            0
+        );
+        for (table, expected) in before {
+            assert_eq!(count(&conn, table), expected, "{table} history preserved");
+        }
+        assert_eq!(
+            repository
+                .latest_incompatible_feature_run_restart("project-a", "plan-a")
+                .expect("restart provenance")
+                .expect("persisted restart"),
+            transition
+        );
+
+        seed_incompatible_run(&conn, "run-rollback");
+        conn.execute_batch(
+            "CREATE TRIGGER fail_incompatible_retirement BEFORE UPDATE ON feature_runs WHEN OLD.id = 'run-rollback' BEGIN SELECT RAISE(ABORT, 'injected restart rollback'); END;",
+        )
+        .expect("rollback trigger");
+        let rollback_run = repository
+            .feature_run("run-rollback")
+            .expect("rollback run");
+        let rollback_transition = retire_incompatible_feature_run(
+            &rollback_run.run,
+            &FeatureRunRestartRequest {
+                plan_id: "plan-a".into(),
+                reason: FeatureRunRestartReason::IncompatibleBudget,
+            },
+            FeatureRunBudgetContractCompatibility::Missing,
+        )
+        .expect("rollback transition");
+        assert!(
+            repository
+                .retire_incompatible_feature_run(
+                    &rollback_transition,
+                    rollback_run.revision,
+                    "operator-a",
+                )
+                .is_err()
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT status FROM feature_runs WHERE id = 'run-rollback'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("run rollback"),
+            "active"
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT status FROM execution_batches WHERE id = 'batch-run-rollback'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("batch rollback"),
+            "active"
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM feature_run_role_leases WHERE run_id = 'run-rollback' AND released_at IS NULL",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("lease rollback"),
+            1
+        );
+    }
+
+    #[test]
+    fn concurrent_incompatible_feature_run_retirement_has_one_atomic_winner() {
+        let dir = tempdir().expect("tempdir");
+        let db = dir.path().join("restart-race.sqlite");
+        let conn = open_db(&db).expect("database");
+        ensure_schema(&conn).expect("schema");
+        seed_incompatible_run(&conn, "run-race-restart");
+        let repository = ExecutionRunRepository::new(&conn);
+        let persisted = repository
+            .feature_run("run-race-restart")
+            .expect("race run");
+        let transition = retire_incompatible_feature_run(
+            &persisted.run,
+            &FeatureRunRestartRequest {
+                plan_id: "plan-a".into(),
+                reason: FeatureRunRestartReason::IncompatibleBudget,
+            },
+            FeatureRunBudgetContractCompatibility::Missing,
+        )
+        .expect("race transition");
+        let expected_revision = persisted.revision;
+        drop(conn);
+
+        let barrier = Arc::new(Barrier::new(2));
+        let results = (0..2)
+            .map(|ordinal| {
+                let db = db.clone();
+                let barrier = Arc::clone(&barrier);
+                let transition = transition.clone();
+                thread::spawn(move || {
+                    let conn = open_db(&db).expect("race connection");
+                    let repository = ExecutionRunRepository::new(&conn);
+                    barrier.wait();
+                    repository
+                        .retire_incompatible_feature_run(
+                            &transition,
+                            expected_revision,
+                            &format!("operator-{ordinal}"),
+                        )
+                        .map(|_| ())
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|handle| handle.join().expect("race thread"))
+            .collect::<Vec<_>>();
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(results.iter().filter(|result| result.is_err()).count(), 1);
+
+        let conn = open_db(&db).expect("final database");
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM events WHERE event_type = 'feature_run_incompatible_budget_retired'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("one event"),
+            1
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM feature_runs WHERE id = 'run-race-restart' AND status = 'cancelled' AND terminal_reason = 'policy_cancelled'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("one retired run"),
+            1
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM feature_run_role_leases WHERE run_id = 'run-race-restart' AND released_at IS NULL",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("no active leases"),
+            0
+        );
+    }
+
+    #[test]
+    fn budget_storage_ledgers_enforce_owner_sequence_and_append_only_integrity() {
+        let conn = Connection::open_in_memory().expect("database");
+        ensure_schema(&conn).expect("schema");
+        let repo = ExecutionRunRepository::new(&conn);
+        let run = feature_run("run-budget-ledger");
+        repo.create_feature_run(
+            "project-a",
+            &run,
+            &bounded_budget_contract(&run.id),
+            Some(&batch(&run.id)),
+        )
+        .expect("run");
+        let started_at_unix_ms = 1_700_000_001_000;
+        let execution_budget = ExecutionBudget::new(
+            started_at_unix_ms,
+            BudgetAmounts {
+                wall_seconds: 10,
+                tool_calls: 5,
+                tokens: 100,
+            },
+        )
+        .expect("execution budget");
+        let reservation = BudgetReservationRecord {
+            id: "reservation-ledger".into(),
+            run_id: run.id.clone(),
+            phase: BudgetPhase::Implementation,
+            boundary_key: "implementation:item-a".into(),
+            owner_role: RunRole::Maker,
+            owner_worker_id: "maker-a".into(),
+            lease_generation: 1,
+            execution_budget: Some(execution_budget),
+            started_at_unix_ms,
+            provenance: "codex.adapter".into(),
+        };
+        repo.create_budget_reservation(&reservation)
+            .expect("owned reservation");
+        let mut wrong_owner = reservation.clone();
+        wrong_owner.id = "reservation-wrong-owner".into();
+        wrong_owner.owner_worker_id = "maker-other".into();
+        assert!(repo.create_budget_reservation(&wrong_owner).is_err());
+
+        for sequence in 1..=2 {
+            repo.record_budget_observation(&BudgetObservationRecord {
+                id: format!("observation-{sequence}"),
+                run_id: run.id.clone(),
+                reservation_id: Some(reservation.id.clone()),
+                sequence: Some(sequence),
+                phase: BudgetPhase::Implementation,
+                metering: MeteringMode::Estimated,
+                wall_metering: Some(MeteringMode::Trusted),
+                tool_calls_metering: Some(MeteringMode::Trusted),
+                tokens_metering: Some(MeteringMode::Estimated),
+                wall_seconds: Some(sequence),
+                tokens: Some(sequence * 10),
+                tool_calls: Some(sequence),
+                credits_micros: None,
+                provenance: "host observation".into(),
+                adapter_id: Some("codex.adapter".into()),
+                observed_at_unix_ms: Some(started_at_unix_ms + sequence),
+            })
+            .expect("monotone observation");
+        }
+        let mut skipped = repo
+            .budget_observations(&run.id)
+            .expect("observations")
+            .pop()
+            .expect("latest observation");
+        skipped.id = "observation-skipped".into();
+        skipped.sequence = Some(4);
+        assert!(repo.record_budget_observation(&skipped).is_err());
+        assert!(
+            conn.execute(
+                "UPDATE feature_run_budget_observations SET tokens = 999 WHERE id = 'observation-1'",
+                [],
+            )
+            .is_err()
+        );
+        assert!(
+            conn.execute(
+                "DELETE FROM feature_run_budget_observations WHERE id = 'observation-1'",
+                [],
+            )
+            .is_err()
+        );
+        assert!(
+            conn.execute(
+                "UPDATE feature_run_budget_reservations SET owner_worker_id = 'maker-other' WHERE id = ?1",
+                [&reservation.id],
+            )
+            .is_err()
+        );
+        assert_eq!(
+            conn.execute(
+                "UPDATE feature_run_budget_reservations SET status = 'reconciled', finished_at = datetime('now') WHERE id = ?1",
+                [&reservation.id],
+            )
+            .expect("terminal reservation transition"),
+            1
+        );
+        assert!(
+            conn.execute(
+                "UPDATE feature_run_budget_reservations SET status = 'released' WHERE id = ?1",
+                [&reservation.id],
+            )
+            .is_err()
+        );
     }
 
     fn legal_restart_run(
@@ -1593,6 +2858,8 @@ DROP TABLE review_attempts;
 DROP TABLE review_gates;
 DROP TABLE feature_run_budget_reservations;
 DROP TABLE feature_run_budget_observations;
+DROP TABLE feature_run_budget_contracts;
+DROP TABLE feature_run_product_repair_settlements;
 DROP TABLE feature_run_source_freezes;
 DROP TABLE execution_run_outcomes;
 DROP TABLE feature_run_role_leases;
@@ -1625,14 +2892,14 @@ INSERT INTO logs(id, project_id, item_id, kind, summary, created_at) VALUES
             )
             .expect("schema version");
         assert_eq!(version, "2");
-        let compatibility_objects: i64 = conn
+        let compatibility_views: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE (type = 'view' OR type = 'trigger') AND (name LIKE '%feature_run%' OR name LIKE '%review_gate%')",
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'view' AND (name LIKE '%feature_run%' OR name LIKE '%review_gate%')",
                 [],
                 |row| row.get(0),
             )
             .expect("compatibility objects");
-        assert_eq!(compatibility_objects, 0);
+        assert_eq!(compatibility_views, 0);
     }
 
     #[test]
@@ -1644,8 +2911,13 @@ INSERT INTO logs(id, project_id, item_id, kind, summary, created_at) VALUES
             ensure_schema(&conn).expect("schema");
             let repo = ExecutionRunRepository::new(&conn);
             let run = feature_run("run-a");
-            repo.create_feature_run("project-a", &run, Some(&batch("run-a")))
-                .expect("create run");
+            repo.create_feature_run(
+                "project-a",
+                &run,
+                &budget_contract("run-a"),
+                Some(&batch("run-a")),
+            )
+            .expect("create run");
             let revision = repo
                 .record_outcome(
                     &RunOutcomeRecord {
@@ -1732,13 +3004,20 @@ INSERT INTO logs(id, project_id, item_id, kind, summary, created_at) VALUES
             repo.record_budget_observation(&BudgetObservationRecord {
                 id: "budget-a".into(),
                 run_id: "run-a".into(),
+                reservation_id: None,
+                sequence: None,
                 phase: BudgetPhase::Verification,
                 metering: MeteringMode::Trusted,
+                wall_metering: None,
+                tool_calls_metering: None,
+                tokens_metering: None,
                 wall_seconds: Some(10),
                 tokens: Some(20),
                 tool_calls: Some(3),
                 credits_micros: Some(40),
                 provenance: "trusted-host-meter".into(),
+                adapter_id: None,
+                observed_at_unix_ms: None,
             })
             .expect("budget observation");
             repo.freeze_source(&SourceFreezeRecord {
@@ -1840,6 +3119,7 @@ INSERT INTO logs(id, project_id, item_id, kind, summary, created_at) VALUES
         repo.create_feature_run(
             "project-a",
             &feature_run("run-rollback"),
+            &budget_contract("run-rollback"),
             Some(&batch("run-rollback")),
         )
         .expect("create run");
@@ -1962,8 +3242,13 @@ INSERT INTO logs(id, project_id, item_id, kind, summary, created_at) VALUES
             let repo = ExecutionRunRepository::new(&conn);
             let run = feature_run("run-roll");
             let capped = batch("run-roll");
-            repo.create_feature_run("project-a", &run, Some(&capped))
-                .expect("create capped run");
+            repo.create_feature_run(
+                "project-a",
+                &run,
+                &budget_contract("run-roll"),
+                Some(&capped),
+            )
+            .expect("create capped run");
             for (ordinal, item_id) in ["one", "two", "three"].into_iter().enumerate() {
                 repo.record_outcome(
                     &RunOutcomeRecord {
@@ -2089,6 +3374,7 @@ INSERT INTO logs(id, project_id, item_id, kind, summary, created_at) VALUES
         repo.create_feature_run(
             "project-a",
             &feature_run("run-race"),
+            &budget_contract("run-race"),
             Some(&batch("run-race")),
         )
         .expect("create run");
@@ -2198,8 +3484,13 @@ INSERT INTO logs(id, project_id, item_id, kind, summary, created_at) VALUES
             let repo = ExecutionRunRepository::new(&conn);
             for run in &expected {
                 let initial_batch = run.active_batch_id.as_ref().map(|_| batch(&run.id));
-                repo.create_feature_run("project-a", run, initial_batch.as_ref())
-                    .unwrap_or_else(|error| panic!("create {}: {error:#}", run.id));
+                repo.create_feature_run(
+                    "project-a",
+                    run,
+                    &budget_contract(&run.id),
+                    initial_batch.as_ref(),
+                )
+                .unwrap_or_else(|error| panic!("create {}: {error:#}", run.id));
             }
         }
 
@@ -2233,10 +3524,20 @@ INSERT INTO logs(id, project_id, item_id, kind, summary, created_at) VALUES
 
         let run_a = feature_run("run-a");
         let run_b = feature_run("run-b");
-        repo.create_feature_run("project-a", &run_a, Some(&batch("run-a")))
-            .expect("run a");
-        repo.create_feature_run("project-a", &run_b, Some(&batch("run-b")))
-            .expect("run b");
+        repo.create_feature_run(
+            "project-a",
+            &run_a,
+            &budget_contract("run-a"),
+            Some(&batch("run-a")),
+        )
+        .expect("run a");
+        repo.create_feature_run(
+            "project-a",
+            &run_b,
+            &budget_contract("run-b"),
+            Some(&batch("run-b")),
+        )
+        .expect("run b");
 
         let mut cross_run = run_a.clone();
         cross_run.active_batch_id = Some("batch-run-b".into());
@@ -2273,10 +3574,15 @@ INSERT INTO logs(id, project_id, item_id, kind, summary, created_at) VALUES
         let mut wrong_initial = feature_run("wrong-initial");
         wrong_initial.role_owners[0].worker_id = "maker-b".into();
         assert!(
-            repo.create_feature_run("project-a", &wrong_initial, Some(&batch("wrong-initial")))
-                .unwrap_err()
-                .to_string()
-                .contains("batch_maker_mismatch")
+            repo.create_feature_run(
+                "project-a",
+                &wrong_initial,
+                &budget_contract("wrong-initial"),
+                Some(&batch("wrong-initial")),
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("batch_maker_mismatch")
         );
         assert_eq!(count(&conn, "feature_runs"), 2);
 
@@ -2306,6 +3612,7 @@ INSERT INTO logs(id, project_id, item_id, kind, summary, created_at) VALUES
         repo.create_feature_run(
             "project-a",
             &feature_run("run-batch"),
+            &budget_contract("run-batch"),
             Some(&batch("run-batch")),
         )
         .expect("create run");
@@ -2372,6 +3679,7 @@ INSERT INTO logs(id, project_id, item_id, kind, summary, created_at) VALUES
         repo.create_feature_run(
             "project-a",
             &feature_run("run-review"),
+            &budget_contract("run-review"),
             Some(&batch("run-review")),
         )
         .expect("create run");
@@ -2533,8 +3841,13 @@ INSERT INTO logs(id, project_id, item_id, kind, summary, created_at) VALUES
         ensure_schema(&conn).expect("schema");
         let repo = ExecutionRunRepository::new(&conn);
         for run_id in ["run-freeze", "run-finding"] {
-            repo.create_feature_run("project-a", &feature_run(run_id), Some(&batch(run_id)))
-                .expect("create run");
+            repo.create_feature_run(
+                "project-a",
+                &feature_run(run_id),
+                &budget_contract(run_id),
+                Some(&batch(run_id)),
+            )
+            .expect("create run");
         }
         repo.create_review_gate(&ReviewGateRecord {
             id: "gate-finding".into(),

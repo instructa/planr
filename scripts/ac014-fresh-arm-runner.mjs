@@ -89,6 +89,7 @@ async function runFreshArmEntry(input, options = {}) {
 
 async function runFreshArm(config, commands, options = {}) {
   requireSchema(config);
+  const controlHandoff = validateControlHandoff(config.control_handoff);
   if ("replace_fresh_root" in config) {
     throw admission("AC-014 fresh_root must never be destructively replaced");
   }
@@ -121,7 +122,11 @@ async function runFreshArm(config, commands, options = {}) {
 
   const planrBin = path.resolve(config.planr_bin ?? process.env.PLANR_BIN ?? "target/debug/planr");
   assertExecutable(planrBin);
-  const preCodexContract = observeStaticContract(config, freshCanonical, planrBin);
+  const planrCandidateIdentity = validatePlanrCandidateIdentity(controlHandoff?.planr_candidate, planrBin);
+  const preCodexContract = {
+    ...observeStaticContract(config, freshCanonical, planrBin),
+    planr_candidate: planrCandidateIdentity,
+  };
   const dbPath = resolveFreshPath(config.db_path ?? ".planr/planr.sqlite", freshCanonical, "db_path", false);
   const projectId = requiredString(config.project_id, "project_id");
 
@@ -142,6 +147,7 @@ async function runFreshArm(config, commands, options = {}) {
   ], commands, "instrumentation");
 
   const validation = validateLocalPlanrState(planrBin, dbPath, freshCanonical, commands);
+  const evidencePreparation = runEvidencePreparation(config, freshCanonical, planrBin, commands);
   const migrationInput = resolveFreshPath(
     requiredString(config.evidence_migration_input, "evidence_migration_input"),
     freshCanonical,
@@ -162,12 +168,13 @@ async function runFreshArm(config, commands, options = {}) {
     "--apply",
   ], commands, "instrumentation");
   const evidenceMigration = {
+    preparation: evidencePreparation,
     input: path.relative(freshCanonical, migrationInput),
     preview: summarizeJson(migrationPreview),
     applied: summarizeJson(migrationApplied),
   };
 
-  const codexHome = canonicalExistingDir(config.codex_home ?? process.env.CODEX_HOME, "CODEX_HOME");
+  const codexHome = isolatedCodexHome(config, baselineRoot, freshCanonical);
   const armMonitor = createArmMonitor(config);
   const codexCommand = codexLaunchCommand(config, freshCanonical, options);
   let codex;
@@ -184,6 +191,9 @@ async function runFreshArm(config, commands, options = {}) {
     throw instrumentation("at least one CODEX_HOME session is required for AC-014 usage accounting");
   }
   const observedContract = observeEffectiveContract(config, preCodexContract, sessions);
+  if (Number.isFinite(config.test_post_session_deadline_elapsed_wall_seconds)) {
+    armMonitor.startedWall = Date.now() - Math.ceil(config.test_post_session_deadline_elapsed_wall_seconds * 1000);
+  }
   const metrics = usageMetricsFromSessions(sessions, elapsedArmSeconds(armMonitor));
   const ceilingVerdict = enforceCeilings(metrics, config.ceilings);
   const failedCeiling = Object.values(ceilingVerdict.checks).find((check) => check.status !== "passed");
@@ -257,6 +267,7 @@ async function runFreshArm(config, commands, options = {}) {
     fresh_root: freshCanonical,
     baseline_root: baselineRoot,
     copied_from_declared_baseline_only: true,
+    control_handoff: controlHandoff,
     relocation: {
       preview: summarizeJson(preview),
       applied: summarizeJson(applied),
@@ -272,6 +283,33 @@ async function runFreshArm(config, commands, options = {}) {
   };
   writeImmutableArtifacts(config, freshCanonical, passed, "passed", "completed", armMonitor);
   return passed;
+}
+
+function runEvidencePreparation(config, freshRoot, planrBin, commands) {
+  const configured = config.evidence_prepare_commands ?? [];
+  if (!Array.isArray(configured)) {
+    throw admission("evidence_prepare_commands must be an array of command arrays");
+  }
+  const pathValue = [path.dirname(planrBin), process.env.PATH].filter(Boolean).join(path.delimiter);
+  return configured.map((value, index) => {
+    const command = requiredCommand(value, `evidence_prepare_commands[${index}]`);
+    const output = spawnSync(command[0], command.slice(1), {
+      cwd: freshRoot,
+      encoding: "utf8",
+      env: { ...process.env, PATH: pathValue },
+    });
+    const record = {
+      command: command.join(" "),
+      status: output.status,
+      stdout_digest: `sha256:${createHash("sha256").update(output.stdout ?? "").digest("hex")}`,
+      stderr: trim(output.stderr),
+    };
+    commands.push(record);
+    if (output.status !== 0) {
+      throw instrumentation(`Evidence preparation failed: ${command.join(" ")}`, record);
+    }
+    return record;
+  });
 }
 
 function artifactPayload(preview, applied, validation, evidenceMigration, observedContract, codex, sessions, ceilings, oracle, armMonitor) {
@@ -359,18 +397,24 @@ function enforceCeilings(metrics, ceilings) {
   return { checks, all_unchanged_ceilings_enforced: true, immutable_ceilings: effective };
 }
 
-function assertArmDeadline(monitor, phase) {
-  const failure = deadlineFailure(monitor, phase);
-  if (failure) {
-    throw failure;
-  }
-}
-
-function deadlineFailure(monitor, phase) {
+function deadlineFailure(monitor, phase, captured = null) {
   const elapsed = elapsedArmSeconds(monitor);
   if (elapsed > EXPECTED.ceilings.wall_time_seconds) {
+    const {
+      schema_version: _schemaVersion,
+      status: _status,
+      failure_class: _failureClass,
+      retry: _retry,
+      verdict: _verdict,
+      stop_reason: _stopReason,
+      ...preserved
+    } = captured && typeof captured === "object" ? captured : {};
+    const sessions = Array.isArray(captured?.sessions) ? captured.sessions : [];
     return product(`AC-014 continuous wall deadline exceeded during ${phase}`, {
-      ceilings: enforceCeilings({ wall_time_seconds: elapsed, total_tokens: 0, tool_call_envelopes: 0 }),
+      ...preserved,
+      sessions,
+      ceilings: enforceCeilings(usageMetricsFromSessions(sessions, elapsed)),
+      oracle: null,
       arm: { elapsed_wall_seconds: elapsed, deadline_wall_seconds: EXPECTED.ceilings.wall_time_seconds },
     });
   }
@@ -406,6 +450,7 @@ async function runMonitoredCommand(config, freshRoot, codexHome, commands, phase
   const child = spawn(command[0], command.slice(1), {
     cwd: freshRoot,
     env: phaseEnv,
+    detached: true,
     stdio: ["ignore", "pipe", "pipe"],
   });
   let stdout = "";
@@ -421,21 +466,26 @@ async function runMonitoredCommand(config, freshRoot, codexHome, commands, phase
   });
   let interrupted = null;
   const pollMs = Number.isInteger(config.monitor_poll_ms) ? config.monitor_poll_ms : 1000;
-  while (!closed) {
-    await sleep(pollMs);
-    if (closed) {
-      break;
+  try {
+    while (!closed) {
+      await sleep(pollMs);
+      if (closed) {
+        break;
+      }
+      const elapsed = elapsedArmSeconds(armMonitor);
+      const sessions = discoverCodexSessionTree(codexHome, freshRoot, config.root_session_id, { allowEmpty: true });
+      const metrics = usageMetricsFromSessions(sessions, elapsed);
+      const verdict = enforceCeilings(metrics, config.ceilings);
+      const failed = Object.values(verdict.checks).find((check) => check.status !== "passed");
+      if (failed) {
+        interrupted = { ceiling: failed.name, metrics, elapsed_wall_seconds: elapsed };
+        terminateChildTree(child);
+        break;
+      }
     }
-    const elapsed = elapsedArmSeconds(armMonitor);
-    const sessions = discoverCodexSessionTree(codexHome, freshRoot, config.root_session_id, { allowEmpty: true });
-    const metrics = usageMetricsFromSessions(sessions, elapsed);
-    const verdict = enforceCeilings(metrics, config.ceilings);
-    const failed = Object.values(verdict.checks).find((check) => check.status !== "passed");
-    if (failed) {
-      interrupted = { ceiling: failed.name, metrics, elapsed_wall_seconds: elapsed };
-      terminateChild(child);
-      break;
-    }
+  } catch (error) {
+    terminateChildTree(child);
+    throw error;
   }
   const exit = await exitPromise;
   const durationSeconds = Math.round(((performance.now() - startedTick) / 1000) * 1000) / 1000;
@@ -610,6 +660,38 @@ function codexSpawnEnv(config, codexHome) {
   return env;
 }
 
+function isolatedCodexHome(config, baselineRoot, freshRoot) {
+  if (!Object.prototype.hasOwnProperty.call(config, "codex_home")) {
+    throw admission("AC-014 codex_home must declare an isolated persistent benchmark CODEX_HOME");
+  }
+  const codexHome = canonicalExistingDir(config.codex_home, "codex_home");
+  if (codexHome === baselineRoot || codexHome === freshRoot || isPathInside(codexHome, baselineRoot) || isPathInside(codexHome, freshRoot)) {
+    throw admission("AC-014 codex_home must be isolated from baseline_root and fresh_root");
+  }
+  const activeCodexHome = activeSharedCodexHomes().find((sharedHome) => codexHome === sharedHome);
+  if (activeCodexHome) {
+    throw admission(`AC-014 codex_home must not be the active shared Codex profile: ${codexHome}`);
+  }
+  return codexHome;
+}
+
+function activeSharedCodexHomes() {
+  const candidates = [
+    process.env.CODEX_HOME,
+    path.join(process.env.HOME ?? "", ".codex"),
+    path.join(process.env.HOME ?? "", ".codex-kevin"),
+  ].filter(Boolean);
+  const homes = [];
+  for (const candidate of candidates) {
+    try {
+      homes.push(realpathSync(candidate));
+    } catch {
+      // Missing optional shared profiles are ignored.
+    }
+  }
+  return [...new Set(homes)];
+}
+
 function frozenNodePath(ambientPath) {
   const nodeDir = path.dirname(EXPECTED.codex_node_realpath);
   const parts = ambientPath.split(path.delimiter).filter((part) => part && path.resolve(part) !== nodeDir);
@@ -655,16 +737,6 @@ function discoverCodexSessionTree(codexHome, freshRoot, rootSessionId, { allowEm
   const sessionsRoot = path.join(codexHome, "sessions");
   const files = existsSync(sessionsRoot) ? allFiles(sessionsRoot).filter((file) => file.endsWith(".jsonl")) : [];
   const sessions = files.map((file) => parseSessionFile(codexHome, file)).filter(Boolean);
-  const seen = new Map();
-  for (const session of sessions) {
-    if (seen.has(session.id)) {
-      throw instrumentation(`duplicate Codex session id discovered: ${session.id}`);
-    }
-    if (session.parent === session.id) {
-      throw instrumentation(`cyclic Codex session lineage discovered: ${session.id}`);
-    }
-    seen.set(session.id, session);
-  }
   const root = rootSessionId
     ? sessions.find((session) => session.id === rootSessionId)
     : sessions.find((session) => session.cwd === freshRoot && !session.parent);
@@ -681,15 +753,21 @@ function discoverCodexSessionTree(codexHome, freshRoot, rootSessionId, { allowEm
   }
   const discovered = [];
   const stack = [root];
-  const visiting = new Set();
+  const seenIds = new Set();
   while (stack.length > 0) {
     const session = stack.pop();
-    if (visiting.has(session.id)) {
+    if (seenIds.has(session.id)) {
       throw instrumentation(`cyclic Codex session lineage discovered: ${session.id}`);
     }
-    visiting.add(session.id);
+    if (session.parent === session.id) {
+      throw instrumentation(`cyclic Codex session lineage discovered: ${session.id}`);
+    }
+    seenIds.add(session.id);
     discovered.push(session);
     for (const child of byParent.get(session.id) ?? []) {
+      if (seenIds.has(child.id)) {
+        throw instrumentation(`duplicate Codex session id discovered: ${child.id}`);
+      }
       stack.push(child);
     }
   }
@@ -709,6 +787,8 @@ function parseSessionFile(root, file) {
   let latestTokens = 0;
   let latestToolEnvelopeTotal = 0;
   const uniqueToolCalls = new Set();
+  let sawSessionMeta = false;
+  let sessionMetaOwnsTurnContext = false;
   for (const line of lines) {
     if (!line.trim()) continue;
     let value;
@@ -718,16 +798,22 @@ function parseSessionFile(root, file) {
       continue;
     }
     const meta = ownSessionMeta(value);
-    if (meta) {
+    if (meta && !sawSessionMeta) {
       id = meta.id ?? id;
+      parent = parentFromRecord(value);
       cwd = meta.cwd ?? cwd;
       role = meta.role ?? role;
       cliVersion = meta.cli_version ?? cliVersion;
       surface = meta.surface ?? surface;
-      turnContextRecord = meta.turn_context ?? turnContextRecord;
+      if (meta.turn_context) {
+        turnContextRecord = meta.turn_context;
+        sessionMetaOwnsTurnContext = true;
+      }
+      sawSessionMeta = true;
     }
-    parent = parentFromRecord(value) ?? parent;
-    turnContextRecord = turnContext(value) ?? turnContextRecord;
+    if (!meta && !sessionMetaOwnsTurnContext) {
+      turnContextRecord = turnContext(value) ?? turnContextRecord;
+    }
     latestTokens = Math.max(latestTokens, tokenTotal(value));
     latestToolEnvelopeTotal = Math.max(
       latestToolEnvelopeTotal,
@@ -870,9 +956,7 @@ function collectToolCalls(value, calls) {
 }
 
 function writeImmutableArtifacts(config, freshRoot, result, status, stopReason, armMonitor = null) {
-  if (armMonitor) {
-    assertArmDeadline(armMonitor, "artifact_finalization");
-  }
+  let publicationDeadline = armMonitor ? deadlineFailure(armMonitor, "artifact_finalization", result) : null;
   if (Number.isInteger(config.finalization_delay_ms) && config.finalization_delay_ms > 0) {
     sleepSync(config.finalization_delay_ms);
   }
@@ -881,43 +965,47 @@ function writeImmutableArtifacts(config, freshRoot, result, status, stopReason, 
   const resultPath = path.join(artifactDir, "BENCHMARK_RESULT.json");
   const preflightPath = path.join(artifactDir, "PREFLIGHT.json");
   const monitorPath = path.join(artifactDir, "monitor-status.json");
-  const buildArtifacts = (artifactStatus, artifactStopReason) => {
+  const buildArtifacts = (artifactStatus, artifactStopReason, artifactResult = result) => {
     const base = {
       status: artifactStatus,
       verdict: artifactStatus === "passed" ? "passed" : "failed",
       stop_reason: artifactStopReason,
       retry: false,
+      control_handoff: config.control_handoff ?? null,
     };
     const artifacts = new Map();
     artifacts.set(preflightPath, {
       schema_version: "planr.ac014.preflight.v1",
       ...base,
       expected_contract: EXPECTED,
-      observed_contract: result.observed_contract ?? null,
-      codex_launch_identity: result.codex?.launch_identity ?? null,
+      observed_contract: artifactResult.observed_contract ?? null,
+      codex_launch_identity: artifactResult.codex?.launch_identity ?? null,
       relocation: {
-        preview: result.preview ?? result.relocation?.preview ?? null,
-        applied: result.applied ?? result.relocation?.applied ?? null,
+        preview: artifactResult.preview ?? artifactResult.relocation?.preview ?? null,
+        applied: artifactResult.applied ?? artifactResult.relocation?.applied ?? null,
       },
-      validation: result.validation ?? null,
-      evidence_migration: result.evidence_migration ?? null,
+      validation: artifactResult.validation ?? null,
+      evidence_migration: artifactResult.evidence_migration ?? null,
     });
     artifacts.set(resultPath, {
       schema_version: "planr.ac014.benchmark_result.v1",
-      ...result,
+      ...artifactResult,
       ...base,
     });
     artifacts.set(monitorPath, {
       schema_version: "planr.ac014.monitor_status.v1",
       ...base,
-      sessions: result.sessions ?? [],
-      ceilings: result.ceilings ?? null,
-      oracle: result.oracle ?? null,
+      sessions: artifactResult.sessions ?? [],
+      ceilings: artifactResult.ceilings ?? null,
+      oracle: artifactResult.oracle ?? null,
     });
     return artifacts;
   };
-  let publicationDeadline = null;
-  const publication = writeJsonSetImmutable(buildArtifacts(status, stopReason), {
+  const publication = writeJsonSetImmutable(buildArtifacts(
+    publicationDeadline ? "failed" : status,
+    publicationDeadline ? "deadline_exceeded" : stopReason,
+    publicationDeadline ? { ...result, ...publicationDeadline.details } : result,
+  ), {
     afterStage() {
       if (Number.isInteger(config.test_stage_write_delay_ms) && config.test_stage_write_delay_ms > 0) {
         sleepSync(config.test_stage_write_delay_ms);
@@ -928,8 +1016,11 @@ function writeImmutableArtifacts(config, freshRoot, result, status, stopReason, 
       if (Number.isFinite(config.test_stage_deadline_elapsed_wall_seconds) && armMonitor) {
         armMonitor.startedWall = Date.now() - Math.ceil(config.test_stage_deadline_elapsed_wall_seconds * 1000);
       }
-      publicationDeadline = armMonitor ? deadlineFailure(armMonitor, "artifact_publication") : null;
-      return publicationDeadline ? buildArtifacts("failed", "deadline_exceeded") : null;
+      const stagedDeadline = armMonitor ? deadlineFailure(armMonitor, "artifact_publication", result) : null;
+      publicationDeadline ??= stagedDeadline;
+      return publicationDeadline
+        ? buildArtifacts("failed", "deadline_exceeded", { ...result, ...publicationDeadline.details })
+        : null;
     },
   });
   if (publicationDeadline) {
@@ -1103,6 +1194,7 @@ function observeStaticContract(config, freshRoot, planrBin) {
     oracle_sha256: sha256File(path.resolve(oracleCommand[0])),
   };
   for (const [key, value] of Object.entries(observed)) {
+    if (key === "planr_candidate") continue;
     if (!value) {
       throw admission(`AC-014 observed identity is missing: ${key}`);
     }
@@ -1124,6 +1216,7 @@ function observeEffectiveContract(config, staticContract, sessions) {
     cli_version: root?.cli_version ?? null,
   };
   for (const [key, value] of Object.entries(observed)) {
+    if (key === "planr_candidate") continue;
     if (!value) {
       throw admission(`AC-014 observed identity is missing: ${key}`, { observed_contract: observed, sessions });
     }
@@ -1144,6 +1237,22 @@ function gitHead(root) {
   const output = spawnSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf8" });
   if (output.status !== 0) {
     throw admission(`fresh_root git HEAD is not observable: ${trim(output.stderr)}`);
+  }
+  return output.stdout.trim();
+}
+
+function gitTree(root) {
+  const output = spawnSync("git", ["-C", root, "rev-parse", "HEAD^{tree}"], { encoding: "utf8" });
+  if (output.status !== 0) {
+    throw admission(`Planr candidate git tree is not observable: ${trim(output.stderr)}`);
+  }
+  return output.stdout.trim();
+}
+
+function gitStatus(root) {
+  const output = spawnSync("git", ["-C", root, "status", "--porcelain"], { encoding: "utf8" });
+  if (output.status !== 0) {
+    throw admission(`Planr candidate git status is not observable: ${trim(output.stderr)}`);
   }
   return output.stdout.trim();
 }
@@ -1329,6 +1438,64 @@ function requiredString(value, label) {
   return value;
 }
 
+function validateControlHandoff(value) {
+  if (value === undefined) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw admission("AC-014 control_handoff must be an object");
+  }
+  const expectedFields = ["plan_id", "preflight_item_id", "verification_item_id", "obligation_id"];
+  for (const field of expectedFields) requiredString(value[field], `control_handoff.${field}`);
+  if (value.schema_version !== "planr.ac014.control_handoff.v1") {
+    throw admission("AC-014 control_handoff schema_version must be planr.ac014.control_handoff.v1");
+  }
+  if (typeof value.policy_digest !== "string" || !/^sha256:[0-9a-f]{64}$/.test(value.policy_digest)) {
+    throw admission("AC-014 control_handoff.policy_digest must be an exact sha256 digest");
+  }
+  if (value.review_required !== true) {
+    throw admission("AC-014 control_handoff must require accepted review");
+  }
+  if (value.planr_candidate !== undefined) {
+    const candidate = value.planr_candidate;
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      throw admission("control_handoff.planr_candidate must be an object");
+    }
+    for (const field of ["root", "source_revision", "source_tree", "binary_sha256", "accepted_fix_review_gate_id"]) {
+      requiredString(candidate[field], `control_handoff.planr_candidate.${field}`);
+    }
+    if (!/^[0-9a-f]{40}$/.test(candidate.source_revision) || !/^[0-9a-f]{40}$/.test(candidate.source_tree)) {
+      throw admission("control_handoff.planr_candidate source revision and tree must be exact git identities");
+    }
+    if (!/^sha256:[0-9a-f]{64}$/.test(candidate.binary_sha256)) {
+      throw admission("control_handoff.planr_candidate.binary_sha256 must be an exact sha256 digest");
+    }
+  }
+  return structuredClone(value);
+}
+
+function validatePlanrCandidateIdentity(candidate, planrBin) {
+  if (candidate === undefined) return null;
+  const root = canonicalExistingDir(candidate.root, "control_handoff.planr_candidate.root");
+  if (gitHead(root) !== candidate.source_revision) {
+    throw admission("AC-014 Planr candidate source revision mismatch");
+  }
+  if (gitTree(root) !== candidate.source_tree) {
+    throw admission("AC-014 Planr candidate source tree mismatch");
+  }
+  if (gitStatus(root) !== "") {
+    throw admission("AC-014 Planr candidate source must be clean");
+  }
+  if (sha256File(planrBin) !== candidate.binary_sha256) {
+    throw admission("AC-014 Planr candidate binary digest mismatch");
+  }
+  return {
+    root,
+    source_revision: candidate.source_revision,
+    source_tree: candidate.source_tree,
+    binary_sha256: candidate.binary_sha256,
+    accepted_fix_review_gate_id: candidate.accepted_fix_review_gate_id,
+  };
+}
+
 function requiredCommand(value, label) {
   if (!Array.isArray(value) || value.length === 0 || value.some((part) => typeof part !== "string" || part.length === 0)) {
     throw admission(`${label} must be a non-empty string array`);
@@ -1346,13 +1513,59 @@ function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-function terminateChild(child) {
+function terminateChildTree(child) {
+  const pids = child.pid ? descendantPids(child.pid) : [];
+  if (child.pid) {
+    try {
+      process.kill(-child.pid, "SIGTERM");
+    } catch {
+      // The child may already be gone or may not own a process group.
+    }
+  }
+  for (const pid of pids.reverse()) {
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch {
+      // Process may already have exited between discovery and signal delivery.
+    }
+  }
   child.kill("SIGTERM");
   setTimeout(() => {
+    if (child.pid) {
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+    }
+    for (const pid of pids.reverse()) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+    }
     if (child.exitCode === null && child.signalCode === null) {
       child.kill("SIGKILL");
     }
   }, 1000).unref();
+}
+
+function descendantPids(pid) {
+  const direct = childPids(pid);
+  return direct.flatMap((childPid) => [childPid, ...descendantPids(childPid)]);
+}
+
+function childPids(pid) {
+  const output = spawnSync("pgrep", ["-P", String(pid)], { encoding: "utf8" });
+  if (output.status !== 0 || !output.stdout.trim()) {
+    return [];
+  }
+  return output.stdout
+    .trim()
+    .split(/\s+/u)
+    .map((value) => Number.parseInt(value, 10))
+    .filter(Number.isInteger);
 }
 
 function sleep(ms) {

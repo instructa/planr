@@ -11,6 +11,32 @@ Eval Contract v1, including the additive v1.1 efficiency-evidence amendment, is 
 - SQLite ReviewGate tables: authoritative review attempts, findings, leases, and final product review state.
 - Git: source diffs, commits, branches, and worktrees.
 
+## Planr 2.0 FeatureRun Budget Objects
+
+### FeatureRunBudgetContract
+
+`schema = planr.feature_run_budget_contract.v2`; run id; persisted UTC run-start anchor and clock basis; explicit `bounded | unbounded` mode; optional complete wall-seconds/tool-call/token limits and five-phase allocations; per-dimension metering requirements; canonical SHA-256 digest. The contract is insert-only and is created in the same transaction as its FeatureRun. Bounded mode requires positive limits and an exact allocation of each dimension across maker, verification, review, repair, and release. Unbounded mode has neither limits nor phase reserves.
+
+### ExecutionBudget
+
+Mandatory for every admitted bounded task: positive `max_wall_seconds`, `max_tool_calls`, and `max_tokens`, plus `deadline_unix_ms`. Deadline multiplication and addition are checked; overflow is invalid budget state and holds before dispatch.
+
+### BudgetReservation And BudgetObservation
+
+A reservation binds immutable run, phase, task/lease identity, maxima, creation time, and state. Reconciliation appends monotonically sequenced observations. Wall seconds, tool calls, and tokens retain independent `trusted | estimated | unavailable` provenance and adapter identity; projected or declared maxima are never stored as trusted observations.
+
+### BudgetSnapshot
+
+The pure admission input contains mode, consumed, reserved, remaining, protected, and available values; released phase boundary; per-dimension provenance; optional admitted-task deadline; and contract digest. All public surfaces derive their byte-equivalent budget object from this snapshot through `planr.execution_state.v2`.
+
+### Incompatible FeatureRun Restart
+
+`FeatureRunBudgetContractCompatibility = compatible | missing | invalid | digest_mismatch`. A nonterminal incompatible run projects `restart.status = required`, `reason = incompatible-budget`, and a stable compatibility-specific reason code in `planr.execution_state.v2`; peek and mutating pick return the same `kind = hold` packet without leasing work. `planr run restart --plan <id> --reason incompatible-budget`, MCP `planr_run_restart`, and `POST /v1/plans/<id>/run/restart` reuse one application result. The atomic retirement policy-cancels the old run, ends its active batch and role leases, preserves child history, and persists restart provenance. It creates no contract or successor. A later canonical pick is the only run-start path and creates a distinct FeatureRun with exactly one immutable v2 contract.
+
+### Compatible Budget-Hold Resolution
+
+`planr run resolve-budget-hold --plan <id>`, MCP `planr_run_resolve_budget_hold`, and `POST /v1/plans/<id>/run/resolve-budget-hold` reuse `planr.feature_run_budget_hold_resolution.v2`. Resolution is explicit, plan-scoped, idempotent, and restores only the exact prior phase after the application transaction revalidates the compatible immutable contract, snapshot integrity, active reservation deadlines, phase, role owner, and lease generation. It rejects incompatible contracts with the restart action and keeps capability holds, corrupt state, expired deadlines, missing reservations, unrepaired ceilings, and owner mismatches held.
+
 ## Core Tables
 
 ### projects

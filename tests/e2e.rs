@@ -3,6 +3,7 @@ use planr::codex_compat::{
     CODEX_0145_HOOK_EVENTS, CODEX_0145_PERMISSION_MODES, validate_codex_0145_stop_input,
     validate_codex_0145_stop_output,
 };
+use planr::usage_policy::{BudgetProvenance, FeatureRunBudgetContract, MeteringProvenance};
 use predicates::prelude::*;
 use rusqlite::Connection;
 use serde_json::{Value, json};
@@ -113,6 +114,32 @@ fn http_json(response: &str) -> Value {
 
 fn single_json_document(bytes: &[u8]) -> Value {
     serde_json::from_slice(bytes).expect("stdout must be exactly one JSON document")
+}
+
+fn test_unbounded_feature_run_contract(run_id: &str) -> FeatureRunBudgetContract {
+    FeatureRunBudgetContract::unbounded(
+        run_id,
+        1_700_000_000_000,
+        BudgetProvenance {
+            wall_seconds: MeteringProvenance::Trusted,
+            tool_calls: MeteringProvenance::Unavailable,
+            tokens: MeteringProvenance::Unavailable,
+        },
+    )
+    .expect("valid test budget contract")
+}
+
+fn insert_test_feature_run_contract(conn: &Connection, contract: &FeatureRunBudgetContract) {
+    conn.execute(
+        "INSERT INTO feature_run_budget_contracts(run_id, schema, digest, contract_json) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![
+            contract.run_id,
+            contract.schema,
+            contract.digest,
+            serde_json::to_string(contract).unwrap()
+        ],
+    )
+    .expect("test budget contract");
 }
 
 fn codex_stop_envelope(dir: &Path, session: &str, stop_hook_active: bool) -> String {
@@ -1196,10 +1223,6 @@ fn current_utc_second() -> String {
         .unwrap()
 }
 
-fn write_fresh_host_capture_envelope(root: &Path, mutate: impl FnOnce(&mut Value)) {
-    write_fresh_host_capture_envelope_with_producer(root, "planr-codex-host-capture", mutate);
-}
-
 fn write_fresh_host_capture_envelope_with_producer(
     root: &Path,
     producer_name: &str,
@@ -1242,6 +1265,35 @@ fn write_fresh_host_capture_envelope_with_producer(
         serde_json::to_vec_pretty(&envelope).unwrap(),
     )
     .unwrap();
+}
+
+fn host_capture_import_fixture(
+    root: &Path,
+    producer_name: &str,
+    mutate_capture: impl FnOnce(&mut Value),
+) -> Value {
+    let canonical_root = root.canonicalize().unwrap();
+    assert!(canonical_root.is_absolute());
+    assert_eq!(canonical_root.canonicalize().unwrap(), canonical_root);
+    for ancestor in canonical_root.ancestors() {
+        if ancestor.as_os_str().is_empty() {
+            continue;
+        }
+        assert!(
+            !fs::symlink_metadata(ancestor)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "host-capture fixture path must not contain symlink components: {}",
+            ancestor.display()
+        );
+    }
+    write_fresh_host_capture_envelope_with_producer(&canonical_root, producer_name, mutate_capture);
+    json!({
+        "schema_version": "planr.evidence.host_capture.import.v1",
+        "obligation_id": "pob-host-capture",
+        "import_root": canonical_root.to_str().unwrap(),
+    })
 }
 
 fn write_registered_host_capture_run_helper(
@@ -1727,7 +1779,14 @@ fn write_http_curl_extension_fixture(root: &Path, port: u16) {
 
 #[test]
 fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_mcp() {
-    let dir = tempdir().unwrap();
+    let canonical_temp_root = std::env::temp_dir().canonicalize().unwrap();
+    let dir = tempfile::tempdir_in(canonical_temp_root).unwrap();
+    let canonical_temp_root = dir.path().parent().unwrap().to_path_buf();
+    let planr = || {
+        let mut command = crate::planr();
+        command.env("TMPDIR", &canonical_temp_root);
+        command
+    };
     let db_dir = tempdir().unwrap();
     let db = db_dir.path().join("planr.sqlite");
     write_evidence_policy_fixture(dir.path());
@@ -1784,20 +1843,12 @@ fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_m
         .success();
 
     let self_authored_root = tempdir().unwrap();
-    write_fresh_host_capture_envelope_with_producer(
-        self_authored_root.path(),
-        "e2e-fresh-host-capture",
-        |_| {},
-    );
+    let self_authored_input =
+        host_capture_import_fixture(self_authored_root.path(), "e2e-fresh-host-capture", |_| {});
     let self_authored_path = dir.path().join("host-import-self-authored.json");
     fs::write(
         &self_authored_path,
-        serde_json::to_vec_pretty(&json!({
-            "schema_version": "planr.evidence.host_capture.import.v1",
-            "obligation_id": "pob-host-capture",
-            "import_root": self_authored_root.path().to_str().unwrap(),
-        }))
-        .unwrap(),
+        serde_json::to_vec_pretty(&self_authored_input).unwrap(),
     )
     .unwrap();
     planr()
@@ -1817,12 +1868,8 @@ fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_m
         .stdout(predicate::str::contains("not enabled"));
 
     let import_root = tempdir().unwrap();
-    write_fresh_host_capture_envelope(import_root.path(), |_| {});
-    let import_input = json!({
-        "schema_version": "planr.evidence.host_capture.import.v1",
-        "obligation_id": "pob-host-capture",
-        "import_root": import_root.path().to_str().unwrap(),
-    });
+    let import_input =
+        host_capture_import_fixture(import_root.path(), "planr-codex-host-capture", |_| {});
     let import_path = dir.path().join("host-import.json");
     fs::write(
         &import_path,
@@ -1896,6 +1943,7 @@ fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_m
     let pre_freeze_port = free_port();
     let mut pre_freeze_server = StdCommand::new(assert_cmd::cargo::cargo_bin!("planr"))
         .current_dir(dir.path())
+        .env("TMPDIR", &canonical_temp_root)
         .args([
             "--db",
             db.to_str().unwrap(),
@@ -2864,6 +2912,7 @@ fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_m
     let bin = assert_cmd::cargo::cargo_bin("planr");
     let mut server = StdCommand::new(&bin)
         .current_dir(dir.path())
+        .env("TMPDIR", &canonical_temp_root)
         .args([
             "--db",
             db.to_str().unwrap(),
@@ -2909,7 +2958,7 @@ fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_m
             .unwrap()
             .starts_with("host-capture-run-verifier-host-capture-run-")
     );
-    let mcp_run_response = mcp_tool_response(
+    let mcp_run_response = mcp_tool_response_with_env(
         dir.path(),
         &db,
         78,
@@ -2919,6 +2968,7 @@ fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_m
             "obligation_id": "pob-host-capture-mcp",
             "manifest_id": manifest_id,
         }}),
+        &[("TMPDIR", canonical_temp_root.to_str().unwrap())],
     );
     assert_ne!(
         mcp_run_response["result"]["isError"], true,
@@ -2957,12 +3007,13 @@ fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_m
         "bad_request",
         "not enabled",
     );
-    let mcp_response = mcp_tool_response(
+    let mcp_response = mcp_tool_response_with_env(
         dir.path(),
         &db,
         77,
         "planr_evidence_host_capture_import",
-        json!({"input": import_input}),
+        json!({"input": import_input.clone()}),
+        &[("TMPDIR", canonical_temp_root.to_str().unwrap())],
     );
     assert_mcp_evidence_error(
         &mcp_response,
@@ -2973,12 +3024,8 @@ fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_m
     let _ = server.kill();
     let _ = server.wait();
 
-    let bad_env = json!({
-        "schema_version": "planr.evidence.host_capture.import.v1",
-        "obligation_id": "pob-host-capture",
-        "import_root": import_root.path().to_str().unwrap(),
-        "environment": {"kind": "local", "id": "wrong", "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"},
-    });
+    let mut bad_env = import_input.clone();
+    bad_env["environment"] = json!({"kind": "local", "id": "wrong", "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"});
     let bad_env_path = dir.path().join("host-import-bad-env.json");
     fs::write(&bad_env_path, serde_json::to_vec_pretty(&bad_env).unwrap()).unwrap();
     planr()
@@ -2998,19 +3045,15 @@ fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_m
         .stdout(predicate::str::contains("not enabled"));
 
     let stale_root = tempdir().unwrap();
-    write_fresh_host_capture_envelope(stale_root.path(), |raw| {
-        raw["started_at"] = json!("2020-01-01T00:00:00Z");
-        raw["ended_at"] = json!("2020-01-01T00:00:00Z");
-    });
+    let stale_input =
+        host_capture_import_fixture(stale_root.path(), "planr-codex-host-capture", |raw| {
+            raw["started_at"] = json!("2020-01-01T00:00:00Z");
+            raw["ended_at"] = json!("2020-01-01T00:00:00Z");
+        });
     let stale_path = dir.path().join("host-import-stale.json");
     fs::write(
         &stale_path,
-        serde_json::to_vec_pretty(&json!({
-            "schema_version": "planr.evidence.host_capture.import.v1",
-            "obligation_id": "pob-host-capture",
-            "import_root": stale_root.path().to_str().unwrap(),
-        }))
-        .unwrap(),
+        serde_json::to_vec_pretty(&stale_input).unwrap(),
     )
     .unwrap();
     planr()
@@ -3030,19 +3073,15 @@ fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_m
         .stdout(predicate::str::contains("stale"));
 
     let unavailable_root = tempdir().unwrap();
-    write_fresh_host_capture_envelope(unavailable_root.path(), |raw| {
-        raw["result"]["final_status"] = json!("unavailable");
-        raw["events"][1]["payload"]["final_status"] = json!("unavailable");
-    });
+    let unavailable_input =
+        host_capture_import_fixture(unavailable_root.path(), "planr-codex-host-capture", |raw| {
+            raw["result"]["final_status"] = json!("unavailable");
+            raw["events"][1]["payload"]["final_status"] = json!("unavailable");
+        });
     let unavailable_path = dir.path().join("host-import-unavailable.json");
     fs::write(
         &unavailable_path,
-        serde_json::to_vec_pretty(&json!({
-            "schema_version": "planr.evidence.host_capture.import.v1",
-            "obligation_id": "pob-host-capture",
-            "import_root": unavailable_root.path().to_str().unwrap(),
-        }))
-        .unwrap(),
+        serde_json::to_vec_pretty(&unavailable_input).unwrap(),
     )
     .unwrap();
     planr()
@@ -3062,18 +3101,17 @@ fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_m
         .stdout(predicate::str::contains("not enabled"));
 
     let unknown_payload_root = tempdir().unwrap();
-    write_fresh_host_capture_envelope(unknown_payload_root.path(), |raw| {
-        raw["payload_version"] = json!("host-capability-raw/2.0.0");
-    });
+    let unknown_payload_input = host_capture_import_fixture(
+        unknown_payload_root.path(),
+        "planr-codex-host-capture",
+        |raw| {
+            raw["payload_version"] = json!("host-capability-raw/2.0.0");
+        },
+    );
     let unknown_payload_path = dir.path().join("host-import-unknown-payload.json");
     fs::write(
         &unknown_payload_path,
-        serde_json::to_vec_pretty(&json!({
-            "schema_version": "planr.evidence.host_capture.import.v1",
-            "obligation_id": "pob-host-capture",
-            "import_root": unknown_payload_root.path().to_str().unwrap(),
-        }))
-        .unwrap(),
+        serde_json::to_vec_pretty(&unknown_payload_input).unwrap(),
     )
     .unwrap();
     planr()
@@ -8067,7 +8105,7 @@ fn evidence_e2e_scenarios_cover_api_queue_stale_retry_unavailable_and_browser_ga
         unavailable_cli_run["object"]["attempt"]["capability_instance_id"],
         unavailable_instance_id
     );
-    let unavailable_mcp_run = mcp_tool(
+    let unavailable_mcp_response = mcp_tool_response(
         unavailable_dir.path(),
         &unavailable_db,
         107,
@@ -8080,6 +8118,8 @@ fn evidence_e2e_scenarios_cover_api_queue_stale_retry_unavailable_and_browser_ga
             }
         }),
     );
+    assert_eq!(unavailable_mcp_response["result"]["isError"], true);
+    let unavailable_mcp_run = mcp_text_value(&unavailable_mcp_response);
     let (unavailable_mcp_attempt_id, unavailable_mcp_receipt_id) = assert_unavailable_run_identity(
         &unavailable_mcp_run,
         unavailable_instance,
@@ -8135,7 +8175,7 @@ fn evidence_e2e_scenarios_cover_api_queue_stale_retry_unavailable_and_browser_ga
         unavailable_http_instance["capability"],
         unavailable_instance["capability"]
     );
-    let unavailable_http_run = http_json(&http_request(
+    let unavailable_http_response = http_request(
         unavailable_port,
         "POST",
         "/v1/evidence/run",
@@ -8145,7 +8185,12 @@ fn evidence_e2e_scenarios_cover_api_queue_stale_retry_unavailable_and_browser_ga
             "target": {"kind": "process", "uri": "local://health"}
         })
         .to_string(),
-    ));
+    );
+    assert!(
+        unavailable_http_response.starts_with("HTTP/1.1 503 Service Unavailable"),
+        "{unavailable_http_response}"
+    );
+    let unavailable_http_run = http_json(&unavailable_http_response);
     let (unavailable_http_attempt_id, unavailable_http_receipt_id) =
         assert_unavailable_run_identity(
             &unavailable_http_run,
@@ -8826,16 +8871,18 @@ fn evidence_e2e_scenarios_cover_api_queue_stale_retry_unavailable_and_browser_ga
 fn project_relocation_previews_validates_and_applies_all_paths_atomically() {
     let source = tempdir().unwrap();
     let destination = tempdir().unwrap();
-    let db = source.path().join(".planr/planr.sqlite");
+    let source_root = source.path().canonicalize().unwrap();
+    let destination_root = destination.path().canonicalize().unwrap();
+    let db = source_root.join(".planr/planr.sqlite");
     planr()
-        .current_dir(source.path())
+        .current_dir(&source_root)
         .args(["--db", db.to_str().unwrap(), "project", "init", "Relocate"])
         .assert()
         .success();
 
     let relative_plan = Path::new(".planr/plans/build/relocate.plan.md");
-    let source_plan = source.path().join(relative_plan);
-    let destination_plan = destination.path().join(relative_plan);
+    let source_plan = source_root.join(relative_plan);
+    let destination_plan = destination_root.join(relative_plan);
     fs::create_dir_all(source_plan.parent().unwrap()).unwrap();
     fs::create_dir_all(destination_plan.parent().unwrap()).unwrap();
     fs::write(&source_plan, "# Relocate\n").unwrap();
@@ -8860,7 +8907,7 @@ fn project_relocation_previews_validates_and_applies_all_paths_atomically() {
     drop(conn);
 
     let output = planr()
-        .current_dir(source.path())
+        .current_dir(&source_root)
         .args([
             "--db",
             db.to_str().unwrap(),
@@ -8869,7 +8916,7 @@ fn project_relocation_previews_validates_and_applies_all_paths_atomically() {
             "relocate",
             &project_id,
             "--destination",
-            destination.path().to_str().unwrap(),
+            destination_root.to_str().unwrap(),
         ])
         .assert()
         .success()
@@ -8881,11 +8928,11 @@ fn project_relocation_previews_validates_and_applies_all_paths_atomically() {
     assert_eq!(preview["relocation"]["project"]["id"], project_id);
     assert_eq!(
         preview["relocation"]["project"]["from"],
-        source.path().to_string_lossy().as_ref()
+        source_root.to_string_lossy().as_ref()
     );
     assert_eq!(
         preview["relocation"]["project"]["to"],
-        destination.path().to_string_lossy().as_ref()
+        destination_root.to_string_lossy().as_ref()
     );
     assert_eq!(preview["relocation"]["plans"][0]["id"], "plan-relocate");
     assert_eq!(
@@ -8924,16 +8971,16 @@ fn project_relocation_previews_validates_and_applies_all_paths_atomically() {
     assert_eq!(
         stored_paths(),
         (
-            source.path().to_string_lossy().to_string(),
+            source_root.to_string_lossy().to_string(),
             source_plan.to_string_lossy().to_string(),
             source_plan.to_string_lossy().to_string(),
         )
     );
     drop(conn);
 
-    let missing_destination = source.path().join("missing-destination");
+    let missing_destination = source_root.join("missing-destination");
     planr()
-        .current_dir(source.path())
+        .current_dir(&source_root)
         .args([
             "--db",
             db.to_str().unwrap(),
@@ -8959,13 +9006,13 @@ fn project_relocation_previews_validates_and_applies_all_paths_atomically() {
                     "relocate".to_string(),
                     project_id.clone(),
                     "--destination".to_string(),
-                    destination.path().to_string_lossy().to_string(),
+                    destination_root.to_string_lossy().to_string(),
                 ];
                 if apply {
                     args.push("--apply".to_string());
                 }
                 planr()
-                    .current_dir(source.path())
+                    .current_dir(&source_root)
                     .args(args)
                     .assert()
                     .failure()
@@ -8978,7 +9025,7 @@ fn project_relocation_previews_validates_and_applies_all_paths_atomically() {
                         |row| row.get::<_, String>(0),
                     )
                     .unwrap(),
-                    source.path().to_string_lossy()
+                    source_root.to_string_lossy()
                 );
                 assert_eq!(
                     conn.query_row(
@@ -9001,7 +9048,7 @@ fn project_relocation_previews_validates_and_applies_all_paths_atomically() {
             }
         };
 
-    let parent_escape = source.path().join("../parent-escape.plan.md");
+    let parent_escape = source_root.join("../parent-escape.plan.md");
     let parent_escape = parent_escape.to_string_lossy().to_string();
     let conn = Connection::open(&db).unwrap();
     conn.execute(
@@ -9022,13 +9069,10 @@ fn project_relocation_previews_validates_and_applies_all_paths_atomically() {
 
     #[cfg(unix)]
     {
-        let source_link_plan = source
-            .path()
-            .join(".planr/plans/build/symlink-escape.plan.md");
+        let source_link_plan = source_root.join(".planr/plans/build/symlink-escape.plan.md");
         fs::write(&source_link_plan, "# Symlink escape\n").unwrap();
-        let destination_link_plan = destination
-            .path()
-            .join(".planr/plans/build/symlink-escape.plan.md");
+        let destination_link_plan =
+            destination_root.join(".planr/plans/build/symlink-escape.plan.md");
         let outside = tempdir().unwrap();
         let outside_plan = outside.path().join("outside.plan.md");
         fs::write(&outside_plan, "# Outside\n").unwrap();
@@ -9074,7 +9118,7 @@ fn project_relocation_previews_validates_and_applies_all_paths_atomically() {
     .unwrap();
     drop(conn);
     planr()
-        .current_dir(source.path())
+        .current_dir(&source_root)
         .args([
             "--db",
             db.to_str().unwrap(),
@@ -9082,7 +9126,7 @@ fn project_relocation_previews_validates_and_applies_all_paths_atomically() {
             "relocate",
             &project_id,
             "--destination",
-            destination.path().to_str().unwrap(),
+            destination_root.to_str().unwrap(),
         ])
         .assert()
         .failure()
@@ -9102,7 +9146,7 @@ fn project_relocation_previews_validates_and_applies_all_paths_atomically() {
     drop(conn);
 
     planr()
-        .current_dir(source.path())
+        .current_dir(&source_root)
         .args([
             "--db",
             db.to_str().unwrap(),
@@ -9110,7 +9154,7 @@ fn project_relocation_previews_validates_and_applies_all_paths_atomically() {
             "relocate",
             &project_id,
             "--destination",
-            destination.path().to_str().unwrap(),
+            destination_root.to_str().unwrap(),
             "--apply",
         ])
         .assert()
@@ -9131,14 +9175,14 @@ fn project_relocation_previews_validates_and_applies_all_paths_atomically() {
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(root_after_failure, source.path().to_string_lossy());
+    assert_eq!(root_after_failure, source_root.to_string_lossy());
     assert_eq!(plan_after_failure, source_plan.to_string_lossy());
     conn.execute_batch("DROP TRIGGER fail_project_relocation_item_update")
         .unwrap();
     drop(conn);
 
     let output = planr()
-        .current_dir(source.path())
+        .current_dir(&source_root)
         .args([
             "--db",
             db.to_str().unwrap(),
@@ -9147,7 +9191,7 @@ fn project_relocation_previews_validates_and_applies_all_paths_atomically() {
             "relocate",
             &project_id,
             "--destination",
-            destination.path().to_str().unwrap(),
+            destination_root.to_str().unwrap(),
             "--apply",
         ])
         .assert()
@@ -9165,7 +9209,7 @@ fn project_relocation_previews_validates_and_applies_all_paths_atomically() {
             |row| row.get::<_, String>(0),
         )
         .unwrap(),
-        destination.path().to_string_lossy()
+        destination_root.to_string_lossy()
     );
     assert_eq!(
         conn.query_row(
@@ -14658,6 +14702,455 @@ fn plan_work_type_annotations_seed_routed_items_without_retags() {
 }
 
 #[test]
+fn canonical_verification_task_builds_a_sealed_verifier_packet_without_retagging() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    let db_arg = db.to_str().unwrap().to_string();
+    write_evidence_policy_fixture(dir.path());
+    write_materiality_policy(dir.path());
+    let policy_path = dir.path().join(".planr/policy.toml");
+    let policy = fs::read_to_string(&policy_path)
+        .unwrap()
+        .lines()
+        .filter(|line| {
+            !line.starts_with("max_wall_time_seconds =")
+                && !line.starts_with("max_tool_calls =")
+                && !line.starts_with("max_tokens =")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(policy_path, policy).unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "project", "init", "Canonical Verification"])
+        .assert()
+        .success();
+
+    let product = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                &db_arg,
+                "--json",
+                "plan",
+                "new",
+                "Canonical Verification",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    let build = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                &db_arg,
+                "--json",
+                "plan",
+                "split",
+                product["plan"]["id"].as_str().unwrap(),
+                "--slice",
+                "Canonical verifier packet",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    let plan_id = build["plan"]["id"].as_str().unwrap().to_string();
+    let plan_path = build["plan"]["path"].as_str().unwrap().to_string();
+    let content = fs::read_to_string(&plan_path).unwrap();
+    let start = content.find("## Phase 1").unwrap();
+    let end = content.find("## Out Of Scope").unwrap();
+    let tasks = "### TASK-001 (code): Prepare deterministic source\n\nPrepare the source freeze.\n\n### TASK-007 (verification): Verify frozen source\n\nCollect binding Evidence from the sealed run index.\n\n";
+    fs::write(
+        &plan_path,
+        format!("{}{}{}", &content[..start], tasks, &content[end..]),
+    )
+    .unwrap();
+    let map = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db", &db_arg, "--json", "map", "build", "--from", &plan_id,
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    let item = |title: &str| {
+        map["created"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["title"] == title)
+            .unwrap_or_else(|| panic!("item `{title}` missing: {map}"))
+            .clone()
+    };
+    let implementation = item("Prepare deterministic source");
+    let verification = item("Verify frozen source");
+    assert_eq!(implementation["work_type"], "code");
+    assert_eq!(verification["work_type"], "verification");
+    let implementation_id = implementation["id"].as_str().unwrap().to_string();
+    let verification_id = verification["id"].as_str().unwrap().to_string();
+
+    let policy = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args(["--db", &db_arg, "--json", "evidence", "policy"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    init_git_repo(dir.path());
+    let mut obligation = evidence_obligation(
+        "pob-canonical-verifier-packet",
+        policy["object"]["digest"].as_str().unwrap(),
+        json!({"kind": "local", "id": "canonical", "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"}),
+    );
+    obligation["plan_id"] = json!(plan_id);
+    obligation["item_id"] = json!(verification_id);
+    obligation["criterion_id"] = json!("crit-canonical-verifier-packet");
+    obligation["fixture_policy"]["fixtures_allowed"] = json!(true);
+    obligation["observations"][0]["payload_schema"] =
+        json!({"schema_ref": "schema://com.example.health.status"});
+    add_evidence_obligation_value(
+        dir.path(),
+        &db,
+        "pob-canonical-verifier-packet",
+        &obligation,
+    );
+    let capability_instance_id = policy["object"]["registry"]["probes"][0]["instance_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let failed_run_path = dir.path().join("product-finding.run.json");
+    fs::write(
+        &failed_run_path,
+        serde_json::to_vec_pretty(&json!({
+            "obligation_id": "pob-canonical-verifier-packet",
+            "capability_instance_id": capability_instance_id,
+            "target": {"kind": "process", "uri": "local://health"},
+            "env": {"PLANR_FIXTURE_GAP_REASONS": "[\"product_failed\"]"},
+            "fixture_disclosure": {
+                "fixtures_used": true,
+                "mocks_used": false,
+                "fixture_refs": ["planr-test-fixture:product-finding-repair"]
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let picked = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", "canonical-maker")
+            .args([
+                "--db",
+                &db_arg,
+                "--json",
+                "pick",
+                "--plan",
+                &plan_id,
+                "--work-type",
+                "code",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    assert_eq!(picked["item"]["id"], implementation_id);
+
+    let done = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", "canonical-maker")
+            .args([
+                "--db",
+                &db_arg,
+                "--json",
+                "done",
+                &implementation_id,
+                "--summary",
+                "canonical source prepared",
+                "--cmd",
+                "true",
+                "--tests",
+                "true",
+                "--next",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    assert_eq!(done["next"]["reason"], "verification_handoff_source_frozen");
+    assert_eq!(
+        done["next"]["work_packet"]["verification_item_id"],
+        verification_id
+    );
+
+    let packet = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", "canonical-verifier")
+            .args([
+                "--db",
+                &db_arg,
+                "--json",
+                "pick",
+                "--plan",
+                &plan_id,
+                "--work-type",
+                "verification",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    assert_eq!(packet["work_packet"]["kind"], "verification");
+    assert_eq!(packet["work_packet"]["item_id"], verification_id);
+    assert!(packet["work_packet"].get("mode").is_none());
+    assert!(packet["work_packet"].get("repair_id").is_none());
+    assert!(
+        packet["work_packet"]
+            .get("selective_replay_obligation_ids")
+            .is_none()
+    );
+    assert_eq!(
+        packet["work_packet"]["execution_state"]["phase"], "verification",
+        "{packet}"
+    );
+    assert_eq!(
+        packet["work_packet"]["verification_lease"]["worker_id"],
+        "canonical-verifier"
+    );
+    assert!(packet["work_packet"]["source_freeze"]["source_digest"].is_string());
+    assert_eq!(
+        packet["work_packet"]["sealed_run_index"]["schema_version"],
+        "planr.evidence.run-index.v1"
+    );
+    assert_eq!(
+        packet["work_packet"]["sealed_run_index"]["runs"][0]["input"]["obligation_id"],
+        "pob-canonical-verifier-packet"
+    );
+
+    let trace = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args(["--db", &db_arg, "--json", "trace", "item", &verification_id])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    assert_eq!(trace["proof"]["active_binding"], true);
+
+    let failed = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", "canonical-verifier")
+            .args([
+                "--db",
+                &db_arg,
+                "--json",
+                "evidence",
+                "run",
+                "--input",
+                failed_run_path.to_str().unwrap(),
+            ])
+            .assert()
+            .code(2)
+            .get_output()
+            .stdout,
+    );
+    assert_eq!(
+        failed["object"]["receipt"]["proof_gaps"],
+        json!(["product_failed"])
+    );
+    let repair_id = failed["object"]["product_finding"]["repair_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        failed["object"]["product_finding"]["verification_item_id"],
+        verification_id
+    );
+    let repair_packet = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", "canonical-maker")
+            .args([
+                "--db",
+                &db_arg,
+                "--json",
+                "pick",
+                "--plan",
+                &plan_id,
+                "--work-type",
+                "code",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    assert_eq!(repair_packet["work_packet"]["repair_id"], repair_id);
+    assert_eq!(
+        repair_packet["work_packet"]["selective_replay_obligation_ids"],
+        json!(["pob-canonical-verifier-packet"])
+    );
+    let settle_args = || {
+        vec![
+            "--db".to_string(),
+            db_arg.clone(),
+            "--json".to_string(),
+            "run".to_string(),
+            "settle-repair".to_string(),
+            "--plan".to_string(),
+            plan_id.clone(),
+            "--invalidation".to_string(),
+            repair_id.clone(),
+            "--summary".to_string(),
+            "repaired product finding".to_string(),
+            "--files".to_string(),
+            "tests/e2e.rs".to_string(),
+            "--cmd".to_string(),
+            "cargo test --test e2e".to_string(),
+            "--tests".to_string(),
+            "passed".to_string(),
+        ]
+    };
+    let bin = assert_cmd::cargo::cargo_bin("planr");
+    let settle_a = StdCommand::new(&bin)
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "canonical-maker")
+        .args(settle_args())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let settle_b = StdCommand::new(&bin)
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "canonical-maker")
+        .args(settle_args())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let settled_outputs = [
+        settle_a.wait_with_output().unwrap(),
+        settle_b.wait_with_output().unwrap(),
+    ];
+    assert!(settled_outputs.iter().all(|output| output.status.success()));
+    let settled_values = settled_outputs
+        .iter()
+        .map(|output| single_json_document(&output.stdout))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        settled_values
+            .iter()
+            .filter(|value| value["created"] == true)
+            .count(),
+        1
+    );
+    let settled = &settled_values[0];
+    assert_eq!(settled["work_packet"]["kind"], "verification_handoff");
+    assert_eq!(settled["work_packet"]["mode"], "selective_replay");
+    assert_eq!(settled["work_packet"]["repair_id"], repair_id);
+    assert_ne!(
+        settled["work_packet"]["source_freeze"]["id"],
+        done["next"]["work_packet"]["source_freeze"]["id"]
+    );
+    let fresh_packet = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", "canonical-verifier-fresh")
+            .args([
+                "--db",
+                &db_arg,
+                "--json",
+                "pick",
+                "--plan",
+                &plan_id,
+                "--work-type",
+                "verification",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    assert_eq!(fresh_packet["work_packet"]["mode"], "selective_replay");
+    assert_eq!(fresh_packet["work_packet"]["repair_id"], repair_id);
+    assert_eq!(
+        fresh_packet["work_packet"]["responsible_maker_id"],
+        "canonical-maker"
+    );
+    assert_eq!(
+        fresh_packet["work_packet"]["selective_replay_obligation_ids"],
+        json!(["pob-canonical-verifier-packet"])
+    );
+    assert_eq!(
+        fresh_packet["work_packet"]["sealed_run_index"]["runs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|run| run["input"]["obligation_id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["pob-canonical-verifier-packet"]
+    );
+    let replay_path = fresh_packet["work_packet"]["sealed_run_index"]["repository_path"]
+        .as_str()
+        .unwrap();
+    let replay = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", "canonical-verifier-fresh")
+            .args([
+                "--db",
+                &db_arg,
+                "--json",
+                "evidence",
+                "run",
+                "--input",
+                replay_path,
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    assert_eq!(replay["object"]["verdict"], "passed");
+    let coverage = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                &db_arg,
+                "--json",
+                "evidence",
+                "coverage",
+                "--scope",
+                "obligation",
+                "--id",
+                "pob-canonical-verifier-packet",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    assert_eq!(coverage["object"]["coverage"]["status"], "satisfied");
+}
+
+#[test]
 fn install_writes_host_hooks_by_default_with_additive_merge() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
@@ -17678,6 +18171,713 @@ fn pick_peek_reads_the_packet_without_leasing() {
 }
 
 #[test]
+fn incompatible_feature_run_restart_is_atomic_and_creates_fresh_v2_run_on_next_pick() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join("restart-template.sqlite");
+    let db_arg = db.to_str().unwrap().to_string();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "project", "init", "Restart hard cut"])
+        .assert()
+        .success();
+    let plan = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                &db_arg,
+                "--json",
+                "plan",
+                "new",
+                "Restart hard cut plan",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    let plan_id = plan["plan"]["id"].as_str().unwrap().to_string();
+    let plan_path = plan["plan"]["path"].as_str().unwrap().to_string();
+    let conn = Connection::open(&db).unwrap();
+    let project_id: String = conn
+        .query_row("SELECT id FROM projects LIMIT 1", [], |row| row.get(0))
+        .unwrap();
+    for ordinal in 1..=2 {
+        conn.execute(
+            "INSERT INTO items(id, project_id, title, description, status, work_type, plan_path, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 'restart proof', 'ready', 'code', ?4, datetime('now'), datetime('now'))",
+            rusqlite::params![
+                format!("restart-item-{ordinal}"),
+                project_id,
+                format!("Restart item {ordinal}"),
+                plan_path,
+            ],
+        )
+        .unwrap();
+    }
+    conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+    conn.execute(
+        "INSERT INTO feature_runs(id, project_id, plan_id, status, phase, policy_digest, active_batch_id, outcomes_settled, batch_outcome_count)
+         VALUES ('run-incompatible-old', ?1, ?2, 'active', 'implementation', 'sha256:legacy-policy', 'batch-incompatible-old', 1, 1)",
+        rusqlite::params![project_id, plan_id],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO execution_batches(id, run_id, maker_worker_id, status) VALUES ('batch-incompatible-old', 'run-incompatible-old', 'legacy-maker', 'active')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO feature_run_role_leases(run_id, role, worker_id, lease_generation) VALUES ('run-incompatible-old', 'maker', 'legacy-maker', 1)",
+        [],
+    )
+    .unwrap();
+    conn.execute_batch("COMMIT").unwrap();
+    conn.execute(
+        "INSERT INTO execution_run_outcomes(id, run_id, batch_id, item_id, ordinal, outcome_json) VALUES ('outcome-old', 'run-incompatible-old', 'batch-incompatible-old', 'historical-item', 1, '{}')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO review_gates(id, run_id, scope_kind, scope_id, kind, status, responsible_maker_id, latest_attempt) VALUES ('gate-old', 'run-incompatible-old', 'outcome', 'historical-item', 'risk_checkpoint', 'accepted', 'legacy-maker', 1)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO review_attempts(id, gate_id, attempt_number, reviewer_worker_id, reviewer_mode, verdict, source_revision, artifacts_json) VALUES ('attempt-old', 'gate-old', 1, 'legacy-reviewer', 'independent', 'accepted', 'sha256:old-source', '[]')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO review_findings(id, run_id, gate_id, attempt_id, severity, target, owner_worker_id, status, invalidated_evidence_ids_json) VALUES ('finding-old', 'run-incompatible-old', 'gate-old', 'attempt-old', 'moderate', 'src/old.rs', 'legacy-maker', 'resolved', '[]')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO feature_run_budget_reservations(id, run_id, phase, boundary_key, status, started_at_unix_ms, provenance) VALUES ('reservation-old', 'run-incompatible-old', 'implementation', 'implementation:historical-item', 'active', 1700000000000, 'legacy.history')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO feature_run_budget_observations(id, run_id, phase, metering, wall_seconds, provenance) VALUES ('observation-old', 'run-incompatible-old', 'implementation', 'trusted', 9, 'legacy.history')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO logs(id, project_id, item_id, run_id, kind, summary, created_at) VALUES ('log-old', ?1, 'historical-item', 'run-incompatible-old', 'completion', 'historical log', datetime('now'))",
+        [&project_id],
+    )
+    .unwrap();
+    let history_tables = [
+        "execution_run_outcomes",
+        "review_gates",
+        "review_attempts",
+        "review_findings",
+        "feature_run_budget_reservations",
+        "feature_run_budget_observations",
+        "logs",
+    ];
+    let history_before = history_tables
+        .iter()
+        .map(|table| {
+            (
+                *table,
+                conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    drop(conn);
+
+    let peek = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                &db_arg,
+                "--json",
+                "pick",
+                "--peek",
+                "--work-type",
+                "code",
+                "--plan",
+                &plan_id,
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    let pick_hold = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", "restart-maker")
+            .args([
+                "--db",
+                &db_arg,
+                "--json",
+                "pick",
+                "--work-type",
+                "code",
+                "--plan",
+                &plan_id,
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    assert_eq!(peek["work_packet"], pick_hold["work_packet"]);
+    assert_eq!(peek["work_packet"]["kind"], "hold");
+    assert_eq!(
+        peek["work_packet"]["classification"],
+        "incompatible_feature_run_budget_contract"
+    );
+    assert_eq!(
+        peek["work_packet"]["reason_code"],
+        "feature_run_budget_contract_missing"
+    );
+    assert_eq!(
+        peek["work_packet"]["next_action"],
+        "restart_incompatible_feature_run"
+    );
+    assert_eq!(
+        peek["work_packet"]["execution_state"]["schema_version"],
+        "planr.execution_state.v2"
+    );
+    assert_eq!(
+        peek["work_packet"]["execution_state"]["restart"]["status"],
+        "required"
+    );
+    assert_eq!(
+        peek["work_packet"]["execution_state"]["restart"]["reason"],
+        "incompatible-budget"
+    );
+    assert_eq!(pick_hold["item"]["status"], "ready");
+    assert!(pick_hold["item"]["worker_id"].is_null());
+    let conn = Connection::open(&db).unwrap();
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM events WHERE event_type = 'item_picked' AND item_id LIKE 'restart-item-%'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM feature_run_budget_contracts",
+            [],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+        .unwrap();
+    drop(conn);
+
+    let cli_db = dir.path().join("restart-cli.sqlite");
+    let mcp_db = dir.path().join("restart-mcp.sqlite");
+    let http_db = dir.path().join("restart-http.sqlite");
+    fs::copy(&db, &cli_db).unwrap();
+    fs::copy(&db, &mcp_db).unwrap();
+    fs::copy(&db, &http_db).unwrap();
+
+    let cli_restart = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                cli_db.to_str().unwrap(),
+                "--json",
+                "run",
+                "restart",
+                "--plan",
+                &plan_id,
+                "--reason",
+                "incompatible-budget",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    let mcp_output = planr()
+        .current_dir(dir.path())
+        .args(["--db", mcp_db.to_str().unwrap(), "mcp"])
+        .write_stdin(format!(
+            "{}\n",
+            json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"planr_run_restart","arguments":{"plan":plan_id,"reason":"incompatible-budget"}}})
+        ))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let mcp_envelope: Value = serde_json::from_slice(&mcp_output).unwrap();
+    let mcp_restart: Value = serde_json::from_str(
+        mcp_envelope["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    let port = free_port();
+    let bin = assert_cmd::cargo::cargo_bin("planr");
+    let mut server = StdCommand::new(&bin)
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            http_db.to_str().unwrap(),
+            "serve",
+            "--port",
+            &port.to_string(),
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    wait_for_http_server(port);
+    let http_restart = http_json(&http_request(
+        port,
+        "POST",
+        &format!("/v1/plans/{plan_id}/run/restart"),
+        r#"{"reason":"incompatible-budget"}"#,
+    ));
+    server.kill().unwrap();
+    server.wait().unwrap();
+    assert_eq!(cli_restart, mcp_restart);
+    assert_eq!(cli_restart, http_restart);
+    assert_eq!(cli_restart["restart"]["disposition"], "retired");
+    assert_eq!(
+        cli_restart["restart"]["retired_run"]["id"],
+        "run-incompatible-old"
+    );
+    assert_eq!(
+        cli_restart["execution_state"]["restart"]["status"],
+        "retired"
+    );
+
+    let conn = Connection::open(&cli_db).unwrap();
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM feature_run_budget_contracts",
+            [],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0,
+        "restart must not create a contract"
+    );
+    assert_eq!(conn.query_row("SELECT COUNT(*) FROM feature_runs WHERE id = 'run-incompatible-old' AND status = 'cancelled' AND phase = 'cancelled' AND terminal_reason = 'policy_cancelled'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+    assert_eq!(conn.query_row("SELECT COUNT(*) FROM execution_batches WHERE id = 'batch-incompatible-old' AND status = 'ended'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+    assert_eq!(conn.query_row("SELECT COUNT(*) FROM feature_run_role_leases WHERE run_id = 'run-incompatible-old' AND released_at IS NULL", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+    for (table, expected) in &history_before {
+        assert_eq!(
+            conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            *expected,
+            "{table} history preserved"
+        );
+    }
+    drop(conn);
+
+    let repeated = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                cli_db.to_str().unwrap(),
+                "--json",
+                "run",
+                "restart",
+                "--plan",
+                &plan_id,
+                "--reason",
+                "incompatible-budget",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    assert_eq!(repeated["restart"]["disposition"], "already_retired");
+    let conn = Connection::open(&cli_db).unwrap();
+    assert_eq!(conn.query_row("SELECT COUNT(*) FROM events WHERE event_type = 'feature_run_incompatible_budget_retired'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+    drop(conn);
+
+    let next_pick = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", "restart-maker")
+            .args([
+                "--db",
+                cli_db.to_str().unwrap(),
+                "--json",
+                "pick",
+                "--work-type",
+                "code",
+                "--plan",
+                &plan_id,
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    assert_eq!(next_pick["work_packet"]["kind"], "outcome");
+    let new_run_id = next_pick["work_packet"]["execution_state"]["feature_run"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_ne!(new_run_id, "run-incompatible-old");
+    assert_eq!(
+        next_pick["work_packet"]["execution_state"]["budget"]["status"],
+        "available"
+    );
+    assert!(next_pick["work_packet"]["execution_state"]["restart"].is_null());
+    let conn = Connection::open(&cli_db).unwrap();
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM feature_runs", [], |row| row
+            .get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM feature_run_budget_contracts",
+            [],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+    assert_eq!(conn.query_row("SELECT COUNT(*) FROM feature_run_budget_contracts WHERE run_id = ?1 AND schema = 'planr.feature_run_budget_contract.v2'", [&new_run_id], |row| row.get::<_, i64>(0)).unwrap(), 1);
+    assert_eq!(conn.query_row("SELECT COUNT(*) FROM feature_run_budget_contracts WHERE run_id = 'run-incompatible-old'", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+    let retired_event: i64 = conn
+        .query_row(
+            "SELECT id FROM events WHERE event_type = 'feature_run_incompatible_budget_retired'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let started_event: i64 = conn.query_row("SELECT id FROM events WHERE event_type = 'feature_run_started' AND json_extract(payload, '$.run_id') = ?1", [&new_run_id], |row| row.get(0)).unwrap();
+    assert!(
+        retired_event < started_event,
+        "hold/restart must precede canonical successor creation"
+    );
+    drop(conn);
+
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            cli_db.to_str().unwrap(),
+            "run",
+            "restart",
+            "--plan",
+            &plan_id,
+            "--reason",
+            "incompatible-budget",
+        ])
+        .assert()
+        .failure();
+    let conn = Connection::open(&cli_db).unwrap();
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM feature_runs WHERE id = ?1 AND status = 'active'",
+            [&new_run_id],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1,
+        "healthy successor remains active"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM feature_run_budget_contracts",
+            [],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn compatible_budget_hold_resolution_is_typed_concurrent_and_transport_owned() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join("budget-hold-template.sqlite");
+    let db_arg = db.to_str().unwrap().to_string();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "project", "init", "Budget hold resolution"])
+        .assert()
+        .success();
+    let plan = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                &db_arg,
+                "--json",
+                "plan",
+                "new",
+                "Budget hold resolution plan",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    let plan_id = plan["plan"]["id"].as_str().unwrap().to_string();
+    let plan_path = plan["plan"]["path"].as_str().unwrap().to_string();
+    let conn = Connection::open(&db).unwrap();
+    let project_id: String = conn
+        .query_row("SELECT id FROM projects LIMIT 1", [], |row| row.get(0))
+        .unwrap();
+    let contract = test_unbounded_feature_run_contract("run-budget-held-v2");
+    conn.execute(
+        "INSERT INTO items(id, project_id, title, description, status, work_type, worker_id, plan_path, created_at, updated_at)
+         VALUES ('item-budget-held-v2', ?1, 'Held work', 'resume without database repair', 'picked', 'code', 'hold-owner', ?2, datetime('now'), datetime('now'))",
+        rusqlite::params![project_id, plan_path],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO feature_runs(id, project_id, plan_id, status, phase, policy_digest, budget_contract_digest, active_batch_id, held_from_phase, hold_reason)
+         VALUES ('run-budget-held-v2', ?1, ?2, 'held', 'held', 'sha256:policy', ?3, NULL, 'implementation', 'budget')",
+        rusqlite::params![project_id, plan_id, contract.digest],
+    )
+    .unwrap();
+    insert_test_feature_run_contract(&conn, &contract);
+    conn.execute(
+        "INSERT INTO execution_batches(id, run_id, maker_worker_id, status) VALUES ('batch-budget-held-v2', 'run-budget-held-v2', 'hold-owner', 'active')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE feature_runs SET active_batch_id = 'batch-budget-held-v2' WHERE id = 'run-budget-held-v2'",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO feature_run_role_leases(run_id, role, worker_id, lease_generation) VALUES ('run-budget-held-v2', 'maker', 'hold-owner', 1)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO feature_run_budget_reservations(id, run_id, contract_digest, phase, boundary_key, owner_role, owner_worker_id, lease_generation, status, started_at_unix_ms, provenance)
+         VALUES ('reservation-budget-held-v2', 'run-budget-held-v2', ?1, 'implementation', 'implementation:item-budget-held-v2', 'maker', 'hold-owner', 1, 'active', 1700000000000, 'test.resume')",
+        [&contract.digest],
+    )
+    .unwrap();
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+        .unwrap();
+    drop(conn);
+
+    let cli_db = dir.path().join("budget-hold-cli.sqlite");
+    let mcp_db = dir.path().join("budget-hold-mcp.sqlite");
+    let http_db = dir.path().join("budget-hold-http.sqlite");
+    let concurrent_db = dir.path().join("budget-hold-concurrent.sqlite");
+    let rollback_db = dir.path().join("budget-hold-rollback.sqlite");
+    for copy in [&cli_db, &mcp_db, &http_db, &concurrent_db, &rollback_db] {
+        fs::copy(&db, copy).unwrap();
+    }
+
+    let cli = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", "hold-owner")
+            .args([
+                "--db",
+                cli_db.to_str().unwrap(),
+                "--json",
+                "run",
+                "resolve-budget-hold",
+                "--plan",
+                &plan_id,
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    let mcp_output = planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "hold-owner")
+        .args(["--db", mcp_db.to_str().unwrap(), "mcp"])
+        .write_stdin(format!(
+            "{}\n",
+            json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"planr_run_resolve_budget_hold","arguments":{"plan":plan_id}}})
+        ))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let mcp_envelope: Value = serde_json::from_slice(&mcp_output).unwrap();
+    let mcp: Value = serde_json::from_str(
+        mcp_envelope["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    let port = free_port();
+    let bin = assert_cmd::cargo::cargo_bin("planr");
+    let mut server = StdCommand::new(&bin)
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "hold-owner")
+        .args([
+            "--db",
+            http_db.to_str().unwrap(),
+            "serve",
+            "--port",
+            &port.to_string(),
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    wait_for_http_server(port);
+    let http = http_json(&http_request(
+        port,
+        "POST",
+        &format!("/v1/plans/{plan_id}/run/resolve-budget-hold"),
+        "{}",
+    ));
+    server.kill().unwrap();
+    server.wait().unwrap();
+    assert_eq!(cli["resolution"], mcp["resolution"]);
+    assert_eq!(cli["resolution"], http["resolution"]);
+    assert_eq!(cli["resolution"]["disposition"], "resumed");
+    assert_eq!(
+        cli["resolution"]["cause"],
+        "active_reservations_revalidated"
+    );
+    assert_eq!(cli["execution_state"]["phase"], "implementation");
+
+    let repeated = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", "hold-owner")
+            .args([
+                "--db",
+                cli_db.to_str().unwrap(),
+                "--json",
+                "run",
+                "resolve-budget-hold",
+                "--plan",
+                &plan_id,
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    assert_eq!(repeated["resolution"]["disposition"], "already_resumed");
+
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let mut threads = Vec::new();
+    for _ in 0..2 {
+        let barrier = barrier.clone();
+        let db = concurrent_db.clone();
+        let plan_id = plan_id.clone();
+        let root = dir.path().to_path_buf();
+        threads.push(thread::spawn(move || {
+            barrier.wait();
+            let output = planr()
+                .current_dir(root)
+                .env("PLANR_WORKER_ID", "hold-owner")
+                .args([
+                    "--db",
+                    db.to_str().unwrap(),
+                    "--json",
+                    "run",
+                    "resolve-budget-hold",
+                    "--plan",
+                    &plan_id,
+                ])
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            serde_json::from_slice::<Value>(&output.stdout).unwrap()
+        }));
+    }
+    let mut dispositions = threads
+        .into_iter()
+        .map(|thread| {
+            thread.join().unwrap()["resolution"]["disposition"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    dispositions.sort();
+    assert_eq!(dispositions, ["already_resumed", "resumed"]);
+    let conn = Connection::open(&concurrent_db).unwrap();
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM events WHERE event_type = 'feature_run_budget_hold_resolved'",
+            [],
+            |row| row.get::<_, u64>(0),
+        )
+        .unwrap(),
+        1
+    );
+
+    let conn = Connection::open(&rollback_db).unwrap();
+    conn.execute_batch(
+        "CREATE TRIGGER fail_budget_hold_resolution BEFORE UPDATE ON feature_runs
+         WHEN NEW.phase = 'implementation'
+         BEGIN SELECT RAISE(ABORT, 'injected resolve rollback'); END;",
+    )
+    .unwrap();
+    drop(conn);
+    planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "hold-owner")
+        .args([
+            "--db",
+            rollback_db.to_str().unwrap(),
+            "--json",
+            "run",
+            "resolve-budget-hold",
+            "--plan",
+            &plan_id,
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("injected resolve rollback"));
+    let conn = Connection::open(&rollback_db).unwrap();
+    assert_eq!(
+        conn.query_row(
+            "SELECT phase FROM feature_runs WHERE id = 'run-budget-held-v2'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap(),
+        "held"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM events WHERE event_type = 'feature_run_budget_hold_resolved'",
+            [],
+            |row| row.get::<_, u64>(0),
+        )
+        .unwrap(),
+        0
+    );
+}
+
+#[test]
 fn mcp_route_tools_reuse_cli_json_shapes() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
@@ -20121,10 +21321,13 @@ fn seed_final_review_feature_run(dir: &Path, db: &Path) -> String {
     let plan: Value = serde_json::from_slice(&plan).unwrap();
     let plan_id = plan["plan"]["id"].as_str().unwrap().to_string();
     let plan_path = plan["plan"]["path"].as_str().unwrap().to_string();
+    init_git_repo(dir);
+    let source = evidence_source_binding(dir);
     let conn = Connection::open(db).unwrap();
     let project_id: String = conn
         .query_row("SELECT id FROM projects LIMIT 1", [], |row| row.get(0))
         .unwrap();
+    let budget_contract = test_unbounded_feature_run_contract("run-final-seed");
     conn.execute(
         "INSERT INTO items(id, project_id, title, description, status, work_type, worker_id, plan_path, created_at, updated_at, completed_at)
          VALUES ('outcome-final-seed', ?1, 'Outcome', 'settled outcome', 'closed', 'code', 'maker-final', ?2, datetime('now'), datetime('now'), datetime('now'))",
@@ -20132,9 +21335,15 @@ fn seed_final_review_feature_run(dir: &Path, db: &Path) -> String {
     )
     .unwrap();
     conn.execute(
-        "INSERT INTO feature_runs(id, project_id, plan_id, status, phase, policy_digest, source_revision, active_batch_id, outcomes_settled, batch_outcome_count, revision)
-         VALUES ('run-final-seed', ?1, ?2, 'active', 'verification', 'sha256:policy', 'source-final', NULL, 1, 0, 0)",
-        rusqlite::params![project_id, plan_id],
+        "INSERT INTO feature_runs(id, project_id, plan_id, status, phase, policy_digest, source_revision, active_batch_id, outcomes_settled, batch_outcome_count, revision, budget_contract_digest)
+         VALUES ('run-final-seed', ?1, ?2, 'active', 'verification', 'sha256:policy', ?3, NULL, 1, 0, 0, ?4)",
+        rusqlite::params![project_id, plan_id, source["revision"].as_str().unwrap(), budget_contract.digest],
+    )
+    .unwrap();
+    insert_test_feature_run_contract(&conn, &budget_contract);
+    conn.execute(
+        "INSERT INTO feature_run_source_freezes(id, run_id, source_revision, source_digest, status) VALUES ('freeze-final-seed', 'run-final-seed', ?1, ?2, 'active')",
+        rusqlite::params![source["revision"].as_str().unwrap(), source["tree_digest"].as_str().unwrap()],
     )
     .unwrap();
     conn.execute(
@@ -20237,7 +21446,8 @@ fn canonical_final_review_cli_mcp_pick_accept_and_audit_use_one_gate_without_map
 }
 
 #[test]
-fn canonical_execution_state_projects_across_cli_mcp_http_inspection_recovery_package_and_audit() {
+fn execution_state_v2_budget_is_byte_equivalent_across_cli_mcp_http_and_packets() {
+    let secret_marker = "sk-planr-budget-provenance-0123456789abcdef0123456789abcdef";
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
     planr()
@@ -20269,6 +21479,8 @@ fn canonical_execution_state_projects_across_cli_mcp_http_inspection_recovery_pa
     let plan: Value = serde_json::from_slice(&plan).unwrap();
     let plan_id = plan["plan"]["id"].as_str().unwrap().to_string();
     let plan_path = plan["plan"]["path"].as_str().unwrap().to_string();
+    init_git_repo(dir.path());
+    let source = evidence_source_binding(dir.path());
     let conn = Connection::open(&db).unwrap();
     let project_id: String = conn
         .query_row("SELECT id FROM projects LIMIT 1", [], |row| row.get(0))
@@ -20304,8 +21516,8 @@ fn canonical_execution_state_projects_across_cli_mcp_http_inspection_recovery_pa
     )
     .unwrap();
     conn.execute(
-        "INSERT INTO feature_run_budget_reservations(id, run_id, phase, boundary_key, status, reserved_wall_seconds, reserved_tool_calls, owns_wall, started_at_unix_ms, provenance)
-         VALUES ('reservation-historical', 'run-historical', 'review', 'review:historical', 'active', 97, 13, 1, 1, 'historical-test')",
+        "INSERT INTO feature_run_budget_reservations(id, run_id, phase, boundary_key, status, reserved_wall_seconds, reserved_tool_calls, started_at_unix_ms, provenance)
+         VALUES ('reservation-historical', 'run-historical', 'review', 'review:historical', 'active', 97, 13, 1, 'historical-test')",
         [],
     )
     .unwrap();
@@ -20321,10 +21533,17 @@ fn canonical_execution_state_projects_across_cli_mcp_http_inspection_recovery_pa
         rusqlite::params![project_id, plan_path],
     )
     .unwrap();
+    let budget_contract = test_unbounded_feature_run_contract("run-final");
     conn.execute(
-        "INSERT INTO feature_runs(id, project_id, plan_id, status, phase, policy_digest, source_revision, active_batch_id, outcomes_settled, batch_outcome_count, revision)
-         VALUES ('run-final', ?1, ?2, 'active', 'verification', 'sha256:policy', 'source-final', NULL, 1, 0, 0)",
-        rusqlite::params![project_id, plan_id],
+        "INSERT INTO feature_runs(id, project_id, plan_id, status, phase, policy_digest, source_revision, active_batch_id, outcomes_settled, batch_outcome_count, revision, budget_contract_digest)
+         VALUES ('run-final', ?1, ?2, 'active', 'verification', 'sha256:policy', ?3, NULL, 1, 0, 0, ?4)",
+        rusqlite::params![project_id, plan_id, source["revision"].as_str().unwrap(), budget_contract.digest],
+    )
+    .unwrap();
+    insert_test_feature_run_contract(&conn, &budget_contract);
+    conn.execute(
+        "INSERT INTO feature_run_source_freezes(id, run_id, source_revision, source_digest, status) VALUES ('freeze-final', 'run-final', ?1, ?2, 'active')",
+        rusqlite::params![source["revision"].as_str().unwrap(), source["tree_digest"].as_str().unwrap()],
     )
     .unwrap();
     conn.execute(
@@ -20337,6 +21556,22 @@ fn canonical_execution_state_projects_across_cli_mcp_http_inspection_recovery_pa
         "INSERT INTO feature_run_role_leases(run_id, role, worker_id, lease_generation)
          VALUES ('run-final', 'verifier', 'verifier-final', 1)",
         [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO feature_run_budget_reservations(
+            id, run_id, contract_digest, phase, boundary_key, owner_role,
+            owner_worker_id, lease_generation, status, started_at_unix_ms, provenance
+         ) VALUES (
+            'reservation-secret-provenance', 'run-final', ?1, 'verification', ?2, 'verifier',
+            'verifier-final', 1, 'released', ?3, ?4
+         )",
+        rusqlite::params![
+            budget_contract.digest,
+            format!("verification:{secret_marker}"),
+            budget_contract.started_at_unix_ms,
+            secret_marker,
+        ],
     )
     .unwrap();
     drop(conn);
@@ -20360,25 +21595,30 @@ fn canonical_execution_state_projects_across_cli_mcp_http_inspection_recovery_pa
     assert_eq!(created["created"], true);
     assert_eq!(
         created["execution_state"]["schema_version"],
-        "planr.execution_state.v1"
+        "planr.execution_state.v2"
     );
     assert_eq!(created["execution_state"]["feature_run"]["id"], "run-final");
     assert_eq!(
         created["execution_state"]["feature_run"]["source_revision"],
-        "source-final"
+        source["revision"]
     );
     assert_eq!(
         created["execution_state"]["review_gate"]["source_revision"],
-        "source-final"
+        source["revision"]
+    );
+    assert_eq!(
+        created["execution_state"]["review_source_binding"]["freeze_id"],
+        "freeze-final"
+    );
+    assert_eq!(
+        created["execution_state"]["review_source_binding"]["source_digest"],
+        source["tree_digest"]
     );
     assert_eq!(
         created["execution_state"]["owner"]["worker_id"],
         "verifier-final"
     );
-    assert_eq!(
-        created["execution_state"]["budget"]["active_reservations"],
-        0
-    );
+    assert_eq!(created["execution_state"]["budget"]["status"], "available");
     let gate_id = created["execution_state"]["review_gate"]["id"]
         .as_str()
         .unwrap()
@@ -20456,6 +21696,43 @@ fn canonical_execution_state_projects_across_cli_mcp_http_inspection_recovery_pa
         .clone();
     let picked: Value = serde_json::from_slice(&picked).unwrap();
     assert_eq!(picked["work_packet"]["kind"], "review_gate");
+    let canonical_budget_bytes =
+        serde_json::to_vec(&picked["work_packet"]["execution_state"]["budget"]).unwrap();
+    thread::sleep(Duration::from_millis(1_100));
+
+    let cli_status = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args(["--db", db.to_str().unwrap(), "--json", "map", "status"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    let mcp_status = mcp_tool(dir.path(), &db, 72, "planr_map_status", json!({}));
+    let http_status = http_json(&http_request(port, "GET", "/v1/map/status", ""));
+    for (surface, status) in [
+        ("CLI", &cli_status),
+        ("MCP", &mcp_status),
+        ("HTTP", &http_status),
+    ] {
+        let budget = &status["execution_states"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|state| state["feature_run"]["id"] == "run-final")
+            .unwrap()["budget"];
+        assert_eq!(
+            serde_json::to_vec(budget).unwrap(),
+            canonical_budget_bytes,
+            "{surface} must reuse the byte-equivalent work-packet budget projection"
+        );
+    }
+    assert_eq!(
+        serde_json::to_vec(&picked["work_packet"]["execution_state"]["budget"]).unwrap(),
+        canonical_budget_bytes,
+        "work packets must reuse the byte-equivalent canonical budget projection"
+    );
     assert_eq!(
         picked["work_packet"]["execution_state"]["review_gate"]["id"],
         gate_id
@@ -20532,7 +21809,7 @@ fn canonical_execution_state_projects_across_cli_mcp_http_inspection_recovery_pa
         "attempt-historical"
     );
     assert_eq!(historical_status["findings"][0]["id"], "finding-historical");
-    assert_eq!(historical_status["budget"]["active_reservations"], 1);
+    assert_eq!(historical_status["budget"]["status"], "unavailable");
     assert!(historical_status["owner"].is_null());
     assert_eq!(
         historical_status["feature_run"]["source_revision"],
@@ -20634,9 +21911,27 @@ fn canonical_execution_state_projects_across_cli_mcp_http_inspection_recovery_pa
         .find(|state| state["feature_run"]["id"] == "run-final")
         .unwrap();
     assert_eq!(packaged_current, &trace["execution_state"]);
+    for (surface, value) in [
+        ("final-review CLI", &created),
+        ("final-review MCP", &mcp_value),
+        ("review work packet", &picked),
+        ("status CLI", &cli_status),
+        ("status MCP", &mcp_status),
+        ("status HTTP", &http_status),
+        ("audit", &audit),
+        ("trace", &trace),
+        ("package", &package),
+    ] {
+        assert!(
+            !serde_json::to_string(value)
+                .unwrap()
+                .contains(secret_marker),
+            "{surface} leaked private budget ledger provenance"
+        );
+    }
     assert_eq!(
         trace["execution_state"]["review_attempts"][0]["source_revision"],
-        "source-final"
+        source["revision"]
     );
     assert!(
         trace["execution_state"]["findings"]
@@ -20661,6 +21956,10 @@ fn canonical_execution_state_projects_across_cli_mcp_http_inspection_recovery_pa
             .stdout
             .clone();
         let human = String::from_utf8(output).unwrap();
+        assert!(
+            !human.contains(secret_marker),
+            "human projection leaked private budget ledger provenance"
+        );
         let leading = human.lines().take(5).collect::<Vec<_>>();
         assert!(leading[0].starts_with("phase:"), "{human}");
         assert!(leading[1].starts_with("owner:"), "{human}");
@@ -20693,6 +21992,7 @@ fn capability_and_budget_holds_keep_distinct_reasons_across_cli_mcp_and_http() {
         ("run-capability-held", "plan-capability-held", "capability"),
         ("run-budget-held", "plan-budget-held", "budget"),
     ] {
+        let budget_contract = test_unbounded_feature_run_contract(run_id);
         conn.execute(
             "INSERT INTO plans(id, project_id, stage, path, title, slug, parse_status, content_hash, created_at, updated_at)
              VALUES (?1, ?2, 'build', ?3, ?4, ?1, 'ok', ?1, datetime('now'), datetime('now'))",
@@ -20700,11 +22000,12 @@ fn capability_and_budget_holds_keep_distinct_reasons_across_cli_mcp_and_http() {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO feature_runs(id, project_id, plan_id, status, phase, policy_digest, source_revision, active_batch_id, outcomes_settled, batch_outcome_count, held_from_phase, hold_reason, revision)
-             VALUES (?1, ?2, ?3, 'held', 'held', 'sha256:policy', 'source-held', NULL, 1, 0, 'source_frozen', ?4, 0)",
-            rusqlite::params![run_id, project_id, plan_id, reason],
+            "INSERT INTO feature_runs(id, project_id, plan_id, status, phase, policy_digest, source_revision, active_batch_id, outcomes_settled, batch_outcome_count, held_from_phase, hold_reason, revision, budget_contract_digest)
+             VALUES (?1, ?2, ?3, 'held', 'held', 'sha256:policy', 'source-held', NULL, 1, 0, 'source_frozen', ?4, 0, ?5)",
+            rusqlite::params![run_id, project_id, plan_id, reason, budget_contract.digest],
         )
         .unwrap();
+        insert_test_feature_run_contract(&conn, &budget_contract);
     }
     drop(conn);
 
@@ -24084,6 +25385,7 @@ fn grok_host_surfaces_are_explicit_portable_and_opt_in() {
     );
 
     let dir = tempdir().unwrap();
+    let canonical_dir = dir.path().canonicalize().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
     let initialized = planr()
         .current_dir(dir.path())
@@ -24164,7 +25466,7 @@ fn grok_host_surfaces_are_explicit_portable_and_opt_in() {
         .map(|path| {
             path.as_str()
                 .unwrap()
-                .strip_prefix(dir.path().to_str().unwrap())
+                .strip_prefix(canonical_dir.to_str().unwrap())
                 .unwrap()
                 .trim_start_matches('/')
                 .to_string()
@@ -24430,6 +25732,7 @@ fn pi_host_surfaces_are_native_explicit_and_optional() {
     );
 
     let dir = tempdir().unwrap();
+    let canonical_dir = dir.path().canonicalize().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
     let initialized = planr()
         .current_dir(dir.path())
@@ -24539,7 +25842,7 @@ fn pi_host_surfaces_are_native_explicit_and_optional() {
         .map(|path| {
             path.as_str()
                 .unwrap()
-                .strip_prefix(dir.path().to_str().unwrap())
+                .strip_prefix(canonical_dir.to_str().unwrap())
                 .unwrap()
                 .trim_start_matches('/')
                 .to_string()

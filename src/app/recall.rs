@@ -83,6 +83,14 @@ impl App {
             work_type,
             plan_path: plan_path.as_ref().map(|plan| plan.path.as_str()),
         };
+        if let Some(id) = self.peek_next_ready_item_filtered(&filter)? {
+            let hold = self.peek_outcome_work_packet(&id)?;
+            if hold["kind"] == "hold" {
+                let mut packet = self.work_packet(&id, None)?;
+                packet["work_packet"] = hold;
+                return Ok(packet);
+            }
+        }
         let leased = if peek {
             self.peek_next_ready_item_filtered(&filter)?
                 .map(|id| (id, None))
@@ -143,6 +151,9 @@ impl App {
         let Some(run) = repository.active_feature_run_for_plan(&item.project_id, &plan_id)? else {
             return Ok(json!({"kind": "outcome", "item_id": item_id}));
         };
+        if let Some(hold) = self.incompatible_feature_run_hold_value(item_id, &run)? {
+            return Ok(hold);
+        }
         Ok(json!({
             "kind": "outcome",
             "item_id": item_id,

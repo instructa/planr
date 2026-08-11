@@ -384,6 +384,44 @@ pub(crate) struct RunArgs {
 #[derive(Subcommand, Debug)]
 pub(crate) enum RunCommand {
     Batch(RunBatchArgs),
+    Restart(RunRestartArgs),
+    ResolveBudgetHold(RunResolveBudgetHoldArgs),
+    SettleRepair(RunSettleRepairArgs),
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct RunSettleRepairArgs {
+    #[arg(long)]
+    pub(crate) plan: String,
+    #[arg(long)]
+    pub(crate) invalidation: String,
+    #[arg(long)]
+    pub(crate) summary: String,
+    #[arg(long, value_delimiter = ',')]
+    pub(crate) files: Vec<String>,
+    #[arg(long)]
+    pub(crate) cmd: Vec<String>,
+    #[arg(long)]
+    pub(crate) tests: Vec<String>,
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct RunResolveBudgetHoldArgs {
+    #[arg(long)]
+    pub(crate) plan: String,
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct RunRestartArgs {
+    #[arg(long)]
+    pub(crate) plan: String,
+    #[arg(long, value_enum)]
+    pub(crate) reason: FeatureRunRestartReasonArg,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub(crate) enum FeatureRunRestartReasonArg {
+    IncompatibleBudget,
 }
 
 #[derive(Args, Debug)]

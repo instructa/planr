@@ -52,6 +52,22 @@ Optional dashboard
 - MCP clients must receive concise, structured responses optimized for LLM context.
 - All client layers must call core services, not mutate database or Markdown directly.
 
+## Planr 2.0 Budget Ownership
+
+- `usage_policy`: sole shared-core owner of `FeatureRunBudgetContract`, `ExecutionBudget`, `BudgetSnapshot`, provenance, contract validation, phase protection, and checked deadline/reserve arithmetic.
+- `execution_policy`: pure pre-dispatch admission over typed policy, concurrency state, and a persisted budget snapshot; it never loads storage or authored policy.
+- `app/execution_run`: resolves authored policy once at run start and creates the FeatureRun plus immutable budget contract in one transaction.
+- `execution_run` owns the pure incompatible-contract retirement transition; `app/execution_run` owns plan-scoped compatibility diagnosis and restart orchestration; `app/repository/execution_run` applies run, batch, lease, and provenance changes in one optimistic transaction.
+- `app/feature_run_evidence`: coordinates reservation, append-only observation, reconciliation, release, and budget-hold transitions against SQLite.
+- `app/execution_state`: sole `planr.execution_state.v2` projection owner for CLI, MCP, HTTP, work packets, trace, status, roles, and skills.
+- Storage owns insert-only contract, reservation, and observation mechanics but no policy. Host adapters enforce supplied task maxima/deadlines and report provenance but never choose policy.
+
+Dependencies remain one-way: surfaces and host adapters -> application services -> pure policy/admission core. Runtime budget decisions never reload `.planr/policy.toml`, synthesize missing state, or fall back to a previous execution-state shape.
+
+CLI, MCP, and HTTP restart adapters parse only the closed `incompatible-budget` reason and return the canonical application value byte-for-byte. They never cancel healthy runs, calculate budget compatibility, or create successor runs.
+
+Compatible budget-hold resolution is a separate `app/feature_run_evidence` lifecycle. It resumes only the exact prior phase after one immediate transaction revalidates the persisted contract/snapshot, every active reservation and deadline, the canonical role owner, and lease generation. Incompatible contracts route to restart; capability holds, corrupt or exhausted state, missing reservations, expired deadlines, and ownership mismatch remain fail-closed. CLI, MCP, and HTTP are transport-only.
+
 ## Backend Architecture
 
 V1 is a local backend packaged into the CLI binary:

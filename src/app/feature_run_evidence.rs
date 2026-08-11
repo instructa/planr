@@ -2,18 +2,25 @@
 
 use super::App;
 use super::repository::execution_run::{
-    BudgetObservationRecord, EvidenceInvalidationRecord, ExecutionRunRepository,
-    PersistedFeatureRun, SourceFreezeRecord, SourceFreezeStatus,
+    BudgetObservationRecord, BudgetReservationRecord, BudgetReservationStatus,
+    EvidenceInvalidationRecord, ExecutionRunRepository, FindingStatus, PersistedFeatureRun,
+    ProductRepairSettlementRecord, ReviewGateKind, ReviewGateStatus, SourceFreezeRecord,
+    SourceFreezeStatus,
 };
 use crate::cli::EvidenceCoverageScope;
 use crate::evidence::policy::capture_repository_snapshot;
+use crate::execution_policy::{BudgetTaskAdmission, BudgetTaskHoldReason, admit_budget_task};
 use crate::execution_run::{
-    ExecutionBatch, ExecutionBatchStatus, FeatureRunHoldReason, FeatureRunPhase, PhaseTransition,
-    PhaseTransitionCause, RoleOwner, RunRole, apply_phase_transition,
+    ExecutionBatch, ExecutionBatchStatus, FeatureRunBudgetContractCompatibility,
+    FeatureRunBudgetHoldResolutionCause, FeatureRunBudgetHoldResolutionDisposition,
+    FeatureRunBudgetHoldResolutionRequest, FeatureRunBudgetHoldResolutionTransition,
+    FeatureRunHoldReason, FeatureRunPhase, PhaseTransition, PhaseTransitionCause, RoleOwner,
+    RunRole, apply_phase_transition, owner_for_role, resolve_budget_held_feature_run,
 };
 use crate::usage_policy::{
-    BudgetDimension, BudgetPhase, MeteringMode, PolicyLoad, RiskLevel, TransitionState,
-    UsageObservation, assess_budgets, first_exhausted_budget, load_policy,
+    BudgetAmounts, BudgetPhase, BudgetProvenance, BudgetSnapshot, ExecutionBudget,
+    FeatureRunBudgetContract, FeatureRunBudgetMode, FeatureRunBudgetPhase, MeteringMode,
+    MeteringProvenance, budget_snapshot,
 };
 use crate::util::{short_id, worker_id};
 use anyhow::{Result, anyhow, bail};
@@ -34,22 +41,111 @@ pub(crate) struct CanonicalFeatureRunEvidenceLease {
     pub(crate) source_digest: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub(crate) struct FeatureRunBudgetReservation {
-    pub(crate) id: String,
-    pub(crate) run_id: String,
-    pub(crate) phase: BudgetPhase,
-    pub(crate) boundary_key: String,
-    pub(crate) owns_wall: bool,
-    pub(crate) started_at_unix_ms: u64,
+pub(crate) type FeatureRunBudgetReservation = BudgetReservationRecord;
+
+fn add_selective_replay_metadata(
+    packet: &mut Value,
+    settlement: Option<&ProductRepairSettlementRecord>,
+) {
+    let Some(settlement) = settlement else {
+        return;
+    };
+    packet["mode"] = json!("selective_replay");
+    packet["repair_id"] = json!(settlement.invalidation_id);
+    packet["responsible_maker_id"] = json!(settlement.responsible_maker_id);
+    packet["selective_replay_obligation_ids"] = json!(settlement.selective_obligation_ids);
+}
+
+impl App {
+    fn add_review_finding_reverification_metadata(
+        &self,
+        packet: &mut Value,
+        run_id: &str,
+        plan_id: &str,
+    ) -> Result<()> {
+        if !packet["item_id"].is_null() {
+            return Ok(());
+        }
+        let repository = ExecutionRunRepository::new(&self.conn);
+        let Some(gate) = repository
+            .review_gates_for_run(run_id, false)?
+            .into_iter()
+            .find(|gate| {
+                gate.kind == ReviewGateKind::FinalProduct
+                    && gate.status == ReviewGateStatus::ChangesRequested
+            })
+        else {
+            return Ok(());
+        };
+        let findings = repository.findings(&gate.id)?;
+        if findings.is_empty()
+            || findings
+                .iter()
+                .any(|finding| finding.status != FindingStatus::Resolved)
+        {
+            return Ok(());
+        }
+        let attempts = repository.review_attempts(&gate.id)?;
+        let attempt_id = attempts
+            .last()
+            .map(|attempt| attempt.id.clone())
+            .ok_or_else(|| anyhow!("review_reverification_attempt_missing:{}", gate.id))?;
+        let mut stmt = self.conn.prepare(
+            "SELECT id FROM proof_obligations WHERE plan_id = ?1 AND binding = 1
+             AND NOT EXISTS (SELECT 1 FROM proof_obligations successor WHERE successor.supersedes_obligation_id = proof_obligations.id)
+             ORDER BY id",
+        )?;
+        let obligation_ids = stmt
+            .query_map([plan_id], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        if obligation_ids.is_empty() {
+            bail!("review_reverification_obligations_missing:{}", gate.id);
+        }
+        packet["mode"] = json!("review_finding_reverification");
+        packet["repair_id"] = json!(format!("review:{}:{attempt_id}", gate.id));
+        packet["review_gate_id"] = json!(gate.id);
+        packet["review_attempt_id"] = json!(attempt_id);
+        packet["review_finding_ids"] = json!(
+            findings
+                .into_iter()
+                .map(|finding| finding.id)
+                .collect::<Vec<_>>()
+        );
+        packet["responsible_maker_id"] = json!(gate.responsible_maker_id);
+        packet["selective_replay_obligation_ids"] = json!(obligation_ids);
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BudgetUsageReport {
+    pub(crate) tool_calls: Option<u64>,
+    pub(crate) tool_calls_metering: MeteringMode,
+    pub(crate) tokens: Option<u64>,
+    pub(crate) tokens_metering: MeteringMode,
+    pub(crate) adapter_id: String,
+}
+
+impl BudgetUsageReport {
+    pub(crate) fn application(tool_calls: Option<u64>) -> Self {
+        Self {
+            tool_calls,
+            tool_calls_metering: if tool_calls.is_some() {
+                MeteringMode::Estimated
+            } else {
+                MeteringMode::Unavailable
+            },
+            tokens: None,
+            tokens_metering: MeteringMode::Unavailable,
+            adapter_id: "planr.application_reconciliation".to_string(),
+        }
+    }
 }
 
 pub(crate) enum FeatureRunBudgetAdmission {
     Reserved(FeatureRunBudgetReservation),
     Held(Value),
 }
-
-pub(crate) const HUMAN_PHASE_WALL_ALLOWANCE_SECONDS: u64 = 5;
 
 impl App {
     pub(crate) fn resolve_feature_run_evidence_lease(
@@ -150,24 +246,22 @@ impl App {
         Ok(())
     }
 
-    // Keep all reservation dimensions explicit at the transaction boundary; callers must not
-    // silently inherit wall ownership, projected usage, or provenance defaults.
-    #[allow(clippy::too_many_arguments)]
+    // Admission and reservation share one immediate transaction. Every bounded reservation stores
+    // the exact numeric maxima selected from the persisted snapshot; no caller projection is ever
+    // converted into an observation or metering claim.
     pub(crate) fn admit_feature_run_budget(
         &self,
         persisted: &PersistedFeatureRun,
         phase: BudgetPhase,
         boundary_key: &str,
-        projected_wall_seconds: Option<u64>,
-        projected_tool_calls: Option<u64>,
-        owns_wall: bool,
+        actor_worker_id: &str,
         provenance: &str,
     ) -> Result<FeatureRunBudgetAdmission> {
-        if boundary_key.trim().is_empty() || provenance.trim().is_empty() {
-            bail!("budget reservation boundary and provenance must be non-empty");
-        }
-        if projected_wall_seconds == Some(0) || projected_tool_calls == Some(0) {
-            bail!("budget reservation projections must be positive when observed");
+        if boundary_key.trim().is_empty()
+            || actor_worker_id.trim().is_empty()
+            || provenance.trim().is_empty()
+        {
+            bail!("budget reservation boundary, actor, and provenance must be non-empty");
         }
         let owns_transaction = self.conn.is_autocommit();
         self.conn.execute_batch(if owns_transaction {
@@ -176,39 +270,126 @@ impl App {
             "SAVEPOINT admit_feature_run_budget"
         })?;
         let result = (|| -> Result<FeatureRunBudgetAdmission> {
-            if let Some(existing) =
-                self.load_active_budget_reservation(&persisted.run.id, boundary_key)?
+            let repository = ExecutionRunRepository::new(&self.conn);
+            let current = repository.feature_run(&persisted.run.id)?;
+            let now_unix_ms = unix_time_ms()?;
+            let existing = match repository.active_budget_reservation(&current.run.id, boundary_key)
             {
-                if let Some(hold) = self.feature_run_budget_hold_projected(
-                    persisted,
-                    phase,
-                    projected_wall_seconds,
-                    projected_tool_calls,
-                )? {
+                Ok(value) => value,
+                Err(error) => {
+                    let hold = self.persist_budget_hold(
+                        &current,
+                        BudgetTaskHoldReason::InvalidBudgetState,
+                        format!("cannot load persisted budget reservation: {error}"),
+                    )?;
+                    return Ok(FeatureRunBudgetAdmission::Held(hold));
+                }
+            };
+            if let Some(existing) = existing {
+                if existing.phase != phase || existing.owner_worker_id != actor_worker_id {
+                    let hold = self.persist_budget_hold(
+                        &current,
+                        BudgetTaskHoldReason::InvalidBudgetState,
+                        "active budget reservation phase or owner does not match its dispatch boundary",
+                    )?;
+                    return Ok(FeatureRunBudgetAdmission::Held(hold));
+                }
+                if existing
+                    .execution_budget
+                    .is_some_and(|budget| now_unix_ms >= budget.deadline_unix_ms)
+                {
+                    let hold = self.persist_budget_hold(
+                        &current,
+                        BudgetTaskHoldReason::TaskDeadlineExceeded,
+                        "the admitted task deadline has elapsed",
+                    )?;
                     return Ok(FeatureRunBudgetAdmission::Held(hold));
                 }
                 return Ok(FeatureRunBudgetAdmission::Reserved(existing));
             }
-            if let Some(hold) = self.feature_run_budget_hold_projected(
-                persisted,
-                phase,
-                projected_wall_seconds,
-                projected_tool_calls,
-            )? {
+
+            let (mut contract, mut snapshot) = match self.persisted_budget_snapshot(
+                &current,
+                feature_run_budget_phase(phase),
+                now_unix_ms,
+            ) {
+                Ok(value) => value,
+                Err(error) => {
+                    let hold = self.persist_budget_hold(
+                        &current,
+                        BudgetTaskHoldReason::InvalidBudgetState,
+                        format!("cannot derive persisted budget snapshot: {error}"),
+                    )?;
+                    return Ok(FeatureRunBudgetAdmission::Held(hold));
+                }
+            };
+            let mut declared_maxima = match contract.mode {
+                FeatureRunBudgetMode::Unbounded => None,
+                FeatureRunBudgetMode::Bounded => snapshot.available,
+            };
+            if contract.mode == FeatureRunBudgetMode::Bounded
+                && declared_maxima.is_none_or(|maxima| !budget_amounts_are_positive(maxima))
+            {
+                let authoritative = repository.feature_run(&current.run.id)?;
+                (contract, snapshot) = self.persisted_budget_snapshot(
+                    &authoritative,
+                    feature_run_budget_phase(phase),
+                    unix_time_ms()?,
+                )?;
+                declared_maxima = match contract.mode {
+                    FeatureRunBudgetMode::Unbounded => None,
+                    FeatureRunBudgetMode::Bounded => snapshot.available,
+                };
+                if contract.mode == FeatureRunBudgetMode::Bounded
+                    && declared_maxima.is_none_or(|maxima| !budget_amounts_are_positive(maxima))
+                {
+                    let hold = self.persist_budget_hold(
+                        &authoritative,
+                        BudgetTaskHoldReason::BudgetExhausted,
+                        "no complete bounded task maxima remain after authoritative reservation reconciliation",
+                    )?;
+                    return Ok(FeatureRunBudgetAdmission::Held(hold));
+                }
+            }
+            let execution_budget =
+                match admit_budget_task(&contract, &snapshot, declared_maxima, now_unix_ms) {
+                    BudgetTaskAdmission::Admitted { execution_budget } => execution_budget,
+                    BudgetTaskAdmission::Held { reason, message } => {
+                        let hold = self.persist_budget_hold(&current, reason, message)?;
+                        return Ok(FeatureRunBudgetAdmission::Held(hold));
+                    }
+                };
+            let owner_role = budget_phase_owner_role(phase);
+            let owner = owner_for_role(&current.run, owner_role).ok_or_else(|| {
+                anyhow!(
+                    "budget_reservation_missing_{owner_role:?}_owner:{}",
+                    current.run.id
+                )
+            })?;
+            if owner.worker_id != actor_worker_id {
+                let hold = self.persist_budget_hold(
+                    &current,
+                    BudgetTaskHoldReason::InvalidBudgetState,
+                    format!(
+                        "budget reservation owner mismatch: active {:?} owner is {}",
+                        owner_role, owner.worker_id
+                    ),
+                )?;
                 return Ok(FeatureRunBudgetAdmission::Held(hold));
             }
-            let reservation = FeatureRunBudgetReservation {
+            let reservation = BudgetReservationRecord {
                 id: short_id("budget-reservation"),
-                run_id: persisted.run.id.clone(),
+                run_id: current.run.id.clone(),
                 phase,
                 boundary_key: boundary_key.to_string(),
-                owns_wall,
-                started_at_unix_ms: unix_time_ms()?,
+                owner_role,
+                owner_worker_id: owner.worker_id.clone(),
+                lease_generation: owner.lease_generation,
+                execution_budget,
+                started_at_unix_ms: now_unix_ms,
+                provenance: provenance.to_string(),
             };
-            self.conn.execute(
-                "INSERT INTO feature_run_budget_reservations(id, run_id, phase, boundary_key, status, reserved_wall_seconds, reserved_tokens, reserved_tool_calls, owns_wall, started_at_unix_ms, provenance) VALUES (?1, ?2, ?3, ?4, 'active', ?5, NULL, ?6, ?7, ?8, ?9)",
-                rusqlite::params![reservation.id, reservation.run_id, budget_phase_name(phase), reservation.boundary_key, projected_wall_seconds, projected_tool_calls, owns_wall, reservation.started_at_unix_ms, provenance],
-            )?;
+            repository.create_budget_reservation(&reservation)?;
             Ok(FeatureRunBudgetAdmission::Reserved(reservation))
         })();
         match result {
@@ -234,8 +415,9 @@ impl App {
     pub(crate) fn reconcile_feature_run_budget(
         &self,
         reservation: &FeatureRunBudgetReservation,
-        actual_tool_calls: Option<u64>,
+        usage: &BudgetUsageReport,
     ) -> Result<()> {
+        validate_usage_report(usage)?;
         let owns_transaction = self.conn.is_autocommit();
         self.conn.execute_batch(if owns_transaction {
             "BEGIN IMMEDIATE"
@@ -243,55 +425,71 @@ impl App {
             "SAVEPOINT reconcile_feature_run_budget"
         })?;
         let result = (|| -> Result<()> {
-            let status: String = self.conn.query_row(
-                "SELECT status FROM feature_run_budget_reservations WHERE id = ?1 AND run_id = ?2",
-                rusqlite::params![reservation.id, reservation.run_id],
-                |row| row.get(0),
-            )?;
-            if status == "reconciled" {
+            let repository = ExecutionRunRepository::new(&self.conn);
+            let persisted = repository
+                .budget_reservations(&reservation.run_id)?
+                .into_iter()
+                .find(|value| value.reservation.id == reservation.id)
+                .ok_or_else(|| anyhow!("budget_reservation_not_found:{}", reservation.id))?;
+            if persisted.status == BudgetReservationStatus::Reconciled {
                 return Ok(());
             }
-            if status != "active" {
+            if persisted.status != BudgetReservationStatus::Active
+                || persisted.reservation != *reservation
+            {
                 bail!("budget_reservation_not_active:{}", reservation.id);
             }
-            let actual_wall_seconds = if reservation.owns_wall {
-                Some(
-                    (unix_time_ms()?
-                        .saturating_sub(reservation.started_at_unix_ms)
-                        .saturating_add(999)
-                        / 1000)
-                        .max(1),
-                )
-            } else {
-                None
-            };
-            let repository = ExecutionRunRepository::new(&self.conn);
+            let now_unix_ms = unix_time_ms()?;
+            let elapsed_ms = now_unix_ms
+                .checked_sub(reservation.started_at_unix_ms)
+                .ok_or_else(|| anyhow!("budget_reconciliation_clock_before_admission"))?;
+            let actual_wall_seconds = elapsed_ms
+                .saturating_add(999)
+                .checked_div(1_000)
+                .unwrap_or(0)
+                .max(1);
             let observations = repository.budget_observations(&reservation.run_id)?;
-            let maximum = |get: fn(&BudgetObservationRecord) -> Option<u64>| {
-                observations.iter().filter_map(get).max().unwrap_or(0)
-            };
-            let provenance: String = self.conn.query_row(
-                "SELECT provenance FROM feature_run_budget_reservations WHERE id = ?1",
-                [&reservation.id],
-                |row| row.get(0),
-            )?;
+            let ledger_sequence = observations
+                .iter()
+                .filter(|observation| {
+                    observation.reservation_id.as_deref() == Some(&reservation.id)
+                })
+                .filter_map(|observation| observation.sequence)
+                .max()
+                .unwrap_or(0)
+                .checked_add(1)
+                .ok_or_else(|| {
+                    anyhow!("budget_observation_sequence_overflow:{}", reservation.id)
+                })?;
+            let aggregate_metering = MeteringMode::Trusted
+                .min(usage.tool_calls_metering)
+                .min(usage.tokens_metering);
             repository.record_budget_observation(&BudgetObservationRecord {
                 id: short_id("budget"),
                 run_id: reservation.run_id.clone(),
+                reservation_id: Some(reservation.id.clone()),
+                sequence: Some(ledger_sequence),
                 phase: reservation.phase,
-                metering: MeteringMode::Trusted,
-                wall_seconds: actual_wall_seconds
-                    .map(|value| maximum(|observation| observation.wall_seconds) + value),
-                tokens: None,
-                tool_calls: actual_tool_calls
-                    .map(|value| maximum(|observation| observation.tool_calls) + value),
+                metering: aggregate_metering,
+                wall_metering: Some(MeteringMode::Trusted),
+                tool_calls_metering: Some(usage.tool_calls_metering),
+                tokens_metering: Some(usage.tokens_metering),
+                wall_seconds: Some(actual_wall_seconds),
+                tokens: usage.tokens,
+                tool_calls: usage.tool_calls,
                 credits_micros: None,
-                provenance: format!("{provenance};tokens=unavailable"),
+                provenance: format!(
+                    "wall_seconds=planr.utc_clock:trusted;tool_calls={}:{:?};tokens={}:{:?}",
+                    usage.adapter_id,
+                    usage.tool_calls_metering,
+                    usage.adapter_id,
+                    usage.tokens_metering,
+                )
+                .to_ascii_lowercase(),
+                adapter_id: Some(usage.adapter_id.clone()),
+                observed_at_unix_ms: Some(now_unix_ms),
             })?;
-            self.conn.execute(
-                "UPDATE feature_run_budget_reservations SET status = 'reconciled', finished_at = datetime('now') WHERE id = ?1 AND status = 'active'",
-                [&reservation.id],
-            )?;
+            repository.reconcile_budget_reservation(&reservation.id, &reservation.run_id)?;
             Ok(())
         })();
         match result {
@@ -318,11 +516,8 @@ impl App {
         &self,
         reservation: &FeatureRunBudgetReservation,
     ) -> Result<()> {
-        self.conn.execute(
-            "UPDATE feature_run_budget_reservations SET status = 'released', finished_at = datetime('now') WHERE id = ?1 AND run_id = ?2 AND status = 'active'",
-            rusqlite::params![reservation.id, reservation.run_id],
-        )?;
-        Ok(())
+        ExecutionRunRepository::new(&self.conn)
+            .release_budget_reservation(&reservation.id, &reservation.run_id)
     }
 
     pub(crate) fn load_active_budget_reservation(
@@ -330,21 +525,7 @@ impl App {
         run_id: &str,
         boundary_key: &str,
     ) -> Result<Option<FeatureRunBudgetReservation>> {
-        let mut statement = self.conn.prepare(
-            "SELECT id, phase, owns_wall, started_at_unix_ms FROM feature_run_budget_reservations WHERE run_id = ?1 AND boundary_key = ?2 AND status = 'active'",
-        )?;
-        let mut rows = statement.query(rusqlite::params![run_id, boundary_key])?;
-        let Some(row) = rows.next()? else {
-            return Ok(None);
-        };
-        Ok(Some(FeatureRunBudgetReservation {
-            id: row.get(0)?,
-            run_id: run_id.to_string(),
-            phase: parse_budget_phase_name(&row.get::<_, String>(1)?)?,
-            boundary_key: boundary_key.to_string(),
-            owns_wall: row.get(2)?,
-            started_at_unix_ms: row.get(3)?,
-        }))
+        ExecutionRunRepository::new(&self.conn).active_budget_reservation(run_id, boundary_key)
     }
 
     pub(crate) fn reconcile_active_phase_wall(
@@ -352,40 +533,400 @@ impl App {
         run_id: &str,
         phase: BudgetPhase,
     ) -> Result<()> {
-        let mut statement = self.conn.prepare(
-            "SELECT id, boundary_key, started_at_unix_ms FROM feature_run_budget_reservations WHERE run_id = ?1 AND phase = ?2 AND status = 'active' AND owns_wall = 1 ORDER BY id",
-        )?;
-        let rows =
-            statement.query_map(rusqlite::params![run_id, budget_phase_name(phase)], |row| {
-                Ok(FeatureRunBudgetReservation {
-                    id: row.get(0)?,
-                    run_id: run_id.to_string(),
-                    phase,
-                    boundary_key: row.get(1)?,
-                    owns_wall: true,
-                    started_at_unix_ms: row.get(2)?,
-                })
-            })?;
-        let reservations = rows.collect::<std::result::Result<Vec<_>, _>>()?;
-        drop(statement);
+        let reservations = ExecutionRunRepository::new(&self.conn)
+            .budget_reservations(run_id)?
+            .into_iter()
+            .filter(|value| {
+                value.status == BudgetReservationStatus::Active && value.reservation.phase == phase
+            })
+            .map(|value| value.reservation)
+            .collect::<Vec<_>>();
         for reservation in reservations {
-            self.reconcile_feature_run_budget(&reservation, Some(1))?;
+            self.reconcile_feature_run_budget(
+                &reservation,
+                &BudgetUsageReport::application(Some(1)),
+            )?;
         }
         Ok(())
+    }
+
+    pub(crate) fn persisted_budget_snapshot(
+        &self,
+        persisted: &PersistedFeatureRun,
+        released_through: FeatureRunBudgetPhase,
+        now_unix_ms: u64,
+    ) -> Result<(FeatureRunBudgetContract, BudgetSnapshot)> {
+        let repository = ExecutionRunRepository::new(&self.conn);
+        let contract = repository.budget_contract(&persisted.run.id)?;
+        let reservations = repository.budget_reservations(&persisted.run.id)?;
+        let observations = repository.budget_observations(&persisted.run.id)?;
+        if observations
+            .iter()
+            .any(|observation| observation.reservation_id.is_none())
+        {
+            bail!(
+                "feature_run_budget_contains_unbound_observation:{}",
+                persisted.run.id
+            );
+        }
+        let elapsed_ms = now_unix_ms
+            .checked_sub(contract.started_at_unix_ms)
+            .ok_or_else(|| anyhow!("feature_run_clock_before_persisted_run_start"))?;
+        let wall_seconds = elapsed_ms.saturating_add(999) / 1_000;
+        let mut reserved = BudgetAmounts::ZERO;
+        let mut consumed_tool_calls = 0_u64;
+        let mut consumed_tokens = 0_u64;
+        let mut tool_calls_metering = MeteringMode::Unavailable;
+        let mut tokens_metering = MeteringMode::Unavailable;
+        let mut observed_terminal_reservation = false;
+        let mut active_execution_budget: Option<ExecutionBudget> = None;
+
+        for persisted_reservation in &reservations {
+            let reservation = &persisted_reservation.reservation;
+            match (contract.mode, reservation.execution_budget) {
+                (FeatureRunBudgetMode::Bounded, None)
+                | (FeatureRunBudgetMode::Unbounded, Some(_)) => {
+                    bail!("budget_reservation_mode_mismatch:{}", reservation.id)
+                }
+                _ => {}
+            }
+            match persisted_reservation.status {
+                BudgetReservationStatus::Active => {
+                    if let Some(execution_budget) = reservation.execution_budget {
+                        reserved = reserved.checked_add(execution_budget.maxima())?;
+                        if active_execution_budget.is_none_or(|current| {
+                            execution_budget.deadline_unix_ms < current.deadline_unix_ms
+                        }) {
+                            active_execution_budget = Some(execution_budget);
+                        }
+                    }
+                }
+                BudgetReservationStatus::Released => {
+                    if observations.iter().any(|observation| {
+                        observation.reservation_id.as_deref() == Some(&reservation.id)
+                    }) {
+                        bail!(
+                            "released_budget_reservation_has_observation:{}",
+                            reservation.id
+                        );
+                    }
+                }
+                BudgetReservationStatus::Reconciled => {
+                    let task_observations = observations
+                        .iter()
+                        .filter(|observation| {
+                            observation.reservation_id.as_deref() == Some(&reservation.id)
+                        })
+                        .collect::<Vec<_>>();
+                    if task_observations.is_empty() {
+                        bail!(
+                            "reconciled_budget_reservation_missing_observation:{}",
+                            reservation.id
+                        );
+                    }
+                    let (tool_calls, task_tool_metering) = reconciled_dimension(
+                        &task_observations,
+                        |observation| observation.tool_calls,
+                        |observation| observation.tool_calls_metering,
+                        reservation
+                            .execution_budget
+                            .map(|budget| budget.max_tool_calls),
+                    )?;
+                    let (tokens, task_token_metering) = reconciled_dimension(
+                        &task_observations,
+                        |observation| observation.tokens,
+                        |observation| observation.tokens_metering,
+                        reservation.execution_budget.map(|budget| budget.max_tokens),
+                    )?;
+                    consumed_tool_calls = consumed_tool_calls
+                        .checked_add(tool_calls)
+                        .ok_or_else(|| anyhow!("consumed tool-call budget overflow"))?;
+                    consumed_tokens = consumed_tokens
+                        .checked_add(tokens)
+                        .ok_or_else(|| anyhow!("consumed token budget overflow"))?;
+                    tool_calls_metering = if observed_terminal_reservation {
+                        tool_calls_metering.min(task_tool_metering)
+                    } else {
+                        task_tool_metering
+                    };
+                    tokens_metering = if observed_terminal_reservation {
+                        tokens_metering.min(task_token_metering)
+                    } else {
+                        task_token_metering
+                    };
+                    observed_terminal_reservation = true;
+                }
+            }
+        }
+        if !observed_terminal_reservation {
+            tool_calls_metering = MeteringMode::Unavailable;
+            tokens_metering = MeteringMode::Unavailable;
+        }
+        let snapshot = budget_snapshot(
+            &contract,
+            released_through,
+            BudgetAmounts {
+                wall_seconds,
+                tool_calls: consumed_tool_calls,
+                tokens: consumed_tokens,
+            },
+            reserved,
+            BudgetProvenance {
+                wall_seconds: MeteringProvenance::Trusted,
+                tool_calls: MeteringProvenance::from(tool_calls_metering),
+                tokens: MeteringProvenance::from(tokens_metering),
+            },
+            active_execution_budget,
+        )?;
+        Ok((contract, snapshot))
+    }
+
+    fn persist_budget_hold(
+        &self,
+        persisted: &PersistedFeatureRun,
+        reason: BudgetTaskHoldReason,
+        message: impl Into<String>,
+    ) -> Result<Value> {
+        let repository = ExecutionRunRepository::new(&self.conn);
+        let held = if persisted.run.phase == FeatureRunPhase::Held {
+            persisted.run.clone()
+        } else {
+            let held = apply_phase_transition(
+                &persisted.run,
+                &PhaseTransition {
+                    to: FeatureRunPhase::Held,
+                    cause: PhaseTransitionCause::BudgetHold,
+                    reference: format!("budget:{reason:?}").to_ascii_lowercase(),
+                    owner: None,
+                },
+            )
+            .map_err(|violation| anyhow!("budget_hold_transition:{violation:?}"))?;
+            repository.save_feature_run(&held, persisted.revision)?;
+            held
+        };
+        let reason = serde_json::to_value(reason)?;
+        Ok(json!({
+            "work_packet": {
+                "kind": "hold",
+                "classification": "budget",
+                "reason": reason,
+                "message": message.into(),
+                "execution_state": self.canonical_execution_state_value(&held.id, None)?,
+            },
+            "remaining": self.progress_value()?,
+        }))
+    }
+
+    pub(crate) fn resolve_feature_run_budget_hold_value(&self, plan_id: &str) -> Result<Value> {
+        let project = self.default_project()?;
+        let operator = worker_id();
+        let owns_transaction = self.conn.is_autocommit();
+        self.conn.execute_batch(if owns_transaction {
+            "BEGIN IMMEDIATE"
+        } else {
+            "SAVEPOINT resolve_feature_run_budget_hold"
+        })?;
+        let result = (|| -> Result<FeatureRunBudgetHoldResolutionTransition> {
+            let repository = ExecutionRunRepository::new(&self.conn);
+            let persisted = repository
+                .active_feature_run_for_plan(&project.id, plan_id)?
+                .ok_or_else(|| anyhow!("feature_run_not_found_for_plan:{plan_id}"))?;
+            if persisted.run.phase != FeatureRunPhase::Held {
+                let previous = self
+                    .latest_feature_run_budget_hold_resolution(&project.id, plan_id)?
+                    .filter(|transition| transition.resumed_run == persisted.run)
+                    .ok_or_else(|| {
+                        anyhow!("feature_run_budget_hold_resolution_rejected:not_budget_held")
+                    })?;
+                return Ok(FeatureRunBudgetHoldResolutionTransition {
+                    disposition: FeatureRunBudgetHoldResolutionDisposition::AlreadyResumed,
+                    ..previous
+                });
+            }
+            if persisted.run.hold_reason != Some(FeatureRunHoldReason::Budget) {
+                bail!("feature_run_budget_hold_resolution_rejected:capability_hold");
+            }
+            let compatibility = repository.budget_contract_compatibility(&persisted.run.id)?;
+            if compatibility != FeatureRunBudgetContractCompatibility::Compatible {
+                bail!(
+                    "feature_run_budget_hold_requires_restart:{compatibility:?}:restart_incompatible_feature_run"
+                );
+            }
+
+            let reservations = repository.budget_reservations(&persisted.run.id).map_err(
+                |error| {
+                    anyhow!(
+                        "feature_run_budget_hold_resolution_rejected:corrupt_reservation:{error}"
+                    )
+                },
+            )?;
+            let active = reservations
+                .iter()
+                .filter(|reservation| reservation.status == BudgetReservationStatus::Active)
+                .map(|reservation| &reservation.reservation)
+                .collect::<Vec<_>>();
+            let (_phase, cause) = if active.is_empty() {
+                let phase = held_feature_run_budget_phase(&persisted.run)?;
+                if !reservations.iter().any(|reservation| {
+                    reservation.status == BudgetReservationStatus::Reconciled
+                        && reservation.reservation.phase == phase
+                }) {
+                    bail!(
+                        "feature_run_budget_hold_resolution_rejected:unrepaired_ceiling_or_missing_reservation"
+                    );
+                }
+                let owner_role = budget_phase_owner_role(phase);
+                let owner = owner_for_role(&persisted.run, owner_role).ok_or_else(|| {
+                    anyhow!("feature_run_budget_hold_resolution_rejected:owner_missing")
+                })?;
+                if owner.worker_id != operator {
+                    bail!("feature_run_budget_hold_resolution_rejected:owner_mismatch");
+                }
+                let (_, snapshot) = self
+                    .persisted_budget_snapshot(
+                        &persisted,
+                        feature_run_budget_phase(phase),
+                        unix_time_ms()?,
+                    )
+                    .map_err(|error| {
+                        anyhow!(
+                            "feature_run_budget_hold_resolution_rejected:corrupt_budget:{error}"
+                        )
+                    })?;
+                if snapshot.mode == FeatureRunBudgetMode::Bounded
+                    && snapshot
+                        .available
+                        .is_none_or(|available| !budget_amounts_are_positive(available))
+                {
+                    bail!("feature_run_budget_hold_resolution_rejected:unrepaired_ceiling");
+                }
+                (
+                    phase,
+                    FeatureRunBudgetHoldResolutionCause::TransientContentionCleared,
+                )
+            } else {
+                let phase = active[0].phase;
+                if !active.iter().all(|reservation| reservation.phase == phase)
+                    || !budget_phase_matches_held_origin(phase, persisted.run.held_from_phase)
+                {
+                    bail!("feature_run_budget_hold_resolution_rejected:phase_mismatch");
+                }
+                let owner_role = budget_phase_owner_role(phase);
+                let owner = owner_for_role(&persisted.run, owner_role).ok_or_else(|| {
+                    anyhow!("feature_run_budget_hold_resolution_rejected:owner_missing")
+                })?;
+                if owner.worker_id != operator
+                    || active.iter().any(|reservation| {
+                        reservation.owner_role != owner_role
+                            || reservation.owner_worker_id != owner.worker_id
+                            || reservation.lease_generation != owner.lease_generation
+                    })
+                {
+                    bail!("feature_run_budget_hold_resolution_rejected:owner_mismatch");
+                }
+                let now_unix_ms = unix_time_ms()?;
+                if active.iter().any(|reservation| {
+                    reservation
+                        .execution_budget
+                        .is_some_and(|budget| now_unix_ms >= budget.deadline_unix_ms)
+                }) {
+                    bail!("feature_run_budget_hold_resolution_rejected:task_deadline_exceeded");
+                }
+                self.persisted_budget_snapshot(
+                    &persisted,
+                    feature_run_budget_phase(phase),
+                    now_unix_ms,
+                )
+                .map_err(|error| {
+                    anyhow!("feature_run_budget_hold_resolution_rejected:corrupt_budget:{error}")
+                })?;
+                (
+                    phase,
+                    FeatureRunBudgetHoldResolutionCause::ActiveReservationsRevalidated,
+                )
+            };
+
+            let request = FeatureRunBudgetHoldResolutionRequest {
+                plan_id: plan_id.to_string(),
+            };
+            let resumed_run = resolve_budget_held_feature_run(&persisted.run, &request, &operator)
+                .map_err(|violation| {
+                    anyhow!("feature_run_budget_hold_resolution_rejected:{violation:?}")
+                })?;
+            repository.save_feature_run(&resumed_run, persisted.revision)?;
+            let transition = FeatureRunBudgetHoldResolutionTransition {
+                request,
+                disposition: FeatureRunBudgetHoldResolutionDisposition::Resumed,
+                cause,
+                previous_phase: persisted
+                    .run
+                    .held_from_phase
+                    .expect("held origin validated"),
+                active_reservation_ids: active
+                    .iter()
+                    .map(|reservation| reservation.id.clone())
+                    .collect(),
+                resumed_run,
+            };
+            self.conn.execute(
+                "INSERT INTO events(project_id, item_id, worker_id, event_type, payload, timestamp) VALUES (?1, NULL, ?2, 'feature_run_budget_hold_resolved', ?3, datetime('now'))",
+                params![project.id, operator, serde_json::to_string(&transition)?],
+            )?;
+            Ok(transition)
+        })();
+        let transition = match result {
+            Ok(value) => {
+                self.conn.execute_batch(if owns_transaction {
+                    "COMMIT"
+                } else {
+                    "RELEASE resolve_feature_run_budget_hold"
+                })?;
+                value
+            }
+            Err(error) => {
+                let _ = self.conn.execute_batch(if owns_transaction {
+                    "ROLLBACK"
+                } else {
+                    "ROLLBACK TO resolve_feature_run_budget_hold; RELEASE resolve_feature_run_budget_hold"
+                });
+                return Err(error);
+            }
+        };
+        let run_id = transition.resumed_run.id.clone();
+        Ok(json!({
+            "schema_version": "planr.feature_run_budget_hold_resolution.v2",
+            "resolution": transition,
+            "execution_state": self.canonical_execution_state_value(&run_id, None)?,
+        }))
+    }
+
+    fn latest_feature_run_budget_hold_resolution(
+        &self,
+        project_id: &str,
+        plan_id: &str,
+    ) -> Result<Option<FeatureRunBudgetHoldResolutionTransition>> {
+        self.conn
+            .query_row(
+                "SELECT payload FROM events WHERE project_id = ?1 AND event_type = 'feature_run_budget_hold_resolved' AND json_extract(payload, '$.request.plan_id') = ?2 ORDER BY id DESC LIMIT 1",
+                params![project_id, plan_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .map(|payload| serde_json::from_str(&payload).map_err(Into::into))
+            .transpose()
     }
 
     pub(crate) fn continue_review_budget(
         &self,
         run: &PersistedFeatureRun,
         gate_id: &str,
+        reviewer_worker_id: &str,
     ) -> Result<Option<Value>> {
         match self.admit_feature_run_budget(
             run,
             BudgetPhase::Review,
             &format!("review:{gate_id}"),
-            Some(HUMAN_PHASE_WALL_ALLOWANCE_SECONDS),
-            None,
-            true,
+            reviewer_worker_id,
             "review.completion",
         )? {
             FeatureRunBudgetAdmission::Held(hold) => Ok(Some(hold)),
@@ -396,11 +937,36 @@ impl App {
     pub(crate) fn repair_work_packet_value(&self, plan_id: &str) -> Result<Option<Value>> {
         let project = self.default_project()?;
         let repository = ExecutionRunRepository::new(&self.conn);
+        if let Some(gate) = repository.repair_review_gate_for_plan(&project.id, plan_id)? {
+            if gate.responsible_maker_id != worker_id() {
+                return Ok(None);
+            }
+            let persisted = repository.feature_run(&gate.run_id)?;
+            match self.admit_feature_run_budget(
+                &persisted,
+                BudgetPhase::Repair,
+                &format!("repair:{}", persisted.run.id),
+                &worker_id(),
+                "repair.dispatch",
+            )? {
+                FeatureRunBudgetAdmission::Held(hold) => return Ok(Some(hold)),
+                FeatureRunBudgetAdmission::Reserved(_) => {}
+            }
+            return Ok(Some(json!({
+                "work_packet": {"kind": "outcome", "mode": "finding_repair", "gate_id": gate.id,
+                    "finding_ids": repository.findings(&gate.id)?.into_iter().filter(|finding| finding.status == FindingStatus::Open).map(|finding| finding.id).collect::<Vec<_>>(),
+                    "responsible_maker_id": gate.responsible_maker_id,
+                    "execution_state": self.canonical_execution_state_value(&persisted.run.id, Some(&gate.id))?},
+                "remaining": self.progress_value()?
+            })));
+        }
         if let Some(run) = repository.active_feature_run_for_plan(&project.id, plan_id)?
             && run.run.phase == FeatureRunPhase::Implementation
         {
             let invalidations = repository.invalidations(&run.run.id)?;
-            if let Some(latest) = invalidations.last() {
+            if let Some(latest) = invalidations.last()
+                && repository.product_repair_settlement(&latest.id)?.is_none()
+            {
                 let maker_worker_id = run
                     .run
                     .role_owners
@@ -415,50 +981,208 @@ impl App {
                     &run,
                     BudgetPhase::Repair,
                     &format!("repair:{}", run.run.id),
-                    Some(HUMAN_PHASE_WALL_ALLOWANCE_SECONDS),
-                    Some(1),
-                    true,
+                    &worker_id(),
                     "repair.dispatch",
                 )? {
                     FeatureRunBudgetAdmission::Held(hold) => return Ok(Some(hold)),
                     FeatureRunBudgetAdmission::Reserved(_) => {}
                 }
-                let replay_obligation_ids = latest
-                    .affected_evidence_ids
-                    .first()
-                    .cloned()
-                    .into_iter()
-                    .collect::<Vec<_>>();
+                let verification_item_id = self.product_repair_verification_item(plan_id)?;
+                let replay_obligation_ids =
+                    self.product_repair_obligation_ids(&latest.affected_evidence_ids)?;
                 return Ok(Some(json!({
                     "work_packet": {"kind": "outcome", "mode": "product_finding_repair", "execution_state": self.canonical_execution_state_value(&run.run.id, None)?,
-                        "responsible_maker_id": maker_worker_id, "invalidation": latest,
+                        "repair_id": latest.id, "responsible_maker_id": maker_worker_id,
+                        "verification_item_id": verification_item_id, "invalidation": latest,
                         "selective_replay_obligation_ids": replay_obligation_ids},
                     "remaining": self.progress_value()?,
                 })));
             }
         }
-        let Some(gate) = repository.repair_review_gate_for_plan(&project.id, plan_id)? else {
-            return Ok(None);
+        Ok(None)
+    }
+
+    fn product_repair_verification_item(&self, plan_id: &str) -> Result<String> {
+        self.conn
+            .query_row(
+                "SELECT items.id
+                 FROM items JOIN plans ON plans.path = items.plan_path
+                 WHERE plans.id = ?1 AND items.work_type = 'verification'
+                   AND items.status IN ('ready','picked','running')
+                 ORDER BY items.created_at, items.id LIMIT 1",
+                [plan_id],
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(|error| {
+                anyhow!("product_finding_repair_verification_item_missing:{plan_id}:{error}")
+            })
+    }
+
+    fn product_repair_obligation_ids(&self, affected_ids: &[String]) -> Result<Vec<String>> {
+        let mut obligations = Vec::new();
+        for id in affected_ids {
+            let exists = self.conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM proof_obligations WHERE id = ?1)",
+                [id],
+                |row| row.get::<_, bool>(0),
+            )?;
+            if exists {
+                obligations.push(id.clone());
+            }
+        }
+        if obligations.is_empty() {
+            bail!("product_finding_repair_missing_selective_obligations");
+        }
+        Ok(obligations)
+    }
+
+    pub(crate) fn settle_product_finding_repair_value(
+        &self,
+        plan_id: &str,
+        invalidation_id: &str,
+        summary: &str,
+        files: &[String],
+        commands: &[String],
+        tests: &[String],
+    ) -> Result<Value> {
+        let project = self.default_project()?;
+        let repository = ExecutionRunRepository::new(&self.conn);
+        let persisted = repository
+            .active_feature_run_for_plan(&project.id, plan_id)?
+            .ok_or_else(|| anyhow!("product_finding_repair_run_missing:{plan_id}"))?;
+        if let Some(existing) = repository.product_repair_settlement(invalidation_id)? {
+            if existing.run_id != persisted.run.id || existing.responsible_maker_id != worker_id() {
+                bail!("product_finding_repair_owner_or_run_mismatch:{invalidation_id}");
+            }
+            let source_freeze = repository.source_freeze(&existing.source_freeze_id)?;
+            let mut handoff = self.canonical_verification_handoff_value(
+                plan_id,
+                Some(existing.verification_item_id.clone()),
+                serde_json::to_value(source_freeze)?,
+            )?;
+            handoff["work_packet"]["mode"] = json!("selective_replay");
+            handoff["work_packet"]["repair_id"] = json!(invalidation_id);
+            handoff["work_packet"]["responsible_maker_id"] = json!(worker_id());
+            handoff["work_packet"]["selective_replay_obligation_ids"] =
+                json!(existing.selective_obligation_ids);
+            handoff["created"] = json!(false);
+            return Ok(handoff);
+        }
+        if persisted.run.phase != FeatureRunPhase::Implementation {
+            bail!("product_finding_repair_requires_implementation:{invalidation_id}");
+        }
+        let maker = owner_for_role(&persisted.run, RunRole::Maker)
+            .ok_or_else(|| anyhow!("feature_run_missing_maker:{}", persisted.run.id))?;
+        if maker.worker_id != worker_id() {
+            bail!("product_finding_repair_maker_mismatch:{invalidation_id}");
+        }
+        let invalidation = repository
+            .invalidations(&persisted.run.id)?
+            .into_iter()
+            .find(|value| value.id == invalidation_id)
+            .ok_or_else(|| {
+                anyhow!("product_finding_repair_invalidation_missing:{invalidation_id}")
+            })?;
+        let verification_item_id = self.product_repair_verification_item(plan_id)?;
+        let selective_obligation_ids =
+            self.product_repair_obligation_ids(&invalidation.affected_evidence_ids)?;
+        let snapshot = capture_repository_snapshot(&self.root)
+            .map_err(|error| anyhow!("capturing repaired canonical source freeze: {error}"))?;
+        let freeze = SourceFreezeRecord {
+            id: short_id("freeze"),
+            run_id: persisted.run.id.clone(),
+            source_revision: snapshot.source.revision.clone(),
+            source_digest: snapshot.source.tree_digest.as_str().to_string(),
+            status: SourceFreezeStatus::Active,
         };
-        if gate.responsible_maker_id != worker_id() {
-            return Ok(None);
+        let settlement_value = json!({
+            "summary": summary,
+            "files": files,
+            "commands": commands,
+            "tests": tests,
+        });
+        self.conn
+            .execute_batch("BEGIN IMMEDIATE; SAVEPOINT settle_product_finding_repair")?;
+        let result = (|| -> Result<()> {
+            if repository
+                .product_repair_settlement(invalidation_id)?
+                .is_some()
+            {
+                bail!("product_finding_repair_concurrent_settlement:{invalidation_id}");
+            }
+            self.reconcile_active_phase_wall(&persisted.run.id, BudgetPhase::Repair)?;
+            if let Some(batch_id) = persisted.run.active_batch_id.as_deref() {
+                let batch = repository.batch(batch_id)?;
+                let mut ended = batch.batch;
+                ended.status = ExecutionBatchStatus::Ended;
+                repository.save_batch(&ended, batch.revision)?;
+            }
+            let frozen = apply_phase_transition(
+                &persisted.run,
+                &PhaseTransition {
+                    to: FeatureRunPhase::SourceFrozen,
+                    cause: PhaseTransitionCause::ImplementationSettled,
+                    reference: format!("product_repair:{invalidation_id}"),
+                    owner: None,
+                },
+            )
+            .map_err(|violation| anyhow!("product_finding_repair_refreeze:{violation:?}"))?;
+            repository.save_feature_run(&frozen, persisted.revision)?;
+            repository.freeze_source(&freeze)?;
+            let released = self.conn.execute(
+                "UPDATE items SET status = 'ready', worker_id = NULL, pick_token = NULL,
+                     picked_at = NULL, last_heartbeat_at = NULL, updated_at = datetime('now')
+                 WHERE id = ?1 AND work_type = 'verification'
+                   AND status IN ('ready','picked','running')",
+                [&verification_item_id],
+            )?;
+            if released != 1 {
+                bail!("product_finding_repair_verifier_release_failed:{verification_item_id}");
+            }
+            repository.record_product_repair_settlement(&ProductRepairSettlementRecord {
+                invalidation_id: invalidation_id.to_string(),
+                run_id: persisted.run.id.clone(),
+                responsible_maker_id: worker_id(),
+                verification_item_id: verification_item_id.clone(),
+                selective_obligation_ids: selective_obligation_ids.clone(),
+                settlement: settlement_value.clone(),
+                source_freeze_id: freeze.id.clone(),
+            })?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => self
+                .conn
+                .execute_batch("RELEASE settle_product_finding_repair; COMMIT")?,
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK TO settle_product_finding_repair; RELEASE settle_product_finding_repair; ROLLBACK");
+                if error
+                    .to_string()
+                    .starts_with("product_finding_repair_concurrent_settlement:")
+                {
+                    return self.settle_product_finding_repair_value(
+                        plan_id,
+                        invalidation_id,
+                        summary,
+                        files,
+                        commands,
+                        tests,
+                    );
+                }
+                return Err(error);
+            }
         }
-        let persisted = repository.feature_run(&gate.run_id)?;
-        match self.admit_feature_run_budget(
-            &persisted,
-            BudgetPhase::Repair,
-            &format!("repair:{}", persisted.run.id),
-            Some(HUMAN_PHASE_WALL_ALLOWANCE_SECONDS),
-            Some(1),
-            true,
-            "repair.dispatch",
-        )? {
-            FeatureRunBudgetAdmission::Held(hold) => return Ok(Some(hold)),
-            FeatureRunBudgetAdmission::Reserved(_) => {}
-        }
-        Ok(Some(
-            json!({"work_packet": {"kind": "outcome", "mode": "finding_repair", "execution_state": self.canonical_execution_state_value(&persisted.run.id, Some(&gate.id))?}, "remaining": self.progress_value()?}),
-        ))
+        let mut handoff = self.canonical_verification_handoff_value(
+            plan_id,
+            Some(verification_item_id),
+            serde_json::to_value(&freeze)?,
+        )?;
+        handoff["work_packet"]["mode"] = json!("selective_replay");
+        handoff["work_packet"]["repair_id"] = json!(invalidation_id);
+        handoff["work_packet"]["responsible_maker_id"] = json!(worker_id());
+        handoff["work_packet"]["selective_replay_obligation_ids"] = json!(selective_obligation_ids);
+        handoff["created"] = json!(true);
+        Ok(handoff)
     }
 
     pub(crate) fn verification_work_packet_value(
@@ -487,6 +1211,8 @@ impl App {
             {
                 bail!("source_freeze_stale:{}", freeze.id);
             }
+            let repair =
+                repository.product_repair_settlement_for_source_freeze(&run.run.id, &freeze.id)?;
             let verifier_worker_id = worker_id();
             let maker_worker_id = self.conn.query_row(
                 "SELECT worker_id FROM feature_run_role_leases WHERE run_id = ?1 AND role = 'maker' ORDER BY lease_generation DESC LIMIT 1",
@@ -501,24 +1227,13 @@ impl App {
                 "SELECT COALESCE(MAX(lease_generation), 0) + 1 FROM feature_run_role_leases WHERE run_id = ?1 AND role = 'verifier'",
                 [&run.run.id], |row| row.get::<_, u64>(0))?;
             if peek {
-                return Ok(Some(
-                    json!({"work_packet": {"kind": "verification", "execution_state": self.canonical_execution_state_value(&run.run.id, None)?,
-                    "item_id": verification_item_id, "source_freeze": freeze, "verification_lease": {"worker_id": verifier_worker_id, "generation": lease_generation}},
-                    "peek": true, "remaining": self.progress_value()?}),
-                ));
+                let mut packet = json!({"kind": "verification", "execution_state": self.canonical_execution_state_value(&run.run.id, None)?,
+                    "item_id": verification_item_id, "source_freeze": freeze, "verification_lease": {"worker_id": verifier_worker_id, "generation": lease_generation}});
+                add_selective_replay_metadata(&mut packet, repair.as_ref());
+                self.add_review_finding_reverification_metadata(&mut packet, &run.run.id, plan_id)?;
+                return Ok(Some(json!({"work_packet": packet,
+                    "peek": true, "remaining": self.progress_value()?})));
             }
-            let reservation = match self.admit_feature_run_budget(
-                &run,
-                BudgetPhase::Verification,
-                &format!("verification:{}", run.run.id),
-                Some(HUMAN_PHASE_WALL_ALLOWANCE_SECONDS),
-                Some(1),
-                true,
-                "verification.dispatch",
-            )? {
-                FeatureRunBudgetAdmission::Held(hold) => return Ok(Some(hold)),
-                FeatureRunBudgetAdmission::Reserved(reservation) => reservation,
-            };
             let verification = apply_phase_transition(
                 &run.run,
                 &PhaseTransition {
@@ -536,11 +1251,26 @@ impl App {
             self.conn
                 .execute_batch("BEGIN IMMEDIATE; SAVEPOINT verification_pick")?;
             let mut sealed_run_index = None;
+            let mut budget_hold = None;
             let pick_result = (|| -> Result<()> {
+                repository.save_feature_run(&verification, run.revision)?;
+                let verification = repository.feature_run(&run.run.id)?;
+                match self.admit_feature_run_budget(
+                    &verification,
+                    BudgetPhase::Verification,
+                    &format!("verification:{}", run.run.id),
+                    &verifier_worker_id,
+                    "verification.dispatch",
+                )? {
+                    FeatureRunBudgetAdmission::Held(hold) => {
+                        budget_hold = Some(hold);
+                        return Ok(());
+                    }
+                    FeatureRunBudgetAdmission::Reserved(_) => {}
+                }
                 if let Some(item_id) = verification_item_id.as_deref() {
                     self.lease_verification_item(item_id, &verifier_worker_id)?;
                 }
-                repository.save_feature_run(&verification, run.revision)?;
                 let readiness =
                     self.evidence_readiness_value(EvidenceCoverageScope::Plan, plan_id)?;
                 if readiness["status"] != "passed" {
@@ -556,16 +1286,19 @@ impl App {
                 let _ = self.conn.execute_batch(
                     "ROLLBACK TO verification_pick; RELEASE verification_pick; ROLLBACK",
                 );
-                self.release_feature_run_budget(&reservation)?;
                 return Err(error);
             }
             self.conn
                 .execute_batch("RELEASE verification_pick; COMMIT")?;
-            return Ok(Some(
-                json!({"work_packet": {"kind": "verification", "execution_state": self.canonical_execution_state_value(&verification.id, None)?,
-                "item_id": verification_item_id, "source_freeze": freeze, "verification_lease": {"worker_id": verifier_worker_id, "generation": lease_generation}, "sealed_run_index": sealed_run_index},
-                "peek": false, "remaining": self.progress_value()?}),
-            ));
+            if let Some(hold) = budget_hold {
+                return Ok(Some(hold));
+            }
+            let mut packet = json!({"kind": "verification", "execution_state": self.canonical_execution_state_value(&verification.id, None)?,
+                "item_id": verification_item_id, "source_freeze": freeze, "verification_lease": {"worker_id": verifier_worker_id, "generation": lease_generation}, "sealed_run_index": sealed_run_index});
+            add_selective_replay_metadata(&mut packet, repair.as_ref());
+            self.add_review_finding_reverification_metadata(&mut packet, &run.run.id, plan_id)?;
+            return Ok(Some(json!({"work_packet": packet,
+                "peek": false, "remaining": self.progress_value()?})));
         }
         if run.run.phase != FeatureRunPhase::Verification {
             return Ok(None);
@@ -584,9 +1317,7 @@ impl App {
                 &run,
                 BudgetPhase::Verification,
                 &format!("verification:{}", run.run.id),
-                Some(HUMAN_PHASE_WALL_ALLOWANCE_SECONDS),
-                Some(1),
-                true,
+                &worker_id(),
                 "verification.dispatch",
             )? {
                 FeatureRunBudgetAdmission::Held(hold) => return Ok(Some(hold)),
@@ -605,10 +1336,18 @@ impl App {
             };
             Some(run_index)
         };
-        Ok(Some(
-            json!({"work_packet": {"kind": "verification", "execution_state": self.canonical_execution_state_value(&run.run.id, None)?,
+        let source_freeze = repository
+            .active_source_freeze(&run.run.id)?
+            .ok_or_else(|| anyhow!("verification_run_missing_freeze:{}", run.run.id))?;
+        let repair = repository
+            .product_repair_settlement_for_source_freeze(&run.run.id, &source_freeze.id)?;
+        let mut packet = json!({"kind": "verification", "execution_state": self.canonical_execution_state_value(&run.run.id, None)?,
             "item_id": verification_item_id, "verifier_worker_id": verifier.worker_id, "verification_lease": {"worker_id": verifier.worker_id, "generation": verifier.lease_generation},
-            "source_freeze": repository.active_source_freeze(&run.run.id)?, "sealed_run_index": sealed_run_index}, "peek": peek, "remaining": self.progress_value()?}),
+            "source_freeze": source_freeze, "sealed_run_index": sealed_run_index});
+        add_selective_replay_metadata(&mut packet, repair.as_ref());
+        self.add_review_finding_reverification_metadata(&mut packet, &run.run.id, plan_id)?;
+        Ok(Some(
+            json!({"work_packet": packet, "peek": peek, "remaining": self.progress_value()?}),
         ))
     }
 
@@ -750,7 +1489,11 @@ impl App {
         if persisted.run.phase != FeatureRunPhase::Implementation {
             return Ok(None);
         }
-        if let Some(hold) = self.feature_run_budget_hold(&persisted, BudgetPhase::Implementation)? {
+        let repair_refreeze = !repository.invalidations(&persisted.run.id)?.is_empty();
+        if !repair_refreeze
+            && let Some(hold) =
+                self.feature_run_budget_hold(&persisted, BudgetPhase::Implementation)?
+        {
             return Ok(Some(hold));
         }
         let snapshot = capture_repository_snapshot(&self.root)
@@ -862,25 +1605,50 @@ impl App {
         freeze_id: &str,
         obligation_id: &str,
     ) -> Result<Value> {
+        self.route_evidence_product_findings_value(run_id, freeze_id, &[obligation_id.to_string()])
+    }
+
+    pub(crate) fn route_evidence_product_findings_value(
+        &self,
+        run_id: &str,
+        freeze_id: &str,
+        obligation_ids: &[String],
+    ) -> Result<Value> {
+        let obligation_ids = obligation_ids
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let first_obligation_id = obligation_ids
+            .first()
+            .ok_or_else(|| anyhow!("product_finding_requires_obligation:{run_id}"))?;
         let repository = ExecutionRunRepository::new(&self.conn);
         let persisted = repository.feature_run(run_id)?;
         if persisted.run.phase != FeatureRunPhase::Verification {
             bail!("product_finding_requires_verification:{run_id}");
         }
+        let verifier_worker_id = owner_for_role(&persisted.run, RunRole::Verifier)
+            .ok_or_else(|| anyhow!("product_finding_missing_verifier:{run_id}"))?
+            .worker_id
+            .clone();
+        let verification_item_id = self.product_repair_verification_item(&persisted.run.plan_id)?;
         let maker_worker_id = self.conn.query_row(
             "SELECT worker_id FROM feature_run_role_leases WHERE run_id = ?1 AND role = 'maker' ORDER BY lease_generation DESC LIMIT 1",
             [run_id],
             |row| row.get::<_, String>(0),
         )?;
-        let mut affected_evidence_ids = vec![obligation_id.to_string()];
+        let mut affected_evidence_ids = obligation_ids.clone();
         let mut receipt_statement = self.conn.prepare(
             "SELECT id FROM evidence_receipts WHERE project_id = ?1 AND obligation_id = ?2 AND receipt_status = 'trusted' ORDER BY created_at, id",
         )?;
-        let receipt_rows = receipt_statement.query_map(
-            rusqlite::params![persisted.project_id, obligation_id],
-            |row| row.get::<_, String>(0),
-        )?;
-        affected_evidence_ids.extend(crate::util::collect_rows(receipt_rows)?);
+        for obligation_id in &obligation_ids {
+            let receipt_rows = receipt_statement.query_map(
+                rusqlite::params![persisted.project_id, obligation_id],
+                |row| row.get::<_, String>(0),
+            )?;
+            affected_evidence_ids.extend(crate::util::collect_rows(receipt_rows)?);
+        }
         drop(receipt_statement);
         let invalidation = EvidenceInvalidationRecord {
             id: short_id("invalidation"),
@@ -900,7 +1668,7 @@ impl App {
             &PhaseTransition {
                 to: FeatureRunPhase::Implementation,
                 cause: PhaseTransitionCause::ProductFinding,
-                reference: format!("evidence:{obligation_id}"),
+                reference: format!("evidence:{first_obligation_id}"),
                 owner: Some(RoleOwner {
                     role: RunRole::Maker,
                     worker_id: maker_worker_id.clone(),
@@ -925,11 +1693,23 @@ impl App {
             self.reconcile_active_phase_wall(run_id, BudgetPhase::Verification)?;
             repository.invalidate_source(&invalidation)?;
             repository.save_feature_run_with_new_batch(&repair, persisted.revision, &batch)?;
+            let released = self.conn.execute(
+                "UPDATE items SET status = 'ready', worker_id = NULL, pick_token = NULL,
+                     picked_at = NULL, last_heartbeat_at = NULL, updated_at = datetime('now')
+                 WHERE id = ?1 AND work_type = 'verification'
+                   AND status IN ('picked','running') AND worker_id = ?2",
+                params![verification_item_id, verifier_worker_id],
+            )?;
+            if released != 1 {
+                bail!("product_finding_verifier_release_failed:{verification_item_id}");
+            }
             Ok(json!({
                 "classification": "product_finding",
                 "responsible_maker_id": maker_worker_id,
+                "repair_id": invalidation.id,
+                "verification_item_id": verification_item_id,
                 "invalidation": invalidation,
-                "selective_replay_obligation_ids": [obligation_id],
+                "selective_replay_obligation_ids": obligation_ids,
                 "next": "maker_repair_then_plan_readiness_refreeze",
             }))
         })();
@@ -951,120 +1731,41 @@ impl App {
         persisted: &PersistedFeatureRun,
         phase: BudgetPhase,
     ) -> Result<Option<Value>> {
-        self.feature_run_budget_hold_projected(persisted, phase, None, None)
-    }
-
-    fn feature_run_budget_hold_projected(
-        &self,
-        persisted: &PersistedFeatureRun,
-        phase: BudgetPhase,
-        projected_wall_seconds: Option<u64>,
-        projected_tool_calls: Option<u64>,
-    ) -> Result<Option<Value>> {
-        let PolicyLoad::Loaded(policy) = load_policy(&self.root) else {
-            return Ok(None);
+        let now_unix_ms = unix_time_ms()?;
+        let snapshot = match self.persisted_budget_snapshot(
+            persisted,
+            feature_run_budget_phase(phase),
+            now_unix_ms,
+        ) {
+            Ok((_, snapshot)) => snapshot,
+            Err(error) => {
+                return self
+                    .persist_budget_hold(
+                        persisted,
+                        BudgetTaskHoldReason::InvalidBudgetState,
+                        format!("cannot derive persisted budget snapshot: {error}"),
+                    )
+                    .map(Some);
+            }
         };
-        let observations =
-            ExecutionRunRepository::new(&self.conn).budget_observations(&persisted.run.id)?;
-        let trusted = observations
-            .iter()
-            .filter(|value| value.metering == MeteringMode::Trusted)
-            .collect::<Vec<_>>();
-        let maximum = |get: fn(&BudgetObservationRecord) -> Option<u64>| {
-            trusted.iter().filter_map(|value| get(value)).max()
-        };
-        let now_ms = unix_time_ms()?;
-        let mut statement = self.conn.prepare(
-            "SELECT reserved_wall_seconds, reserved_tool_calls, owns_wall, started_at_unix_ms FROM feature_run_budget_reservations WHERE run_id = ?1 AND status = 'active'",
-        )?;
-        let active = statement.query_map([&persisted.run.id], |row| {
-            Ok((
-                row.get::<_, Option<u64>>(0)?,
-                row.get::<_, Option<u64>>(1)?,
-                row.get::<_, bool>(2)?,
-                row.get::<_, u64>(3)?,
-            ))
-        })?;
-        let mut reserved_wall = 0_u64;
-        let mut reserved_tools = 0_u64;
-        for row in active {
-            let (wall, tools, owns_wall, started_at_ms) = row?;
-            let elapsed = owns_wall
-                .then(|| (now_ms.saturating_sub(started_at_ms).saturating_add(999) / 1000).max(1));
-            reserved_wall += wall.unwrap_or(0).max(elapsed.unwrap_or(0));
-            reserved_tools += tools.unwrap_or(0);
-        }
-        let state = TransitionState {
-            current_depth: 0,
-            projected_active_agents: 1,
-            projected_parallel_readers: 0,
-            projected_parallel_writers: 0,
-            attempts_started: 0,
-            same_route_retries: 0,
-            availability_fallbacks: 0,
-            quality_escalations: 0,
-            quota_downgrades: 0,
-            elapsed_seconds: maximum(|value| value.wall_seconds).unwrap_or(0)
-                + reserved_wall
-                + projected_wall_seconds.unwrap_or(0),
-            usage: UsageObservation {
-                metering: if trusted.is_empty()
-                    && reserved_tools + projected_tool_calls.unwrap_or(0) == 0
-                {
-                    MeteringMode::Unavailable
-                } else {
-                    MeteringMode::Trusted
-                },
-                tool_calls: maximum(|value| value.tool_calls)
-                    .map(|value| value + reserved_tools + projected_tool_calls.unwrap_or(0))
-                    .or_else(|| {
-                        let projected = reserved_tools + projected_tool_calls.unwrap_or(0);
-                        (projected > 0).then_some(projected)
-                    }),
-                tokens: maximum(|value| value.tokens),
-                credits_micros: maximum(|value| value.credits_micros),
-            },
-            risk: RiskLevel::Moderate,
-            material: true,
-            budget_phase: phase,
-            pending_safety_stop: None,
-        };
-        let wall_available = maximum(|value| value.wall_seconds).is_some()
-            || reserved_wall > 0
-            || projected_wall_seconds.is_some();
-        let mut assessments = assess_budgets(&policy, &state);
-        if !wall_available
-            && let Some(wall) = assessments
-                .iter_mut()
-                .find(|value| value.dimension == BudgetDimension::WallTime)
+        if snapshot.mode == FeatureRunBudgetMode::Bounded
+            && snapshot.available.is_some_and(|available| {
+                available.wall_seconds == 0 || available.tool_calls == 0 || available.tokens == 0
+            })
         {
-            wall.metering = MeteringMode::Unavailable;
-            wall.observed = None;
-            wall.exhausted = false;
+            return self
+                .persist_budget_hold(
+                    persisted,
+                    BudgetTaskHoldReason::BudgetExhausted,
+                    "no complete bounded task can be admitted from the persisted budget snapshot",
+                )
+                .map(Some);
         }
-        let Some((reason, message)) = first_exhausted_budget(&assessments) else {
-            return Ok(None);
-        };
-        self.reconcile_active_phase_wall(&persisted.run.id, phase)?;
-        let held = apply_phase_transition(
-            &persisted.run,
-            &PhaseTransition {
-                to: FeatureRunPhase::Held,
-                cause: PhaseTransitionCause::BudgetHold,
-                reference: format!("budget:{reason:?}"),
-                owner: None,
-            },
-        )
-        .map_err(|violation| anyhow!("budget_hold_transition:{violation:?}"))?;
-        ExecutionRunRepository::new(&self.conn).save_feature_run(&held, persisted.revision)?;
-        Ok(Some(json!({
-            "work_packet": {"kind": "hold", "classification": "budget", "reason": reason, "message": message, "budget": assessments, "execution_state": self.canonical_execution_state_value(&held.id, None)?},
-            "remaining": self.progress_value()?,
-        })))
+        Ok(None)
     }
 }
 
-fn unix_time_ms() -> Result<u64> {
+pub(crate) fn unix_time_ms() -> Result<u64> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| anyhow!("system clock before unix epoch: {error}"))?
@@ -1073,28 +1774,106 @@ fn unix_time_ms() -> Result<u64> {
         .map_err(|_| anyhow!("system clock millisecond value overflow"))
 }
 
-fn budget_phase_name(phase: BudgetPhase) -> &'static str {
+const fn budget_phase_owner_role(phase: BudgetPhase) -> RunRole {
     match phase {
-        BudgetPhase::Implementation => "implementation",
-        BudgetPhase::Verification => "verification",
-        BudgetPhase::Review => "review",
-        BudgetPhase::Repair => "repair",
+        BudgetPhase::Implementation | BudgetPhase::Repair => RunRole::Maker,
+        BudgetPhase::Verification => RunRole::Verifier,
+        BudgetPhase::Review => RunRole::Reviewer,
     }
 }
 
-fn parse_budget_phase_name(value: &str) -> Result<BudgetPhase> {
-    match value {
-        "implementation" => Ok(BudgetPhase::Implementation),
-        "verification" => Ok(BudgetPhase::Verification),
-        "review" => Ok(BudgetPhase::Review),
-        "repair" => Ok(BudgetPhase::Repair),
-        _ => bail!("invalid budget reservation phase:{value}"),
+fn held_feature_run_budget_phase(run: &crate::execution_run::FeatureRun) -> Result<BudgetPhase> {
+    match run.held_from_phase {
+        Some(FeatureRunPhase::Implementation) => Ok(BudgetPhase::Implementation),
+        Some(FeatureRunPhase::RiskReview | FeatureRunPhase::FinalReview) => Ok(BudgetPhase::Review),
+        Some(FeatureRunPhase::SourceFrozen | FeatureRunPhase::Verification) => {
+            Ok(BudgetPhase::Verification)
+        }
+        _ => bail!("feature_run_budget_hold_resolution_rejected:invalid_held_origin"),
     }
+}
+
+const fn budget_phase_matches_held_origin(
+    phase: BudgetPhase,
+    held_from_phase: Option<FeatureRunPhase>,
+) -> bool {
+    matches!(
+        (phase, held_from_phase),
+        (
+            BudgetPhase::Implementation | BudgetPhase::Repair,
+            Some(FeatureRunPhase::Implementation)
+        ) | (
+            BudgetPhase::Review,
+            Some(FeatureRunPhase::RiskReview | FeatureRunPhase::FinalReview)
+        ) | (
+            BudgetPhase::Verification,
+            Some(FeatureRunPhase::SourceFrozen | FeatureRunPhase::Verification)
+        )
+    )
+}
+
+const fn feature_run_budget_phase(phase: BudgetPhase) -> FeatureRunBudgetPhase {
+    match phase {
+        BudgetPhase::Implementation => FeatureRunBudgetPhase::Maker,
+        BudgetPhase::Verification => FeatureRunBudgetPhase::Verification,
+        BudgetPhase::Review => FeatureRunBudgetPhase::Review,
+        BudgetPhase::Repair => FeatureRunBudgetPhase::Repair,
+    }
+}
+
+fn validate_usage_report(usage: &BudgetUsageReport) -> Result<()> {
+    if usage.adapter_id.trim().is_empty()
+        || !reported_dimension_is_consistent(usage.tool_calls_metering, usage.tool_calls)
+        || !reported_dimension_is_consistent(usage.tokens_metering, usage.tokens)
+    {
+        bail!("budget_usage_report_provenance_mismatch");
+    }
+    Ok(())
+}
+
+const fn reported_dimension_is_consistent(metering: MeteringMode, value: Option<u64>) -> bool {
+    match metering {
+        MeteringMode::Unavailable => value.is_none(),
+        MeteringMode::Estimated | MeteringMode::Trusted => value.is_some(),
+    }
+}
+
+fn reconciled_dimension(
+    observations: &[&BudgetObservationRecord],
+    value: fn(&BudgetObservationRecord) -> Option<u64>,
+    metering: fn(&BudgetObservationRecord) -> Option<MeteringMode>,
+    declared_maximum: Option<u64>,
+) -> Result<(u64, MeteringMode)> {
+    let mut observed = 0_u64;
+    let mut effective_metering = MeteringMode::Trusted;
+    for observation in observations {
+        let dimension_metering = metering(observation)
+            .ok_or_else(|| anyhow!("budget observation is missing dimension provenance"))?;
+        effective_metering = effective_metering.min(dimension_metering);
+        if let Some(amount) = value(observation) {
+            observed = observed
+                .checked_add(amount)
+                .ok_or_else(|| anyhow!("budget observation arithmetic overflow"))?;
+        }
+    }
+    let consumed = match (effective_metering, declared_maximum) {
+        (MeteringMode::Trusted, _) | (_, None) => observed,
+        (MeteringMode::Unavailable | MeteringMode::Estimated, Some(maximum)) => {
+            observed.max(maximum)
+        }
+    };
+    Ok((consumed, effective_metering))
+}
+
+fn budget_amounts_are_positive(amounts: BudgetAmounts) -> bool {
+    amounts.wall_seconds > 0 && amounts.tool_calls > 0 && amounts.tokens > 0
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::execution_run::OutcomeSettlement;
+    use crate::app::repository::execution_run::ReviewVerdict;
     use crate::evidence::model::{
         CapabilityBinding, PermissionState, RawResultRef, Sha256Digest, SourceBinding,
         TrustedProvenance, TrustedReceiptInput, VantagePoint, build_trusted_receipt,
@@ -1127,6 +1906,15 @@ mod tests {
                 params![id, worker_id()],
             )
             .expect("outcome item");
+    }
+
+    fn add_verification_outcome(app: &App, id: &str) {
+        app.conn
+            .execute(
+                "INSERT INTO items(id, project_id, title, description, status, work_type, plan_path, created_at, updated_at) VALUES (?1, 'project-a', ?1, 'verification', 'ready', 'verification', 'plan-a.md', datetime('now'), datetime('now'))",
+                [id],
+            )
+            .expect("verification item");
     }
 
     fn add_verification_item(app: &App, id: &str) {
@@ -1191,18 +1979,6 @@ allow_overwrite = true
         .unwrap();
     }
 
-    fn age_reservation(app: &App, run_id: &str, boundary_key: &str, seconds: u64) {
-        assert_eq!(
-            app.conn
-                .execute(
-                    "UPDATE feature_run_budget_reservations SET started_at_unix_ms = started_at_unix_ms - ?1 WHERE run_id = ?2 AND boundary_key = ?3 AND status = 'active'",
-                    rusqlite::params![seconds * 1000, run_id, boundary_key],
-                )
-                .unwrap(),
-            1
-        );
-    }
-
     fn initialize_git(root: &Path) {
         for args in [
             vec!["init", "-q"],
@@ -1252,7 +2028,7 @@ allow_overwrite = true
         let execution = json!({
             "kind": "process",
             "executable": "sh",
-            "args": ["-c", "printf ready"],
+            "args": ["-c", "printf '{\"status\":\"ready\"}'"],
             "working_directory": ".",
             "timeout_ms": 5000,
             "stdout_limit_bytes": 4096,
@@ -1360,6 +2136,112 @@ allow_overwrite = true
         policy_digest
     }
 
+    fn add_product_failure_evidence_adapter(root: &Path) -> String {
+        let policy_path = root.join(".planr/evidence.yaml");
+        let schema_path =
+            root.join(".planr/evidence/schemas/com.example.product.status.v1.schema.json");
+        let manifest_path = root.join(".planr/evidence/adapters/product-failure.manifest.json");
+        let schema = json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$id": "com.example.product.status@v1",
+            "type": "object",
+            "required": ["status"],
+            "properties": {"status": {"const": "ready"}},
+            "additionalProperties": false
+        });
+        std::fs::write(&schema_path, serde_json::to_vec_pretty(&schema).unwrap()).unwrap();
+        let schema_digest = crate::canonical_json::sha256_json_digest(&schema).unwrap();
+        let payload_schema = json!({
+            "type": "com.example.product.status",
+            "schema_ref": "com.example.product.status@v1",
+            "schema_digest": schema_digest
+        });
+        let execution = json!({
+            "kind": "process",
+            "executable": "sh",
+            "args": ["-c", "exit 77"],
+            "working_directory": ".",
+            "timeout_ms": 5000,
+            "stdout_limit_bytes": 4096,
+            "stderr_limit_bytes": 4096,
+            "payload_schema": payload_schema
+        });
+        let probe_execution = json!({
+            "kind": "process",
+            "executable": "sh",
+            "args": ["-c", "printf ready"],
+            "working_directory": ".",
+            "timeout_ms": 5000,
+            "stdout_limit_bytes": 4096,
+            "stderr_limit_bytes": 4096,
+            "payload_schema": payload_schema
+        });
+        let adapter_digest = crate::canonical_json::sha256_json_digest(&json!({
+            "schema_version": "planr.process_adapter.binding.v1",
+            "execution_contract": probe_execution,
+            "file_arguments": []
+        }))
+        .unwrap();
+        let manifest = json!({
+            "id": "vcap-example-product-failure-v1",
+            "schema_version": "evidence.contract.v1",
+            "version": "1.0.0",
+            "adapter_kind": "process",
+            "adapter_digest": adapter_digest,
+            "supported_surfaces": ["local-process"],
+            "supported_observations": [payload_schema],
+            "supported_interactions": ["process"],
+            "supported_artifacts": ["stdout"],
+            "runtime_targets": [{"kind": "process", "id": "product-failure"}],
+            "provenance_path": "planr_observed_execution",
+            "permissions": {"network": "none", "filesystem": "read_workspace"},
+            "costs": {},
+            "determinism": "deterministic",
+            "repeatability": "repeatable",
+            "independence": "repository-owned product-failure adapter",
+            "blind_spots": [],
+            "availability_probe": {"kind": "process", "execution": probe_execution}
+        });
+        std::fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        let manifest_digest = crate::canonical_json::sha256_json_digest(&manifest).unwrap();
+        let mut policy: Value =
+            serde_json::from_slice(&std::fs::read(&policy_path).unwrap()).unwrap();
+        policy["observation_schema_registrations"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "type": "com.example.product.status",
+                "schema_ref": "com.example.product.status@v1",
+                "schema_digest": schema_digest,
+                "owning_namespace": "com.example.product"
+            }));
+        policy["adapter_registrations"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "manifest_id": "vcap-example-product-failure-v1",
+                "manifest_path": ".planr/evidence/adapters/product-failure.manifest.json",
+                "manifest_digest": manifest_digest,
+                "observation_types": ["com.example.product.status"],
+                "payload_schemas": [payload_schema],
+                "provenance_path": "planr_observed_execution",
+                "execution_contract": execution
+            }));
+        policy["extension_namespaces"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("com.example.product"));
+        policy.as_object_mut().unwrap().remove("policy_digest");
+        let policy_digest = crate::canonical_json::sha256_json_digest(&policy).unwrap();
+        policy["policy_digest"] = json!(policy_digest);
+        std::fs::write(&policy_path, serde_json::to_vec_pretty(&policy).unwrap()).unwrap();
+        policy_digest
+    }
+
     fn verification_fixture() -> (tempfile::TempDir, App, String, String) {
         let root = tempfile::tempdir().unwrap();
         write_budget_policy(root.path());
@@ -1367,6 +2249,7 @@ allow_overwrite = true
         initialize_git(root.path());
         let app = test_app(root.path().to_path_buf());
         add_outcome(&app, "item-phase");
+        add_verification_item(&app, "verification-phase");
         app.conn
             .execute(
                 "INSERT INTO proof_obligations(
@@ -1413,6 +2296,13 @@ allow_overwrite = true
             .unwrap()
             .unwrap();
         assert_eq!(packet["work_packet"]["kind"], "verification");
+        assert!(packet["work_packet"].get("mode").is_none());
+        assert!(packet["work_packet"].get("repair_id").is_none());
+        assert!(
+            packet["work_packet"]
+                .get("selective_replay_obligation_ids")
+                .is_none()
+        );
         (root, app, run.run.id, freeze_id)
     }
 
@@ -1650,6 +2540,136 @@ allow_overwrite = true
                 .unwrap()
                 .starts_with("sha256:")
         );
+
+        let run_result = app
+            .evidence_run_value(readiness["run_index"].clone())
+            .expect("admit and execute the sealed run index");
+        assert_eq!(run_result["results"][0]["verdict"], "passed");
+        let persisted = ExecutionRunRepository::new(&app.conn)
+            .feature_run(&run.run.id)
+            .unwrap();
+        assert_eq!(persisted.run.phase, FeatureRunPhase::Verification);
+        assert_eq!(persisted.run.role_owners[0].role, RunRole::Verifier);
+    }
+
+    #[test]
+    fn sealed_multi_run_defers_product_finding_until_every_adapter_finishes() {
+        let root = tempfile::tempdir().unwrap();
+        write_budget_policy(root.path());
+        write_ready_evidence_policy(root.path());
+        let policy_digest = add_product_failure_evidence_adapter(root.path());
+        initialize_git(root.path());
+        let app = test_app(root.path().to_path_buf());
+        for item_id in ["item-batch-a", "item-batch-b"] {
+            add_outcome(&app, item_id);
+        }
+        add_verification_outcome(&app, "item-verifier");
+        let run = app
+            .ensure_outcome_feature_run("item-batch-a")
+            .unwrap()
+            .unwrap();
+        let non_material =
+            json!({"decision": {"material": false, "review": "none", "reasons": []}});
+        for item_id in ["item-batch-a", "item-batch-b"] {
+            app.settle_feature_run_outcome(OutcomeSettlement {
+                item_id,
+                summary: "compatible batched maker outcome",
+                materiality: &non_material,
+                escalation: None,
+            })
+            .unwrap();
+        }
+        for (obligation_id, criterion_id) in [
+            ("pob-a-product-failure", "criterion-a-product-failure"),
+            ("pob-b-ready", "criterion-b-ready"),
+        ] {
+            app.conn
+                .execute(
+                    "INSERT INTO proof_obligations(
+                      id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
+                      binding, observation_requirements_json, fixture_policy_json, freshness_policy_json,
+                      assurance_policy_json, retry_aggregation, policy_digest, config_digest,
+                      source_digest, supersedes_obligation_id, created_at, obligation_shape
+                    ) VALUES (
+                      ?1, 'project-a', 'plan-a', 'item-verifier', ?2, 1,
+                      ?1, 1, ?3, '{}', '{}', '{}', 'all_applicable_pass', ?4, ?4, ?4, NULL,
+                      datetime('now'), 'semantic_v1'
+                    )",
+                    params![
+                        obligation_id,
+                        criterion_id,
+                        json!([{
+                            "id": format!("obs-{obligation_id}"),
+                            "type": if obligation_id == "pob-a-product-failure" {
+                                "com.example.product.status"
+                            } else {
+                                "com.example.ready.status"
+                            },
+                            "subject": obligation_id,
+                            "expected": {"status": "ready"},
+                            "target": {"kind": "process", "uri": "local://ready"},
+                            "payload_schema": {"schema_ref": if obligation_id == "pob-a-product-failure" {
+                                "com.example.product.status@v1"
+                            } else {
+                                "com.example.ready.status@v1"
+                            }}
+                        }])
+                        .to_string(),
+                        policy_digest,
+                    ],
+                )
+                .unwrap();
+        }
+        app.conn
+            .execute(
+                "UPDATE feature_run_role_leases SET worker_id = 'maker-other' WHERE run_id = ?1 AND role = 'maker' AND released_at IS NULL",
+                [&run.run.id],
+            )
+            .unwrap();
+        let frozen = app
+            .freeze_feature_run_source_value("plan-a")
+            .unwrap()
+            .unwrap();
+        assert_eq!(frozen["feature_run"]["phase"], "source_frozen");
+        let packet = app
+            .verification_work_packet_value("plan-a", false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(packet["work_packet"]["item_id"], "item-verifier");
+        assert_eq!(
+            packet["work_packet"]["execution_state"]["phase"],
+            "verification"
+        );
+        let readiness = app
+            .evidence_readiness_value(crate::cli::EvidenceCoverageScope::Plan, "plan-a")
+            .unwrap();
+        assert_eq!(readiness["status"], "passed");
+        assert_eq!(readiness["run_index"]["runs"].as_array().unwrap().len(), 2);
+
+        let result = app
+            .evidence_run_value(readiness["run_index"].clone())
+            .expect("the sealed collector must not invalidate its own verifier lease");
+        assert_eq!(result["verdict"], "failed");
+        assert_eq!(
+            crate::app::evidence::evidence_success_envelope("evidence.run", result.clone())["exit"]
+                ["code"],
+            crate::app::evidence::EVIDENCE_UNSATISFIED
+        );
+        assert_eq!(result["results"].as_array().unwrap().len(), 2);
+        assert_eq!(result["results"][0]["verdict"], "failed");
+        assert_eq!(result["results"][1]["verdict"], "passed", "{result}");
+        assert_eq!(
+            app.conn
+                .query_row("SELECT COUNT(*) FROM evidence_attempts", [], |row| row
+                    .get::<_, u64>(0))
+                .unwrap(),
+            2
+        );
+        let repaired = ExecutionRunRepository::new(&app.conn)
+            .feature_run(&run.run.id)
+            .unwrap();
+        assert_eq!(repaired.run.phase, FeatureRunPhase::Implementation);
+        assert_eq!(repaired.run.role_owners[0].role, RunRole::Maker);
     }
 
     fn seed_settlement_obligation(app: &App, policy_digest: &str) {
@@ -1873,9 +2893,35 @@ allow_overwrite = true
     fn settlement_app() -> (tempfile::TempDir, App, String) {
         let root = tempfile::tempdir().unwrap();
         write_budget_policy(root.path());
+        let budget_policy_path = root.path().join(".planr/policy.toml");
+        let unbounded_policy = std::fs::read_to_string(&budget_policy_path)
+            .unwrap()
+            .lines()
+            .filter(|line| {
+                !line.starts_with("max_wall_time_seconds")
+                    && !line.starts_with("max_tool_calls")
+                    && !line.starts_with("max_tokens")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&budget_policy_path, unbounded_policy).unwrap();
         let policy_digest = write_ready_evidence_policy(root.path());
+        std::fs::write(root.path().join(".gitignore"), "planr.sqlite*\n").unwrap();
         initialize_git(root.path());
-        let app = test_app(root.path().to_path_buf());
+        let database_path = root.path().join("planr.sqlite");
+        let conn = Connection::open(&database_path).expect("database");
+        ensure_schema(&conn).expect("schema");
+        conn.execute(
+            "INSERT INTO projects(id, name, root_path, status, created_at, updated_at) VALUES ('project-a', 'Project', '.', 'active', datetime('now'), datetime('now'))",
+            [],
+        )
+        .expect("project");
+        conn.execute(
+            "INSERT INTO plans(id, project_id, stage, path, title, slug, parse_status, content_hash, created_at, updated_at) VALUES ('plan-a', 'project-a', 'build', 'plan-a.md', 'Plan', 'plan', 'ok', 'sha256:plan', datetime('now'), datetime('now'))",
+            [],
+        )
+        .expect("plan");
+        let app = App::new(conn, root.path().to_path_buf(), database_path, true, false);
         add_outcome(&app, "item-settle-maker");
         add_verification_item(&app, "item-settle-verification");
         let run = app
@@ -1896,7 +2942,7 @@ allow_overwrite = true
 
     #[test]
     fn satisfied_plan_coverage_closes_verification_item_with_receipt_lineage() {
-        let (_root, app, policy_digest) = settlement_app();
+        let (root, app, policy_digest) = settlement_app();
         let receipt_digest = seed_receipt_bound_settlement(&app, &policy_digest);
 
         let coverage = app
@@ -1952,6 +2998,177 @@ allow_overwrite = true
             event["coverage"]["receipt_lineage"],
             coverage["receipt_lineage"]
         );
+
+        let final_gate = app
+            .ensure_final_product_review_gate_value("plan-a")
+            .expect("initial final review gate");
+        let gate_id = final_gate["execution_state"]["review_gate"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        app.review_gate_pick_value("plan-a", false)
+            .expect("review pick")
+            .expect("review packet");
+        let changes = app
+            .complete_review_gate_value(
+                &gate_id,
+                ReviewVerdict::ChangesRequested,
+                &["repair exact source binding".into()],
+                Some(&worker_id()),
+            )
+            .expect("changes requested");
+        let finding_id = changes["execution_state"]["findings"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        app.conn
+            .execute(
+                "UPDATE review_gates SET responsible_maker_id = ?2 WHERE id = ?1",
+                params![gate_id, worker_id()],
+            )
+            .unwrap();
+        app.conn
+            .execute(
+                "UPDATE feature_run_role_leases SET worker_id = ?2 WHERE run_id = ?1 AND role = 'maker' AND released_at IS NULL",
+                params![
+                    changes["execution_state"]["feature_run"]["id"]
+                        .as_str()
+                        .unwrap(),
+                    worker_id()
+                ],
+            )
+            .unwrap();
+        std::fs::write(app.root.join("review-finding-repair.txt"), "repaired").unwrap();
+        app.resolve_review_gate_findings_value(&gate_id, std::slice::from_ref(&finding_id))
+            .expect("resolved finding refreezes source");
+        app.conn
+            .execute(
+                "UPDATE review_gates SET status = 'changes_requested' WHERE id = ?1",
+                [&gate_id],
+            )
+            .unwrap();
+        app.conn
+            .execute(
+                "UPDATE feature_run_role_leases SET worker_id = 'maker-other' WHERE run_id = ?1 AND role = 'maker'",
+                [changes["execution_state"]["feature_run"]["id"]
+                    .as_str()
+                    .unwrap()],
+            )
+            .unwrap();
+        let packet = app
+            .verification_work_packet_value("plan-a", false)
+            .expect("review finding reverification packet")
+            .expect("itemless packet");
+        assert_eq!(packet["work_packet"]["item_id"], Value::Null);
+        assert_eq!(
+            packet["work_packet"]["mode"], "review_finding_reverification",
+            "{packet}"
+        );
+        assert_eq!(packet["work_packet"]["review_gate_id"], gate_id);
+        assert_eq!(
+            packet["work_packet"]["review_finding_ids"],
+            json!([finding_id])
+        );
+        assert_eq!(
+            packet["work_packet"]["selective_replay_obligation_ids"],
+            json!(["pob-settle"])
+        );
+        let run_id = packet["work_packet"]["execution_state"]["feature_run"]["id"]
+            .as_str()
+            .unwrap();
+
+        let stale_path = app.root.join("stale-review-reverification-source.txt");
+        std::fs::write(&stale_path, "stale").unwrap();
+        let stale = app
+            .evidence_coverage_value(crate::cli::EvidenceCoverageScope::Plan, "plan-a")
+            .expect_err("stale source must roll back gate settlement");
+        assert!(
+            stale
+                .to_string()
+                .contains("review_reverification_source_stale")
+        );
+        let repository = ExecutionRunRepository::new(&app.conn);
+        let gate = repository.review_gate(&gate_id).unwrap();
+        assert_eq!(gate.status, ReviewGateStatus::ChangesRequested);
+        std::fs::remove_file(stale_path).unwrap();
+
+        app.conn
+            .execute(
+                "UPDATE feature_run_role_leases SET worker_id = 'wrong-verifier' WHERE run_id = ?1 AND role = 'verifier' AND released_at IS NULL",
+                [run_id],
+            )
+            .unwrap();
+        let wrong_worker = app
+            .evidence_coverage_value(crate::cli::EvidenceCoverageScope::Plan, "plan-a")
+            .expect_err("wrong verifier cannot settle review repair");
+        assert!(
+            wrong_worker
+                .to_string()
+                .contains("review_reverification_verifier_conflict")
+        );
+        app.conn
+            .execute(
+                "UPDATE feature_run_role_leases SET worker_id = ?2 WHERE run_id = ?1 AND role = 'verifier' AND released_at IS NULL",
+                params![run_id, worker_id()],
+            )
+            .unwrap();
+
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let mut threads = Vec::new();
+        for _ in 0..2 {
+            let barrier = barrier.clone();
+            let database_path = app.db_path.clone();
+            let repository_root = root.path().to_path_buf();
+            threads.push(std::thread::spawn(move || {
+                let connection = Connection::open(&database_path).unwrap();
+                connection
+                    .busy_timeout(std::time::Duration::from_secs(10))
+                    .unwrap();
+                let concurrent = App::new(connection, repository_root, database_path, true, false);
+                barrier.wait();
+                concurrent
+                    .evidence_coverage_value(crate::cli::EvidenceCoverageScope::Plan, "plan-a")
+                    .unwrap()
+            }));
+        }
+        barrier.wait();
+        let concurrent = threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .collect::<Vec<_>>();
+        let statuses = concurrent
+            .iter()
+            .map(|coverage| {
+                coverage["feature_run_verification_settlement"]["status"]
+                    .as_str()
+                    .unwrap()
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            statuses,
+            ["already_settled", "settled"].into_iter().collect()
+        );
+        let settled = concurrent
+            .iter()
+            .find(|coverage| coverage["feature_run_verification_settlement"]["status"] == "settled")
+            .unwrap();
+        assert_eq!(
+            settled["feature_run_verification_settlement"]["review_gate_id"],
+            gate_id
+        );
+        let repeated = app
+            .evidence_coverage_value(crate::cli::EvidenceCoverageScope::Plan, "plan-a")
+            .expect("sequential repeat is idempotent");
+        assert_eq!(
+            repeated["feature_run_verification_settlement"]["status"],
+            "already_settled"
+        );
+        assert_eq!(
+            repeated["feature_run_verification_settlement"]["coverage"]["receipt_lineage"],
+            settled["feature_run_verification_settlement"]["coverage"]["receipt_lineage"]
+        );
+        let ready_gate = repository.review_gate(&gate_id).unwrap();
+        assert_eq!(ready_gate.status, ReviewGateStatus::Pending);
     }
 
     #[test]
@@ -2221,228 +3438,392 @@ allow_overwrite = true
     }
 
     #[test]
-    fn projected_next_action_holds_at_n_minus_one_for_every_phase_and_evidence_producer() {
-        for (phase, threshold, boundary) in [
-            (BudgetPhase::Implementation, 60, "implementation.dispatch"),
-            (BudgetPhase::Verification, 80, "verification.dispatch"),
-            (BudgetPhase::Review, 90, "review.dispatch"),
-            (BudgetPhase::Repair, 100, "repair.dispatch"),
-            (BudgetPhase::Verification, 80, "evidence.process_adapter"),
-            (BudgetPhase::Verification, 80, "evidence.host_capture"),
-        ] {
-            for dimension in ["wall", "tool"] {
-                let root = tempfile::tempdir().unwrap();
-                write_budget_policy(root.path());
-                let app = test_app(root.path().to_path_buf());
-                add_outcome(&app, &format!("item-{boundary}-{dimension}"));
-                let persisted = app
-                    .ensure_outcome_feature_run(&format!("item-{boundary}-{dimension}"))
-                    .expect("ensure run")
-                    .expect("run");
-                ExecutionRunRepository::new(&app.conn)
-                    .record_budget_observation(&BudgetObservationRecord {
-                        id: short_id("budget"),
-                        run_id: persisted.run.id.clone(),
-                        phase,
-                        metering: MeteringMode::Trusted,
-                        wall_seconds: (dimension == "wall").then_some(threshold - 1),
-                        tokens: None,
-                        tool_calls: (dimension == "tool").then_some(threshold - 1),
-                        credits_micros: None,
-                        provenance: format!("test.{boundary}.{dimension};tokens=unavailable"),
-                    })
-                    .expect("N-1 observation");
-                let hold = match app
-                    .admit_feature_run_budget(
-                        &persisted,
-                        phase,
-                        &format!("{boundary}:{dimension}"),
-                        (dimension == "wall").then_some(1),
-                        (dimension == "tool").then_some(1),
-                        !boundary.starts_with("evidence."),
-                        boundary,
-                    )
-                    .expect("projected admission")
-                {
-                    FeatureRunBudgetAdmission::Held(hold) => hold,
-                    FeatureRunBudgetAdmission::Reserved(_) => {
-                        panic!("next {dimension} action crossed the {phase:?} reserve")
-                    }
-                };
-                let reason = if phase == BudgetPhase::Repair {
-                    if dimension == "wall" {
-                        "wall_time_budget_exhausted"
-                    } else {
-                        "tool_call_budget_exhausted"
-                    }
-                } else {
-                    "required_phase_reserve_protected"
-                };
-                assert_eq!(hold["work_packet"]["reason"], reason);
-                let token = hold["work_packet"]["budget"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .find(|value| value["dimension"] == "tokens")
-                    .unwrap();
-                assert_eq!(token["metering"], "unavailable");
-                assert_eq!(token["observed"], Value::Null);
-                if dimension == "tool" {
-                    let wall = hold["work_packet"]["budget"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .find(|value| value["dimension"] == "wall_time")
-                        .unwrap();
-                    assert_eq!(wall["metering"], "unavailable");
-                    assert_eq!(wall["observed"], Value::Null);
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn reservation_release_and_reconcile_are_durable_and_never_claim_unobserved_tokens() {
+    fn persisted_contract_not_mutated_policy_controls_runtime_admission() {
         let root = tempfile::tempdir().unwrap();
         write_budget_policy(root.path());
         let app = test_app(root.path().to_path_buf());
-        add_outcome(&app, "item-reservation");
+        add_outcome(&app, "item-policy-snapshot");
         let persisted = app
-            .ensure_outcome_feature_run("item-reservation")
+            .ensure_outcome_feature_run("item-policy-snapshot")
             .unwrap()
             .unwrap();
-        let no_usage_hold = app
-            .feature_run_budget_hold(&persisted, BudgetPhase::Implementation)
-            .unwrap();
-        assert!(no_usage_hold.is_none());
-        let assessments = app
-            .feature_run_budget_hold_projected(&persisted, BudgetPhase::Implementation, None, None)
-            .unwrap();
-        assert!(assessments.is_none());
-        let failed = match app
+        let repository = ExecutionRunRepository::new(&app.conn);
+        let original = repository.budget_contract(&persisted.run.id).unwrap();
+        let mutated = std::fs::read_to_string(root.path().join(".planr/policy.toml"))
+            .unwrap()
+            .replace("max_wall_time_seconds = 100", "max_wall_time_seconds = 1")
+            .replace("max_tool_calls = 100", "max_tool_calls = 1")
+            .replace("max_tokens = 1000", "max_tokens = 1");
+        std::fs::write(root.path().join(".planr/policy.toml"), mutated).unwrap();
+
+        let reservation = app
             .admit_feature_run_budget(
                 &persisted,
                 BudgetPhase::Implementation,
-                "failed-dispatch",
-                Some(1),
-                Some(1),
-                true,
-                "test.failed_dispatch",
+                "implementation:policy-snapshot",
+                &worker_id(),
+                "test.policy_snapshot",
+            )
+            .unwrap();
+        assert!(matches!(
+            reservation,
+            FeatureRunBudgetAdmission::Reserved(_)
+        ));
+        assert_eq!(
+            repository
+                .budget_contract(&persisted.run.id)
+                .unwrap()
+                .digest,
+            original.digest
+        );
+    }
+
+    #[test]
+    fn compatible_budget_hold_resolution_is_idempotent_and_rollback_safe() {
+        let root = tempfile::tempdir().unwrap();
+        let app = test_app(root.path().to_path_buf());
+        add_outcome(&app, "item-budget-resume");
+        let persisted = app
+            .ensure_outcome_feature_run("item-budget-resume")
+            .unwrap()
+            .unwrap();
+        let reservation = match app
+            .admit_feature_run_budget(
+                &persisted,
+                BudgetPhase::Implementation,
+                "implementation:item-budget-resume",
+                &worker_id(),
+                "test.resume",
             )
             .unwrap()
         {
-            FeatureRunBudgetAdmission::Reserved(value) => value,
-            FeatureRunBudgetAdmission::Held(_) => panic!("unexpected hold"),
+            FeatureRunBudgetAdmission::Reserved(reservation) => reservation,
+            FeatureRunBudgetAdmission::Held(_) => panic!("expected reservation"),
         };
-        app.release_feature_run_budget(&failed).unwrap();
+        let repository = ExecutionRunRepository::new(&app.conn);
+        let held = apply_phase_transition(
+            &repository.feature_run(&persisted.run.id).unwrap().run,
+            &PhaseTransition {
+                to: FeatureRunPhase::Held,
+                cause: PhaseTransitionCause::BudgetHold,
+                reference: "test:stale_runtime_hold".to_string(),
+                owner: None,
+            },
+        )
+        .unwrap();
+        repository
+            .save_feature_run(&held, persisted.revision)
+            .unwrap();
+
+        let resumed = app.resolve_feature_run_budget_hold_value("plan-a").unwrap();
+        assert_eq!(resumed["resolution"]["disposition"], "resumed");
+        assert_eq!(
+            resumed["resolution"]["cause"],
+            "active_reservations_revalidated"
+        );
+        assert_eq!(resumed["execution_state"]["phase"], "implementation");
+        let repeated = app.resolve_feature_run_budget_hold_value("plan-a").unwrap();
+        assert_eq!(repeated["resolution"]["disposition"], "already_resumed");
         assert_eq!(
             app.conn
                 .query_row(
-                    "SELECT COUNT(*) FROM feature_run_budget_reservations WHERE status = 'active'",
+                    "SELECT COUNT(*) FROM events WHERE event_type = 'feature_run_budget_hold_resolved'",
                     [],
                     |row| row.get::<_, u64>(0),
                 )
                 .unwrap(),
-            0
+            1
         );
-        let successful = match app
+
+        app.reconcile_feature_run_budget(&reservation, &BudgetUsageReport::application(Some(1)))
+            .unwrap();
+        let reconciled = repository.feature_run(&persisted.run.id).unwrap();
+        let transient_hold = apply_phase_transition(
+            &reconciled.run,
+            &PhaseTransition {
+                to: FeatureRunPhase::Held,
+                cause: PhaseTransitionCause::BudgetHold,
+                reference: "test:transient_contention".to_string(),
+                owner: None,
+            },
+        )
+        .unwrap();
+        repository
+            .save_feature_run(&transient_hold, reconciled.revision)
+            .unwrap();
+        let cleared = app.resolve_feature_run_budget_hold_value("plan-a").unwrap();
+        assert_eq!(
+            cleared["resolution"]["cause"],
+            "transient_contention_cleared"
+        );
+        assert_eq!(cleared["resolution"]["active_reservation_ids"], json!([]));
+
+        let current = repository.feature_run(&persisted.run.id).unwrap();
+        let held_again = apply_phase_transition(
+            &current.run,
+            &PhaseTransition {
+                to: FeatureRunPhase::Held,
+                cause: PhaseTransitionCause::BudgetHold,
+                reference: "test:rollback".to_string(),
+                owner: None,
+            },
+        )
+        .unwrap();
+        repository
+            .save_feature_run(&held_again, current.revision)
+            .unwrap();
+        app.conn
+            .execute_batch(
+                "CREATE TRIGGER fail_budget_hold_resolution BEFORE UPDATE ON feature_runs
+                 WHEN OLD.id = 'frun-does-not-match' OR NEW.phase = 'implementation'
+                 BEGIN SELECT RAISE(ABORT, 'injected budget hold resolution rollback'); END;",
+            )
+            .unwrap();
+        let error = app
+            .resolve_feature_run_budget_hold_value("plan-a")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("injected budget hold resolution rollback"));
+        assert_eq!(
+            repository.feature_run(&persisted.run.id).unwrap().run.phase,
+            FeatureRunPhase::Held
+        );
+        assert_eq!(
+            app.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM events WHERE event_type = 'feature_run_budget_hold_resolved'",
+                    [],
+                    |row| row.get::<_, u64>(0),
+                )
+                .unwrap(),
+            2
+        );
+    }
+
+    #[test]
+    fn budget_hold_resolution_rejects_unrepaired_and_incompatible_state() {
+        let root = tempfile::tempdir().unwrap();
+        let app = test_app(root.path().to_path_buf());
+        add_outcome(&app, "item-unrepaired-hold");
+        let persisted = app
+            .ensure_outcome_feature_run("item-unrepaired-hold")
+            .unwrap()
+            .unwrap();
+        let repository = ExecutionRunRepository::new(&app.conn);
+        let held = apply_phase_transition(
+            &persisted.run,
+            &PhaseTransition {
+                to: FeatureRunPhase::Held,
+                cause: PhaseTransitionCause::BudgetHold,
+                reference: "test:no_reservation".to_string(),
+                owner: None,
+            },
+        )
+        .unwrap();
+        repository
+            .save_feature_run(&held, persisted.revision)
+            .unwrap();
+        let unrepaired = app
+            .resolve_feature_run_budget_hold_value("plan-a")
+            .unwrap_err()
+            .to_string();
+        assert!(unrepaired.contains("unrepaired_ceiling_or_missing_reservation"));
+
+        app.conn
+            .execute_batch(
+                "DROP TRIGGER feature_run_budget_contracts_no_delete;
+                 DELETE FROM feature_run_budget_contracts WHERE run_id IN (SELECT id FROM feature_runs WHERE plan_id = 'plan-a');",
+            )
+            .unwrap();
+        let incompatible = app
+            .resolve_feature_run_budget_hold_value("plan-a")
+            .unwrap_err()
+            .to_string();
+        assert!(incompatible.contains("feature_run_budget_hold_requires_restart"));
+        assert!(incompatible.contains("restart_incompatible_feature_run"));
+    }
+
+    #[test]
+    fn reconciliation_is_delta_based_transactional_and_never_launders_provenance() {
+        let root = tempfile::tempdir().unwrap();
+        write_budget_policy(root.path());
+        let app = test_app(root.path().to_path_buf());
+        add_outcome(&app, "item-reconcile");
+        let persisted = app
+            .ensure_outcome_feature_run("item-reconcile")
+            .unwrap()
+            .unwrap();
+        let released = match app
             .admit_feature_run_budget(
                 &persisted,
                 BudgetPhase::Implementation,
-                "successful-dispatch",
-                Some(1),
-                Some(1),
-                true,
-                "test.successful_dispatch",
+                "implementation:released",
+                &worker_id(),
+                "test.release",
             )
             .unwrap()
         {
             FeatureRunBudgetAdmission::Reserved(value) => value,
-            FeatureRunBudgetAdmission::Held(_) => panic!("released capacity was not restored"),
+            FeatureRunBudgetAdmission::Held(_) => panic!("unexpected release fixture hold"),
         };
-        app.conn
-            .execute(
-                "UPDATE feature_run_budget_reservations SET started_at_unix_ms = started_at_unix_ms - 1500 WHERE id = ?1",
-                [&successful.id],
+        app.release_feature_run_budget(&released).unwrap();
+
+        let reservation = match app
+            .admit_feature_run_budget(
+                &persisted,
+                BudgetPhase::Implementation,
+                "implementation:reconcile",
+                &worker_id(),
+                "test.reconciliation",
+            )
+            .unwrap()
+        {
+            FeatureRunBudgetAdmission::Reserved(value) => value,
+            FeatureRunBudgetAdmission::Held(_) => panic!("unexpected reconciliation hold"),
+        };
+        app.reconcile_feature_run_budget(&reservation, &BudgetUsageReport::application(Some(1)))
+            .unwrap();
+
+        let repository = ExecutionRunRepository::new(&app.conn);
+        let observations = repository.budget_observations(&persisted.run.id).unwrap();
+        assert_eq!(observations.len(), 1);
+        assert!(observations.iter().all(|observation| {
+            observation.metering == MeteringMode::Unavailable
+                && observation.wall_metering == Some(MeteringMode::Trusted)
+                && observation.tool_calls_metering == Some(MeteringMode::Estimated)
+                && observation.tokens_metering == Some(MeteringMode::Unavailable)
+                && observation.tool_calls == Some(1)
+                && observation.tokens.is_none()
+        }));
+        let (_, snapshot) = app
+            .persisted_budget_snapshot(
+                &persisted,
+                FeatureRunBudgetPhase::Maker,
+                unix_time_ms().unwrap(),
             )
             .unwrap();
-        let mut successful = successful;
-        successful.started_at_unix_ms -= 1500;
-        app.reconcile_feature_run_budget(&successful, Some(1))
-            .unwrap();
-        let observation = ExecutionRunRepository::new(&app.conn)
-            .budget_observations(&persisted.run.id)
-            .unwrap()
-            .pop()
-            .unwrap();
-        assert!(observation.wall_seconds.unwrap() >= 2);
-        assert_eq!(observation.tool_calls, Some(1));
-        assert_eq!(observation.tokens, None);
-        assert!(observation.provenance.contains("tokens=unavailable"));
+        assert_eq!(snapshot.consumed.tool_calls, 60);
+        assert_eq!(snapshot.consumed.tokens, 600);
+        assert_eq!(snapshot.metering.tool_calls, MeteringProvenance::Estimated);
+        assert_eq!(snapshot.metering.tokens, MeteringProvenance::Unavailable);
     }
 
     #[test]
-    fn aged_human_phase_reservations_stop_all_four_real_entry_points() {
+    fn concurrent_same_phase_reservations_are_serialized_against_one_snapshot() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        let root = tempfile::tempdir().unwrap();
+        write_budget_policy(root.path());
+        let database_path = root.path().join("concurrent.sqlite");
+        let connection = Connection::open(&database_path).unwrap();
+        ensure_schema(&connection).unwrap();
+        connection.execute(
+            "INSERT INTO projects(id, name, root_path, status, created_at, updated_at) VALUES ('project-a', 'Project', '.', 'active', datetime('now'), datetime('now'))",
+            [],
+        ).unwrap();
+        connection.execute(
+            "INSERT INTO plans(id, project_id, stage, path, title, slug, parse_status, content_hash, created_at, updated_at) VALUES ('plan-a', 'project-a', 'build', 'plan-a.md', 'Plan', 'plan', 'ok', 'sha256:plan', datetime('now'), datetime('now'))",
+            [],
+        ).unwrap();
+        let setup = App::new(
+            connection,
+            root.path().to_path_buf(),
+            database_path.clone(),
+            true,
+            false,
+        );
+        add_outcome(&setup, "item-concurrent");
+        let run_id = setup
+            .ensure_outcome_feature_run("item-concurrent")
+            .unwrap()
+            .unwrap()
+            .run
+            .id;
+        drop(setup);
+
+        let barrier = Arc::new(Barrier::new(2));
+        let mut threads = Vec::new();
+        for index in 0..2 {
+            let barrier = Arc::clone(&barrier);
+            let root_path = root.path().to_path_buf();
+            let database_path = database_path.clone();
+            let run_id = run_id.clone();
+            threads.push(thread::spawn(move || {
+                let connection = Connection::open(&database_path).unwrap();
+                connection
+                    .busy_timeout(std::time::Duration::from_secs(5))
+                    .unwrap();
+                let app = App::new(connection, root_path, database_path, true, false);
+                let persisted = ExecutionRunRepository::new(&app.conn)
+                    .feature_run(&run_id)
+                    .unwrap();
+                barrier.wait();
+                app.admit_feature_run_budget(
+                    &persisted,
+                    BudgetPhase::Implementation,
+                    &format!("implementation:concurrent-{index}"),
+                    &worker_id(),
+                    "test.concurrent",
+                )
+                .unwrap()
+            }));
+        }
+        let results = threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| matches!(result, FeatureRunBudgetAdmission::Reserved(_)))
+                .count(),
+            1
+        );
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| matches!(result, FeatureRunBudgetAdmission::Held(_)))
+                .count(),
+            1
+        );
+        let connection = Connection::open(&database_path).unwrap();
+        let active: u64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM feature_run_budget_reservations WHERE run_id = ?1 AND status = 'active'",
+                [&run_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(active, 1);
+    }
+
+    #[test]
+    fn wall_consumption_is_anchored_to_persisted_run_start() {
         let root = tempfile::tempdir().unwrap();
         write_budget_policy(root.path());
         let app = test_app(root.path().to_path_buf());
-        add_outcome(&app, "item-implementation");
-        let first = app.outcome_work_packet("item-implementation").unwrap();
-        let run_id = first["execution_state"]["feature_run"]["id"]
-            .as_str()
+        add_outcome(&app, "item-wall-anchor");
+        let persisted = app
+            .ensure_outcome_feature_run("item-wall-anchor")
+            .unwrap()
             .unwrap();
-        age_reservation(&app, run_id, "implementation:item-implementation", 56);
-        assert_eq!(
-            app.outcome_work_packet("item-implementation").unwrap()["kind"],
-            "hold"
-        );
-
-        let (_root, app, run_id, _) = verification_fixture();
-        age_reservation(&app, &run_id, &format!("verification:{run_id}"), 76);
-        assert_eq!(
-            app.verification_work_packet_value("plan-a", false)
+        std::thread::sleep(std::time::Duration::from_millis(1_050));
+        let (contract, snapshot) = app
+            .persisted_budget_snapshot(
+                &persisted,
+                FeatureRunBudgetPhase::Maker,
+                unix_time_ms().unwrap(),
+            )
+            .unwrap();
+        assert!(contract.started_at_unix_ms > 0);
+        assert!(snapshot.consumed.wall_seconds >= 2);
+        assert!(
+            ExecutionRunRepository::new(&app.conn)
+                .budget_reservations(&persisted.run.id)
                 .unwrap()
-                .unwrap()["work_packet"]["kind"],
-            "hold"
-        );
-
-        let (_root, app, run_id, freeze_id) = verification_fixture();
-        app.conn
-            .execute(
-                "UPDATE feature_run_role_leases SET worker_id = ?1 WHERE run_id = ?2 AND role = 'maker'",
-                rusqlite::params![worker_id(), run_id],
-            )
-            .unwrap();
-        app.route_evidence_product_finding_value(&run_id, &freeze_id, "pob-aged")
-            .unwrap();
-        app.repair_work_packet_value("plan-a").unwrap().unwrap();
-        age_reservation(&app, &run_id, &format!("repair:{run_id}"), 96);
-        assert_eq!(
-            app.repair_work_packet_value("plan-a").unwrap().unwrap()["work_packet"]["kind"],
-            "hold"
-        );
-
-        let (_root, app, run_id, _) = verification_fixture();
-        let gate = app
-            .ensure_final_product_review_gate_value("plan-a")
-            .unwrap();
-        let gate_id = gate["execution_state"]["review_gate"]["id"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        app.review_gate_pick_value("plan-a", false)
-            .unwrap()
-            .unwrap();
-        age_reservation(&app, &run_id, &format!("review:{gate_id}"), 86);
-        assert_eq!(
-            app.complete_review_gate_value(
-                &gate_id,
-                super::super::repository::execution_run::ReviewVerdict::Accepted,
-                &[],
-                None,
-            )
-            .unwrap()["work_packet"]["kind"],
-            "hold"
+                .is_empty(),
+            "run wall consumption must not depend on a task reservation start"
         );
     }
 
@@ -2455,31 +3836,87 @@ allow_overwrite = true
                 rusqlite::params![worker_id(), run_id],
             )
             .unwrap();
-        app.route_evidence_product_finding_value(&run_id, &freeze_id, "pob-lifecycle")
+        let routed = app
+            .route_evidence_product_finding_value(&run_id, &freeze_id, "pob-phase-ready")
             .unwrap();
+        let repair_id = routed["repair_id"].as_str().unwrap();
+        assert_eq!(repair_id, routed["invalidation"]["id"]);
+        assert_eq!(routed["verification_item_id"], "verification-phase");
+        let released: (String, Option<String>) = app
+            .conn
+            .query_row(
+                "SELECT status, worker_id FROM items WHERE id = 'verification-phase'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(released, ("ready".to_string(), None));
         assert!(
             app.load_active_budget_reservation(&run_id, &format!("verification:{run_id}"))
                 .unwrap()
                 .is_none()
         );
-        app.repair_work_packet_value("plan-a").unwrap().unwrap();
-        app.settle_feature_run_outcome(super::super::execution_run::OutcomeSettlement {
-            item_id: "item-phase",
-            summary: "repair complete",
-            materiality: &json!({"decision": {"review": "none"}}),
-            escalation: None,
-        })
-        .unwrap();
+        let repair = app.repair_work_packet_value("plan-a").unwrap().unwrap();
+        assert_eq!(repair["work_packet"]["repair_id"], repair_id);
+        assert_eq!(
+            repair["work_packet"]["verification_item_id"],
+            "verification-phase"
+        );
+        let refrozen = app
+            .settle_product_finding_repair_value(
+                "plan-a",
+                repair_id,
+                "repair complete",
+                &["tests/e2e.rs".to_string()],
+                &["cargo test".to_string()],
+                &["passed".to_string()],
+            )
+            .unwrap();
+        assert_eq!(refrozen["work_packet"]["kind"], "verification_handoff");
+        assert_eq!(refrozen["work_packet"]["mode"], "selective_replay");
+        assert_eq!(
+            refrozen["work_packet"]["selective_replay_obligation_ids"],
+            json!(["pob-phase-ready"])
+        );
+        assert_eq!(refrozen["work_packet"]["source_freeze"]["status"], "active");
         assert!(
             app.load_active_budget_reservation(&run_id, &format!("repair:{run_id}"))
                 .unwrap()
                 .is_none()
         );
-        let refrozen = app
-            .freeze_feature_run_source_value("plan-a")
+        assert_eq!(
+            refrozen["work_packet"]["execution_state"]["phase"],
+            "source_frozen"
+        );
+        let selective_packet = app
+            .verification_work_packet_value("plan-a", true)
             .unwrap()
             .unwrap();
-        assert_eq!(refrozen["feature_run"]["phase"], "source_frozen");
+        assert_eq!(selective_packet["work_packet"]["mode"], "selective_replay");
+        assert_eq!(selective_packet["work_packet"]["repair_id"], repair_id);
+        assert_eq!(
+            selective_packet["work_packet"]["responsible_maker_id"],
+            worker_id()
+        );
+        assert_eq!(
+            selective_packet["work_packet"]["selective_replay_obligation_ids"],
+            json!(["pob-phase-ready"])
+        );
+        let repeated = app
+            .settle_product_finding_repair_value(
+                "plan-a",
+                repair_id,
+                "repair complete",
+                &[],
+                &[],
+                &[],
+            )
+            .unwrap();
+        assert_eq!(repeated["created"], false);
+        assert_eq!(
+            repeated["work_packet"]["source_freeze"]["id"],
+            refrozen["work_packet"]["source_freeze"]["id"]
+        );
         let observations = ExecutionRunRepository::new(&app.conn)
             .budget_observations(&run_id)
             .unwrap();
@@ -2490,74 +3927,6 @@ allow_overwrite = true
                 .count(),
             2,
             "verification and repair phase intervals are the only wall owners"
-        );
-    }
-
-    #[test]
-    fn successful_nested_evidence_counts_wall_once_under_the_phase_owner() {
-        let root = tempfile::tempdir().unwrap();
-        write_budget_policy(root.path());
-        let app = test_app(root.path().to_path_buf());
-        add_outcome(&app, "item-wall-owner");
-        let run = app
-            .ensure_outcome_feature_run("item-wall-owner")
-            .unwrap()
-            .unwrap();
-        let phase = match app
-            .admit_feature_run_budget(
-                &run,
-                BudgetPhase::Verification,
-                "verification:wall-owner",
-                Some(5),
-                Some(1),
-                true,
-                "verification.dispatch",
-            )
-            .unwrap()
-        {
-            FeatureRunBudgetAdmission::Reserved(value) => value,
-            FeatureRunBudgetAdmission::Held(_) => panic!("phase unexpectedly held"),
-        };
-        let evidence = match app
-            .admit_feature_run_budget(
-                &run,
-                BudgetPhase::Verification,
-                "evidence.process:wall-owner",
-                Some(10),
-                Some(1),
-                false,
-                "evidence.process_adapter",
-            )
-            .unwrap()
-        {
-            FeatureRunBudgetAdmission::Reserved(value) => value,
-            FeatureRunBudgetAdmission::Held(_) => panic!("Evidence unexpectedly held"),
-        };
-        age_reservation(&app, &run.run.id, &phase.boundary_key, 2);
-        age_reservation(&app, &run.run.id, &evidence.boundary_key, 2);
-        let mut phase = phase;
-        phase.started_at_unix_ms -= 2000;
-        let mut evidence = evidence;
-        evidence.started_at_unix_ms -= 2000;
-        app.reconcile_feature_run_budget(&evidence, Some(1))
-            .unwrap();
-        app.reconcile_feature_run_budget(&phase, Some(1)).unwrap();
-        let observations = ExecutionRunRepository::new(&app.conn)
-            .budget_observations(&run.run.id)
-            .unwrap();
-        assert_eq!(
-            observations
-                .iter()
-                .filter(|observation| observation.wall_seconds.is_some())
-                .count(),
-            1
-        );
-        assert_eq!(
-            observations
-                .iter()
-                .filter_map(|observation| observation.tool_calls)
-                .max(),
-            Some(2)
         );
     }
 }

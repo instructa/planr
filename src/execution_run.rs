@@ -122,6 +122,91 @@ pub enum FeatureRunHoldReason {
     Capability,
 }
 
+/// Persisted budget-contract compatibility as diagnosed by the application
+/// boundary before any FeatureRun work is dispatched.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureRunBudgetContractCompatibility {
+    Compatible,
+    Missing,
+    Invalid,
+    DigestMismatch,
+}
+
+impl FeatureRunBudgetContractCompatibility {
+    pub fn is_incompatible(self) -> bool {
+        self != Self::Compatible
+    }
+}
+
+/// Explicit operator reason accepted by the incompatible-run restart
+/// lifecycle. Healthy-run cancellation is intentionally a separate contract.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FeatureRunRestartReason {
+    IncompatibleBudget,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureRunRestartRequest {
+    pub plan_id: String,
+    pub reason: FeatureRunRestartReason,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureRunRestartDisposition {
+    Retired,
+    AlreadyRetired,
+}
+
+/// Pure transition output. The application repository applies the run,
+/// active-batch, and role-lease effects in one transaction; later ordinary
+/// pick logic remains the only owner allowed to create a successor run.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureRunRestartTransition {
+    pub request: FeatureRunRestartRequest,
+    pub incompatibility: FeatureRunBudgetContractCompatibility,
+    pub disposition: FeatureRunRestartDisposition,
+    pub previous_phase: FeatureRunPhase,
+    pub ended_batch_id: Option<String>,
+    pub released_role_owners: Vec<RoleOwner>,
+    pub retired_run: FeatureRun,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureRunBudgetHoldResolutionDisposition {
+    Resumed,
+    AlreadyResumed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureRunBudgetHoldResolutionCause {
+    ActiveReservationsRevalidated,
+    TransientContentionCleared,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureRunBudgetHoldResolutionRequest {
+    pub plan_id: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureRunBudgetHoldResolutionTransition {
+    pub request: FeatureRunBudgetHoldResolutionRequest,
+    pub disposition: FeatureRunBudgetHoldResolutionDisposition,
+    pub cause: FeatureRunBudgetHoldResolutionCause,
+    pub previous_phase: FeatureRunPhase,
+    pub active_reservation_ids: Vec<String>,
+    pub resumed_run: FeatureRun,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PhaseTransitionCause {
@@ -178,6 +263,12 @@ pub enum RunContractViolation {
     ReplacementBeforeBatchCap,
     ReplacementSourceMismatch,
     SameWorkerReplacement,
+    RestartPlanMismatch,
+    RestartBudgetContractCompatible,
+    RestartRunTerminal,
+    BudgetHoldResolutionPlanMismatch,
+    BudgetHoldResolutionNotBudgetHeld,
+    BudgetHoldResolutionOwnerMismatch,
 }
 
 pub const ALL_FEATURE_RUN_PHASES: [FeatureRunPhase; 8] = [
@@ -240,6 +331,14 @@ pub fn is_legal_phase_transition(
             PhaseTransitionCause::ProductFinding
         ) | (
             FeatureRunPhase::Verification,
+            FeatureRunPhase::SourceFrozen,
+            PhaseTransitionCause::VerificationPassed | PhaseTransitionCause::SourceInvalidated
+        ) | (
+            FeatureRunPhase::Verification,
+            FeatureRunPhase::FinalReview,
+            PhaseTransitionCause::VerificationPassed
+        ) | (
+            FeatureRunPhase::SourceFrozen,
             FeatureRunPhase::FinalReview,
             PhaseTransitionCause::VerificationPassed
         ) | (
@@ -524,14 +623,126 @@ pub fn apply_phase_transition(
     if transition.cause == PhaseTransitionCause::ImplementationSettled {
         next.source_revision = Some(transition.reference.clone());
     }
-    if matches!(
-        transition.cause,
-        PhaseTransitionCause::SourceInvalidated | PhaseTransitionCause::ProductFinding
-    ) {
+    if transition.cause == PhaseTransitionCause::ProductFinding
+        || (transition.cause == PhaseTransitionCause::SourceInvalidated
+            && transition.to == FeatureRunPhase::Implementation)
+    {
         next.source_revision = None;
     }
     validate_feature_run(&next)?;
     Ok(next)
+}
+
+pub fn retire_incompatible_feature_run(
+    run: &FeatureRun,
+    request: &FeatureRunRestartRequest,
+    compatibility: FeatureRunBudgetContractCompatibility,
+) -> Result<FeatureRunRestartTransition, RunContractViolation> {
+    validate_feature_run(run)?;
+    if request.plan_id.trim().is_empty() {
+        return Err(RunContractViolation::EmptyIdentity);
+    }
+    if request.plan_id != run.plan_id {
+        return Err(RunContractViolation::RestartPlanMismatch);
+    }
+    if !compatibility.is_incompatible() {
+        return Err(RunContractViolation::RestartBudgetContractCompatible);
+    }
+
+    if run.phase == FeatureRunPhase::Cancelled
+        && run.terminal_reason == Some(FeatureRunTerminalReason::PolicyCancelled)
+    {
+        return Ok(FeatureRunRestartTransition {
+            request: request.clone(),
+            incompatibility: compatibility,
+            disposition: FeatureRunRestartDisposition::AlreadyRetired,
+            previous_phase: run.phase,
+            ended_batch_id: None,
+            released_role_owners: Vec::new(),
+            retired_run: run.clone(),
+        });
+    }
+    if matches!(
+        run.status,
+        FeatureRunStatus::Complete | FeatureRunStatus::Cancelled
+    ) {
+        return Err(RunContractViolation::RestartRunTerminal);
+    }
+
+    let previous_phase = run.phase;
+    let ended_batch_id = run.active_batch_id.clone();
+    let released_role_owners = run.role_owners.clone();
+    let reference = match compatibility {
+        FeatureRunBudgetContractCompatibility::Missing => "budget_contract_missing",
+        FeatureRunBudgetContractCompatibility::Invalid => "budget_contract_invalid",
+        FeatureRunBudgetContractCompatibility::DigestMismatch => "budget_contract_digest_mismatch",
+        FeatureRunBudgetContractCompatibility::Compatible => unreachable!("checked above"),
+    };
+    let mut retired_run = apply_phase_transition(
+        run,
+        &PhaseTransition {
+            to: FeatureRunPhase::Cancelled,
+            cause: PhaseTransitionCause::PolicyCancelled,
+            reference: reference.into(),
+            owner: None,
+        },
+    )?;
+    retired_run.active_batch_id = None;
+    retired_run.batch_outcome_count = 0;
+    validate_feature_run(&retired_run)?;
+
+    Ok(FeatureRunRestartTransition {
+        request: request.clone(),
+        incompatibility: compatibility,
+        disposition: FeatureRunRestartDisposition::Retired,
+        previous_phase,
+        ended_batch_id,
+        released_role_owners,
+        retired_run,
+    })
+}
+
+pub fn resolve_budget_held_feature_run(
+    run: &FeatureRun,
+    request: &FeatureRunBudgetHoldResolutionRequest,
+    worker_id: &str,
+) -> Result<FeatureRun, RunContractViolation> {
+    validate_feature_run(run)?;
+    if request.plan_id.trim().is_empty() || worker_id.trim().is_empty() {
+        return Err(RunContractViolation::EmptyIdentity);
+    }
+    if request.plan_id != run.plan_id {
+        return Err(RunContractViolation::BudgetHoldResolutionPlanMismatch);
+    }
+    if run.phase != FeatureRunPhase::Held
+        || run.status != FeatureRunStatus::Held
+        || run.hold_reason != Some(FeatureRunHoldReason::Budget)
+    {
+        return Err(RunContractViolation::BudgetHoldResolutionNotBudgetHeld);
+    }
+    let previous_phase = run
+        .held_from_phase
+        .ok_or(RunContractViolation::InvalidHeldOrigin)?;
+    let owner_role = match previous_phase {
+        FeatureRunPhase::Implementation => RunRole::Maker,
+        FeatureRunPhase::RiskReview | FeatureRunPhase::FinalReview => RunRole::Reviewer,
+        FeatureRunPhase::SourceFrozen | FeatureRunPhase::Verification => RunRole::Verifier,
+        FeatureRunPhase::Held | FeatureRunPhase::Complete | FeatureRunPhase::Cancelled => {
+            return Err(RunContractViolation::InvalidHeldOrigin);
+        }
+    };
+    if owner_for_role(run, owner_role).is_none_or(|owner| owner.worker_id != worker_id) {
+        return Err(RunContractViolation::BudgetHoldResolutionOwnerMismatch);
+    }
+    apply_phase_transition(
+        run,
+        &PhaseTransition {
+            to: previous_phase,
+            cause: PhaseTransitionCause::HoldResolved,
+            reference: "budget_hold:active_reservations_revalidated".to_string(),
+            owner: None,
+        },
+    )
 }
 
 pub fn settle_batch_outcome(
@@ -697,6 +908,13 @@ mod tests {
         }
     }
 
+    fn restart_request() -> FeatureRunRestartRequest {
+        FeatureRunRestartRequest {
+            plan_id: "plan-a".into(),
+            reason: FeatureRunRestartReason::IncompatibleBudget,
+        }
+    }
+
     fn state_for_phase_and_terminal(
         phase: FeatureRunPhase,
         held_from_phase: Option<FeatureRunPhase>,
@@ -851,6 +1069,116 @@ mod tests {
     }
 
     #[test]
+    fn incompatible_budget_retirement_is_typed_and_preserves_run_history() {
+        for incompatibility in [
+            FeatureRunBudgetContractCompatibility::Missing,
+            FeatureRunBudgetContractCompatibility::Invalid,
+            FeatureRunBudgetContractCompatibility::DigestMismatch,
+        ] {
+            let mut active = run();
+            active.outcomes_settled = 7;
+            active.batch_outcome_count = 2;
+            active.source_revision = Some("sha256:historical-source".into());
+            let transition =
+                retire_incompatible_feature_run(&active, &restart_request(), incompatibility)
+                    .expect("incompatible run retires");
+
+            assert_eq!(transition.request, restart_request());
+            assert_eq!(transition.incompatibility, incompatibility);
+            assert_eq!(
+                transition.disposition,
+                FeatureRunRestartDisposition::Retired
+            );
+            assert_eq!(transition.previous_phase, FeatureRunPhase::Implementation);
+            assert_eq!(transition.ended_batch_id.as_deref(), Some("batch-a"));
+            assert_eq!(transition.released_role_owners, active.role_owners);
+            assert_eq!(transition.retired_run.status, FeatureRunStatus::Cancelled);
+            assert_eq!(transition.retired_run.phase, FeatureRunPhase::Cancelled);
+            assert_eq!(
+                transition.retired_run.terminal_reason,
+                Some(FeatureRunTerminalReason::PolicyCancelled)
+            );
+            assert_eq!(transition.retired_run.active_batch_id, None);
+            assert_eq!(transition.retired_run.role_owners, Vec::new());
+            assert_eq!(transition.retired_run.outcomes_settled, 7);
+            assert_eq!(transition.retired_run.batch_outcome_count, 0);
+            assert_eq!(
+                transition.retired_run.source_revision.as_deref(),
+                Some("sha256:historical-source")
+            );
+        }
+    }
+
+    #[test]
+    fn incompatible_budget_retirement_rejects_healthy_wrong_plan_and_terminal_runs() {
+        assert_eq!(
+            retire_incompatible_feature_run(
+                &run(),
+                &restart_request(),
+                FeatureRunBudgetContractCompatibility::Compatible,
+            ),
+            Err(RunContractViolation::RestartBudgetContractCompatible)
+        );
+
+        let mut wrong_plan = restart_request();
+        wrong_plan.plan_id = "plan-other".into();
+        assert_eq!(
+            retire_incompatible_feature_run(
+                &run(),
+                &wrong_plan,
+                FeatureRunBudgetContractCompatibility::Missing,
+            ),
+            Err(RunContractViolation::RestartPlanMismatch)
+        );
+
+        for terminal in [
+            state_for_phase_and_terminal(
+                FeatureRunPhase::Complete,
+                None,
+                Some(FeatureRunTerminalReason::Completed),
+            ),
+            state_for_phase_and_terminal(
+                FeatureRunPhase::Cancelled,
+                None,
+                Some(FeatureRunTerminalReason::UserCancelled),
+            ),
+        ] {
+            assert_eq!(
+                retire_incompatible_feature_run(
+                    &terminal,
+                    &restart_request(),
+                    FeatureRunBudgetContractCompatibility::Invalid,
+                ),
+                Err(RunContractViolation::RestartRunTerminal)
+            );
+        }
+    }
+
+    #[test]
+    fn incompatible_budget_retirement_is_idempotent_after_policy_retirement() {
+        let first = retire_incompatible_feature_run(
+            &run(),
+            &restart_request(),
+            FeatureRunBudgetContractCompatibility::Missing,
+        )
+        .expect("first retirement");
+        let repeated = retire_incompatible_feature_run(
+            &first.retired_run,
+            &restart_request(),
+            FeatureRunBudgetContractCompatibility::Missing,
+        )
+        .expect("repeated retirement");
+
+        assert_eq!(
+            repeated.disposition,
+            FeatureRunRestartDisposition::AlreadyRetired
+        );
+        assert_eq!(repeated.retired_run, first.retired_run);
+        assert_eq!(repeated.ended_batch_id, None);
+        assert!(repeated.released_role_owners.is_empty());
+    }
+
+    #[test]
     fn risk_review_and_budget_hold_resume_exact_prior_phase() {
         let original = run();
         let reviewed = apply_phase_transition(
@@ -909,6 +1237,17 @@ mod tests {
         )
         .expect("resume exact phase");
         assert_eq!(restored.hold_reason, None);
+        let request = FeatureRunBudgetHoldResolutionRequest {
+            plan_id: held.plan_id.clone(),
+        };
+        assert_eq!(
+            resolve_budget_held_feature_run(&held, &request, "maker-other"),
+            Err(RunContractViolation::BudgetHoldResolutionOwnerMismatch)
+        );
+        assert_eq!(
+            resolve_budget_held_feature_run(&held, &request, "maker-a").unwrap(),
+            restored
+        );
 
         let capability_held = apply_phase_transition(
             &resumed,
@@ -1014,7 +1353,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(legal_count, 36);
+        assert_eq!(legal_count, 39);
     }
 
     #[test]

@@ -143,6 +143,642 @@ pub enum MeteringMode {
     Trusted,
 }
 
+pub const FEATURE_RUN_BUDGET_CONTRACT_SCHEMA: &str = "planr.feature_run_budget_contract.v2";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureRunBudgetMode {
+    Bounded,
+    Unbounded,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureRunBudgetPhase {
+    Maker,
+    Verification,
+    Review,
+    Repair,
+    Release,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BudgetClockBasis {
+    UtcUnixMilliseconds,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MeteringProvenance {
+    Unavailable,
+    Estimated,
+    Trusted,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BudgetAmounts {
+    pub wall_seconds: u64,
+    pub tool_calls: u64,
+    pub tokens: u64,
+}
+
+impl BudgetAmounts {
+    pub const ZERO: Self = Self {
+        wall_seconds: 0,
+        tool_calls: 0,
+        tokens: 0,
+    };
+
+    pub fn checked_add(self, other: Self) -> Result<Self, BudgetArithmeticError> {
+        Ok(Self {
+            wall_seconds: self.wall_seconds.checked_add(other.wall_seconds).ok_or(
+                BudgetArithmeticError::ReserveOverflow(BudgetContractDimension::WallSeconds),
+            )?,
+            tool_calls: self.tool_calls.checked_add(other.tool_calls).ok_or(
+                BudgetArithmeticError::ReserveOverflow(BudgetContractDimension::ToolCalls),
+            )?,
+            tokens: self.tokens.checked_add(other.tokens).ok_or(
+                BudgetArithmeticError::ReserveOverflow(BudgetContractDimension::Tokens),
+            )?,
+        })
+    }
+
+    pub const fn saturating_sub(self, other: Self) -> Self {
+        Self {
+            wall_seconds: self.wall_seconds.saturating_sub(other.wall_seconds),
+            tool_calls: self.tool_calls.saturating_sub(other.tool_calls),
+            tokens: self.tokens.saturating_sub(other.tokens),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BudgetContractDimension {
+    WallSeconds,
+    ToolCalls,
+    Tokens,
+}
+
+impl BudgetContractDimension {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::WallSeconds => "wall_seconds",
+            Self::ToolCalls => "tool_calls",
+            Self::Tokens => "tokens",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BudgetArithmeticError {
+    ZeroMaximum(BudgetContractDimension),
+    ReserveOverflow(BudgetContractDimension),
+    InvalidClockAnchor,
+    DeadlineOverflow,
+    IncompleteBoundedContract,
+    UnexpectedBoundedValues,
+}
+
+impl fmt::Display for BudgetArithmeticError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ZeroMaximum(dimension) => {
+                write!(
+                    formatter,
+                    "{} maximum must be at least 1",
+                    dimension.as_str()
+                )
+            }
+            Self::ReserveOverflow(dimension) => {
+                write!(
+                    formatter,
+                    "{} reserve arithmetic overflowed",
+                    dimension.as_str()
+                )
+            }
+            Self::InvalidClockAnchor => {
+                formatter.write_str("task admission requires a UTC clock anchor")
+            }
+            Self::DeadlineOverflow => formatter.write_str("task deadline arithmetic overflowed"),
+            Self::IncompleteBoundedContract => {
+                formatter.write_str("bounded budget contract is missing limits or phase reserves")
+            }
+            Self::UnexpectedBoundedValues => formatter
+                .write_str("unbounded budget contract cannot contain limits or phase reserves"),
+        }
+    }
+}
+
+impl std::error::Error for BudgetArithmeticError {}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureRunPhaseReserves {
+    pub maker: BudgetAmounts,
+    pub verification: BudgetAmounts,
+    pub review: BudgetAmounts,
+    pub repair: BudgetAmounts,
+    pub release: BudgetAmounts,
+}
+
+impl FeatureRunPhaseReserves {
+    pub fn total(self) -> Result<BudgetAmounts, BudgetArithmeticError> {
+        self.maker
+            .checked_add(self.verification)?
+            .checked_add(self.review)?
+            .checked_add(self.repair)?
+            .checked_add(self.release)
+    }
+
+    pub fn protected_after(
+        self,
+        phase: FeatureRunBudgetPhase,
+    ) -> Result<BudgetAmounts, BudgetArithmeticError> {
+        match phase {
+            FeatureRunBudgetPhase::Maker => self
+                .verification
+                .checked_add(self.review)?
+                .checked_add(self.repair)?
+                .checked_add(self.release),
+            FeatureRunBudgetPhase::Verification => self
+                .review
+                .checked_add(self.repair)?
+                .checked_add(self.release),
+            FeatureRunBudgetPhase::Review => self.repair.checked_add(self.release),
+            FeatureRunBudgetPhase::Repair => Ok(self.release),
+            FeatureRunBudgetPhase::Release => Ok(BudgetAmounts::ZERO),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BudgetProvenance {
+    pub wall_seconds: MeteringProvenance,
+    pub tool_calls: MeteringProvenance,
+    pub tokens: MeteringProvenance,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureRunBudgetContract {
+    pub schema: String,
+    pub run_id: String,
+    pub started_at_unix_ms: u64,
+    pub clock_basis: BudgetClockBasis,
+    pub mode: FeatureRunBudgetMode,
+    pub limits: Option<BudgetAmounts>,
+    pub phase_reserves: Option<FeatureRunPhaseReserves>,
+    pub metering_requirements: BudgetProvenance,
+    pub digest: String,
+}
+
+impl FeatureRunBudgetContract {
+    pub fn bounded(
+        run_id: impl Into<String>,
+        started_at_unix_ms: u64,
+        limits: BudgetAmounts,
+        phase_reserves: FeatureRunPhaseReserves,
+        metering_requirements: BudgetProvenance,
+    ) -> Result<Self, PolicyDiagnostics> {
+        seal_feature_run_budget_contract(Self {
+            schema: FEATURE_RUN_BUDGET_CONTRACT_SCHEMA.to_string(),
+            run_id: run_id.into(),
+            started_at_unix_ms,
+            clock_basis: BudgetClockBasis::UtcUnixMilliseconds,
+            mode: FeatureRunBudgetMode::Bounded,
+            limits: Some(limits),
+            phase_reserves: Some(phase_reserves),
+            metering_requirements,
+            digest: String::new(),
+        })
+    }
+
+    pub fn unbounded(
+        run_id: impl Into<String>,
+        started_at_unix_ms: u64,
+        metering_requirements: BudgetProvenance,
+    ) -> Result<Self, PolicyDiagnostics> {
+        seal_feature_run_budget_contract(Self {
+            schema: FEATURE_RUN_BUDGET_CONTRACT_SCHEMA.to_string(),
+            run_id: run_id.into(),
+            started_at_unix_ms,
+            clock_basis: BudgetClockBasis::UtcUnixMilliseconds,
+            mode: FeatureRunBudgetMode::Unbounded,
+            limits: None,
+            phase_reserves: None,
+            metering_requirements,
+            digest: String::new(),
+        })
+    }
+}
+
+pub fn feature_run_budget_contract_from_policy(
+    run_id: impl Into<String>,
+    started_at_unix_ms: u64,
+    policy: Option<&UsagePolicyV1>,
+) -> Result<FeatureRunBudgetContract, PolicyDiagnostics> {
+    let run_id = run_id.into();
+    let metering_requirements = BudgetProvenance {
+        wall_seconds: MeteringProvenance::Trusted,
+        tool_calls: policy
+            .map(|value| MeteringProvenance::from(value.usage.metering))
+            .unwrap_or(MeteringProvenance::Unavailable),
+        tokens: policy
+            .map(|value| MeteringProvenance::from(value.usage.metering))
+            .unwrap_or(MeteringProvenance::Unavailable),
+    };
+    let Some(policy) = policy else {
+        return FeatureRunBudgetContract::unbounded(
+            run_id,
+            started_at_unix_ms,
+            metering_requirements,
+        );
+    };
+    let configured = [
+        policy.usage.max_wall_time_seconds,
+        policy.usage.max_tool_calls,
+        policy.usage.max_tokens,
+    ];
+    if configured.iter().all(Option::is_none) {
+        return FeatureRunBudgetContract::unbounded(
+            run_id,
+            started_at_unix_ms,
+            metering_requirements,
+        );
+    }
+    if configured.iter().any(Option::is_none) {
+        return Err(PolicyDiagnostics::single(PolicyDiagnostic::validation(
+            "usage",
+            "bounded FeatureRuns require wall-seconds, tool-call, and token limits together",
+        )));
+    }
+    let limits = BudgetAmounts {
+        wall_seconds: configured[0].expect("complete bounded limits"),
+        tool_calls: configured[1].expect("complete bounded limits"),
+        tokens: configured[2].expect("complete bounded limits"),
+    };
+    FeatureRunBudgetContract::bounded(
+        run_id,
+        started_at_unix_ms,
+        limits,
+        exact_feature_run_phase_reserves(limits, policy.usage.phase_reserves),
+        metering_requirements,
+    )
+}
+
+impl From<MeteringMode> for MeteringProvenance {
+    fn from(value: MeteringMode) -> Self {
+        match value {
+            MeteringMode::Unavailable => Self::Unavailable,
+            MeteringMode::Estimated => Self::Estimated,
+            MeteringMode::Trusted => Self::Trusted,
+        }
+    }
+}
+
+fn exact_feature_run_phase_reserves(
+    limits: BudgetAmounts,
+    percentages: PhaseBudgetReserves,
+) -> FeatureRunPhaseReserves {
+    let percent = |amounts: BudgetAmounts, value: u8| BudgetAmounts {
+        wall_seconds: percentage_amount(amounts.wall_seconds, value),
+        tool_calls: percentage_amount(amounts.tool_calls, value),
+        tokens: percentage_amount(amounts.tokens, value),
+    };
+    let verification = percent(limits, percentages.verification_percent);
+    let review = percent(limits, percentages.review_percent);
+    let repair = percent(limits, percentages.repair_percent);
+    let assigned = verification
+        .checked_add(review)
+        .and_then(|value| value.checked_add(repair))
+        .expect("validated phase percentages cannot overflow their limits");
+    FeatureRunPhaseReserves {
+        maker: limits.saturating_sub(assigned),
+        verification,
+        review,
+        repair,
+        release: BudgetAmounts::ZERO,
+    }
+}
+
+const fn percentage_amount(limit: u64, percent: u8) -> u64 {
+    let percent = percent as u64;
+    (limit / 100) * percent + ((limit % 100) * percent) / 100
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionBudget {
+    pub max_wall_seconds: u64,
+    pub max_tool_calls: u64,
+    pub max_tokens: u64,
+    pub deadline_unix_ms: u64,
+}
+
+impl ExecutionBudget {
+    pub fn new(
+        admitted_at_unix_ms: u64,
+        maxima: BudgetAmounts,
+    ) -> Result<Self, BudgetArithmeticError> {
+        require_positive_amounts(maxima)?;
+        Ok(Self {
+            max_wall_seconds: maxima.wall_seconds,
+            max_tool_calls: maxima.tool_calls,
+            max_tokens: maxima.tokens,
+            deadline_unix_ms: deadline_unix_ms(admitted_at_unix_ms, maxima.wall_seconds)?,
+        })
+    }
+
+    pub const fn maxima(self) -> BudgetAmounts {
+        BudgetAmounts {
+            wall_seconds: self.max_wall_seconds,
+            tool_calls: self.max_tool_calls,
+            tokens: self.max_tokens,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BudgetSnapshot {
+    pub mode: FeatureRunBudgetMode,
+    pub consumed: BudgetAmounts,
+    pub reserved: BudgetAmounts,
+    pub remaining: Option<BudgetAmounts>,
+    pub protected: BudgetAmounts,
+    pub available: Option<BudgetAmounts>,
+    pub released_through: FeatureRunBudgetPhase,
+    pub metering: BudgetProvenance,
+    pub task_deadline_unix_ms: Option<u64>,
+    pub contract_digest: String,
+}
+
+pub fn deadline_unix_ms(
+    admitted_at_unix_ms: u64,
+    max_wall_seconds: u64,
+) -> Result<u64, BudgetArithmeticError> {
+    if admitted_at_unix_ms == 0 {
+        return Err(BudgetArithmeticError::InvalidClockAnchor);
+    }
+    if max_wall_seconds == 0 {
+        return Err(BudgetArithmeticError::ZeroMaximum(
+            BudgetContractDimension::WallSeconds,
+        ));
+    }
+    let duration_ms = max_wall_seconds
+        .checked_mul(1_000)
+        .ok_or(BudgetArithmeticError::DeadlineOverflow)?;
+    admitted_at_unix_ms
+        .checked_add(duration_ms)
+        .ok_or(BudgetArithmeticError::DeadlineOverflow)
+}
+
+pub fn feature_run_budget_contract_digest(
+    contract: &FeatureRunBudgetContract,
+) -> anyhow::Result<String> {
+    let value = serde_json::to_value(contract)?;
+    crate::canonical_json::sha256_json_digest_without_top_level_field(&value, "digest")
+}
+
+pub fn validate_feature_run_budget_contract(
+    contract: &FeatureRunBudgetContract,
+) -> Vec<PolicyDiagnostic> {
+    let mut diagnostics = validate_feature_run_budget_contract_body(contract);
+    if !is_sha256_digest(&contract.digest) {
+        diagnostics.push(PolicyDiagnostic::validation(
+            "budget_contract.digest",
+            "must be sha256:<64 lowercase hex>",
+        ));
+    } else {
+        match feature_run_budget_contract_digest(contract) {
+            Ok(actual) if actual != contract.digest => {
+                diagnostics.push(PolicyDiagnostic::validation(
+                    "budget_contract.digest",
+                    "does not match the canonical contract body",
+                ))
+            }
+            Ok(_) => {}
+            Err(error) => diagnostics.push(PolicyDiagnostic::validation(
+                "budget_contract.digest",
+                format!("cannot canonicalize contract: {error}"),
+            )),
+        }
+    }
+    diagnostics
+}
+
+pub fn validate_execution_budget(budget: &ExecutionBudget) -> Vec<PolicyDiagnostic> {
+    let mut diagnostics = Vec::new();
+    for (field, value) in [
+        ("execution_budget.max_wall_seconds", budget.max_wall_seconds),
+        ("execution_budget.max_tool_calls", budget.max_tool_calls),
+        ("execution_budget.max_tokens", budget.max_tokens),
+    ] {
+        if value == 0 {
+            diagnostics.push(PolicyDiagnostic::validation(field, "must be at least 1"));
+        }
+    }
+    let minimum_duration_ms = budget.max_wall_seconds.checked_mul(1_000);
+    if minimum_duration_ms.is_none_or(|duration| budget.deadline_unix_ms <= duration) {
+        diagnostics.push(PolicyDiagnostic::validation(
+            "execution_budget.deadline_unix_ms",
+            "must be an absolute UTC deadline after the declared wall duration",
+        ));
+    }
+    diagnostics
+}
+
+pub fn budget_snapshot(
+    contract: &FeatureRunBudgetContract,
+    released_through: FeatureRunBudgetPhase,
+    consumed: BudgetAmounts,
+    reserved: BudgetAmounts,
+    metering: BudgetProvenance,
+    execution_budget: Option<ExecutionBudget>,
+) -> Result<BudgetSnapshot, BudgetArithmeticError> {
+    let (remaining, protected, available) = match contract.mode {
+        FeatureRunBudgetMode::Bounded => {
+            let limits = contract
+                .limits
+                .ok_or(BudgetArithmeticError::IncompleteBoundedContract)?;
+            let phase_reserves = contract
+                .phase_reserves
+                .ok_or(BudgetArithmeticError::IncompleteBoundedContract)?;
+            let remaining = limits.saturating_sub(consumed);
+            let protected = phase_reserves.protected_after(released_through)?;
+            let available = remaining.saturating_sub(reserved).saturating_sub(protected);
+            (Some(remaining), protected, Some(available))
+        }
+        FeatureRunBudgetMode::Unbounded => {
+            if contract.limits.is_some() || contract.phase_reserves.is_some() {
+                return Err(BudgetArithmeticError::UnexpectedBoundedValues);
+            }
+            (None, BudgetAmounts::ZERO, None)
+        }
+    };
+    Ok(BudgetSnapshot {
+        mode: contract.mode,
+        consumed,
+        reserved,
+        remaining,
+        protected,
+        available,
+        released_through,
+        metering,
+        task_deadline_unix_ms: execution_budget.map(|budget| budget.deadline_unix_ms),
+        contract_digest: contract.digest.clone(),
+    })
+}
+
+fn seal_feature_run_budget_contract(
+    mut contract: FeatureRunBudgetContract,
+) -> Result<FeatureRunBudgetContract, PolicyDiagnostics> {
+    let diagnostics = validate_feature_run_budget_contract_body(&contract);
+    if !diagnostics.is_empty() {
+        return Err(PolicyDiagnostics { diagnostics });
+    }
+    contract.digest = feature_run_budget_contract_digest(&contract).map_err(|error| {
+        PolicyDiagnostics::single(PolicyDiagnostic::validation(
+            "budget_contract.digest",
+            format!("cannot canonicalize contract: {error}"),
+        ))
+    })?;
+    Ok(contract)
+}
+
+fn validate_feature_run_budget_contract_body(
+    contract: &FeatureRunBudgetContract,
+) -> Vec<PolicyDiagnostic> {
+    let mut diagnostics = Vec::new();
+    if contract.schema != FEATURE_RUN_BUDGET_CONTRACT_SCHEMA {
+        diagnostics.push(PolicyDiagnostic::validation(
+            "budget_contract.schema",
+            format!("must be {FEATURE_RUN_BUDGET_CONTRACT_SCHEMA}"),
+        ));
+    }
+    require_nonempty(&mut diagnostics, "budget_contract.run_id", &contract.run_id);
+    if contract.started_at_unix_ms == 0 {
+        diagnostics.push(PolicyDiagnostic::validation(
+            "budget_contract.started_at_unix_ms",
+            "must be a persisted UTC run-start anchor",
+        ));
+    }
+    match contract.mode {
+        FeatureRunBudgetMode::Bounded => {
+            if contract.limits.is_none() {
+                diagnostics.push(PolicyDiagnostic::validation(
+                    "budget_contract.limits",
+                    "bounded mode requires all limits",
+                ));
+            }
+            if contract.phase_reserves.is_none() {
+                diagnostics.push(PolicyDiagnostic::validation(
+                    "budget_contract.phase_reserves",
+                    "bounded mode requires all phase reserves",
+                ));
+            }
+            if let (Some(limits), Some(reserves)) = (contract.limits, contract.phase_reserves) {
+                for (field, value) in [
+                    ("budget_contract.limits.wall_seconds", limits.wall_seconds),
+                    ("budget_contract.limits.tool_calls", limits.tool_calls),
+                    ("budget_contract.limits.tokens", limits.tokens),
+                ] {
+                    if value == 0 {
+                        diagnostics.push(PolicyDiagnostic::validation(field, "must be at least 1"));
+                    }
+                }
+                match reserves.total() {
+                    Ok(total) => {
+                        for (field, actual, expected) in [
+                            (
+                                "budget_contract.phase_reserves.wall_seconds",
+                                total.wall_seconds,
+                                limits.wall_seconds,
+                            ),
+                            (
+                                "budget_contract.phase_reserves.tool_calls",
+                                total.tool_calls,
+                                limits.tool_calls,
+                            ),
+                            (
+                                "budget_contract.phase_reserves.tokens",
+                                total.tokens,
+                                limits.tokens,
+                            ),
+                        ] {
+                            if actual != expected {
+                                diagnostics.push(PolicyDiagnostic::validation(
+                                    field,
+                                    format!(
+                                        "phase allocations total {actual}; expected {expected}"
+                                    ),
+                                ));
+                            }
+                        }
+                    }
+                    Err(error) => diagnostics.push(PolicyDiagnostic::validation(
+                        "budget_contract.phase_reserves",
+                        error.to_string(),
+                    )),
+                }
+                if deadline_unix_ms(contract.started_at_unix_ms, limits.wall_seconds).is_err() {
+                    diagnostics.push(PolicyDiagnostic::validation(
+                        "budget_contract.limits.wall_seconds",
+                        "overflows the absolute run deadline",
+                    ));
+                }
+            }
+            if contract.metering_requirements.wall_seconds != MeteringProvenance::Trusted {
+                diagnostics.push(PolicyDiagnostic::validation(
+                    "budget_contract.metering_requirements.wall_seconds",
+                    "bounded wall time requires trusted UTC clock provenance",
+                ));
+            }
+        }
+        FeatureRunBudgetMode::Unbounded => {
+            if contract.limits.is_some() {
+                diagnostics.push(PolicyDiagnostic::validation(
+                    "budget_contract.limits",
+                    "unbounded mode cannot contain numeric limits",
+                ));
+            }
+            if contract.phase_reserves.is_some() {
+                diagnostics.push(PolicyDiagnostic::validation(
+                    "budget_contract.phase_reserves",
+                    "unbounded mode cannot contain numeric phase reserves",
+                ));
+            }
+        }
+    }
+    diagnostics
+}
+
+fn require_positive_amounts(amounts: BudgetAmounts) -> Result<(), BudgetArithmeticError> {
+    for (dimension, value) in [
+        (BudgetContractDimension::WallSeconds, amounts.wall_seconds),
+        (BudgetContractDimension::ToolCalls, amounts.tool_calls),
+        (BudgetContractDimension::Tokens, amounts.tokens),
+    ] {
+        if value == 0 {
+            return Err(BudgetArithmeticError::ZeroMaximum(dimension));
+        }
+    }
+    Ok(())
+}
+
+fn is_sha256_digest(value: &str) -> bool {
+    value.strip_prefix("sha256:").is_some_and(|hex| {
+        hex.len() == 64
+            && hex
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BudgetExhaustionBehavior {
@@ -1534,7 +2170,8 @@ fn push_metered_assessment(
 
 pub fn phase_spend_limit(limit: u64, reserves: PhaseBudgetReserves, phase: BudgetPhase) -> u64 {
     let protected = reserves.protected_percent_for(phase).min(100);
-    limit.saturating_mul(u64::from(100 - protected)) / 100
+    let spend_percent = u64::from(100 - protected);
+    (limit / 100) * spend_percent + ((limit % 100) * spend_percent) / 100
 }
 
 fn reserved_limit(limit: u64, policy: &UsagePolicyV1, phase: BudgetPhase) -> u64 {
@@ -1685,6 +2322,63 @@ mod tests {
             budget_phase: BudgetPhase::Implementation,
             pending_safety_stop: None,
         }
+    }
+
+    fn v2_budget_provenance() -> BudgetProvenance {
+        BudgetProvenance {
+            wall_seconds: MeteringProvenance::Trusted,
+            tool_calls: MeteringProvenance::Estimated,
+            tokens: MeteringProvenance::Trusted,
+        }
+    }
+
+    fn v2_budget_limits() -> BudgetAmounts {
+        BudgetAmounts {
+            wall_seconds: 100,
+            tool_calls: 50,
+            tokens: 1_000,
+        }
+    }
+
+    fn v2_phase_reserves() -> FeatureRunPhaseReserves {
+        FeatureRunPhaseReserves {
+            maker: BudgetAmounts {
+                wall_seconds: 50,
+                tool_calls: 25,
+                tokens: 500,
+            },
+            verification: BudgetAmounts {
+                wall_seconds: 20,
+                tool_calls: 10,
+                tokens: 200,
+            },
+            review: BudgetAmounts {
+                wall_seconds: 10,
+                tool_calls: 5,
+                tokens: 100,
+            },
+            repair: BudgetAmounts {
+                wall_seconds: 10,
+                tool_calls: 5,
+                tokens: 100,
+            },
+            release: BudgetAmounts {
+                wall_seconds: 10,
+                tool_calls: 5,
+                tokens: 100,
+            },
+        }
+    }
+
+    fn v2_bounded_contract() -> FeatureRunBudgetContract {
+        FeatureRunBudgetContract::bounded(
+            "run-budget-v2",
+            1_700_000_000_000,
+            v2_budget_limits(),
+            v2_phase_reserves(),
+            v2_budget_provenance(),
+        )
+        .expect("valid bounded contract")
     }
 
     fn valid_toml() -> String {
@@ -2184,6 +2878,264 @@ mod tests {
     }
 
     #[test]
+    fn bounded_feature_run_contract_is_complete_sealed_and_tamper_evident() {
+        let contract = v2_bounded_contract();
+        assert_eq!(contract.mode, FeatureRunBudgetMode::Bounded);
+        assert_eq!(contract.limits, Some(v2_budget_limits()));
+        assert_eq!(contract.phase_reserves, Some(v2_phase_reserves()));
+        assert!(validate_feature_run_budget_contract(&contract).is_empty());
+        assert_eq!(
+            contract.digest,
+            feature_run_budget_contract_digest(&contract).expect("canonical digest")
+        );
+
+        let mut tampered = contract;
+        tampered.run_id = "run-tampered".to_string();
+        let fields = validate_feature_run_budget_contract(&tampered)
+            .into_iter()
+            .filter_map(|diagnostic| diagnostic.field)
+            .collect::<Vec<_>>();
+        assert_eq!(fields, vec!["budget_contract.digest"]);
+    }
+
+    #[test]
+    fn unbounded_feature_run_contract_is_explicit_and_contains_no_numeric_budget() {
+        let contract = FeatureRunBudgetContract::unbounded(
+            "run-unbounded",
+            1_700_000_000_000,
+            v2_budget_provenance(),
+        )
+        .expect("valid explicit unbounded contract");
+        assert!(validate_feature_run_budget_contract(&contract).is_empty());
+        let value = serde_json::to_value(&contract).expect("contract serializes");
+        assert_eq!(value["mode"], "unbounded");
+        assert!(value["limits"].is_null());
+        assert!(value["phase_reserves"].is_null());
+
+        let snapshot = budget_snapshot(
+            &contract,
+            FeatureRunBudgetPhase::Maker,
+            BudgetAmounts::ZERO,
+            BudgetAmounts::ZERO,
+            v2_budget_provenance(),
+            None,
+        )
+        .expect("unbounded projection");
+        assert_eq!(snapshot.remaining, None);
+        assert_eq!(snapshot.protected, BudgetAmounts::ZERO);
+        assert_eq!(snapshot.available, None);
+    }
+
+    #[test]
+    fn authored_policy_becomes_one_exact_feature_run_contract_snapshot() {
+        let policy = policy();
+        let contract = feature_run_budget_contract_from_policy(
+            "run-policy-snapshot",
+            1_700_000_000_000,
+            Some(&policy),
+        )
+        .expect("complete bounded policy");
+        assert_eq!(contract.mode, FeatureRunBudgetMode::Bounded);
+        assert_eq!(
+            contract.limits,
+            Some(BudgetAmounts {
+                wall_seconds: 600,
+                tool_calls: 100,
+                tokens: 10_000,
+            })
+        );
+        let reserves = contract.phase_reserves.expect("bounded reserves");
+        assert_eq!(
+            reserves.total().expect("exact total"),
+            contract.limits.unwrap()
+        );
+        assert_eq!(reserves.release, BudgetAmounts::ZERO);
+        assert_eq!(
+            contract.metering_requirements,
+            BudgetProvenance {
+                wall_seconds: MeteringProvenance::Trusted,
+                tool_calls: MeteringProvenance::Trusted,
+                tokens: MeteringProvenance::Trusted,
+            }
+        );
+    }
+
+    #[test]
+    fn missing_policy_is_explicitly_unbounded_but_partial_limits_are_rejected() {
+        let contract = feature_run_budget_contract_from_policy(
+            "run-unbounded-policy",
+            1_700_000_000_000,
+            None,
+        )
+        .expect("missing authored policy maps to explicit unbounded mode");
+        assert_eq!(contract.mode, FeatureRunBudgetMode::Unbounded);
+        assert!(contract.limits.is_none());
+
+        let mut partial = policy();
+        partial.usage.max_tokens = None;
+        let diagnostics = feature_run_budget_contract_from_policy(
+            "run-partial-policy",
+            1_700_000_000_000,
+            Some(&partial),
+        )
+        .expect_err("partial bounded policy must fail closed");
+        assert_eq!(diagnostics.diagnostics[0].field.as_deref(), Some("usage"));
+    }
+
+    #[test]
+    fn bounded_contract_validation_rejects_incomplete_or_overallocated_dimensions() {
+        let mut contract = v2_bounded_contract();
+        contract
+            .phase_reserves
+            .as_mut()
+            .expect("bounded reserves")
+            .release
+            .tokens += 1;
+        contract.digest = feature_run_budget_contract_digest(&contract).expect("reseal fixture");
+        let fields = validate_feature_run_budget_contract(&contract)
+            .into_iter()
+            .filter_map(|diagnostic| diagnostic.field)
+            .collect::<Vec<_>>();
+        assert_eq!(fields, vec!["budget_contract.phase_reserves.tokens"]);
+
+        contract.mode = FeatureRunBudgetMode::Unbounded;
+        contract.digest = feature_run_budget_contract_digest(&contract).expect("reseal fixture");
+        let fields = validate_feature_run_budget_contract(&contract)
+            .into_iter()
+            .filter_map(|diagnostic| diagnostic.field)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            fields,
+            vec!["budget_contract.limits", "budget_contract.phase_reserves"]
+        );
+    }
+
+    #[test]
+    fn execution_budget_requires_all_maxima_and_uses_an_absolute_checked_deadline() {
+        let budget = ExecutionBudget::new(
+            1_700_000_000_000,
+            BudgetAmounts {
+                wall_seconds: 30,
+                tool_calls: 12,
+                tokens: 4_000,
+            },
+        )
+        .expect("valid execution budget");
+        assert_eq!(budget.deadline_unix_ms, 1_700_000_030_000);
+        assert!(validate_execution_budget(&budget).is_empty());
+        assert_eq!(
+            ExecutionBudget::new(
+                1_700_000_000_000,
+                BudgetAmounts {
+                    wall_seconds: 30,
+                    tool_calls: 0,
+                    tokens: 4_000,
+                }
+            ),
+            Err(BudgetArithmeticError::ZeroMaximum(
+                BudgetContractDimension::ToolCalls
+            ))
+        );
+        assert_eq!(
+            deadline_unix_ms(u64::MAX - 1_000, 2),
+            Err(BudgetArithmeticError::DeadlineOverflow)
+        );
+        assert_eq!(
+            deadline_unix_ms(0, 1),
+            Err(BudgetArithmeticError::InvalidClockAnchor)
+        );
+        assert_eq!(
+            deadline_unix_ms(1, u64::MAX),
+            Err(BudgetArithmeticError::DeadlineOverflow)
+        );
+    }
+
+    #[test]
+    fn budget_snapshot_protects_every_unreleased_later_phase() {
+        let contract = v2_bounded_contract();
+        let execution_budget = ExecutionBudget::new(
+            1_700_000_000_000,
+            BudgetAmounts {
+                wall_seconds: 20,
+                tool_calls: 10,
+                tokens: 200,
+            },
+        )
+        .expect("task budget");
+        let snapshot = budget_snapshot(
+            &contract,
+            FeatureRunBudgetPhase::Maker,
+            BudgetAmounts {
+                wall_seconds: 20,
+                tool_calls: 10,
+                tokens: 200,
+            },
+            BudgetAmounts {
+                wall_seconds: 10,
+                tool_calls: 5,
+                tokens: 100,
+            },
+            v2_budget_provenance(),
+            Some(execution_budget),
+        )
+        .expect("bounded snapshot");
+        assert_eq!(
+            snapshot.remaining,
+            Some(BudgetAmounts {
+                wall_seconds: 80,
+                tool_calls: 40,
+                tokens: 800,
+            })
+        );
+        assert_eq!(
+            snapshot.protected,
+            BudgetAmounts {
+                wall_seconds: 50,
+                tool_calls: 25,
+                tokens: 500,
+            }
+        );
+        assert_eq!(
+            snapshot.available,
+            Some(BudgetAmounts {
+                wall_seconds: 20,
+                tool_calls: 10,
+                tokens: 200,
+            })
+        );
+        assert_eq!(
+            snapshot.task_deadline_unix_ms,
+            Some(execution_budget.deadline_unix_ms)
+        );
+        assert_eq!(snapshot.contract_digest, contract.digest);
+    }
+
+    #[test]
+    fn reserve_addition_reports_overflow_instead_of_wrapping() {
+        let reserves = FeatureRunPhaseReserves {
+            maker: BudgetAmounts {
+                wall_seconds: u64::MAX,
+                tool_calls: 1,
+                tokens: 1,
+            },
+            verification: BudgetAmounts {
+                wall_seconds: 1,
+                tool_calls: 0,
+                tokens: 0,
+            },
+            review: BudgetAmounts::ZERO,
+            repair: BudgetAmounts::ZERO,
+            release: BudgetAmounts::ZERO,
+        };
+        assert_eq!(
+            reserves.total(),
+            Err(BudgetArithmeticError::ReserveOverflow(
+                BudgetContractDimension::WallSeconds
+            ))
+        );
+    }
+
+    #[test]
     fn phase_budget_limits_release_only_the_current_and_prior_reserves() {
         let reserves = PhaseBudgetReserves {
             verification_percent: 20,
@@ -2202,6 +3154,10 @@ mod tests {
         assert_eq!(
             phase_spend_limit(1_000, reserves, BudgetPhase::Repair),
             1_000
+        );
+        assert_eq!(
+            phase_spend_limit(u64::MAX, reserves, BudgetPhase::Implementation),
+            (u64::MAX / 5) * 3 + ((u64::MAX % 5) * 3) / 5
         );
     }
 

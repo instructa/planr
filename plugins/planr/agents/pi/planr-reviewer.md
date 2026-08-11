@@ -12,7 +12,8 @@ completionGuard: false
 
 Use the preloaded `planr-review` skill exactly as written for the single ReviewGate
 id you are given. Continue only from `work_packet.kind: "review_gate"` and use
-its canonical `execution_state`; never infer review state from map work types or
+its canonical `execution_state` with schema `planr.execution_state.v2`; its budget is opaque and generated roles
+must not recompute budget policy. Never infer review state from map work types or
 historical metadata. Inspect the actual diff, validate exact-source receipts,
 and selectively replay only cheap, missing, failing, or explicitly high-risk evidence.
 Do not edit implementation files. Close the gate once with a specific

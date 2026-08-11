@@ -5,7 +5,10 @@
 //! environment, hook, secret, and approval permissions; it never selects a
 //! model or mutates map state.
 
-use crate::usage_policy::{PolicyDiagnostic, TaskContract, UsageLimits, validate_task_contract};
+use crate::usage_policy::{
+    BudgetAmounts, BudgetSnapshot, ExecutionBudget, FeatureRunBudgetContract, FeatureRunBudgetMode,
+    PolicyDiagnostic, TaskContract, UsageLimits, deadline_unix_ms, validate_task_contract,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path};
@@ -200,6 +203,169 @@ pub enum ExecutionAdmission {
         safety_stop: bool,
         permission_diff: PermissionDiff,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BudgetTaskHoldReason {
+    InvalidBudgetState,
+    TaskMaximaRequired,
+    UnexpectedTaskMaxima,
+    InvalidTaskMaxima,
+    BudgetExhausted,
+    DownstreamReserveProtected,
+    RunDeadlineExceeded,
+    TaskDeadlineExceeded,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum BudgetTaskAdmission {
+    Admitted {
+        execution_budget: Option<ExecutionBudget>,
+    },
+    Held {
+        reason: BudgetTaskHoldReason,
+        message: String,
+    },
+}
+
+impl BudgetTaskAdmission {
+    pub const fn is_admitted(&self) -> bool {
+        matches!(self, Self::Admitted { .. })
+    }
+
+    pub const fn hold_reason(&self) -> Option<BudgetTaskHoldReason> {
+        match self {
+            Self::Admitted { .. } => None,
+            Self::Held { reason, .. } => Some(*reason),
+        }
+    }
+}
+
+/// Pure budget admission for one task. The application layer must build `snapshot` from the
+/// persisted immutable contract, append-only observations, and active reservations while holding
+/// its reservation transaction. This function never loads policy or storage.
+pub fn admit_budget_task(
+    contract: &FeatureRunBudgetContract,
+    snapshot: &BudgetSnapshot,
+    declared_maxima: Option<BudgetAmounts>,
+    admitted_at_unix_ms: u64,
+) -> BudgetTaskAdmission {
+    if snapshot.contract_digest != contract.digest
+        || snapshot.mode != contract.mode
+        || admitted_at_unix_ms < contract.started_at_unix_ms
+    {
+        return budget_held(
+            BudgetTaskHoldReason::InvalidBudgetState,
+            "persisted budget snapshot does not match its FeatureRun contract",
+        );
+    }
+
+    match contract.mode {
+        FeatureRunBudgetMode::Unbounded => {
+            if contract.limits.is_some()
+                || contract.phase_reserves.is_some()
+                || snapshot.remaining.is_some()
+                || snapshot.available.is_some()
+            {
+                return budget_held(
+                    BudgetTaskHoldReason::InvalidBudgetState,
+                    "unbounded FeatureRun contains bounded budget state",
+                );
+            }
+            if declared_maxima.is_some() {
+                return budget_held(
+                    BudgetTaskHoldReason::UnexpectedTaskMaxima,
+                    "unbounded FeatureRun tasks cannot declare numeric budget maxima",
+                );
+            }
+            BudgetTaskAdmission::Admitted {
+                execution_budget: None,
+            }
+        }
+        FeatureRunBudgetMode::Bounded => {
+            let Some(limits) = contract.limits else {
+                return budget_held(
+                    BudgetTaskHoldReason::InvalidBudgetState,
+                    "bounded FeatureRun is missing its persisted limits",
+                );
+            };
+            let (Some(remaining), Some(available)) = (snapshot.remaining, snapshot.available)
+            else {
+                return budget_held(
+                    BudgetTaskHoldReason::InvalidBudgetState,
+                    "bounded FeatureRun snapshot is incomplete",
+                );
+            };
+            let Some(maxima) = declared_maxima else {
+                return budget_held(
+                    BudgetTaskHoldReason::TaskMaximaRequired,
+                    "bounded task admission requires wall, tool-call, and token maxima",
+                );
+            };
+            let execution_budget = match ExecutionBudget::new(admitted_at_unix_ms, maxima) {
+                Ok(value) => value,
+                Err(error) => {
+                    return budget_held(
+                        BudgetTaskHoldReason::InvalidTaskMaxima,
+                        format!("invalid declared task maxima: {error}"),
+                    );
+                }
+            };
+            let run_deadline =
+                match deadline_unix_ms(contract.started_at_unix_ms, limits.wall_seconds) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        return budget_held(
+                            BudgetTaskHoldReason::InvalidBudgetState,
+                            format!("invalid persisted run deadline: {error}"),
+                        );
+                    }
+                };
+            if admitted_at_unix_ms >= run_deadline {
+                return budget_held(
+                    BudgetTaskHoldReason::RunDeadlineExceeded,
+                    "the persisted FeatureRun wall deadline has elapsed",
+                );
+            }
+            if execution_budget.deadline_unix_ms > run_deadline {
+                return budget_held(
+                    BudgetTaskHoldReason::TaskDeadlineExceeded,
+                    "declared task wall maximum extends past the FeatureRun deadline",
+                );
+            }
+            let unprotected = remaining.saturating_sub(snapshot.reserved);
+            if !amounts_fit(maxima, unprotected) {
+                return budget_held(
+                    BudgetTaskHoldReason::BudgetExhausted,
+                    "declared task maxima exceed remaining unreserved FeatureRun capacity",
+                );
+            }
+            if !amounts_fit(maxima, available) {
+                return budget_held(
+                    BudgetTaskHoldReason::DownstreamReserveProtected,
+                    "declared task maxima would consume protected downstream phase capacity",
+                );
+            }
+            BudgetTaskAdmission::Admitted {
+                execution_budget: Some(execution_budget),
+            }
+        }
+    }
+}
+
+fn amounts_fit(requested: BudgetAmounts, available: BudgetAmounts) -> bool {
+    requested.wall_seconds <= available.wall_seconds
+        && requested.tool_calls <= available.tool_calls
+        && requested.tokens <= available.tokens
+}
+
+fn budget_held(reason: BudgetTaskHoldReason, message: impl Into<String>) -> BudgetTaskAdmission {
+    BudgetTaskAdmission::Held {
+        reason,
+        message: message.into(),
+    }
 }
 
 impl ExecutionAdmission {
@@ -762,7 +928,8 @@ fn classify_git_args(args: &[String]) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::usage_policy::{
-        BudgetExhaustionBehavior, MaterialityTrigger, MeteringMode, RiskLevel,
+        BudgetExhaustionBehavior, BudgetProvenance, FeatureRunBudgetPhase, FeatureRunPhaseReserves,
+        MaterialityTrigger, MeteringMode, MeteringProvenance, RiskLevel, budget_snapshot,
     };
 
     fn set(values: &[&str]) -> BTreeSet<String> {
@@ -1191,5 +1358,111 @@ mod tests {
         assert!(!json.contains("model"));
         assert!(!json.contains("fallback"));
         assert!(!json.contains("cost_tier"));
+    }
+
+    #[test]
+    fn budget_admission_deterministically_protects_starvation_deadlines_and_state_integrity() {
+        const STARTED_AT_UNIX_MS: u64 = 1_700_000_000_000;
+        let amounts = |value| BudgetAmounts {
+            wall_seconds: value,
+            tool_calls: value,
+            tokens: value,
+        };
+        let provenance = BudgetProvenance {
+            wall_seconds: MeteringProvenance::Trusted,
+            tool_calls: MeteringProvenance::Trusted,
+            tokens: MeteringProvenance::Trusted,
+        };
+        let contract = FeatureRunBudgetContract::bounded(
+            "run-admission-matrix",
+            STARTED_AT_UNIX_MS,
+            amounts(100),
+            FeatureRunPhaseReserves {
+                maker: amounts(40),
+                verification: amounts(20),
+                review: amounts(20),
+                repair: amounts(10),
+                release: amounts(10),
+            },
+            provenance,
+        )
+        .expect("bounded contract");
+        let snapshot = budget_snapshot(
+            &contract,
+            FeatureRunBudgetPhase::Maker,
+            BudgetAmounts::ZERO,
+            BudgetAmounts::ZERO,
+            provenance,
+            None,
+        )
+        .expect("maker snapshot");
+
+        assert_eq!(
+            admit_budget_task(&contract, &snapshot, Some(amounts(41)), STARTED_AT_UNIX_MS,)
+                .hold_reason(),
+            Some(BudgetTaskHoldReason::DownstreamReserveProtected),
+            "maker work cannot consume any later-phase reserve"
+        );
+        assert_eq!(
+            admit_budget_task(
+                &contract,
+                &snapshot,
+                Some(amounts(1)),
+                STARTED_AT_UNIX_MS + 100_000,
+            )
+            .hold_reason(),
+            Some(BudgetTaskHoldReason::RunDeadlineExceeded),
+            "the exact persisted run deadline is closed"
+        );
+        assert_eq!(
+            admit_budget_task(
+                &contract,
+                &snapshot,
+                Some(amounts(11)),
+                STARTED_AT_UNIX_MS + 90_000,
+            )
+            .hold_reason(),
+            Some(BudgetTaskHoldReason::TaskDeadlineExceeded),
+            "a task may not extend past the persisted run deadline"
+        );
+
+        let mut corrupt = snapshot.clone();
+        corrupt.contract_digest = "sha256:corrupt".to_string();
+        assert_eq!(
+            admit_budget_task(&contract, &corrupt, Some(amounts(1)), STARTED_AT_UNIX_MS,)
+                .hold_reason(),
+            Some(BudgetTaskHoldReason::InvalidBudgetState)
+        );
+
+        let unbounded = FeatureRunBudgetContract::unbounded(
+            "run-unbounded-admission",
+            STARTED_AT_UNIX_MS,
+            provenance,
+        )
+        .expect("unbounded contract");
+        let unbounded_snapshot = budget_snapshot(
+            &unbounded,
+            FeatureRunBudgetPhase::Maker,
+            BudgetAmounts::ZERO,
+            BudgetAmounts::ZERO,
+            provenance,
+            None,
+        )
+        .expect("unbounded snapshot");
+        assert!(
+            admit_budget_task(&unbounded, &unbounded_snapshot, None, STARTED_AT_UNIX_MS,)
+                .is_admitted()
+        );
+        assert_eq!(
+            admit_budget_task(
+                &unbounded,
+                &unbounded_snapshot,
+                Some(amounts(1)),
+                STARTED_AT_UNIX_MS,
+            )
+            .hold_reason(),
+            Some(BudgetTaskHoldReason::UnexpectedTaskMaxima),
+            "unbounded mode stays one explicit non-numeric contract"
+        );
     }
 }

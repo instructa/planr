@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS feature_runs(
   status TEXT NOT NULL CHECK(status IN ('active','held','complete','cancelled')),
   phase TEXT NOT NULL CHECK(phase IN ('implementation','risk_review','source_frozen','verification','final_review','complete','held','cancelled')),
   policy_digest TEXT NOT NULL,
+  budget_contract_digest TEXT,
   source_revision TEXT,
   active_batch_id TEXT,
   outcomes_settled INTEGER NOT NULL DEFAULT 0 CHECK(outcomes_settled >= 0),
@@ -39,6 +40,20 @@ CREATE TABLE IF NOT EXISTS feature_runs(
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
   FOREIGN KEY(active_batch_id, id) REFERENCES execution_batches(id, run_id) DEFERRABLE INITIALLY DEFERRED
+);
+
+CREATE TABLE IF NOT EXISTS feature_run_budget_contracts(
+  run_id TEXT PRIMARY KEY REFERENCES feature_runs(id) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED,
+  schema TEXT NOT NULL CHECK(schema = 'planr.feature_run_budget_contract.v2'),
+  digest TEXT NOT NULL UNIQUE CHECK(length(digest) = 71 AND substr(digest, 1, 7) = 'sha256:' AND substr(digest, 8) NOT GLOB '*[^0-9a-f]*'),
+  contract_json TEXT NOT NULL CHECK(json_valid(contract_json)),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(run_id, digest),
+  CHECK(json_extract(contract_json, '$.run_id') = run_id),
+  CHECK(json_extract(contract_json, '$.schema') = schema),
+  CHECK(json_extract(contract_json, '$.digest') = digest),
+  CHECK(json_extract(contract_json, '$.started_at_unix_ms') > 0),
+  CHECK(json_extract(contract_json, '$.mode') IN ('bounded','unbounded'))
 );
 
 CREATE TABLE IF NOT EXISTS execution_batches(
@@ -106,6 +121,15 @@ CREATE TABLE IF NOT EXISTS review_gates(
   UNIQUE(id, run_id)
 );
 
+CREATE TABLE IF NOT EXISTS final_review_source_bindings(
+  gate_id TEXT PRIMARY KEY REFERENCES review_gates(id) ON DELETE CASCADE,
+  freeze_id TEXT NOT NULL REFERENCES feature_run_source_freezes(id) ON DELETE RESTRICT,
+  source_revision TEXT NOT NULL CHECK(length(trim(source_revision)) > 0),
+  source_digest TEXT NOT NULL CHECK(length(trim(source_digest)) > 0),
+  receipt_lineage_json TEXT NOT NULL CHECK(json_valid(receipt_lineage_json)),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS review_attempts(
   id TEXT PRIMARY KEY,
   gate_id TEXT NOT NULL REFERENCES review_gates(id) ON DELETE CASCADE,
@@ -139,13 +163,20 @@ CREATE INDEX IF NOT EXISTS idx_review_findings_gate_status ON review_findings(ga
 CREATE TABLE IF NOT EXISTS feature_run_budget_observations(
   id TEXT PRIMARY KEY,
   run_id TEXT NOT NULL REFERENCES feature_runs(id) ON DELETE CASCADE,
+  reservation_id TEXT,
+  sequence INTEGER CHECK(sequence IS NULL OR sequence >= 1),
   phase TEXT NOT NULL CHECK(phase IN ('implementation','verification','review','repair')),
   metering TEXT NOT NULL CHECK(metering IN ('unavailable','estimated','trusted')),
+  wall_metering TEXT CHECK(wall_metering IS NULL OR wall_metering IN ('unavailable','estimated','trusted')),
+  tool_calls_metering TEXT CHECK(tool_calls_metering IS NULL OR tool_calls_metering IN ('unavailable','estimated','trusted')),
+  tokens_metering TEXT CHECK(tokens_metering IS NULL OR tokens_metering IN ('unavailable','estimated','trusted')),
   wall_seconds INTEGER CHECK(wall_seconds IS NULL OR wall_seconds >= 0),
   tokens INTEGER CHECK(tokens IS NULL OR tokens >= 0),
   tool_calls INTEGER CHECK(tool_calls IS NULL OR tool_calls >= 0),
   credits_micros INTEGER CHECK(credits_micros IS NULL OR credits_micros >= 0),
-  provenance TEXT NOT NULL,
+  provenance TEXT NOT NULL CHECK(length(trim(provenance)) > 0),
+  adapter_id TEXT,
+  observed_at_unix_ms INTEGER CHECK(observed_at_unix_ms IS NULL OR observed_at_unix_ms > 0),
   observed_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_feature_run_budget_observations_run ON feature_run_budget_observations(run_id, observed_at, id);
@@ -153,13 +184,17 @@ CREATE INDEX IF NOT EXISTS idx_feature_run_budget_observations_run ON feature_ru
 CREATE TABLE IF NOT EXISTS feature_run_budget_reservations(
   id TEXT PRIMARY KEY,
   run_id TEXT NOT NULL REFERENCES feature_runs(id) ON DELETE CASCADE,
+  contract_digest TEXT,
   phase TEXT NOT NULL CHECK(phase IN ('implementation','verification','review','repair')),
   boundary_key TEXT NOT NULL CHECK(length(trim(boundary_key)) > 0),
+  owner_role TEXT CHECK(owner_role IS NULL OR owner_role IN ('maker','verifier','reviewer')),
+  owner_worker_id TEXT,
+  lease_generation INTEGER CHECK(lease_generation IS NULL OR lease_generation >= 1),
   status TEXT NOT NULL CHECK(status IN ('active','reconciled','released')),
   reserved_wall_seconds INTEGER CHECK(reserved_wall_seconds IS NULL OR reserved_wall_seconds >= 1),
   reserved_tokens INTEGER CHECK(reserved_tokens IS NULL OR reserved_tokens >= 1),
   reserved_tool_calls INTEGER CHECK(reserved_tool_calls IS NULL OR reserved_tool_calls >= 1),
-  owns_wall INTEGER NOT NULL CHECK(owns_wall IN (0, 1)),
+  deadline_unix_ms INTEGER CHECK(deadline_unix_ms IS NULL OR deadline_unix_ms > 0),
   started_at_unix_ms INTEGER NOT NULL CHECK(started_at_unix_ms >= 0),
   finished_at TEXT,
   provenance TEXT NOT NULL CHECK(length(trim(provenance)) > 0)
@@ -191,6 +226,18 @@ CREATE TABLE IF NOT EXISTS feature_run_evidence_invalidations(
 );
 CREATE INDEX IF NOT EXISTS idx_feature_run_invalidations_run ON feature_run_evidence_invalidations(run_id, created_at, id);
 
+CREATE TABLE IF NOT EXISTS feature_run_product_repair_settlements(
+  invalidation_id TEXT PRIMARY KEY REFERENCES feature_run_evidence_invalidations(id),
+  run_id TEXT NOT NULL REFERENCES feature_runs(id) ON DELETE CASCADE,
+  responsible_maker_id TEXT NOT NULL,
+  verification_item_id TEXT NOT NULL REFERENCES items(id),
+  selective_obligation_ids_json TEXT NOT NULL CHECK(json_valid(selective_obligation_ids_json)),
+  settlement_json TEXT NOT NULL CHECK(json_valid(settlement_json)),
+  source_freeze_id TEXT NOT NULL REFERENCES feature_run_source_freezes(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(invalidation_id, run_id)
+);
+
 -- One-shot hard-cut settlement starts from stranded targets and follows
 -- historical graph edges forward. These persisted indexes keep that bounded
 -- probe cheap on established databases without changing legacy row meaning.
@@ -201,6 +248,7 @@ CREATE INDEX IF NOT EXISTS idx_events_item_type_timestamp ON events(item_id, eve
     );
     let result = result
         .and_then(|()| ensure_execution_run_additive_columns(conn))
+        .and_then(|()| ensure_budget_storage_integrity(conn))
         .and_then(|()| migrate_accepted_legacy_review_chains_once(conn));
     match result {
         Ok(()) => {
@@ -217,22 +265,203 @@ CREATE INDEX IF NOT EXISTS idx_events_item_type_timestamp ON events(item_id, eve
 }
 
 fn ensure_execution_run_additive_columns(conn: &Connection) -> rusqlite::Result<()> {
+    add_column_if_missing(conn, "feature_runs", "budget_contract_digest", "TEXT")?;
     if !column_exists(conn, "feature_runs", "hold_reason")? {
         conn.execute_batch(
             "ALTER TABLE feature_runs ADD COLUMN hold_reason TEXT CHECK(hold_reason IN ('budget','capability'));",
         )?;
     }
-    if !column_exists(conn, "feature_run_budget_reservations", "owns_wall")? {
-        conn.execute_batch(
-            r#"
-ALTER TABLE feature_run_budget_reservations
-ADD COLUMN owns_wall INTEGER NOT NULL DEFAULT 1 CHECK(owns_wall IN (0, 1));
-UPDATE feature_run_budget_reservations
-SET owns_wall = CASE WHEN provenance LIKE 'evidence.%' THEN 0 ELSE 1 END;
-"#,
-        )?;
+    for (column, definition) in [
+        ("contract_digest", "TEXT"),
+        ("owner_role", "TEXT"),
+        ("owner_worker_id", "TEXT"),
+        ("lease_generation", "INTEGER"),
+        ("deadline_unix_ms", "INTEGER"),
+    ] {
+        add_column_if_missing(conn, "feature_run_budget_reservations", column, definition)?;
+    }
+    for (column, definition) in [
+        ("reservation_id", "TEXT"),
+        ("sequence", "INTEGER"),
+        ("wall_metering", "TEXT"),
+        ("tool_calls_metering", "TEXT"),
+        ("tokens_metering", "TEXT"),
+        ("adapter_id", "TEXT"),
+        ("observed_at_unix_ms", "INTEGER"),
+    ] {
+        add_column_if_missing(conn, "feature_run_budget_observations", column, definition)?;
     }
     Ok(())
+}
+
+fn add_column_if_missing(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> rusqlite::Result<()> {
+    if !column_exists(conn, table, column)? {
+        conn.execute_batch(&format!(
+            "ALTER TABLE {table} ADD COLUMN {column} {definition};"
+        ))?;
+    }
+    Ok(())
+}
+
+fn ensure_budget_storage_integrity(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        r#"
+CREATE UNIQUE INDEX IF NOT EXISTS idx_feature_run_budget_observation_sequence
+  ON feature_run_budget_observations(reservation_id, sequence)
+  WHERE reservation_id IS NOT NULL;
+
+CREATE TRIGGER IF NOT EXISTS feature_runs_budget_contract_digest_no_update
+BEFORE UPDATE OF budget_contract_digest ON feature_runs
+WHEN OLD.budget_contract_digest IS NOT NEW.budget_contract_digest
+BEGIN
+  SELECT RAISE(ABORT, 'FeatureRun budget contract binding is immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS feature_run_budget_contracts_match_run
+BEFORE INSERT ON feature_run_budget_contracts
+WHEN NOT EXISTS (
+  SELECT 1 FROM feature_runs
+  WHERE id = NEW.run_id AND budget_contract_digest = NEW.digest
+)
+BEGIN
+  SELECT RAISE(ABORT, 'FeatureRun budget contract must match its run binding');
+END;
+
+CREATE TRIGGER IF NOT EXISTS feature_run_budget_contracts_no_update
+BEFORE UPDATE ON feature_run_budget_contracts
+BEGIN
+  SELECT RAISE(ABORT, 'FeatureRun budget contracts are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS feature_run_budget_contracts_no_delete
+BEFORE DELETE ON feature_run_budget_contracts
+BEGIN
+  SELECT RAISE(ABORT, 'FeatureRun budget contracts are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS feature_run_budget_reservations_v2_integrity
+BEFORE INSERT ON feature_run_budget_reservations
+WHEN NEW.contract_digest IS NOT NULL AND (
+  NEW.owner_role IS NULL OR length(trim(NEW.owner_worker_id)) = 0 OR NEW.lease_generation IS NULL
+  OR NOT EXISTS (
+    SELECT 1 FROM feature_run_budget_contracts AS contract
+    WHERE contract.run_id = NEW.run_id AND contract.digest = NEW.contract_digest
+  )
+  OR NOT EXISTS (
+    SELECT 1 FROM feature_run_role_leases AS lease
+    WHERE lease.run_id = NEW.run_id
+      AND lease.role = NEW.owner_role
+      AND lease.worker_id = NEW.owner_worker_id
+      AND lease.lease_generation = NEW.lease_generation
+      AND lease.released_at IS NULL
+  )
+  OR EXISTS (
+    SELECT 1 FROM feature_run_budget_contracts AS contract
+    WHERE contract.run_id = NEW.run_id
+      AND json_extract(contract.contract_json, '$.mode') = 'bounded'
+      AND (
+        NEW.reserved_wall_seconds IS NULL OR NEW.reserved_tool_calls IS NULL
+        OR NEW.reserved_tokens IS NULL OR NEW.deadline_unix_ms IS NULL
+      )
+  )
+  OR EXISTS (
+    SELECT 1 FROM feature_run_budget_contracts AS contract
+    WHERE contract.run_id = NEW.run_id
+      AND json_extract(contract.contract_json, '$.mode') = 'unbounded'
+      AND (
+        NEW.reserved_wall_seconds IS NOT NULL OR NEW.reserved_tool_calls IS NOT NULL
+        OR NEW.reserved_tokens IS NOT NULL OR NEW.deadline_unix_ms IS NOT NULL
+      )
+  )
+)
+BEGIN
+  SELECT RAISE(ABORT, 'invalid FeatureRun budget reservation ownership or contract binding');
+END;
+
+CREATE TRIGGER IF NOT EXISTS feature_run_budget_reservations_v2_identity_no_update
+BEFORE UPDATE ON feature_run_budget_reservations
+WHEN OLD.contract_digest IS NOT NULL AND (
+  OLD.id IS NOT NEW.id OR OLD.run_id IS NOT NEW.run_id
+  OR OLD.contract_digest IS NOT NEW.contract_digest OR OLD.phase IS NOT NEW.phase
+  OR OLD.boundary_key IS NOT NEW.boundary_key OR OLD.owner_role IS NOT NEW.owner_role
+  OR OLD.owner_worker_id IS NOT NEW.owner_worker_id
+  OR OLD.lease_generation IS NOT NEW.lease_generation
+  OR OLD.reserved_wall_seconds IS NOT NEW.reserved_wall_seconds
+  OR OLD.reserved_tool_calls IS NOT NEW.reserved_tool_calls
+  OR OLD.reserved_tokens IS NOT NEW.reserved_tokens
+  OR OLD.deadline_unix_ms IS NOT NEW.deadline_unix_ms
+  OR OLD.started_at_unix_ms IS NOT NEW.started_at_unix_ms
+  OR OLD.provenance IS NOT NEW.provenance
+)
+BEGIN
+  SELECT RAISE(ABORT, 'FeatureRun budget reservation identity is immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS feature_run_budget_reservations_state_monotonic
+BEFORE UPDATE OF status ON feature_run_budget_reservations
+WHEN OLD.contract_digest IS NOT NULL AND (
+  OLD.status <> 'active' OR NEW.status NOT IN ('reconciled','released')
+)
+BEGIN
+  SELECT RAISE(ABORT, 'FeatureRun budget reservation state is terminal and monotonic');
+END;
+
+CREATE TRIGGER IF NOT EXISTS feature_run_budget_observations_v2_integrity
+BEFORE INSERT ON feature_run_budget_observations
+WHEN NEW.reservation_id IS NOT NULL AND (
+  NEW.sequence IS NULL OR NEW.wall_metering IS NULL
+  OR NEW.tool_calls_metering IS NULL OR NEW.tokens_metering IS NULL
+  OR length(trim(NEW.adapter_id)) = 0 OR NEW.observed_at_unix_ms IS NULL
+  OR NEW.metering <> CASE
+       WHEN NEW.wall_metering = 'unavailable'
+         OR NEW.tool_calls_metering = 'unavailable'
+         OR NEW.tokens_metering = 'unavailable' THEN 'unavailable'
+       WHEN NEW.wall_metering = 'estimated'
+         OR NEW.tool_calls_metering = 'estimated'
+         OR NEW.tokens_metering = 'estimated' THEN 'estimated'
+       ELSE 'trusted'
+     END
+  OR (NEW.wall_metering = 'unavailable' AND NEW.wall_seconds IS NOT NULL)
+  OR (NEW.wall_metering <> 'unavailable' AND NEW.wall_seconds IS NULL)
+  OR (NEW.tool_calls_metering = 'unavailable' AND NEW.tool_calls IS NOT NULL)
+  OR (NEW.tool_calls_metering <> 'unavailable' AND NEW.tool_calls IS NULL)
+  OR (NEW.tokens_metering = 'unavailable' AND NEW.tokens IS NOT NULL)
+  OR (NEW.tokens_metering <> 'unavailable' AND NEW.tokens IS NULL)
+  OR NOT EXISTS (
+    SELECT 1 FROM feature_run_budget_reservations AS reservation
+    WHERE reservation.id = NEW.reservation_id
+      AND reservation.run_id = NEW.run_id
+      AND reservation.phase = NEW.phase
+      AND reservation.contract_digest IS NOT NULL
+  )
+  OR NEW.sequence <> COALESCE((
+    SELECT MAX(previous.sequence) + 1
+    FROM feature_run_budget_observations AS previous
+    WHERE previous.reservation_id = NEW.reservation_id
+  ), 1)
+)
+BEGIN
+  SELECT RAISE(ABORT, 'invalid FeatureRun budget observation sequence or ownership');
+END;
+
+CREATE TRIGGER IF NOT EXISTS feature_run_budget_observations_no_update
+BEFORE UPDATE ON feature_run_budget_observations
+BEGIN
+  SELECT RAISE(ABORT, 'FeatureRun budget observations are append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS feature_run_budget_observations_no_delete
+BEFORE DELETE ON feature_run_budget_observations
+BEGIN
+  SELECT RAISE(ABORT, 'FeatureRun budget observations are append-only');
+END;
+"#,
+    )
 }
 
 fn column_exists(conn: &Connection, table: &str, column: &str) -> rusqlite::Result<bool> {
@@ -704,33 +933,6 @@ INSERT INTO events(item_id, event_type, payload) VALUES
         conn.execute_batch(&sql).expect("accepted legacy chain");
     }
 
-    fn insert_legacy_budget_reservation_table(conn: &Connection) {
-        conn.execute_batch(
-            r#"
-CREATE TABLE feature_run_budget_reservations(
-  id TEXT PRIMARY KEY,
-  run_id TEXT NOT NULL,
-  phase TEXT NOT NULL,
-  boundary_key TEXT NOT NULL,
-  status TEXT NOT NULL,
-  reserved_wall_seconds INTEGER,
-  reserved_tokens INTEGER,
-  reserved_tool_calls INTEGER,
-  started_at_unix_ms INTEGER NOT NULL,
-  finished_at TEXT,
-  provenance TEXT NOT NULL
-);
-INSERT INTO feature_run_budget_reservations(
-  id, run_id, phase, boundary_key, status, reserved_wall_seconds,
-  reserved_tokens, reserved_tool_calls, started_at_unix_ms, provenance
-) VALUES
-  ('legacy-phase', 'run-old', 'implementation', 'implementation:item-old', 'active', 1, NULL, 1, 1000, 'implementation.dispatch'),
-  ('legacy-evidence', 'run-old', 'verification', 'evidence:item-old', 'reconciled', 30, NULL, 1, 1000, 'evidence.host_capture');
-"#,
-        )
-        .expect("legacy reservation table");
-    }
-
     fn status(conn: &Connection, id: &str) -> String {
         conn.query_row("SELECT status FROM items WHERE id = ?1", [id], |row| {
             row.get(0)
@@ -777,37 +979,6 @@ INSERT INTO feature_run_budget_reservations(
             )
             .expect("historical table inspection");
         assert_eq!(historical_table, 1);
-    }
-
-    #[test]
-    fn legacy_budget_reservation_table_adds_and_backfills_wall_ownership() {
-        let conn = legacy_database();
-        insert_legacy_budget_reservation_table(&conn);
-
-        ensure_execution_run_schema(&conn).expect("additive upgrade");
-        ensure_execution_run_schema(&conn).expect("idempotent restart");
-
-        assert!(
-            column_exists(&conn, "feature_run_budget_reservations", "owns_wall")
-                .expect("column inspection")
-        );
-        let phase_owner: i64 = conn
-            .query_row(
-                "SELECT owns_wall FROM feature_run_budget_reservations WHERE id = 'legacy-phase'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("phase ownership");
-        let evidence_owner: i64 = conn
-            .query_row(
-                "SELECT owns_wall FROM feature_run_budget_reservations WHERE id = 'legacy-evidence'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("evidence ownership");
-        assert_eq!(phase_owner, 1);
-        assert_eq!(evidence_owner, 0);
-        assert_eq!(object_count(&conn, "feature_run_budget_reservations"), 2);
     }
 
     #[test]
@@ -1056,7 +1227,6 @@ FROM sequence;
     #[test]
     fn accepted_legacy_chain_upgrade_rolls_back_status_projection_atomically() {
         let conn = legacy_database();
-        insert_legacy_budget_reservation_table(&conn);
         insert_accepted_chain(&conn, "rollback");
         conn.execute_batch(
             r#"
@@ -1084,11 +1254,6 @@ END;
             )
             .expect("canonical objects");
         assert_eq!(canonical_objects, 0);
-        assert!(
-            !column_exists(&conn, "feature_run_budget_reservations", "owns_wall")
-                .expect("rolled-back column inspection")
-        );
-        assert_eq!(object_count(&conn, "feature_run_budget_reservations"), 2);
         let marker: bool = conn
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM meta WHERE key = ?1)",

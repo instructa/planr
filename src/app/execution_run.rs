@@ -1,22 +1,27 @@
 use super::App;
-use super::feature_run_evidence::{FeatureRunBudgetAdmission, HUMAN_PHASE_WALL_ALLOWANCE_SECONDS};
+use super::feature_run_evidence::{BudgetUsageReport, FeatureRunBudgetAdmission};
 use super::repository::execution_run::{
-    EvidenceInvalidationRecord, ExecutionRunRepository, FindingRecord, FindingStatus,
-    PersistedFeatureRun, ReviewAttemptRecord, ReviewGateKind, ReviewGateRecord, ReviewGateStatus,
-    ReviewScopeKind, ReviewVerdict, RunOutcomeRecord,
+    EvidenceInvalidationRecord, ExecutionRunRepository, FinalReviewSourceBindingRecord,
+    FindingRecord, FindingStatus, PersistedFeatureRun, ReviewAttemptRecord, ReviewGateKind,
+    ReviewGateRecord, ReviewGateStatus, ReviewScopeKind, ReviewVerdict, RunOutcomeRecord,
+    SourceFreezeRecord, SourceFreezeStatus,
 };
 use crate::canonical_json::sha256_json_digest;
 use crate::cli::{RunBatchCommand, RunCommand};
 use crate::evidence::coverage::evaluate_plan_coverage;
+use crate::evidence::policy::capture_repository_snapshot;
 use crate::execution_run::{
     DEFAULT_BATCH_OUTCOME_CAP, ExecutionBatch, ExecutionBatchStatus, FeatureRun, FeatureRunPhase,
+    FeatureRunRestartDisposition, FeatureRunRestartReason, FeatureRunRestartRequest,
     FeatureRunStatus, MakerReplacement, MakerReplacementReason, PhaseTransition,
     PhaseTransitionCause, RoleOwner, RunRole, apply_phase_transition, pause_batch_for_risk_review,
-    replace_batch_maker, resume_batch_after_risk_review, roll_batch_for_same_maker,
+    replace_batch_maker, resume_batch_after_risk_review, retire_incompatible_feature_run,
+    roll_batch_for_same_maker,
 };
 use crate::usage_policy::{
-    BudgetPhase, PolicyLoad, ReviewEscalation, ReviewInterruptDecision, ReviewInterruptRequest,
-    admit_review_interrupt, load_policy, preview_policy_upgrade,
+    BudgetPhase, FeatureRunBudgetContract, PolicyLoad, ReviewEscalation, ReviewInterruptDecision,
+    ReviewInterruptRequest, admit_review_interrupt, feature_run_budget_contract_from_policy,
+    load_policy, preview_policy_upgrade,
 };
 use crate::util::{short_id, worker_id};
 use anyhow::{Result, anyhow, bail};
@@ -33,6 +38,52 @@ pub(crate) struct OutcomeSettlement<'a> {
 }
 
 impl App {
+    fn capture_final_review_source_binding(
+        &self,
+        gate_id: &str,
+        run_id: &str,
+        plan_id: &str,
+    ) -> Result<FinalReviewSourceBindingRecord> {
+        let repository = ExecutionRunRepository::new(&self.conn);
+        let freeze = repository.active_source_freeze(run_id)?.ok_or_else(|| {
+            anyhow!("final_product_review_requires_active_source_freeze:{plan_id}")
+        })?;
+        let snapshot = capture_repository_snapshot(&self.root)
+            .map_err(|error| anyhow!("final_product_review_source_capture_failed:{error}"))?;
+        if snapshot.source.revision != freeze.source_revision
+            || snapshot.source.tree_digest.as_str() != freeze.source_digest
+        {
+            bail!("final_product_review_source_freeze_stale:{plan_id}");
+        }
+        let project = self.default_project()?;
+        let has_binding_obligations = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM proof_obligations WHERE project_id = ?1 AND plan_id = ?2 AND binding = 1)",
+            params![project.id, plan_id],
+            |row| row.get::<_, bool>(0),
+        )?;
+        let receipt_lineage = if has_binding_obligations {
+            let evaluated_at = OffsetDateTime::now_utc().format(&Rfc3339)?;
+            let coverage = evaluate_plan_coverage(&self.conn, &project.id, plan_id, &evaluated_at)
+                .map_err(|error| anyhow!("{error}"))?;
+            if coverage.status.as_str() != "satisfied" {
+                bail!(
+                    "final_product_review_requires_satisfied_exact_source_coverage:{plan_id}:{}",
+                    coverage.status.as_str()
+                );
+            }
+            coverage.receipt_lineage
+        } else {
+            json!([])
+        };
+        Ok(FinalReviewSourceBindingRecord {
+            gate_id: gate_id.to_string(),
+            freeze_id: freeze.id,
+            source_revision: freeze.source_revision,
+            source_digest: freeze.source_digest,
+            receipt_lineage,
+        })
+    }
+
     pub(crate) fn execution_run(&self, command: RunCommand) -> Result<()> {
         match command {
             RunCommand::Batch(args) => match args.command {
@@ -65,6 +116,33 @@ impl App {
                     self.emit(value, "feature run maker replaced".to_string())
                 }
             },
+            RunCommand::Restart(args) => {
+                let reason = match args.reason {
+                    crate::cli::FeatureRunRestartReasonArg::IncompatibleBudget => {
+                        FeatureRunRestartReason::IncompatibleBudget
+                    }
+                };
+                let value = self.restart_feature_run_value(&args.plan, reason)?;
+                self.emit(value, "incompatible feature run retired".to_string())
+            }
+            RunCommand::ResolveBudgetHold(args) => {
+                let value = self.resolve_feature_run_budget_hold_value(&args.plan)?;
+                self.emit(value, "feature run budget hold resolved".to_string())
+            }
+            RunCommand::SettleRepair(args) => {
+                let value = self.settle_product_finding_repair_value(
+                    &args.plan,
+                    &args.invalidation,
+                    &args.summary,
+                    &args.files,
+                    &args.cmd,
+                    &args.tests,
+                )?;
+                self.emit(
+                    value,
+                    "product finding repair settled and source refrozen".to_string(),
+                )
+            }
         }
     }
 
@@ -136,7 +214,11 @@ impl App {
         }))
     }
 
-    fn feature_run_policy_digest(&self) -> Result<String> {
+    fn feature_run_policy_snapshot(
+        &self,
+        run_id: &str,
+        started_at_unix_ms: u64,
+    ) -> Result<(String, FeatureRunBudgetContract)> {
         if let Some(upgrade) = preview_policy_upgrade(&self.root)? {
             bail!(
                 "policy_upgrade_required:{} -> {}; run `planr policy upgrade` before FeatureRun start",
@@ -144,14 +226,29 @@ impl App {
                 upgrade.to_shape
             );
         }
-        let value = match load_policy(&self.root) {
-            PolicyLoad::Loaded(policy) => serde_json::to_value(&*policy)?,
-            PolicyLoad::Missing => json!({"policy": "missing"}),
+        let (value, contract) = match load_policy(&self.root) {
+            PolicyLoad::Loaded(policy) => {
+                let contract = feature_run_budget_contract_from_policy(
+                    run_id,
+                    started_at_unix_ms,
+                    Some(&policy),
+                )
+                .map_err(|diagnostics| {
+                    anyhow!("feature_run_budget_contract_invalid:{diagnostics}")
+                })?;
+                (serde_json::to_value(&*policy)?, contract)
+            }
+            PolicyLoad::Missing => (
+                json!({"policy": "missing"}),
+                feature_run_budget_contract_from_policy(run_id, started_at_unix_ms, None).map_err(
+                    |diagnostics| anyhow!("feature_run_budget_contract_invalid:{diagnostics}"),
+                )?,
+            ),
             PolicyLoad::Invalid(diagnostics) => {
                 bail!("feature_run_policy_invalid:{diagnostics}")
             }
         };
-        sha256_json_digest(&value)
+        Ok((sha256_json_digest(&value)?, contract))
     }
 
     pub(crate) fn ensure_outcome_feature_run(
@@ -172,12 +269,17 @@ impl App {
         let maker = item.worker_id.clone().unwrap_or_else(worker_id);
         let run_id = short_id("frun");
         let batch_id = short_id("batch");
+        let started_at_unix_ms =
+            u64::try_from(OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000)
+                .map_err(|_| anyhow!("feature_run_clock_before_unix_epoch"))?;
+        let (policy_digest, budget_contract) =
+            self.feature_run_policy_snapshot(&run_id, started_at_unix_ms)?;
         let run = FeatureRun {
             id: run_id.clone(),
             plan_id: plan_id.clone(),
             status: FeatureRunStatus::Active,
             phase: FeatureRunPhase::Implementation,
-            policy_digest: self.feature_run_policy_digest()?,
+            policy_digest,
             source_revision: None,
             active_batch_id: Some(batch_id.clone()),
             role_owners: vec![RoleOwner {
@@ -199,7 +301,12 @@ impl App {
             settled_outcome_ids: Vec::new(),
             replacement: None,
         };
-        let persisted = repository.create_feature_run(&item.project_id, &run, Some(&batch))?;
+        let persisted = repository.create_feature_run(
+            &item.project_id,
+            &run,
+            &budget_contract,
+            Some(&batch),
+        )?;
         self.record_event(
             "feature_run_started",
             Some(item_id),
@@ -208,19 +315,61 @@ impl App {
         Ok(Some(persisted))
     }
 
+    pub(crate) fn restart_feature_run_value(
+        &self,
+        plan_id: &str,
+        reason: FeatureRunRestartReason,
+    ) -> Result<Value> {
+        let project = self.default_project()?;
+        let repository = ExecutionRunRepository::new(&self.conn);
+        let Some(persisted) = repository.active_feature_run_for_plan(&project.id, plan_id)? else {
+            let mut previous = repository
+                .latest_incompatible_feature_run_restart(&project.id, plan_id)?
+                .ok_or_else(|| anyhow!("feature_run_not_found_for_plan:{plan_id}"))?;
+            previous.disposition = FeatureRunRestartDisposition::AlreadyRetired;
+            let execution_state =
+                self.canonical_execution_state_value(&previous.retired_run.id, None)?;
+            return Ok(json!({
+                "schema_version": "planr.feature_run_restart.v1",
+                "restart": previous,
+                "execution_state": execution_state,
+            }));
+        };
+        let compatibility = repository.budget_contract_compatibility(&persisted.run.id)?;
+        let request = FeatureRunRestartRequest {
+            plan_id: plan_id.to_string(),
+            reason,
+        };
+        let transition =
+            retire_incompatible_feature_run(&persisted.run, &request, compatibility)
+                .map_err(|violation| anyhow!("feature_run_restart_rejected:{violation:?}"))?;
+        repository.retire_incompatible_feature_run(
+            &transition,
+            persisted.revision,
+            &worker_id(),
+        )?;
+        let execution_state = self.canonical_execution_state_value(&persisted.run.id, None)?;
+        Ok(json!({
+            "schema_version": "planr.feature_run_restart.v1",
+            "restart": transition,
+            "execution_state": execution_state,
+        }))
+    }
+
     pub(crate) fn outcome_work_packet(&self, item_id: &str) -> Result<Value> {
         let run = self.ensure_outcome_feature_run(item_id)?;
         let Some(run) = run else {
             return Ok(json!({"kind": "outcome", "item_id": item_id}));
         };
+        if let Some(hold) = self.incompatible_feature_run_hold_value(item_id, &run)? {
+            return Ok(hold);
+        }
         let boundary_key = format!("implementation:{item_id}");
         let reservation = match self.admit_feature_run_budget(
             &run,
             BudgetPhase::Implementation,
             &boundary_key,
-            Some(HUMAN_PHASE_WALL_ALLOWANCE_SECONDS),
-            Some(1),
-            true,
+            &worker_id(),
             "implementation.dispatch",
         )? {
             FeatureRunBudgetAdmission::Held(hold) => return Ok(hold["work_packet"].clone()),
@@ -246,10 +395,40 @@ impl App {
         }))
     }
 
+    pub(crate) fn incompatible_feature_run_hold_value(
+        &self,
+        item_id: &str,
+        run: &PersistedFeatureRun,
+    ) -> Result<Option<Value>> {
+        let compatibility =
+            ExecutionRunRepository::new(&self.conn).budget_contract_compatibility(&run.run.id)?;
+        if !compatibility.is_incompatible() {
+            return Ok(None);
+        }
+        let execution_state = self.canonical_execution_state_value(&run.run.id, None)?;
+        Ok(Some(json!({
+            "kind": "hold",
+            "item_id": item_id,
+            "classification": "incompatible_feature_run_budget_contract",
+            "reason_code": execution_state["reason_code"],
+            "next_action": execution_state["next_action"],
+            "execution_state": execution_state,
+        })))
+    }
+
     pub(crate) fn settle_feature_run_outcome(&self, input: OutcomeSettlement<'_>) -> Result<Value> {
         let Some(persisted) = self.ensure_outcome_feature_run(input.item_id)? else {
             return Ok(json!({"kind": "outcome", "transition": "legacy_unplanned"}));
         };
+        if self
+            .incompatible_feature_run_hold_value(input.item_id, &persisted)?
+            .is_some()
+        {
+            bail!(
+                "feature_run_budget_contract_incompatible:{}",
+                persisted.run.id
+            );
+        }
         if persisted.run.phase != FeatureRunPhase::Implementation {
             bail!("feature_run_not_accepting_outcomes:{}", persisted.run.id);
         }
@@ -358,8 +537,15 @@ impl App {
                 &format!("repair:{}", persisted.run.id),
             )?)
         {
-            self.reconcile_feature_run_budget(&reservation, Some(1))?;
+            self.reconcile_feature_run_budget(
+                &reservation,
+                &BudgetUsageReport::application(Some(1)),
+            )?;
         }
+        let execution_state = self.canonical_execution_state_value(
+            &persisted.run.id,
+            gate.as_ref().map(|gate| gate.id.as_str()),
+        )?;
         Ok(json!({
             "kind": "outcome",
             "run_id": persisted.run.id,
@@ -368,6 +554,7 @@ impl App {
             "batch_outcome_count": ordinal,
             "transition": transition,
             "review_gate": gate,
+            "execution_state": execution_state,
         }))
     }
 
@@ -564,20 +751,85 @@ impl App {
         if gate.responsible_maker_id != worker_id() {
             bail!("finding_repair_requires_responsible_maker:{gate_id}");
         }
+        if gate.kind == ReviewGateKind::FinalProduct
+            && repository.active_source_freeze(&gate.run_id)?.is_none()
+        {
+            self.freeze_feature_run_source_value(&gate.scope_id)?
+                .ok_or_else(|| anyhow!("final_review_repair_refreeze_failed:{gate_id}"))?;
+        }
         self.conn
             .execute_batch("BEGIN IMMEDIATE; SAVEPOINT resolve_review_findings")?;
         let result = (|| -> Result<Value> {
+            let persisted = repository.feature_run(&gate.run_id)?;
+            if gate.kind == ReviewGateKind::FinalProduct
+                && persisted.run.phase == FeatureRunPhase::Verification
+                && let Some(active) = repository.active_source_freeze(&gate.run_id)?
+            {
+                let snapshot = capture_repository_snapshot(&self.root)
+                    .map_err(|error| anyhow!("final_review_repair_source_capture:{error}"))?;
+                if snapshot.source.revision != active.source_revision
+                    || snapshot.source.tree_digest.as_str() != active.source_digest
+                {
+                    self.reconcile_active_phase_wall(&gate.run_id, BudgetPhase::Repair)?;
+                    self.reconcile_active_phase_wall(&gate.run_id, BudgetPhase::Verification)?;
+                    let obligation_ids = self
+                        .conn
+                        .prepare("SELECT id FROM proof_obligations WHERE plan_id = ?1 AND binding = 1 ORDER BY id")?
+                        .query_map([&gate.scope_id], |row| row.get::<_, String>(0))?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    repository.invalidate_source(&EvidenceInvalidationRecord {
+                        id: short_id("invalidation"),
+                        run_id: gate.run_id.clone(),
+                        freeze_id: active.id,
+                        finding_id: repository
+                            .findings(&gate.id)?
+                            .first()
+                            .map(|finding| finding.id.clone()),
+                        reason: "resolved_final_review_repair_source_changed".to_string(),
+                        affected_evidence_ids: obligation_ids,
+                    })?;
+                    let replacement = SourceFreezeRecord {
+                        id: short_id("freeze"),
+                        run_id: gate.run_id.clone(),
+                        source_revision: snapshot.source.revision.clone(),
+                        source_digest: snapshot.source.tree_digest.as_str().to_string(),
+                        status: SourceFreezeStatus::Active,
+                    };
+                    repository.freeze_source(&replacement)?;
+                    let mut refrozen = apply_phase_transition(
+                        &persisted.run,
+                        &PhaseTransition {
+                            to: FeatureRunPhase::SourceFrozen,
+                            cause: PhaseTransitionCause::SourceInvalidated,
+                            reference: format!("source_freeze:{}", replacement.id),
+                            owner: None,
+                        },
+                    )
+                    .map_err(|violation| anyhow!("final_review_repair_refreeze:{violation:?}"))?;
+                    refrozen.source_revision = Some(replacement.source_revision);
+                    repository.save_feature_run(&refrozen, persisted.revision)?;
+                }
+            }
             for finding_id in finding_ids {
-                repository.set_finding_status(
-                    finding_id,
-                    FindingStatus::Open,
-                    FindingStatus::Resolved,
-                )?;
-                self.record_event(
-                    "finding_resolved",
-                    Some(&gate.scope_id),
-                    json!({"gate_id": gate_id, "finding_id": finding_id}),
-                )?;
+                let current = repository
+                    .findings(gate_id)?
+                    .into_iter()
+                    .find(|finding| finding.id == *finding_id)
+                    .ok_or_else(|| anyhow!("review_finding_not_found:{finding_id}"))?;
+                if current.status == FindingStatus::Open {
+                    repository.set_finding_status(
+                        finding_id,
+                        FindingStatus::Open,
+                        FindingStatus::Resolved,
+                    )?;
+                    self.record_event(
+                        "finding_resolved",
+                        Some(&gate.scope_id),
+                        json!({"gate_id": gate_id, "finding_id": finding_id}),
+                    )?;
+                } else if current.status != FindingStatus::Resolved {
+                    bail!("review_finding_not_repairable:{finding_id}");
+                }
             }
             let remaining = repository
                 .findings(gate_id)?
@@ -587,13 +839,39 @@ impl App {
             if !remaining.is_empty() {
                 bail!("review_gate_has_open_findings:{gate_id}");
             }
-            repository.set_review_gate_status(
-                gate_id,
-                ReviewGateStatus::ChangesRequested,
-                ReviewGateStatus::Pending,
-            )?;
+            let ready_for_review = if gate.kind == ReviewGateKind::FinalProduct {
+                match self.capture_final_review_source_binding(
+                    &gate.id,
+                    &gate.run_id,
+                    &gate.scope_id,
+                ) {
+                    Ok(binding) => {
+                        repository.rebind_final_review_gate_source(&binding)?;
+                        true
+                    }
+                    Err(error)
+                        if error.to_string().starts_with(
+                            "final_product_review_requires_satisfied_exact_source_coverage:",
+                        ) =>
+                    {
+                        false
+                    }
+                    Err(error) => return Err(error),
+                }
+            } else {
+                true
+            };
+            if ready_for_review {
+                repository.set_review_gate_status(
+                    gate_id,
+                    ReviewGateStatus::ChangesRequested,
+                    ReviewGateStatus::Pending,
+                )?;
+            }
             Ok(json!({
                 "execution_state": self.canonical_execution_state_value(&gate.run_id, Some(gate_id))?,
+                "resolved_finding_ids": finding_ids,
+                "verification_required": !ready_for_review,
             }))
         })();
         match result {
@@ -634,28 +912,10 @@ impl App {
         if reviewer == gate.responsible_maker_id {
             bail!("review_gate_requires_independent_reviewer:{}", gate.id);
         }
-        let persisted = repository.feature_run(&gate.run_id)?;
-        let reservation = match self.admit_feature_run_budget(
-            &persisted,
-            BudgetPhase::Review,
-            &format!("review:{}", gate.id),
-            Some(HUMAN_PHASE_WALL_ALLOWANCE_SECONDS),
-            Some(1),
-            true,
-            "review.dispatch",
-        )? {
-            FeatureRunBudgetAdmission::Held(hold) => return Ok(Some(hold)),
-            FeatureRunBudgetAdmission::Reserved(reservation) => reservation,
-        };
         self.conn
             .execute_batch("BEGIN IMMEDIATE; SAVEPOINT lease_review_gate")?;
+        let mut gate_leased = false;
         let result = (|| -> Result<Value> {
-            let current = repository.review_gate(&gate.id)?;
-            repository.set_review_gate_status(
-                &gate.id,
-                current.status,
-                ReviewGateStatus::Leased,
-            )?;
             let persisted = repository.feature_run(&gate.run_id)?;
             if gate.kind == ReviewGateKind::RiskCheckpoint {
                 let batch_id =
@@ -701,6 +961,24 @@ impl App {
             )
             .map_err(|violation| anyhow!("review_gate_lease_transition:{violation:?}"))?;
             repository.save_feature_run(&transitioned, persisted.revision)?;
+            let transitioned = repository.feature_run(&gate.run_id)?;
+            match self.admit_feature_run_budget(
+                &transitioned,
+                BudgetPhase::Review,
+                &format!("review:{}", gate.id),
+                &reviewer,
+                "review.dispatch",
+            )? {
+                FeatureRunBudgetAdmission::Held(hold) => return Ok(hold),
+                FeatureRunBudgetAdmission::Reserved(_) => {}
+            }
+            let current = repository.review_gate(&gate.id)?;
+            repository.set_review_gate_status(
+                &gate.id,
+                current.status,
+                ReviewGateStatus::Leased,
+            )?;
+            gate_leased = true;
             Ok(json!({
                 "work_packet": {
                     "kind": "review_gate",
@@ -715,18 +993,19 @@ impl App {
             Ok(value) => {
                 self.conn
                     .execute_batch("RELEASE lease_review_gate; COMMIT")?;
-                self.record_event(
-                    "review_gate_leased",
-                    None,
-                    json!({"gate_id": gate.id, "reviewer_worker_id": reviewer}),
-                )?;
+                if gate_leased {
+                    self.record_event(
+                        "review_gate_leased",
+                        None,
+                        json!({"gate_id": gate.id, "reviewer_worker_id": reviewer}),
+                    )?;
+                }
                 Ok(Some(value))
             }
             Err(error) => {
                 let _ = self.conn.execute_batch(
                     "ROLLBACK TO lease_review_gate; RELEASE lease_review_gate; ROLLBACK",
                 );
-                self.release_feature_run_budget(&reservation)?;
                 Err(error)
             }
         }
@@ -738,7 +1017,7 @@ impl App {
         let run_id = self
             .canonical_execution_run_id_for_plan(plan_id)?
             .ok_or_else(|| anyhow!("feature_run_not_found_for_plan:{plan_id}"))?;
-        if let Some(gate) = repository
+        if let Some(mut gate) = repository
             .review_gates_for_run(&run_id, false)?
             .into_iter()
             .find(|gate| {
@@ -747,6 +1026,40 @@ impl App {
                     && gate.scope_id == plan_id
             })
         {
+            if gate.status == ReviewGateStatus::ChangesRequested
+                && !repository
+                    .findings(&gate.id)?
+                    .iter()
+                    .any(|finding| finding.status == FindingStatus::Open)
+            {
+                let binding = self.capture_final_review_source_binding(
+                    &gate.id,
+                    &gate.run_id,
+                    &gate.scope_id,
+                )?;
+                self.conn.execute_batch(
+                    "BEGIN IMMEDIATE; SAVEPOINT reopen_repaired_final_review_gate",
+                )?;
+                let reopen = (|| -> Result<()> {
+                    repository.rebind_final_review_gate_source(&binding)?;
+                    repository.set_review_gate_status(
+                        &gate.id,
+                        ReviewGateStatus::ChangesRequested,
+                        ReviewGateStatus::Pending,
+                    )?;
+                    Ok(())
+                })();
+                match reopen {
+                    Ok(()) => self
+                        .conn
+                        .execute_batch("RELEASE reopen_repaired_final_review_gate; COMMIT")?,
+                    Err(error) => {
+                        let _ = self.conn.execute_batch("ROLLBACK TO reopen_repaired_final_review_gate; RELEASE reopen_repaired_final_review_gate; ROLLBACK");
+                        return Err(error);
+                    }
+                }
+                gate = repository.review_gate(&gate.id)?;
+            }
             return Ok(
                 json!({"plan": plan, "execution_state": self.canonical_execution_state_value(&gate.run_id, Some(&gate.id))?, "created": false}),
             );
@@ -791,12 +1104,6 @@ impl App {
                 );
             }
         }
-        let source_revision = run
-            .run
-            .source_revision
-            .clone()
-            .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| anyhow!("final_product_review_requires_frozen_source:{plan_id}"))?;
         let responsible_maker_id = run
             .run
             .role_owners
@@ -813,8 +1120,10 @@ impl App {
                     .ok()
             })
             .ok_or_else(|| anyhow!("final_product_review_missing_responsible_maker:{plan_id}"))?;
+        let gate_id = short_id("gate");
+        let binding = self.capture_final_review_source_binding(&gate_id, &run.run.id, plan_id)?;
         let gate = ReviewGateRecord {
-            id: short_id("gate"),
+            id: gate_id,
             run_id: run.run.id,
             scope_kind: ReviewScopeKind::Plan,
             scope_id: plan_id.to_string(),
@@ -823,9 +1132,24 @@ impl App {
             required_risk: None,
             responsible_maker_id,
             latest_attempt: 0,
-            source_revision: Some(source_revision),
+            source_revision: Some(binding.source_revision.clone()),
         };
-        repository.create_review_gate(&gate)?;
+        self.conn
+            .execute_batch("BEGIN IMMEDIATE; SAVEPOINT create_final_review_gate")?;
+        let create_result = (|| -> Result<()> {
+            repository.create_review_gate(&gate)?;
+            repository.create_final_review_source_binding(&binding)?;
+            Ok(())
+        })();
+        match create_result {
+            Ok(()) => self
+                .conn
+                .execute_batch("RELEASE create_final_review_gate; COMMIT")?,
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK TO create_final_review_gate; RELEASE create_final_review_gate; ROLLBACK");
+                return Err(error);
+            }
+        }
         self.record_event(
             "final_review_opened",
             None,
@@ -873,6 +1197,18 @@ impl App {
         if gate.status != ReviewGateStatus::Leased {
             bail!("review_gate_not_leased:{gate_id}");
         }
+        if gate.kind == ReviewGateKind::FinalProduct {
+            let stored = repository
+                .final_review_source_binding(gate_id)?
+                .ok_or_else(|| anyhow!("final_product_review_source_binding_missing:{gate_id}"))?;
+            let current =
+                self.capture_final_review_source_binding(gate_id, &gate.run_id, &gate.scope_id)?;
+            if stored != current
+                || gate.source_revision.as_deref() != Some(stored.source_revision.as_str())
+            {
+                bail!("final_product_review_source_binding_stale:{gate_id}");
+            }
+        }
         let review_reservation =
             self.load_active_budget_reservation(&gate.run_id, &format!("review:{}", gate.id))?;
         let reviewer = reviewer
@@ -893,7 +1229,7 @@ impl App {
         if leased_reviewer.worker_id != reviewer {
             bail!("review_gate_reviewer_lease_mismatch:{gate_id}");
         }
-        if let Some(hold) = self.continue_review_budget(&leased_run, &gate.id)? {
+        if let Some(hold) = self.continue_review_budget(&leased_run, &gate.id, reviewer.as_str())? {
             return Ok(hold);
         }
         let attempt_id = short_id("attempt");
@@ -1024,7 +1360,10 @@ impl App {
             persisted = repository.feature_run(&gate.run_id)?;
         }
         if let Some(reservation) = review_reservation {
-            self.reconcile_feature_run_budget(&reservation, Some(1))?;
+            self.reconcile_feature_run_budget(
+                &reservation,
+                &BudgetUsageReport::application(Some(1)),
+            )?;
         }
         Ok(json!({
             "execution_state": self.canonical_execution_state_value(&persisted.run.id, Some(gate_id))?,
@@ -1041,7 +1380,7 @@ mod tests {
     use crate::storage::ensure_schema;
     use crate::usage_policy::{EscalationSource, ReviewEscalationReason};
     use rusqlite::{Connection, params};
-    use std::path::PathBuf;
+    use std::{fs, path::PathBuf};
 
     fn test_app_at(root: PathBuf) -> App {
         let conn = Connection::open_in_memory().expect("database");
@@ -1080,6 +1419,86 @@ mod tests {
                 "reasons": if review { vec!["material_trigger:schema_or_migration".to_string()] } else { Vec::<String>::new() },
             }
         })
+    }
+
+    fn seed_incompatible_feature_run(app: &App, run_id: &str) {
+        let batch_id = format!("batch-{run_id}");
+        app.conn
+            .execute_batch("BEGIN IMMEDIATE")
+            .expect("begin legacy run seed");
+        app.conn
+            .execute(
+                "INSERT INTO feature_runs(id, project_id, plan_id, status, phase, policy_digest, active_batch_id) VALUES (?1, 'project-a', 'plan-a', 'active', 'implementation', 'sha256:legacy', ?2)",
+                params![run_id, batch_id],
+            )
+            .expect("legacy run");
+        app.conn
+            .execute(
+                "INSERT INTO execution_batches(id, run_id, maker_worker_id, status) VALUES (?1, ?2, ?3, 'active')",
+                params![batch_id, run_id, worker_id()],
+            )
+            .expect("legacy batch");
+        app.conn
+            .execute(
+                "INSERT INTO feature_run_role_leases(run_id, role, worker_id, lease_generation) VALUES (?1, 'maker', ?2, 1)",
+                params![run_id, worker_id()],
+            )
+            .expect("legacy lease");
+        app.conn
+            .execute_batch("COMMIT")
+            .expect("commit legacy run seed");
+    }
+
+    #[test]
+    fn restart_application_is_atomic_idempotent_and_rejects_a_healthy_run() {
+        let app = test_app();
+        seed_incompatible_feature_run(&app, "run-incompatible-app");
+        let first = app
+            .restart_feature_run_value("plan-a", FeatureRunRestartReason::IncompatibleBudget)
+            .expect("first restart");
+        assert_eq!(first["schema_version"], "planr.feature_run_restart.v1");
+        assert_eq!(first["restart"]["disposition"], "retired");
+        assert_eq!(first["restart"]["incompatibility"], "missing");
+        assert_eq!(
+            first["execution_state"]["schema_version"],
+            "planr.execution_state.v2"
+        );
+        assert_eq!(
+            first["execution_state"]["feature_run"]["status"],
+            "cancelled"
+        );
+        assert_eq!(
+            first["execution_state"]["feature_run"]["terminal_reason"],
+            "policy_cancelled"
+        );
+
+        let repeated = app
+            .restart_feature_run_value("plan-a", FeatureRunRestartReason::IncompatibleBudget)
+            .expect("idempotent restart");
+        assert_eq!(repeated["restart"]["disposition"], "already_retired");
+        assert_eq!(
+            app.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM events WHERE event_type = 'feature_run_incompatible_budget_retired'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .expect("one retirement event"),
+            1
+        );
+
+        let healthy = test_app();
+        add_outcome(&healthy, "item-healthy");
+        healthy
+            .outcome_work_packet("item-healthy")
+            .expect("healthy FeatureRun");
+        assert!(
+            healthy
+                .restart_feature_run_value("plan-a", FeatureRunRestartReason::IncompatibleBudget,)
+                .unwrap_err()
+                .to_string()
+                .contains("RestartBudgetContractCompatible")
+        );
     }
 
     #[test]
@@ -1586,11 +2005,34 @@ mod tests {
         let gate_id = first["execution_state"]["review_gate"]["id"]
             .as_str()
             .unwrap();
+        assert_eq!(
+            first["execution_state"]["review_source_binding"]["freeze_id"],
+            "freeze-final"
+        );
+        assert_eq!(
+            first["execution_state"]["review_source_binding"]["source_digest"],
+            repository
+                .source_freeze("freeze-final")
+                .unwrap()
+                .source_digest
+        );
         let packet = app
             .review_gate_pick_value_for_worker("plan-a", false, "reviewer-final")
             .expect("final review pick")
             .expect("packet");
         assert_eq!(packet["work_packet"]["kind"], "review_gate");
+        let stale_path = app.root.join("post-review-source-change.txt");
+        fs::write(&stale_path, "stale review source").unwrap();
+        let stale = app
+            .complete_review_gate_value(
+                gate_id,
+                ReviewVerdict::Accepted,
+                &[],
+                Some("reviewer-final"),
+            )
+            .expect_err("source change before close must reject atomically");
+        assert!(stale.to_string().contains("source_freeze_stale"));
+        fs::remove_file(stale_path).unwrap();
         let changed = app
             .complete_review_gate_value(
                 gate_id,
@@ -1606,12 +2048,25 @@ mod tests {
         let finding_id = changed["execution_state"]["findings"][0]["id"]
             .as_str()
             .unwrap();
-        app.resolve_review_gate_findings_value(gate_id, &[finding_id.to_string()])
-            .expect("resolve final finding");
+        let rebound = app
+            .resolve_review_gate_findings_value(gate_id, &[finding_id.to_string()])
+            .expect("resolve, refreeze, and rebind final finding");
+        assert_eq!(rebound["execution_state"]["phase"], "source_frozen");
         let refrozen = app
             .freeze_feature_run_source_value("plan-a")
-            .expect("refreeze")
+            .expect("read refreeze")
             .expect("refrozen run");
+        assert_eq!(refrozen["created"], false);
+        assert_eq!(
+            rebound["execution_state"]["review_source_binding"]["freeze_id"],
+            refrozen["source_freeze"]["id"]
+        );
+        assert!(
+            !rebound["execution_state"]["review_gate"]["source_revision"]
+                .as_str()
+                .unwrap()
+                .starts_with("product_repair:")
+        );
         let refrozen_run = repository
             .feature_run(refrozen["feature_run"]["id"].as_str().unwrap())
             .expect("refrozen run record");
@@ -1687,6 +2142,31 @@ mod tests {
     fn product_finding_invalidates_only_affected_evidence_and_routes_last_maker() {
         let app = test_app();
         add_outcome(&app, "item-product-finding");
+        app.conn
+            .execute(
+                "INSERT INTO items(id, project_id, title, description, status, work_type, worker_id, plan_path, created_at, updated_at)
+                 VALUES ('verification-product-finding', 'project-a', 'verify', 'verify', 'running', 'verification', 'verifier-a', 'plan-a.md', datetime('now'), datetime('now'))",
+                [],
+            )
+            .unwrap();
+        app.conn
+            .execute(
+                "INSERT INTO proof_obligations(
+                   id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
+                   binding, observation_requirements_json, fixture_policy_json, freshness_policy_json,
+                   assurance_policy_json, retry_aggregation, policy_digest, config_digest,
+                   source_digest, created_at, obligation_shape
+                 ) VALUES (
+                   'pob-only', 'project-a', 'plan-a', 'verification-product-finding', 'crit-only', 1,
+                   'only affected', 1, '[]', '{}', '{}', '{}', 'latest_applicable_pass',
+                   'sha256:0000000000000000000000000000000000000000000000000000000000000000',
+                   'sha256:0000000000000000000000000000000000000000000000000000000000000000',
+                   'sha256:0000000000000000000000000000000000000000000000000000000000000000',
+                   datetime('now'), 'semantic_v1'
+                 )",
+                [],
+            )
+            .unwrap();
         app.ensure_outcome_feature_run("item-product-finding")
             .expect("ensure run")
             .expect("feature run");

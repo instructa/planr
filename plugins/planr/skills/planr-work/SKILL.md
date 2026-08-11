@@ -18,6 +18,8 @@ planr pick --json
 
 The pick output is one flat typed packet. Branch only on `work_packet.kind` and, for outcome work, optional `work_packet.mode`; read lifecycle facts only from `work_packet.execution_state`. `kind: "outcome"` with an item id is ordinary maker work. `kind: "outcome", mode: "finding_repair"` has no synthetic fix item: repair the named findings on the same ReviewGate, log evidence against the gate's scoped outcome, resolve those finding ids, and stop for re-review. `kind: "hold"` is a stop, not permission to replace the maker or bypass policy. Each fact appears once; a missing key means "empty". No separate `trace item` call is needed. Add `--work-type code` to lease only outcome work while checker agents lease ReviewGates, and `--plan <plan-id>` when your dispatch names a plan. A null pick explains itself with a reason, remaining snapshot, exclusions, and a repair command when applicable. Read the linked plan/context, implement the smallest correct slice, then finish ordinary outcome work in one command:
 
+Require `work_packet.execution_state.schema_version` to be `planr.execution_state.v2`. Treat its `budget` object—including consumed, reserved, protected, available, provenance, contract digest, and absolute task deadline—as opaque runtime authority. Skills must not recompute budget policy; a hold or unavailable required value is a stop.
+
 ```bash
 planr done <item-id> --summary "what changed" --files path-a --files path-b --cmd "exact verification command" --tests "exact test command" --next
 ```

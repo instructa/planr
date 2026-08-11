@@ -18,6 +18,8 @@ planr pick --plan <plan-id> --work-type verification --json
 
 This typed pick is the verifier's first action. Continue only when `work_packet.kind` is `verification`. Treat its `execution_state`, `source_freeze`, and `verification_lease` as the complete runtime contract. Product source is read-only for this pass; only Planr runtime state, receipts, logs, and artifacts may be written.
 
+Require `planr.execution_state.v2`; its budget and absolute deadline are opaque supplied authority. Skills must not recompute budget policy. If the selected adapter cannot honor required capability or the packet is held, stop with that exact classification.
+
 Run readiness before starting the configured method:
 
 ```bash

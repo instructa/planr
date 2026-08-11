@@ -916,6 +916,7 @@ impl App {
         self.conn
             .execute_batch("BEGIN IMMEDIATE; SAVEPOINT settlement_done")?;
         let settlement = (|| -> Result<(bool, Value, String, bool, Value, Option<Value>)> {
+            let settled_item = self.get_item(&item_id)?;
             let adopted = self.adopt_ready_item(&item_id)?;
             let materiality = self.settlement_materiality(
                 &item_id,
@@ -928,8 +929,10 @@ impl App {
             let review_required = materiality["effective_review"]["required"]
                 .as_bool()
                 .unwrap_or(escalation.is_some());
-            let settlement_is_retry =
-                matches!(item.status, ItemStatus::Closed | ItemStatus::ClosedPartial);
+            let settlement_is_retry = matches!(
+                settled_item.status,
+                ItemStatus::Closed | ItemStatus::ClosedPartial
+            );
             let previous_log_id = settlement_is_retry
                 .then(|| self.latest_completion_log_id(&item_id))
                 .transpose()?
@@ -1053,21 +1056,11 @@ impl App {
                 .as_ref()
                 .and_then(|next| next["verification_item_id"].as_str())
                 .map(ToOwned::to_owned);
-            fused_next = Some(json!({
-                "item": null,
-                "reason": "verification_handoff_source_frozen",
-                "work_packet": {
-                    "kind": "verification_handoff",
-                    "plan_id": plan_id,
-                    "verification_item_id": verification_item_id,
-                    "source_freeze": source_freeze,
-                    "commands": {
-                        "lease_verifier": format!("planr pick --plan {plan_id} --work-type verification --json"),
-                        "readiness": format!("planr evidence readiness --scope plan --id {plan_id}"),
-                    },
-                    "next_action": "lease_verifier_then_run_readiness",
-                }
-            }));
+            fused_next = Some(self.canonical_verification_handoff_value(
+                plan_id,
+                verification_item_id,
+                source_freeze,
+            )?);
         }
         let extras = self.settlement_extras(
             &item_id,

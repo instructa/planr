@@ -97,6 +97,25 @@ pub fn mcp_tools() -> Vec<Value> {
             &["id"],
         ),
         tool(
+            "planr_run_restart",
+            "Retire one plan's active FeatureRun only when its immutable v2 budget contract is incompatible",
+            json!({
+                "plan": prop("string", "Plan id"),
+                "reason": {
+                    "type": "string",
+                    "enum": ["incompatible-budget"],
+                    "description": "Typed restart reason"
+                }
+            }),
+            &["plan", "reason"],
+        ),
+        tool(
+            "planr_run_resolve_budget_hold",
+            "Resume one compatible budget-held FeatureRun only after its persisted reservation, deadline, phase, lease generation, and owner are revalidated",
+            json!({"plan": prop("string", "Plan id")}),
+            &["plan"],
+        ),
+        tool(
             "planr_plan_link",
             "Link a plan source to an item",
             json!({"source_id": prop("string", "Plan source id"), "item_id": prop("string", "Item id"), "relationship": prop("string", "Link relationship (default references)"), "section_id": prop("string", "Optional plan section id")}),

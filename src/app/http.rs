@@ -2,6 +2,7 @@ use super::{
     App, LogInput, ReviewAnnotationInput, application::ArtifactInput, recovery::ItemRecoveryInput,
 };
 use crate::cli::ServeArgs;
+use crate::execution_run::FeatureRunRestartReason;
 use crate::util::{infer_error_code, item_id, path_item_id, short_id};
 use anyhow::{Result, anyhow, bail};
 use rusqlite::params;
@@ -194,6 +195,24 @@ impl App {
                     let plan_id = path_plan_id(p, "final-product-review")
                         .ok_or_else(|| anyhow!("missing plan id in final product review route"))?;
                     serde_json::to_string(&self.ensure_plan_final_product_review_value(plan_id)?)?
+                }
+                ("POST", p) if p.starts_with("/v1/plans/") && p.ends_with("/run/restart") => {
+                    let plan_id = path_plan_id(p, "run/restart")
+                        .ok_or_else(|| anyhow!("missing plan id in run restart route"))?;
+                    let reason = match body_json.get("reason").and_then(Value::as_str) {
+                        Some("incompatible-budget") => FeatureRunRestartReason::IncompatibleBudget,
+                        Some(value) => bail!("invalid restart reason: {value}"),
+                        None => bail!("missing reason"),
+                    };
+                    serde_json::to_string(&self.restart_feature_run_value(plan_id, reason)?)?
+                }
+                ("POST", p)
+                    if p.starts_with("/v1/plans/") && p.ends_with("/run/resolve-budget-hold") =>
+                {
+                    let plan_id = path_plan_id(p, "run/resolve-budget-hold").ok_or_else(|| {
+                        anyhow!("missing plan id in budget hold resolution route")
+                    })?;
+                    serde_json::to_string(&self.resolve_feature_run_budget_hold_value(plan_id)?)?
                 }
                 ("GET", p) if p.ends_with("/items") => {
                     serde_json::to_string(&json!({"items": self.all_items()?}))?

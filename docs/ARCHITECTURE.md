@@ -32,7 +32,7 @@ Planr V1 is a single Rust binary with explicit module ownership. The crate stays
 - `src/app/review.rs`: ReviewGate application logic. Owns review annotations, feedback ingestion, scoped evidence, durable attempt completion, finding resolution, and gate lookup.
 - `src/app/recovery.rs`: recovery automation logic. Owns item retry policy configuration, task conditions, stale/timed-out sweeps, retry scheduling, and recovery result projections.
 - `src/app/execution_run.rs`: canonical FeatureRun and ReviewGate application boundary. Owns run phases, outcome batching and settlement, typed escalation, role leases, durable findings/re-review, and final product review projections.
-- `src/app/execution_state.rs`: canonical `planr.execution_state.v1` read boundary. It projects one run-scoped FeatureRun, active batch, role owner, budget, ReviewGate, attempts, findings, stable reason code, and next action for CLI, MCP, HTTP, pick, trace, status, recovery, package, and audit consumers.
+- `src/app/execution_state.rs`: canonical `planr.execution_state.v2` read boundary. It projects one run-scoped FeatureRun, active batch, role owner, persisted budget amounts/provenance/digest/deadline, ReviewGate, attempts, findings, stable reason code, and next action for CLI, MCP, HTTP, pick, trace, status, recovery, package, and audit consumers.
 - `src/app/surfaces.rs`: non-CLI runtime surfaces. Owns trace, scrub, artifact, event, debug, export, and import command handlers.
 - `src/app/inspection.rs`: local inspection helpers. Owns debug bundles, context/link snapshots, pick context, secret scans, export value assembly, run recording, search results, and Planr-directory import parsing.
 - `src/app/audit.rs`: goal contract audit boundary. Owns the clause-by-clause `plan audit` verdict (items settled, required independent material reviews, exactly one current independent final product review, approvals clear, canonical Evidence coverage) and its human rendering. Claim-only verification logs remain isolated to frozen pre-Evidence compatibility.
@@ -64,9 +64,28 @@ Every live worker decision is a typed work packet:
 - `kind: "verification"` is a fresh verifier lease over a frozen canonical source digest. Product source is read-only; trusted Evidence can commit only through the source-checked Evidence transaction.
 - `kind: "hold"` is an admission or capability stop. A driver must report its classification and next action; it cannot reinterpret the hold as permission to replace the maker, weaken verification, or open an ad hoc review.
 
-All four packets embed the same run-scoped `planr.execution_state.v1` projection. Host skills, generated roles, installed copies, and Stop hooks render that state but own no lifecycle policy. Ordinary maker settlement uses plain `planr done`; only an allowed protected-risk interrupt uses structured escalation. Review findings are logged and resolved on the existing gate. Evidence runs once after stable source freeze and selectively reruns only invalidated obligations after a product repair.
+All four packets embed the same run-scoped `planr.execution_state.v2` projection. Host skills, generated roles, installed copies, and Stop hooks render that state but own no lifecycle or budget policy. Ordinary maker settlement uses plain `planr done`; only an allowed protected-risk interrupt uses structured escalation. Review findings are logged and resolved on the existing gate. Evidence runs once after stable source freeze and selectively reruns only invalidated obligations after a product repair.
 
 The one exception is persisted database input in `src/storage/execution_run_schema.rs`. Existing user databases may contain historical review/fix graph rows, so the schema upgrade consumes them once into terminal history. That read boundary does not justify aliases, fallback commands, dual DTOs, or live legacy producers elsewhere.
+
+## Planr 2.0 Immutable Budget Boundary
+
+The Planr 2.0 budget authority is one immutable `planr.feature_run_budget_contract.v2` created atomically with each FeatureRun. Bounded contracts contain a persisted UTC run-start anchor, complete wall-seconds/tool-call/token totals, exact maker/verification/review/repair/release allocations, per-dimension metering requirements, and a canonical digest. Unbounded mode is an explicit contract with no numeric limits or reserves. Every admitted bounded task carries positive maxima for all three dimensions and an overflow-checked absolute UTC deadline.
+
+Ownership is singular and dependencies are one-way:
+
+- `src/usage_policy.rs` owns the provider-neutral contract types, validation, provenance, phase protection, snapshots, and pure checked arithmetic.
+- `src/execution_policy.rs` owns pure admission over typed concurrency plus persisted budget snapshots.
+- `src/app/execution_run.rs` resolves authored policy once and binds the immutable contract to run creation.
+- `src/app/feature_run_evidence.rs` owns transactional reservation, append-only observation, reconciliation, phase release, and hold sequencing.
+- `src/app/execution_state.rs` owns the sole `planr.execution_state.v2` projection reused by CLI, MCP, HTTP, work packets, trace, status, generated roles, and skills.
+- Storage owns insert-only persistence and integrity mechanics; host adapters only enforce supplied maxima/deadlines and report observations with provenance.
+
+Runtime decisions never reload `.planr/policy.toml`, fabricate allowances, infer trusted usage from projections, synthesize missing active-run state, or expose a compatibility budget DTO. Missing, invalid, corrupt, or unenforceable budget state is a typed hold before dispatch.
+
+An incompatible active FeatureRun is retired only through the plan-scoped application lifecycle in `src/app/execution_run.rs`. Pure eligibility and policy-cancel state changes live in `src/execution_run.rs`; `src/app/repository/execution_run.rs` ends the batch and leases, updates the run with optimistic concurrency, and records provenance in one transaction. CLI, MCP, and HTTP only transport the closed `incompatible-budget` reason and reuse the canonical result. Restart never writes a budget contract or successor run; a later ordinary pick remains the sole atomic run-plus-contract creation path.
+
+A compatible budget-held FeatureRun resumes only through `planr run resolve-budget-hold --plan <id>`, owned by `src/app/feature_run_evidence.rs`. The application transaction revalidates the immutable contract, persisted snapshot, active reservation deadlines, exact held phase, canonical role owner, and lease generation before restoring that phase. Incompatible contracts require restart; capability holds, corrupt state, expired deadlines, missing reservations, unrepaired ceilings, and owner mismatches remain held. MCP and HTTP transport the same typed application result without policy or arithmetic.
 
 ## Eval Contract V1/V1.1 Ownership
 

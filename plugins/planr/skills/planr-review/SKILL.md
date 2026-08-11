@@ -18,6 +18,8 @@ planr --json pick --work-type review
 
 `--work-type review` leases only durable ReviewGates, so a checker never accidentally takes maker work. Continue only when `work_packet.kind` is `review_gate`; read the gate, FeatureRun, responsible maker, attempts, findings, phase, budget, and source revision from its canonical `execution_state`. Add `--plan <plan-id>` when your dispatch names a plan so the lease stays inside that scope. Use `planr review show <review-gate-id> --json`, `planr review evidence <scope-item-id> --json`, or `planr trace item <scope-item-id> --json` only for deeper reads.
 
+Require `planr.execution_state.v2` and treat its budget projection as opaque. Skills must not recompute budget policy or reinterpret provenance, reserves, digest, or deadline.
+
 Inspect the actual changed files and acceptance criteria, then independently judge whether the evidence proves them. When the repository owns a versioned verification policy, verify the logged receipt against its exact source revision, policy digest, changed-file digest, selected gates, command results, and artifact digests. Use the repository's receipt validator (for this repository, `npm run verification:verify -- --receipt <path> --base <base-revision> --head <source-revision>`), not a visual read of JSON.
 
 Replay only evidence that is cheap, missing, failing, or explicitly high-risk. An already-green expensive check bound to the reviewed source is normally validated from its receipt rather than rerun. Receipt validation does not replace judgment: inspect the diff for security, correctness, scope, and acceptance-criteria gaps, and record a finding when the policy selection or receipt is inadequate. Then close the ReviewGate exactly once:

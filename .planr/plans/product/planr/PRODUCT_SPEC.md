@@ -55,6 +55,18 @@ Planr turns broad product ideas and coding work into a coherent flow: product pl
 - REQ-PROD-004: V1 must not store full agent transcripts by default.
 - REQ-PROD-005: V1 must not privilege one vendor as the only supported workflow.
 
+## Planr 2.0 Immutable FeatureRun Budgets
+
+- REQ-PROD-BUDGET-001: Every FeatureRun must persist exactly one immutable `planr.feature_run_budget_contract.v2` contract atomically with run creation.
+- REQ-PROD-BUDGET-002: Budget mode must be explicit. Bounded runs require complete wall-seconds, tool-call, and token limits plus maker, verification, review, repair, and release phase allocations; unbounded runs contain no numeric limits or reserves.
+- REQ-PROD-BUDGET-003: Every task admitted to a bounded run must receive positive maxima for all three dimensions and an absolute UTC deadline. Missing, invalid, or unenforceable state produces a typed hold before dispatch.
+- REQ-PROD-BUDGET-004: Admission must protect every unreleased later-phase allocation using checked arithmetic over the immutable run contract and a persisted budget snapshot.
+- REQ-PROD-BUDGET-005: Wall consumption is anchored to persisted run-start UTC time. Tool and token observations retain per-dimension provenance; estimated, unavailable, or caller-declared values never become trusted implicitly.
+- REQ-PROD-BUDGET-006: CLI, MCP, HTTP, work packets, generated roles, and skills must reuse one `planr.execution_state.v2` budget projection and must not own budget arithmetic.
+- REQ-PROD-BUDGET-007: Active-run decisions must never reload authored policy, fabricate an allowance, synthesize a missing contract, or use a compatibility budget shape.
+- REQ-PROD-BUDGET-008: Planr owns provider-neutral policy and admission; host adapters only enforce supplied maxima/deadlines and report observations.
+- REQ-PROD-BUDGET-009: An active FeatureRun with a missing, invalid, or digest-mismatched v2 budget contract must return a typed hold before lease or dispatch. The explicit plan-scoped `incompatible-budget` restart policy-cancels that run atomically without synthesizing a contract; only a later ordinary pick may create a distinct run and its one immutable v2 contract.
+
 ## User Personas
 
 - Solo operator: runs Codex and Claude Code in one repo and wants clean handoffs.

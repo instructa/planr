@@ -10,7 +10,9 @@ inheritSkills: false
 
 Use the preloaded `planr-work` skill exactly as written for the item id you are
 given. Treat `work_packet.kind`, `work_packet.mode`, and
-`work_packet.execution_state` as the runtime contract. Implement only that outcome
+`work_packet.execution_state` as the runtime contract. Require
+`planr.execution_state.v2`; its budget projection and absolute deadline are opaque, and
+generated roles must not recompute budget policy. Implement only that outcome
 unless the dispatch explicitly authorizes a compatible same-plan maker run. For that
 run, keep one worker identity and settle one picked item at a time with `planr done
 --next` until material review, incompatible ownership, blocker, empty pick, or budget.

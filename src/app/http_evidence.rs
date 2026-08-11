@@ -154,10 +154,16 @@ impl App {
 
 fn http_evidence_json(command: &str, result: Result<Value>) -> Result<(&'static str, String)> {
     let (status, envelope) = match result {
-        Ok(object) => (
-            "200 OK",
-            super::evidence::evidence_success_envelope(command, object),
-        ),
+        Ok(object) => {
+            let envelope = super::evidence::evidence_success_envelope(command, object);
+            let status = match super::evidence::evidence_envelope_exit_code(&envelope) {
+                super::evidence::EVIDENCE_OK => "200 OK",
+                super::evidence::EVIDENCE_UNSATISFIED => "422 Unprocessable Entity",
+                super::evidence::EVIDENCE_BLOCKED => "503 Service Unavailable",
+                _ => "500 Internal Server Error",
+            };
+            (status, envelope)
+        }
         Err(error) => {
             let envelope = super::evidence::evidence_error_envelope(command, &error);
             let code = envelope["error"]["code"]
