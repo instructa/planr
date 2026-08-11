@@ -1303,6 +1303,25 @@ impl App {
                 Some(&gate.scope_id),
                 json!({"gate_id": gate.id, "run_id": gate.run_id, "maker_worker_id": gate.responsible_maker_id, "batch_outcome_count": persisted.run.batch_outcome_count}),
             )?;
+            if verdict == ReviewVerdict::Accepted {
+                let accepted_gate = repository.review_gate(&gate.id)?;
+                if let Some(handoff) = self
+                    .accepted_risk_verification_handoff_locked(persisted.clone(), &accepted_gate)?
+                {
+                    persisted = repository.feature_run(&gate.run_id)?;
+                    if let Some(reservation) = review_reservation {
+                        self.reconcile_feature_run_budget(
+                            &reservation,
+                            &BudgetUsageReport::application(Some(1)),
+                        )?;
+                    }
+                    return Ok(json!({
+                        "execution_state": self.canonical_execution_state_value(&persisted.run.id, Some(gate_id))?,
+                        "created_map_items": [],
+                        "verification_handoff": handoff,
+                    }));
+                }
+            }
         } else if verdict == ReviewVerdict::Accepted {
             let completed = apply_phase_transition(
                 &persisted.run,
@@ -1398,6 +1417,26 @@ mod tests {
         App::new(conn, root, PathBuf::from("planr.sqlite"), true, false)
     }
 
+    fn test_file_app(root: &std::path::Path, db: &std::path::Path, initialize: bool) -> App {
+        let conn = Connection::open(db).expect("file database");
+        conn.busy_timeout(std::time::Duration::from_secs(5))
+            .expect("busy timeout");
+        ensure_schema(&conn).expect("schema");
+        if initialize {
+            conn.execute(
+                "INSERT INTO projects(id, name, root_path, status, created_at, updated_at) VALUES ('project-a', 'Project', '.', 'active', datetime('now'), datetime('now'))",
+                [],
+            )
+            .expect("project");
+            conn.execute(
+                "INSERT INTO plans(id, project_id, stage, path, title, slug, parse_status, content_hash, created_at, updated_at) VALUES ('plan-a', 'project-a', 'build', 'plan-a.md', 'Plan', 'plan', 'ok', 'sha256:plan', datetime('now'), datetime('now'))",
+                [],
+            )
+            .expect("plan");
+        }
+        App::new(conn, root.to_path_buf(), db.to_path_buf(), true, false)
+    }
+
     fn test_app() -> App {
         test_app_at(PathBuf::from("."))
     }
@@ -1411,6 +1450,35 @@ mod tests {
             .expect("outcome item");
     }
 
+    fn add_ready_verification(app: &App, id: &str) {
+        app.conn
+            .execute(
+                "INSERT INTO items(id, project_id, title, description, status, work_type, plan_path, created_at, updated_at) VALUES (?1, 'project-a', ?1, 'verification', 'ready', 'verification', 'plan-a.md', datetime('now'), datetime('now'))",
+                [id],
+            )
+            .expect("verification item");
+    }
+
+    fn initialize_test_git(root: &std::path::Path) {
+        fs::write(root.join("plan-a.md"), "# Plan\n").expect("plan source");
+        for args in [
+            vec!["init", "-q"],
+            vec!["config", "user.email", "tests@planr.local"],
+            vec!["config", "user.name", "Planr Tests"],
+            vec!["add", "plan-a.md"],
+            vec!["commit", "-qm", "fixture"],
+        ] {
+            assert!(
+                std::process::Command::new("git")
+                    .current_dir(root)
+                    .args(args)
+                    .status()
+                    .expect("git command")
+                    .success()
+            );
+        }
+    }
+
     fn materiality(review: bool) -> Value {
         json!({
             "decision": {
@@ -1419,6 +1487,219 @@ mod tests {
                 "reasons": if review { vec!["material_trigger:schema_or_migration".to_string()] } else { Vec::<String>::new() },
             }
         })
+    }
+
+    #[test]
+    fn accepted_risk_gate_atomically_hands_off_to_verification_and_recovery_is_idempotent() {
+        let root = tempfile::tempdir().expect("root");
+        initialize_test_git(root.path());
+        let app = test_app_at(root.path().to_path_buf());
+        add_outcome(&app, "item-risk-final");
+        add_ready_verification(&app, "item-risk-verification");
+        app.outcome_work_packet("item-risk-final")
+            .expect("maker packet");
+        let settled = app
+            .settle_feature_run_outcome(OutcomeSettlement {
+                item_id: "item-risk-final",
+                summary: "protected final outcome",
+                materiality: &materiality(true),
+                escalation: None,
+            })
+            .expect("risk settlement");
+        let gate_id = settled["review_gate"]["id"].as_str().unwrap();
+        app.review_gate_pick_value_for_worker("plan-a", false, "checker-risk")
+            .expect("review pick")
+            .expect("review packet");
+        let accepted = app
+            .complete_review_gate_value(gate_id, ReviewVerdict::Accepted, &[], Some("checker-risk"))
+            .expect("accepted review");
+        let handoff = &accepted["verification_handoff"];
+        assert_eq!(handoff["reason"], "verification_handoff_source_frozen");
+        assert_eq!(
+            handoff["work_packet"]["verification_item_id"],
+            "item-risk-verification"
+        );
+        assert_eq!(accepted["execution_state"]["phase"], "source_frozen");
+        assert!(accepted["execution_state"]["owner"].is_null());
+        assert_eq!(
+            accepted["execution_state"]["execution_batch"]["status"],
+            "ended"
+        );
+        let freeze_id = handoff["work_packet"]["source_freeze"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let repeated = app
+            .resume_accepted_risk_verification_handoff_value("plan-a")
+            .expect("idempotent recovery")
+            .expect("existing handoff");
+        assert_eq!(repeated["work_packet"]["source_freeze"]["id"], freeze_id);
+        fs::write(root.path().join("plan-a.md"), "# Stale plan\n").expect("stale source");
+        let stale = app
+            .resume_accepted_risk_verification_handoff_value("plan-a")
+            .unwrap_err();
+        assert!(stale.to_string().contains("source_freeze_stale:"));
+    }
+
+    #[test]
+    fn accepted_risk_gate_waits_for_remaining_code_and_rejects_wrong_plan_scope() {
+        let root = tempfile::tempdir().expect("root");
+        initialize_test_git(root.path());
+        let app = test_app_at(root.path().to_path_buf());
+        add_outcome(&app, "item-risk-scope");
+        add_ready_verification(&app, "item-risk-verification");
+        app.conn
+            .execute(
+                "INSERT INTO items(id, project_id, title, description, status, work_type, plan_path, created_at, updated_at) VALUES ('item-risk-remaining', 'project-a', 'remaining', 'remaining code', 'ready', 'code', 'plan-a.md', datetime('now'), datetime('now'))",
+                [],
+            )
+            .expect("remaining code");
+        app.outcome_work_packet("item-risk-scope")
+            .expect("maker packet");
+        let settled = app
+            .settle_feature_run_outcome(OutcomeSettlement {
+                item_id: "item-risk-scope",
+                summary: "protected outcome",
+                materiality: &materiality(true),
+                escalation: None,
+            })
+            .expect("risk settlement");
+        let gate_id = settled["review_gate"]["id"].as_str().unwrap();
+        app.review_gate_pick_value_for_worker("plan-a", false, "checker-risk")
+            .expect("review pick")
+            .expect("review packet");
+        let accepted = app
+            .complete_review_gate_value(gate_id, ReviewVerdict::Accepted, &[], Some("checker-risk"))
+            .expect("accepted review");
+        assert!(accepted.get("verification_handoff").is_none());
+        assert_eq!(accepted["execution_state"]["phase"], "implementation");
+
+        app.conn
+            .execute(
+                "UPDATE items SET status = 'cancelled' WHERE id = 'item-risk-remaining'",
+                [],
+            )
+            .expect("settle remaining fixture");
+        let recovered = app
+            .resume_accepted_risk_verification_handoff_value("plan-a")
+            .expect("recovery")
+            .expect("handoff");
+        assert_eq!(
+            recovered["work_packet"]["execution_state"]["phase"],
+            "source_frozen"
+        );
+
+        let other_root = tempfile::tempdir().expect("other root");
+        initialize_test_git(other_root.path());
+        let other = test_app_at(other_root.path().to_path_buf());
+        add_outcome(&other, "item-risk-wrong-plan");
+        add_ready_verification(&other, "item-risk-verification");
+        other
+            .outcome_work_packet("item-risk-wrong-plan")
+            .expect("maker packet");
+        let settled = other
+            .settle_feature_run_outcome(OutcomeSettlement {
+                item_id: "item-risk-wrong-plan",
+                summary: "protected outcome",
+                materiality: &materiality(true),
+                escalation: None,
+            })
+            .expect("risk settlement");
+        let gate_id = settled["review_gate"]["id"].as_str().unwrap();
+        other
+            .review_gate_pick_value_for_worker("plan-a", false, "checker-risk")
+            .expect("review pick")
+            .expect("review packet");
+        other
+            .conn
+            .execute(
+                "UPDATE items SET plan_path = 'wrong-plan.md' WHERE id = 'item-risk-wrong-plan'",
+                [],
+            )
+            .expect("wrong plan fixture");
+        let wrong_plan = other
+            .complete_review_gate_value(gate_id, ReviewVerdict::Accepted, &[], Some("checker-risk"))
+            .unwrap_err();
+        assert!(
+            wrong_plan
+                .to_string()
+                .contains("risk_checkpoint_scope_plan_mismatch:")
+        );
+    }
+
+    #[test]
+    fn accepted_risk_handoff_recovery_is_concurrent_and_single_freeze() {
+        let root = tempfile::tempdir().expect("root");
+        let state = tempfile::tempdir().expect("state");
+        initialize_test_git(root.path());
+        let db = state.path().join("planr.sqlite");
+        let app = test_file_app(root.path(), &db, true);
+        add_outcome(&app, "item-risk-concurrent");
+        add_ready_verification(&app, "item-risk-verification");
+        app.conn
+            .execute(
+                "INSERT INTO items(id, project_id, title, description, status, work_type, plan_path, created_at, updated_at) VALUES ('item-risk-remaining', 'project-a', 'remaining', 'remaining code', 'ready', 'code', 'plan-a.md', datetime('now'), datetime('now'))",
+                [],
+            )
+            .expect("remaining code");
+        app.outcome_work_packet("item-risk-concurrent")
+            .expect("maker packet");
+        let settled = app
+            .settle_feature_run_outcome(OutcomeSettlement {
+                item_id: "item-risk-concurrent",
+                summary: "protected outcome",
+                materiality: &materiality(true),
+                escalation: None,
+            })
+            .expect("risk settlement");
+        let gate_id = settled["review_gate"]["id"].as_str().unwrap();
+        app.review_gate_pick_value_for_worker("plan-a", false, "checker-risk")
+            .expect("review pick")
+            .expect("review packet");
+        app.complete_review_gate_value(gate_id, ReviewVerdict::Accepted, &[], Some("checker-risk"))
+            .expect("accepted review");
+        app.conn
+            .execute(
+                "UPDATE items SET status = 'cancelled' WHERE id = 'item-risk-remaining'",
+                [],
+            )
+            .expect("settle remaining fixture");
+        drop(app);
+
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let handles = (0..2)
+            .map(|_| {
+                let barrier = barrier.clone();
+                let root = root.path().to_path_buf();
+                let db = db.clone();
+                std::thread::spawn(move || {
+                    let app = test_file_app(&root, &db, false);
+                    barrier.wait();
+                    app.resume_accepted_risk_verification_handoff_value("plan-a")
+                        .expect("concurrent recovery")
+                        .expect("handoff")["work_packet"]["source_freeze"]["id"]
+                        .as_str()
+                        .unwrap()
+                        .to_string()
+                })
+            })
+            .collect::<Vec<_>>();
+        let freeze_ids = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("recovery thread"))
+            .collect::<Vec<_>>();
+        assert_eq!(freeze_ids[0], freeze_ids[1]);
+        let app = test_file_app(root.path(), &db, false);
+        assert_eq!(
+            app.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM feature_run_source_freezes",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .expect("freeze count"),
+            1
+        );
     }
 
     fn seed_incompatible_feature_run(app: &App, run_id: &str) {

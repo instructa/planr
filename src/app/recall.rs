@@ -108,6 +108,14 @@ impl App {
             }
             Ok(packet)
         } else {
+            if !peek
+                && work_type == Some("code")
+                && let Some(plan_id) = plan
+                && let Some(handoff) =
+                    self.resume_accepted_risk_verification_handoff_value(plan_id)?
+            {
+                return Ok(handoff);
+            }
             let remaining = self.progress_value()?;
             let total = remaining["total"].as_i64().unwrap_or(0);
             let settled = remaining["settled"].as_i64().unwrap_or(0);

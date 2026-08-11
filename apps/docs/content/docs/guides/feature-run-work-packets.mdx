@@ -52,7 +52,7 @@ planr review close <review-gate-id> \
   --json
 ```
 
-An accepted risk gate resumes the same maker and batch. Replacement is a separate, provenance-bearing operation for an actually unavailable, context-lost, ownership-incompatible, or batch-capped maker; review alone never replaces one.
+An accepted risk gate resumes the same maker and batch when compatible code work remains. If the reviewed outcome was the last compatible maker outcome and a verification item is ready, Planr atomically ends the batch, freezes source, releases maker ownership, and returns the typed verification handoff instead. A same-maker code pick recovers that handoff idempotently for runs accepted by older clients. Replacement is a separate, provenance-bearing operation for an actually unavailable, context-lost, ownership-incompatible, or batch-capped maker; review alone never replaces one.
 
 ## 3. Frozen-source verification
 

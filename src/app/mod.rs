@@ -4,6 +4,7 @@ use rusqlite::Connection;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
+mod accepted_risk_handoff;
 mod agents;
 mod agents_init;
 mod application;
