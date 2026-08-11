@@ -4,8 +4,8 @@ use super::App;
 use super::repository::execution_run::{
     BudgetObservationRecord, BudgetReservationRecord, BudgetReservationStatus,
     EvidenceInvalidationRecord, ExecutionRunRepository, FindingStatus, PersistedFeatureRun,
-    ProductRepairSettlementRecord, ReviewGateKind, ReviewGateStatus, SourceFreezeRecord,
-    SourceFreezeStatus,
+    ProductRepairSettlementRecord, ReviewGateKind, ReviewGateRecord, ReviewGateStatus,
+    SourceFreezeRecord, SourceFreezeStatus,
 };
 use crate::cli::EvidenceCoverageScope;
 use crate::evidence::policy::capture_repository_snapshot;
@@ -57,6 +57,34 @@ fn add_selective_replay_metadata(
 }
 
 impl App {
+    pub(crate) fn validate_review_source_binding(
+        &self,
+        repository: &ExecutionRunRepository<'_>,
+        gate: &ReviewGateRecord,
+    ) -> Result<()> {
+        let Some(stored) = repository.review_source_binding(&gate.id)? else {
+            if gate.kind == ReviewGateKind::FinalProduct {
+                bail!("final_product_review_source_binding_missing:{}", gate.id);
+            }
+            return Ok(());
+        };
+        let freeze = repository
+            .active_source_freeze(&gate.run_id)?
+            .ok_or_else(|| anyhow!("review_source_binding_missing_active_freeze:{}", gate.id))?;
+        let snapshot = capture_repository_snapshot(&self.root)
+            .map_err(|error| anyhow!("review_source_binding_capture_failed:{error}"))?;
+        if freeze.id != stored.freeze_id
+            || freeze.source_revision != stored.source_revision
+            || freeze.source_digest != stored.source_digest
+            || snapshot.source.revision != stored.source_revision
+            || snapshot.source.tree_digest.as_str() != stored.source_digest
+            || gate.source_revision.as_deref() != Some(stored.source_revision.as_str())
+        {
+            bail!("review_source_binding_source_freeze_stale:{}", gate.id);
+        }
+        Ok(())
+    }
+
     /// Release an active verification pick and its FeatureRun lease as one
     /// application-owned transition. Generic item release cannot safely own
     /// the SourceFrozen boundary because the item row and verifier role lease
