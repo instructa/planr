@@ -1,9 +1,9 @@
 use super::App;
 use super::feature_run_evidence::{BudgetUsageReport, FeatureRunBudgetAdmission};
 use super::repository::execution_run::{
-    EvidenceInvalidationRecord, ExecutionRunRepository, FinalReviewSourceBindingRecord,
-    FindingRecord, FindingStatus, PersistedFeatureRun, ReviewAttemptRecord, ReviewGateKind,
-    ReviewGateRecord, ReviewGateStatus, ReviewScopeKind, ReviewVerdict, RunOutcomeRecord,
+    EvidenceInvalidationRecord, ExecutionRunRepository, FindingRecord, FindingStatus,
+    PersistedFeatureRun, ReviewAttemptRecord, ReviewGateKind, ReviewGateRecord, ReviewGateStatus,
+    ReviewScopeKind, ReviewSourceBindingRecord, ReviewVerdict, RunOutcomeRecord,
     SourceFreezeRecord, SourceFreezeStatus,
 };
 use crate::canonical_json::sha256_json_digest;
@@ -43,7 +43,7 @@ impl App {
         gate_id: &str,
         run_id: &str,
         plan_id: &str,
-    ) -> Result<FinalReviewSourceBindingRecord> {
+    ) -> Result<ReviewSourceBindingRecord> {
         let repository = ExecutionRunRepository::new(&self.conn);
         let freeze = repository.active_source_freeze(run_id)?.ok_or_else(|| {
             anyhow!("final_product_review_requires_active_source_freeze:{plan_id}")
@@ -75,7 +75,7 @@ impl App {
         } else {
             json!([])
         };
-        Ok(FinalReviewSourceBindingRecord {
+        Ok(ReviewSourceBindingRecord {
             gate_id: gate_id.to_string(),
             freeze_id: freeze.id,
             source_revision: freeze.source_revision,
@@ -846,7 +846,7 @@ impl App {
                     &gate.scope_id,
                 ) {
                     Ok(binding) => {
-                        repository.rebind_final_review_gate_source(&binding)?;
+                        repository.rebind_review_gate_source(&binding)?;
                         true
                     }
                     Err(error)
@@ -1041,7 +1041,7 @@ impl App {
                     "BEGIN IMMEDIATE; SAVEPOINT reopen_repaired_final_review_gate",
                 )?;
                 let reopen = (|| -> Result<()> {
-                    repository.rebind_final_review_gate_source(&binding)?;
+                    repository.rebind_review_gate_source(&binding)?;
                     repository.set_review_gate_status(
                         &gate.id,
                         ReviewGateStatus::ChangesRequested,
@@ -1138,7 +1138,7 @@ impl App {
             .execute_batch("BEGIN IMMEDIATE; SAVEPOINT create_final_review_gate")?;
         let create_result = (|| -> Result<()> {
             repository.create_review_gate(&gate)?;
-            repository.create_final_review_source_binding(&binding)?;
+            repository.create_review_source_binding(&binding)?;
             Ok(())
         })();
         match create_result {
@@ -1197,7 +1197,7 @@ impl App {
         if gate.status != ReviewGateStatus::Leased {
             bail!("review_gate_not_leased:{gate_id}");
         }
-        if let Some(stored) = repository.final_review_source_binding(gate_id)? {
+        if let Some(stored) = repository.review_source_binding(gate_id)? {
             let freeze = repository
                 .active_source_freeze(&gate.run_id)?
                 .ok_or_else(|| anyhow!("review_source_binding_missing_active_freeze:{gate_id}"))?;
@@ -1217,7 +1217,7 @@ impl App {
         }
         if gate.kind == ReviewGateKind::FinalProduct {
             let stored = repository
-                .final_review_source_binding(gate_id)?
+                .review_source_binding(gate_id)?
                 .expect("final review binding checked");
             let current =
                 self.capture_final_review_source_binding(gate_id, &gate.run_id, &gate.scope_id)?;

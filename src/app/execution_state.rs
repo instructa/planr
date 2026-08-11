@@ -289,7 +289,7 @@ impl App {
         };
         let review_source_binding = gate
             .as_ref()
-            .map(|gate| repository.final_review_source_binding(&gate.id))
+            .map(|gate| repository.review_source_binding(&gate.id))
             .transpose()?
             .flatten();
         let mut value = serde_json::to_value(CanonicalExecutionStateDto {

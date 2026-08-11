@@ -1,7 +1,7 @@
 use super::App;
 use super::repository::execution_run::{
-    ExecutionRunRepository, FinalReviewSourceBindingRecord, FindingStatus, ReviewGateKind,
-    ReviewGateStatus,
+    ExecutionRunRepository, FindingStatus, ReviewGateKind, ReviewGateStatus,
+    ReviewSourceBindingRecord,
 };
 use crate::cli::{
     EvidenceCapabilityCommand, EvidenceCommand, EvidenceCoverageScope, EvidenceHostCaptureCommand,
@@ -2750,7 +2750,7 @@ impl App {
             let freeze = repository
                 .active_source_freeze(run_id)?
                 .ok_or_else(|| anyhow!("review_reverification_freeze_missing:{run_id}"))?;
-            let binding = FinalReviewSourceBindingRecord {
+            let binding = ReviewSourceBindingRecord {
                 gate_id: gate.id.clone(),
                 freeze_id: freeze.id.clone(),
                 source_revision: freeze.source_revision.clone(),
@@ -2766,7 +2766,7 @@ impl App {
                     );
                 }
                 let stored = repository
-                    .final_review_source_binding(&gate.id)?
+                    .review_source_binding(&gate.id)?
                     .ok_or_else(|| anyhow!("review_reverification_binding_missing:{}", gate.id))?;
                 if stored != binding {
                     bail!("review_reverification_idempotence_conflict:{}", gate.id);
@@ -2802,7 +2802,7 @@ impl App {
             {
                 bail!("review_reverification_source_stale:{}", freeze.id);
             }
-            repository.rebind_final_review_gate_source(&binding)?;
+            repository.rebind_review_gate_source(&binding)?;
             repository.set_review_gate_status(
                 &gate.id,
                 ReviewGateStatus::ChangesRequested,

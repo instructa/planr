@@ -1331,7 +1331,7 @@ impl App {
                         && gate.status == ReviewGateStatus::Pending
                 })
                 && repository
-                    .final_review_source_binding(&gate.id)?
+                    .review_source_binding(&gate.id)?
                     .is_some_and(|binding| binding.freeze_id == existing.source_freeze_id)
             {
                 return Ok(json!({
@@ -1453,7 +1453,7 @@ impl App {
                 source_freeze_id: freeze.id.clone(),
             })?;
             if let Some(gate) = accepted_material_gate.as_ref() {
-                let binding = super::repository::execution_run::FinalReviewSourceBindingRecord {
+                let binding = super::repository::execution_run::ReviewSourceBindingRecord {
                     gate_id: gate.id.clone(),
                     freeze_id: freeze.id.clone(),
                     source_revision: freeze.source_revision.clone(),
@@ -4462,10 +4462,7 @@ allow_overwrite = true
         let pending = repository.review_gate(&gate.id).unwrap();
         assert_eq!(pending.status, ReviewGateStatus::Pending);
         assert_eq!(pending.latest_attempt, 1);
-        let binding = repository
-            .final_review_source_binding(&gate.id)
-            .unwrap()
-            .unwrap();
+        let binding = repository.review_source_binding(&gate.id).unwrap().unwrap();
         assert_eq!(
             pending.source_revision.as_deref(),
             Some(binding.source_revision.as_str())

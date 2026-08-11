@@ -101,7 +101,7 @@ pub(crate) struct ReviewAttemptRecord {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
-pub(crate) struct FinalReviewSourceBindingRecord {
+pub(crate) struct ReviewSourceBindingRecord {
     pub(crate) gate_id: String,
     pub(crate) freeze_id: String,
     pub(crate) source_revision: String,
@@ -1078,9 +1078,9 @@ impl<'conn> ExecutionRunRepository<'conn> {
         Ok(())
     }
 
-    pub(crate) fn create_final_review_source_binding(
+    pub(crate) fn create_review_source_binding(
         &self,
-        binding: &FinalReviewSourceBindingRecord,
+        binding: &ReviewSourceBindingRecord,
     ) -> Result<()> {
         require_nonempty("final_review_binding.freeze_id", &binding.freeze_id)?;
         require_nonempty(
@@ -1097,13 +1097,13 @@ impl<'conn> ExecutionRunRepository<'conn> {
 
     pub(crate) fn reopen_review_gate_with_source_binding(
         &self,
-        binding: &FinalReviewSourceBindingRecord,
+        binding: &ReviewSourceBindingRecord,
     ) -> Result<()> {
         require_nonempty("review_binding.source_revision", &binding.source_revision)?;
         require_nonempty("review_binding.source_digest", &binding.source_digest)?;
         let gate = self.review_gate(&binding.gate_id)?;
         if gate.status == ReviewGateStatus::Pending {
-            let existing = self.final_review_source_binding(&binding.gate_id)?;
+            let existing = self.review_source_binding(&binding.gate_id)?;
             if existing.as_ref() == Some(binding)
                 && gate.source_revision.as_deref() == Some(binding.source_revision.as_str())
             {
@@ -1142,9 +1142,9 @@ impl<'conn> ExecutionRunRepository<'conn> {
         Ok(())
     }
 
-    pub(crate) fn rebind_final_review_gate_source(
+    pub(crate) fn rebind_review_gate_source(
         &self,
-        binding: &FinalReviewSourceBindingRecord,
+        binding: &ReviewSourceBindingRecord,
     ) -> Result<()> {
         require_nonempty(
             "final_review_binding.source_revision",
@@ -1166,10 +1166,10 @@ impl<'conn> ExecutionRunRepository<'conn> {
         Ok(())
     }
 
-    pub(crate) fn final_review_source_binding(
+    pub(crate) fn review_source_binding(
         &self,
         gate_id: &str,
-    ) -> Result<Option<FinalReviewSourceBindingRecord>> {
+    ) -> Result<Option<ReviewSourceBindingRecord>> {
         self.conn
             .query_row(
                 "SELECT freeze_id, source_revision, source_digest, receipt_lineage_json FROM final_review_source_bindings WHERE gate_id = ?1",
@@ -1185,7 +1185,7 @@ impl<'conn> ExecutionRunRepository<'conn> {
             )
             .optional()?
             .map(|raw| {
-                Ok(FinalReviewSourceBindingRecord {
+                Ok(ReviewSourceBindingRecord {
                     gate_id: gate_id.to_string(),
                     freeze_id: raw.0,
                     source_revision: raw.1,
