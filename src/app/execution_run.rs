@@ -1210,7 +1210,7 @@ impl App {
                 || snapshot.source.tree_digest.as_str() != stored.source_digest
                 || gate.source_revision.as_deref() != Some(stored.source_revision.as_str())
             {
-                bail!("review_source_binding_stale:{gate_id}");
+                bail!("review_source_binding_source_freeze_stale:{gate_id}");
             }
         } else if gate.kind == ReviewGateKind::FinalProduct {
             bail!("final_product_review_source_binding_missing:{gate_id}");
