@@ -563,6 +563,14 @@ impl App {
     ) -> Result<()> {
         match command {
             Some(PickCommand::Release(args)) => {
+                if let Some(value) = self.release_verification_pick_value(
+                    &args.item_id,
+                    args.force,
+                    args.repair.as_deref(),
+                )? {
+                    self.emit(value, "verification pick released".to_string())?;
+                    return Ok(());
+                }
                 let item = self.get_item(&args.item_id)?;
                 let worker = worker_id();
                 if !args.force && item.worker_id.as_deref() != Some(worker.as_str()) {

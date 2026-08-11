@@ -57,6 +57,253 @@ fn add_selective_replay_metadata(
 }
 
 impl App {
+    /// Release an active verification pick and its FeatureRun lease as one
+    /// application-owned transition. Generic item release cannot safely own
+    /// the SourceFrozen boundary because the item row and verifier role lease
+    /// must never diverge.
+    pub(crate) fn release_verification_pick_value(
+        &self,
+        item_id: &str,
+        force: bool,
+        repair_reference: Option<&str>,
+    ) -> Result<Option<Value>> {
+        let item = self.get_item(item_id)?;
+        if item.work_type.as_str() != "verification" {
+            return Ok(None);
+        }
+        let current_worker = worker_id();
+        let plan_id = self.conn.query_row(
+            "SELECT plans.id FROM plans JOIN items ON items.plan_path = plans.path WHERE items.id = ?1",
+            [item_id],
+            |row| row.get::<_, String>(0),
+        )?;
+        let project = self.default_project()?;
+        let repository = ExecutionRunRepository::new(&self.conn);
+        let persisted = repository
+            .active_feature_run_for_plan(&project.id, &plan_id)?
+            .ok_or_else(|| anyhow!("verification_release_run_missing:{plan_id}"))?;
+
+        if let Some(reference) = repair_reference {
+            if reference.trim().is_empty() {
+                bail!("verification_repair_reference_required:{item_id}");
+            }
+            if !matches!(
+                persisted.run.phase,
+                FeatureRunPhase::Verification | FeatureRunPhase::SourceFrozen
+            ) {
+                bail!(
+                    "verification_repair_wrong_phase:{}:{:?}",
+                    persisted.run.id,
+                    persisted.run.phase
+                );
+            }
+            let freeze = repository
+                .active_source_freeze(&persisted.run.id)?
+                .ok_or_else(|| {
+                    anyhow!("verification_repair_missing_freeze:{}", persisted.run.id)
+                })?;
+            let maker_worker_id = self.conn.query_row(
+                "SELECT worker_id FROM feature_run_role_leases WHERE run_id = ?1 AND role = 'maker' ORDER BY lease_generation DESC LIMIT 1",
+                [&persisted.run.id],
+                |row| row.get::<_, String>(0),
+            )?;
+            if !force
+                && current_worker != maker_worker_id
+                && item.worker_id.as_deref() != Some(current_worker.as_str())
+            {
+                bail!("verification_repair_requires_verifier_or_maker:{item_id}");
+            }
+            let affected_evidence_ids = self
+                .conn
+                .prepare(
+                    "SELECT obligations.id FROM proof_obligations AS obligations
+                     WHERE obligations.plan_id = ?1 AND obligations.binding = 1
+                       AND NOT EXISTS (
+                         SELECT 1 FROM proof_obligations AS successors
+                         WHERE successors.supersedes_obligation_id = obligations.id
+                       )
+                     ORDER BY obligations.id",
+                )?
+                .query_map([&plan_id], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            if affected_evidence_ids.is_empty() {
+                bail!("verification_repair_missing_binding_obligation:{plan_id}");
+            }
+            let invalidation = EvidenceInvalidationRecord {
+                id: short_id("invalidation"),
+                run_id: persisted.run.id.clone(),
+                freeze_id: freeze.id,
+                finding_id: None,
+                reason: format!("verification_admission_blocker:{reference}"),
+                affected_evidence_ids,
+            };
+            let maker_generation = self.conn.query_row(
+                "SELECT COALESCE(MAX(lease_generation), 0) + 1 FROM feature_run_role_leases WHERE run_id = ?1 AND role = 'maker'",
+                [&persisted.run.id],
+                |row| row.get::<_, u64>(0),
+            )?;
+            let cause = if persisted.run.phase == FeatureRunPhase::Verification {
+                PhaseTransitionCause::ProductFinding
+            } else {
+                PhaseTransitionCause::SourceInvalidated
+            };
+            let mut repair = apply_phase_transition(
+                &persisted.run,
+                &PhaseTransition {
+                    to: FeatureRunPhase::Implementation,
+                    cause,
+                    reference: format!("verification_repair:{reference}"),
+                    owner: Some(RoleOwner {
+                        role: RunRole::Maker,
+                        worker_id: maker_worker_id.clone(),
+                        lease_generation: maker_generation,
+                    }),
+                },
+            )
+            .map_err(|violation| anyhow!("verification_repair_transition:{violation:?}"))?;
+            let batch = ExecutionBatch {
+                id: short_id("batch"),
+                run_id: persisted.run.id.clone(),
+                maker_worker_id: maker_worker_id.clone(),
+                status: ExecutionBatchStatus::Active,
+                settled_outcome_ids: Vec::new(),
+                replacement: None,
+            };
+            repair.active_batch_id = Some(batch.id.clone());
+            repair.batch_outcome_count = 0;
+            self.conn
+                .execute_batch("BEGIN IMMEDIATE; SAVEPOINT route_verification_repair")?;
+            let result = (|| -> Result<()> {
+                if persisted.run.phase == FeatureRunPhase::Verification {
+                    self.reconcile_active_phase_wall(&persisted.run.id, BudgetPhase::Verification)?;
+                }
+                repository.invalidate_source(&invalidation)?;
+                repository.save_feature_run_with_new_batch(&repair, persisted.revision, &batch)?;
+                self.conn.execute(
+                    "UPDATE items SET status = 'ready', worker_id = NULL, pick_token = NULL,
+                         picked_at = NULL, last_heartbeat_at = NULL, paused_at = NULL,
+                         updated_at = datetime('now') WHERE id = ?1 AND work_type = 'verification'",
+                    [item_id],
+                )?;
+                self.record_event(
+                    "verification_repair_routed",
+                    Some(item_id),
+                    json!({
+                        "run_id": persisted.run.id, "repair_reference": reference,
+                        "invalidation_id": invalidation.id, "responsible_maker_id": maker_worker_id,
+                    }),
+                )?;
+                Ok(())
+            })();
+            match result {
+                Ok(()) => self
+                    .conn
+                    .execute_batch("RELEASE route_verification_repair; COMMIT")?,
+                Err(error) => {
+                    let _ = self.conn.execute_batch("ROLLBACK TO route_verification_repair; RELEASE route_verification_repair; ROLLBACK");
+                    return Err(error);
+                }
+            }
+            return Ok(Some(json!({
+                "released": item_id, "item": self.get_item(item_id)?,
+                "feature_run": repair, "disposition": "routed_to_repair",
+                "repair_id": invalidation.id, "repair_reference": reference,
+                "responsible_maker_id": maker_worker_id,
+            })));
+        }
+
+        if item.status == "ready" && persisted.run.phase == FeatureRunPhase::SourceFrozen {
+            return Ok(Some(json!({
+                "released": item_id,
+                "item": item,
+                "feature_run": persisted.run,
+                "disposition": "already_released",
+            })));
+        }
+        if !force && item.worker_id.as_deref() != Some(current_worker.as_str()) {
+            bail!(
+                "item is owned by {:?}; use --force to release",
+                item.worker_id
+            );
+        }
+        if !matches!(item.status.as_str(), "picked" | "running") {
+            bail!(
+                "verification_release_item_not_active:{item_id}:{}",
+                item.status
+            );
+        }
+        if persisted.run.phase != FeatureRunPhase::Verification {
+            bail!(
+                "verification_release_wrong_phase:{}:{:?}",
+                persisted.run.id,
+                persisted.run.phase
+            );
+        }
+        let verifier = owner_for_role(&persisted.run, RunRole::Verifier)
+            .ok_or_else(|| anyhow!("verification_release_missing_owner:{}", persisted.run.id))?;
+        if item.worker_id.as_deref() != Some(verifier.worker_id.as_str()) {
+            bail!("verification_release_stale_item_owner:{item_id}");
+        }
+        let released = apply_phase_transition(
+            &persisted.run,
+            &PhaseTransition {
+                to: FeatureRunPhase::SourceFrozen,
+                cause: PhaseTransitionCause::VerificationReleased,
+                reference: format!("verification_item:{item_id}"),
+                owner: None,
+            },
+        )
+        .map_err(|violation| anyhow!("verification_release_transition:{violation:?}"))?;
+
+        self.conn
+            .execute_batch("BEGIN IMMEDIATE; SAVEPOINT release_verification_pick")?;
+        let result = (|| -> Result<()> {
+            let current = repository.feature_run(&persisted.run.id)?;
+            if current.revision != persisted.revision
+                || current.run.phase != FeatureRunPhase::Verification
+            {
+                bail!("verification_release_stale_run:{}", persisted.run.id);
+            }
+            self.reconcile_active_phase_wall(&persisted.run.id, BudgetPhase::Verification)?;
+            repository.save_feature_run(&released, persisted.revision)?;
+            let changed = self.conn.execute(
+                "UPDATE items SET status = 'ready', worker_id = NULL, pick_token = NULL,
+                     picked_at = NULL, last_heartbeat_at = NULL, paused_at = NULL,
+                     updated_at = datetime('now')
+                 WHERE id = ?1 AND work_type = 'verification'
+                   AND status IN ('picked','running') AND worker_id = ?2",
+                params![item_id, verifier.worker_id],
+            )?;
+            if changed != 1 {
+                bail!("verification_release_stale_item:{item_id}");
+            }
+            self.record_event(
+                "verification_pick_released",
+                Some(item_id),
+                json!({"force": force, "run_id": persisted.run.id,
+                    "lease_generation": verifier.lease_generation}),
+            )?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => self
+                .conn
+                .execute_batch("RELEASE release_verification_pick; COMMIT")?,
+            Err(error) => {
+                let _ = self.conn.execute_batch(
+                    "ROLLBACK TO release_verification_pick; RELEASE release_verification_pick; ROLLBACK",
+                );
+                return Err(error);
+            }
+        }
+        Ok(Some(json!({
+            "released": item_id,
+            "item": self.get_item(item_id)?,
+            "feature_run": released,
+            "disposition": "released",
+        })))
+    }
+
     fn add_review_finding_reverification_metadata(
         &self,
         packet: &mut Value,
@@ -2362,6 +2609,77 @@ allow_overwrite = true
         assert_eq!(resolved.run_id, persisted.run.id);
         assert_eq!(resolved.freeze_id, freeze.id);
         assert_eq!(resolved.lease_generation, 1);
+    }
+
+    #[test]
+    fn verification_release_atomically_restores_the_source_frozen_boundary() {
+        let (_root, app, run_id, _freeze_id) = verification_fixture();
+        let released = app
+            .release_verification_pick_value("verification-phase", false, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(released["disposition"], "released");
+        assert_eq!(released["item"]["status"], "ready");
+        assert_eq!(released["feature_run"]["phase"], "source_frozen");
+
+        let repository = ExecutionRunRepository::new(&app.conn);
+        let persisted = repository.feature_run(&run_id).unwrap();
+        assert_eq!(persisted.run.phase, FeatureRunPhase::SourceFrozen);
+        assert!(persisted.run.role_owners.is_empty());
+        let active_verifiers: u64 = app
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM feature_run_role_leases WHERE run_id = ?1 AND role = 'verifier' AND released_at IS NULL",
+                [&run_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(active_verifiers, 0);
+
+        let repeated = app
+            .release_verification_pick_value("verification-phase", false, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(repeated["disposition"], "already_released");
+    }
+
+    #[test]
+    fn verification_repair_retires_the_verifier_and_routes_the_recorded_maker() {
+        let (_root, app, run_id, _freeze_id) = verification_fixture();
+        app.release_verification_pick_value("verification-phase", false, None)
+            .unwrap()
+            .unwrap();
+        let routed = app
+            .release_verification_pick_value(
+                "verification-phase",
+                true,
+                Some("ctx-admission-blocker"),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(routed["disposition"], "routed_to_repair");
+        assert_eq!(routed["responsible_maker_id"], "maker-other");
+        assert_eq!(routed["item"]["status"], "ready");
+
+        let repository = ExecutionRunRepository::new(&app.conn);
+        let persisted = repository.feature_run(&run_id).unwrap();
+        assert_eq!(persisted.run.phase, FeatureRunPhase::Implementation);
+        assert_eq!(
+            owner_for_role(&persisted.run, RunRole::Maker)
+                .unwrap()
+                .worker_id,
+            "maker-other"
+        );
+        let invalidations = repository.invalidations(&run_id).unwrap();
+        assert_eq!(invalidations.len(), 1);
+        assert_eq!(
+            invalidations[0].reason,
+            "verification_admission_blocker:ctx-admission-blocker"
+        );
+        assert_eq!(
+            invalidations[0].affected_evidence_ids,
+            vec!["pob-phase-ready"]
+        );
     }
 
     #[test]

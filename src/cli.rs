@@ -479,6 +479,9 @@ pub(crate) struct PickReleaseArgs {
     pub(crate) item_id: String,
     #[arg(long)]
     pub(crate) force: bool,
+    /// Route a verification admission blocker back to the recorded maker.
+    #[arg(long)]
+    pub(crate) repair: Option<String>,
 }
 
 #[derive(Args, Debug)]
