@@ -1266,21 +1266,42 @@ impl App {
     }
 
     fn product_repair_obligation_ids(&self, affected_ids: &[String]) -> Result<Vec<String>> {
-        let mut obligations = Vec::new();
+        let mut obligations = std::collections::BTreeSet::new();
         for id in affected_ids {
-            let exists = self.conn.query_row(
-                "SELECT EXISTS(SELECT 1 FROM proof_obligations WHERE id = ?1)",
-                [id],
-                |row| row.get::<_, bool>(0),
-            )?;
-            if exists {
-                obligations.push(id.clone());
+            let mut current = id.clone();
+            let mut visited = std::collections::BTreeSet::new();
+            loop {
+                if !visited.insert(current.clone()) {
+                    bail!("product_finding_repair_obligation_cycle:{current}");
+                }
+                let mut statement = self.conn.prepare(
+                    "SELECT id FROM proof_obligations WHERE supersedes_obligation_id = ?1 ORDER BY created_at, id",
+                )?;
+                let successors = statement
+                    .query_map([&current], |row| row.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                match successors.as_slice() {
+                    [] => break,
+                    [successor] => current = successor.clone(),
+                    _ => bail!("product_finding_repair_ambiguous_successor:{current}"),
+                }
+            }
+            let active = self
+                .conn
+                .query_row(
+                    "SELECT binding FROM proof_obligations WHERE id = ?1",
+                    [&current],
+                    |row| row.get::<_, bool>(0),
+                )
+                .optional()?;
+            if active == Some(true) {
+                obligations.insert(current);
             }
         }
         if obligations.is_empty() {
             bail!("product_finding_repair_missing_selective_obligations");
         }
-        Ok(obligations)
+        Ok(obligations.into_iter().collect())
     }
 
     pub(crate) fn settle_product_finding_repair_value(
@@ -4245,6 +4266,33 @@ allow_overwrite = true
                 .count(),
             2,
             "verification and repair phase intervals are the only wall owners"
+        );
+    }
+
+    #[test]
+    fn product_repair_follows_invalidation_obligations_to_the_active_successor() {
+        let (_root, app, _run_id, _freeze_id) = verification_fixture();
+        app.conn
+            .execute(
+                "INSERT INTO proof_obligations(
+               id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
+               binding, observation_requirements_json, fixture_policy_json, freshness_policy_json,
+               assurance_policy_json, retry_aggregation, policy_digest, config_digest,
+               source_digest, supersedes_obligation_id, created_at, obligation_shape
+             ) SELECT
+               'pob-phase-successor', project_id, plan_id, item_id, criterion_id, 2, title,
+               binding, observation_requirements_json, fixture_policy_json, freshness_policy_json,
+               assurance_policy_json, retry_aggregation, policy_digest, config_digest,
+               source_digest, id, datetime('now'), obligation_shape
+             FROM proof_obligations WHERE id = 'pob-phase-ready'",
+                [],
+            )
+            .unwrap();
+
+        assert_eq!(
+            app.product_repair_obligation_ids(&["pob-phase-ready".to_string()])
+                .unwrap(),
+            vec!["pob-phase-successor"]
         );
     }
 }
