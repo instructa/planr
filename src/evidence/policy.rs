@@ -1988,6 +1988,27 @@ mod tests {
     }
 
     #[test]
+    fn versioned_schema_ref_rejects_at_sign_filename_and_reports_canonical_path() {
+        let fixture = disposable_queue_fixture();
+        let noncanonical = fixture
+            .schema_path
+            .with_file_name("example.queue.job.processed@v1.schema.json");
+        fs::rename(&fixture.schema_path, &noncanonical).unwrap();
+
+        let error = load_repository_observation_schema(
+            fixture.repo.path(),
+            "example.queue.job.processed@v1",
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(
+            error.contains("example.queue.job.processed.v1.schema.json must be readable"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn trusted_builtin_policy_yaml_can_use_reserved_planr_namespace() {
         let mut value: Value = serde_json::from_str(include_str!(
             "../../docs/contracts/fixtures/evidence/v1/examples/evidence-policy.json"

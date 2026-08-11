@@ -45,6 +45,7 @@ mod verification_settlement_recovery;
 
 pub(crate) use eval_surface::EvalCliExit;
 pub(crate) use evidence::EvidenceCliExit;
+pub(crate) use feature_run_evidence::VerificationPickReadinessError;
 pub(crate) use flow::LogInput;
 pub(crate) use repository::eval::EvalReusableCaseEvidence;
 

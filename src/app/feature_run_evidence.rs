@@ -29,6 +29,37 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[derive(Debug)]
+pub(crate) struct VerificationPickReadinessError {
+    plan_id: String,
+    gaps: Value,
+}
+
+impl VerificationPickReadinessError {
+    fn from_readiness(plan_id: &str, readiness: &Value) -> Self {
+        Self {
+            plan_id: plan_id.to_string(),
+            gaps: readiness["gaps"].clone(),
+        }
+    }
+
+    pub(crate) fn details(&self) -> Value {
+        json!({"plan_id": self.plan_id, "gaps": self.gaps})
+    }
+}
+
+impl std::fmt::Display for VerificationPickReadinessError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "verification_pick_readiness_blocked:{}",
+            self.plan_id
+        )
+    }
+}
+
+impl std::error::Error for VerificationPickReadinessError {}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct CanonicalFeatureRunEvidenceLease {
     pub(crate) project_id: String,
@@ -1670,7 +1701,10 @@ impl App {
                 let readiness =
                     self.evidence_readiness_value(EvidenceCoverageScope::Plan, plan_id)?;
                 if readiness["status"] != "passed" {
-                    bail!("verification_pick_readiness_blocked:{plan_id}");
+                    return Err(VerificationPickReadinessError::from_readiness(
+                        plan_id, &readiness,
+                    )
+                    .into());
                 }
                 sealed_run_index = readiness.get("run_index").cloned();
                 if sealed_run_index.is_none() {
@@ -1725,7 +1759,9 @@ impl App {
         } else {
             let readiness = self.evidence_readiness_value(EvidenceCoverageScope::Plan, plan_id)?;
             if readiness["status"] != "passed" {
-                bail!("verification_pick_readiness_blocked:{plan_id}");
+                return Err(
+                    VerificationPickReadinessError::from_readiness(plan_id, &readiness).into(),
+                );
             }
             let Some(run_index) = readiness.get("run_index").cloned() else {
                 bail!("verification_pick_missing_sealed_run_index:{plan_id}");

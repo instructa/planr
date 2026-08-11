@@ -14926,6 +14926,14 @@ fn canonical_verification_task_builds_a_sealed_verifier_packet_without_retagging
         blocked_pick["error"]["message"],
         format!("verification_pick_readiness_blocked:{plan_id}")
     );
+    assert_eq!(
+        blocked_pick["error"]["details"]["gaps"][0]["code"],
+        "missing_payload_schema"
+    );
+    assert_eq!(
+        blocked_pick["error"]["details"]["gaps"][0]["obligation_id"],
+        "pob-canonical-verifier-packet-missing-schema"
+    );
     let conn = Connection::open(&db).unwrap();
     let rolled_back: (String, Option<String>, String, i64) = conn
         .query_row(
