@@ -1095,6 +1095,53 @@ impl<'conn> ExecutionRunRepository<'conn> {
         Ok(())
     }
 
+    pub(crate) fn reopen_review_gate_with_source_binding(
+        &self,
+        binding: &FinalReviewSourceBindingRecord,
+    ) -> Result<()> {
+        require_nonempty("review_binding.source_revision", &binding.source_revision)?;
+        require_nonempty("review_binding.source_digest", &binding.source_digest)?;
+        let gate = self.review_gate(&binding.gate_id)?;
+        if gate.status == ReviewGateStatus::Pending {
+            let existing = self.final_review_source_binding(&binding.gate_id)?;
+            if existing.as_ref() == Some(binding)
+                && gate.source_revision.as_deref() == Some(binding.source_revision.as_str())
+            {
+                return Ok(());
+            }
+            bail!("review_gate_source_reopen_conflict:{}", binding.gate_id);
+        }
+        if gate.status != ReviewGateStatus::Accepted {
+            bail!(
+                "review_gate_source_reopen_requires_accepted:{}",
+                binding.gate_id
+            );
+        }
+        let changed = self.conn.execute(
+            "UPDATE review_gates SET status = 'pending', source_revision = ?1,
+                 accepted_at = NULL, updated_at = datetime('now')
+             WHERE id = ?2 AND status = 'accepted' AND latest_attempt = ?3",
+            params![
+                binding.source_revision,
+                binding.gate_id,
+                gate.latest_attempt
+            ],
+        )?;
+        if changed != 1 {
+            bail!("review_gate_source_reopen_stale:{}", binding.gate_id);
+        }
+        self.conn.execute(
+            "INSERT INTO final_review_source_bindings(gate_id, freeze_id, source_revision, source_digest, receipt_lineage_json)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(gate_id) DO UPDATE SET freeze_id = excluded.freeze_id,
+               source_revision = excluded.source_revision, source_digest = excluded.source_digest,
+               receipt_lineage_json = excluded.receipt_lineage_json, created_at = datetime('now')",
+            params![binding.gate_id, binding.freeze_id, binding.source_revision,
+                binding.source_digest, serde_json::to_string(&binding.receipt_lineage)?],
+        )?;
+        Ok(())
+    }
+
     pub(crate) fn rebind_final_review_gate_source(
         &self,
         binding: &FinalReviewSourceBindingRecord,

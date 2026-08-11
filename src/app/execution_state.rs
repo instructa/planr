@@ -289,7 +289,6 @@ impl App {
         };
         let review_source_binding = gate
             .as_ref()
-            .filter(|gate| gate.kind == ReviewGateKind::FinalProduct)
             .map(|gate| repository.final_review_source_binding(&gate.id))
             .transpose()?
             .flatten();

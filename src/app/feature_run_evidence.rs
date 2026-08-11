@@ -1322,7 +1322,35 @@ impl App {
             if existing.run_id != persisted.run.id || existing.responsible_maker_id != worker_id() {
                 bail!("product_finding_repair_owner_or_run_mismatch:{invalidation_id}");
             }
-            let source_freeze = repository.source_freeze(&existing.source_freeze_id)?;
+            if let Some(gate) = repository
+                .review_gates_for_run(&persisted.run.id, false)?
+                .into_iter()
+                .rev()
+                .find(|gate| {
+                    gate.kind == ReviewGateKind::RiskCheckpoint
+                        && gate.status == ReviewGateStatus::Pending
+                })
+                && repository
+                    .final_review_source_binding(&gate.id)?
+                    .is_some_and(|binding| binding.freeze_id == existing.source_freeze_id)
+            {
+                return Ok(json!({
+                    "created": false,
+                    "work_packet": {
+                        "kind": "review_gate",
+                        "gate_id": gate.id,
+                        "repair_id": invalidation_id,
+                        "responsible_maker_id": worker_id(),
+                        "execution_state": self.canonical_execution_state_value(
+                            &persisted.run.id,
+                            Some(&gate.id),
+                        )?,
+                    },
+                }));
+            }
+            let source_freeze = repository
+                .active_source_freeze(&existing.run_id)?
+                .unwrap_or(repository.source_freeze(&existing.source_freeze_id)?);
             let mut handoff = self.canonical_verification_handoff_value(
                 plan_id,
                 Some(existing.verification_item_id.clone()),
@@ -1369,6 +1397,14 @@ impl App {
             "commands": commands,
             "tests": tests,
         });
+        let accepted_material_gate = repository
+            .review_gates_for_run(&persisted.run.id, false)?
+            .into_iter()
+            .rev()
+            .find(|gate| {
+                gate.kind == ReviewGateKind::RiskCheckpoint
+                    && gate.status == ReviewGateStatus::Accepted
+            });
         self.conn
             .execute_batch("BEGIN IMMEDIATE; SAVEPOINT settle_product_finding_repair")?;
         let result = (|| -> Result<()> {
@@ -1416,6 +1452,55 @@ impl App {
                 settlement: settlement_value.clone(),
                 source_freeze_id: freeze.id.clone(),
             })?;
+            if let Some(gate) = accepted_material_gate.as_ref() {
+                let binding = super::repository::execution_run::FinalReviewSourceBindingRecord {
+                    gate_id: gate.id.clone(),
+                    freeze_id: freeze.id.clone(),
+                    source_revision: freeze.source_revision.clone(),
+                    source_digest: freeze.source_digest.clone(),
+                    receipt_lineage: json!({
+                        "kind": "product_repair",
+                        "repair_id": invalidation_id,
+                        "selective_obligation_ids": selective_obligation_ids,
+                        "settlement": settlement_value,
+                    }),
+                };
+                repository.reopen_review_gate_with_source_binding(&binding)?;
+                let maker_generation = self.conn.query_row(
+                    "SELECT COALESCE(MAX(lease_generation), 0) + 1 FROM feature_run_role_leases WHERE run_id = ?1 AND role = 'maker'",
+                    [&persisted.run.id],
+                    |row| row.get::<_, u64>(0),
+                )?;
+                let mut review_pending = apply_phase_transition(
+                    &frozen,
+                    &PhaseTransition {
+                        to: FeatureRunPhase::Implementation,
+                        cause: PhaseTransitionCause::SourceInvalidated,
+                        reference: format!("review_gate:{}", gate.id),
+                        owner: Some(RoleOwner {
+                            role: RunRole::Maker,
+                            worker_id: worker_id(),
+                            lease_generation: maker_generation,
+                        }),
+                    },
+                )
+                .map_err(|violation| anyhow!("product_repair_review_reopen:{violation:?}"))?;
+                let review_batch = ExecutionBatch {
+                    id: short_id("batch"),
+                    run_id: persisted.run.id.clone(),
+                    maker_worker_id: worker_id(),
+                    status: ExecutionBatchStatus::Active,
+                    settled_outcome_ids: Vec::new(),
+                    replacement: None,
+                };
+                review_pending.active_batch_id = Some(review_batch.id.clone());
+                review_pending.batch_outcome_count = 0;
+                repository.save_feature_run_with_new_batch(
+                    &review_pending,
+                    persisted.revision + 1,
+                    &review_batch,
+                )?;
+            }
             Ok(())
         })();
         match result {
@@ -1439,6 +1524,21 @@ impl App {
                 }
                 return Err(error);
             }
+        }
+        if let Some(gate) = accepted_material_gate {
+            return Ok(json!({
+                "created": true,
+                "work_packet": {
+                    "kind": "review_gate",
+                    "gate_id": gate.id,
+                    "repair_id": invalidation_id,
+                    "responsible_maker_id": worker_id(),
+                    "execution_state": self.canonical_execution_state_value(
+                        &persisted.run.id,
+                        Some(&gate.id),
+                    )?,
+                },
+            }));
         }
         let mut handoff = self.canonical_verification_handoff_value(
             plan_id,
@@ -2141,7 +2241,9 @@ fn budget_amounts_are_positive(amounts: BudgetAmounts) -> bool {
 mod tests {
     use super::*;
     use crate::app::execution_run::OutcomeSettlement;
-    use crate::app::repository::execution_run::ReviewVerdict;
+    use crate::app::repository::execution_run::{
+        ReviewAttemptRecord, ReviewGateRecord, ReviewScopeKind, ReviewVerdict,
+    };
     use crate::evidence::model::{
         CapabilityBinding, PermissionState, RawResultRef, Sha256Digest, SourceBinding,
         TrustedProvenance, TrustedReceiptInput, VantagePoint, build_trusted_receipt,
@@ -4293,6 +4395,113 @@ allow_overwrite = true
             app.product_repair_obligation_ids(&["pob-phase-ready".to_string()])
                 .unwrap(),
             vec!["pob-phase-successor"]
+        );
+    }
+
+    #[test]
+    fn product_repair_reopens_the_same_material_gate_with_exact_source_binding() {
+        let (_root, app, run_id, freeze_id) = verification_fixture();
+        app.conn
+            .execute(
+                "UPDATE feature_run_role_leases SET worker_id = ?1 WHERE run_id = ?2 AND role = 'maker'",
+                params![worker_id(), run_id],
+            )
+            .unwrap();
+        let repository = ExecutionRunRepository::new(&app.conn);
+        let gate = ReviewGateRecord {
+            id: "gate-material-repair".to_string(),
+            run_id: run_id.clone(),
+            scope_kind: ReviewScopeKind::Outcome,
+            scope_id: "item-phase".to_string(),
+            kind: ReviewGateKind::RiskCheckpoint,
+            status: ReviewGateStatus::Pending,
+            required_risk: Some("data_integrity_risk".to_string()),
+            responsible_maker_id: worker_id(),
+            latest_attempt: 0,
+            source_revision: None,
+        };
+        repository.create_review_gate(&gate).unwrap();
+        repository
+            .append_review_attempt(
+                &ReviewAttemptRecord {
+                    id: "attempt-old".to_string(),
+                    gate_id: gate.id.clone(),
+                    attempt_number: 1,
+                    reviewer_worker_id: "checker-old".to_string(),
+                    reviewer_mode: "independent".to_string(),
+                    verdict: ReviewVerdict::Accepted,
+                    source_revision: "risk-gate:gate-material-repair".to_string(),
+                    artifacts: Vec::new(),
+                },
+                &[],
+                0,
+            )
+            .unwrap();
+        let routed = app
+            .route_evidence_product_finding_value(&run_id, &freeze_id, "pob-phase-ready")
+            .unwrap();
+        let repair_id = routed["repair_id"].as_str().unwrap();
+        let reopened = app
+            .settle_product_finding_repair_value(
+                "plan-a",
+                repair_id,
+                "repair changed candidate inputs",
+                &["preflight.json".to_string()],
+                &["cargo test".to_string()],
+                &["passed".to_string()],
+            )
+            .unwrap();
+        assert_eq!(reopened["work_packet"]["kind"], "review_gate");
+        assert_eq!(reopened["work_packet"]["gate_id"], gate.id);
+        let repeated = app
+            .settle_product_finding_repair_value("plan-a", repair_id, "ignored", &[], &[], &[])
+            .unwrap();
+        assert_eq!(repeated["created"], false);
+        assert_eq!(repeated["work_packet"]["gate_id"], gate.id);
+
+        let pending = repository.review_gate(&gate.id).unwrap();
+        assert_eq!(pending.status, ReviewGateStatus::Pending);
+        assert_eq!(pending.latest_attempt, 1);
+        let binding = repository
+            .final_review_source_binding(&gate.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            pending.source_revision.as_deref(),
+            Some(binding.source_revision.as_str())
+        );
+        assert_eq!(
+            reopened["work_packet"]["execution_state"]["review_source_binding"]["freeze_id"],
+            binding.freeze_id
+        );
+        assert_eq!(
+            repository.feature_run(&run_id).unwrap().run.phase,
+            FeatureRunPhase::Implementation
+        );
+        assert!(
+            app.verification_work_packet_value("plan-a", true)
+                .unwrap()
+                .is_none(),
+            "pending exact-source review must block verification"
+        );
+
+        repository
+            .reopen_review_gate_with_source_binding(&binding)
+            .unwrap();
+        let mut conflicting = binding.clone();
+        conflicting.source_digest = "sha256:conflict".to_string();
+        assert!(
+            repository
+                .reopen_review_gate_with_source_binding(&conflicting)
+                .unwrap_err()
+                .to_string()
+                .contains("review_gate_source_reopen_conflict")
+        );
+        conflicting.gate_id = "gate-wrong".to_string();
+        assert!(
+            repository
+                .reopen_review_gate_with_source_binding(&conflicting)
+                .is_err()
         );
     }
 }

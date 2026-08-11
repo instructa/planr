@@ -1197,10 +1197,28 @@ impl App {
         if gate.status != ReviewGateStatus::Leased {
             bail!("review_gate_not_leased:{gate_id}");
         }
+        if let Some(stored) = repository.final_review_source_binding(gate_id)? {
+            let freeze = repository
+                .active_source_freeze(&gate.run_id)?
+                .ok_or_else(|| anyhow!("review_source_binding_missing_active_freeze:{gate_id}"))?;
+            let snapshot = capture_repository_snapshot(&self.root)
+                .map_err(|error| anyhow!("review_source_binding_capture_failed:{error}"))?;
+            if freeze.id != stored.freeze_id
+                || freeze.source_revision != stored.source_revision
+                || freeze.source_digest != stored.source_digest
+                || snapshot.source.revision != stored.source_revision
+                || snapshot.source.tree_digest.as_str() != stored.source_digest
+                || gate.source_revision.as_deref() != Some(stored.source_revision.as_str())
+            {
+                bail!("review_source_binding_stale:{gate_id}");
+            }
+        } else if gate.kind == ReviewGateKind::FinalProduct {
+            bail!("final_product_review_source_binding_missing:{gate_id}");
+        }
         if gate.kind == ReviewGateKind::FinalProduct {
             let stored = repository
                 .final_review_source_binding(gate_id)?
-                .ok_or_else(|| anyhow!("final_product_review_source_binding_missing:{gate_id}"))?;
+                .expect("final review binding checked");
             let current =
                 self.capture_final_review_source_binding(gate_id, &gate.run_id, &gate.scope_id)?;
             if stored != current
