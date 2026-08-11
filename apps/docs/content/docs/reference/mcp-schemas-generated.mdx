@@ -1406,14 +1406,14 @@ Check active Evidence obligations, payload schemas, registered capabilities, and
 
 ## `planr_evidence_recover_settlement`
 
-Recover an exact verified FeatureRun stranded before maker continuation
+Recover exact verified maker continuation or reconcile a proven superseded historical invalidation
 
 ```json
 {
   "additionalProperties": false,
   "properties": {
     "input": {
-      "description": "planr.evidence.recover_settlement.v1 payload",
+      "description": "planr.evidence.recover_settlement.v1 or planr.evidence.reconcile_historical_invalidation.v1 payload",
       "type": "object"
     }
   },

@@ -399,8 +399,8 @@ pub fn mcp_tools() -> Vec<Value> {
         ),
         tool(
             "planr_evidence_recover_settlement",
-            "Recover an exact verified FeatureRun stranded before maker continuation",
-            json!({"input": prop("object", "planr.evidence.recover_settlement.v1 payload")}),
+            "Recover exact verified maker continuation or reconcile a proven superseded historical invalidation",
+            json!({"input": prop("object", "planr.evidence.recover_settlement.v1 or planr.evidence.reconcile_historical_invalidation.v1 payload")}),
             &["input"],
         ),
         tool(

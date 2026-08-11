@@ -1270,9 +1270,23 @@ impl App {
             && run.run.phase == FeatureRunPhase::Implementation
         {
             let invalidations = repository.invalidations(&run.run.id)?;
-            if let Some(latest) = invalidations.last()
-                && repository.product_repair_settlement(&latest.id)?.is_none()
-            {
+            let mut latest_open = None;
+            for invalidation in invalidations.iter().rev() {
+                if repository
+                    .product_repair_settlement(&invalidation.id)?
+                    .is_none()
+                    && self
+                        .historical_invalidation_reconciliation_payload(
+                            &run.run.id,
+                            &invalidation.id,
+                        )?
+                        .is_none()
+                {
+                    latest_open = Some(invalidation);
+                    break;
+                }
+            }
+            if let Some(latest) = latest_open {
                 let maker_worker_id = run
                     .run
                     .role_owners
@@ -2316,6 +2330,7 @@ mod tests {
     use rusqlite::{Connection, params};
     use serde_json::Map;
     use std::path::{Path, PathBuf};
+    use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
     fn test_app(root: PathBuf) -> App {
         let conn = Connection::open_in_memory().expect("database");
@@ -3528,6 +3543,420 @@ allow_overwrite = true
             "next_item_id": "item-after-verification",
         });
         (root, app, input)
+    }
+
+    fn historical_invalidation_reconciliation_app() -> (tempfile::TempDir, App, Value) {
+        let (root, app, settlement_input) = stranded_recovery_app();
+        app.recover_verification_settlement_value(settlement_input)
+            .expect("restore ordinary maker continuation");
+        let repository = ExecutionRunRepository::new(&app.conn);
+        let run = repository
+            .active_feature_run_for_plan("project-a", "plan-a")
+            .unwrap()
+            .unwrap();
+        let active = repository
+            .active_source_freeze(&run.run.id)
+            .unwrap()
+            .unwrap();
+        let (receipt_json, trusted_binding): (String, String) = app
+            .conn
+            .query_row(
+                "SELECT receipt_json, trusted_binding_json FROM evidence_receipts
+                 WHERE id = 'erec-settle'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let mut receipt: Value = serde_json::from_str(&receipt_json).unwrap();
+        receipt["source"]["revision"] = json!(active.source_revision);
+        receipt["source"]["tree_digest"] = json!(active.source_digest);
+        let receipt_digest = crate::canonical_json::sha256_json_digest_without_top_level_field(
+            &receipt,
+            "receipt_digest",
+        )
+        .unwrap();
+        receipt["receipt_digest"] = json!(receipt_digest);
+        let mut trusted_binding: Value = serde_json::from_str(&trusted_binding).unwrap();
+        trusted_binding["source"] = receipt["source"].clone();
+        app.conn
+            .execute(
+                "UPDATE evidence_receipts SET receipt_digest = ?1, receipt_json = ?2,
+                   trusted_binding_json = ?3 WHERE id = 'erec-settle'",
+                params![
+                    receipt_digest,
+                    receipt.to_string(),
+                    trusted_binding.to_string(),
+                ],
+            )
+            .unwrap();
+        let evaluated_at = OffsetDateTime::now_utc().format(&Rfc3339).unwrap();
+        let coverage = crate::evidence::coverage::evaluate_plan_coverage(
+            &app.conn,
+            "project-a",
+            "plan-a",
+            &evaluated_at,
+        )
+        .unwrap();
+        app.conn
+            .execute(
+                "INSERT INTO feature_run_source_freezes(
+                   id, run_id, source_revision, source_digest, status, created_at, invalidated_at
+                 ) VALUES ('freeze-historical', ?1, 'historical-revision',
+                   'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                   'invalidated', '2000-01-01 00:00:00', '2000-01-02 00:00:00')",
+                [&run.run.id],
+            )
+            .unwrap();
+        app.conn
+            .execute(
+                "INSERT INTO review_gates(
+                   id, run_id, scope_kind, scope_id, kind, status, responsible_maker_id,
+                   latest_attempt, source_revision, accepted_at, created_at, updated_at
+                 ) VALUES ('gate-lineage', ?1, 'plan', 'plan-a', 'final_product', 'accepted',
+                   ?2, 2, ?3, datetime('now'), '2000-01-01 00:00:00', datetime('now'))",
+                params![run.run.id, worker_id(), active.source_revision],
+            )
+            .unwrap();
+        app.conn
+            .execute(
+                "INSERT INTO review_attempts(
+                   id, gate_id, attempt_number, reviewer_worker_id, reviewer_mode, verdict,
+                   source_revision, artifacts_json, created_at
+                 ) VALUES ('attempt-lineage', 'gate-lineage', 2, 'independent-reviewer',
+                   'independent', 'accepted', ?1, '[]', datetime('now'))",
+                [&active.source_revision],
+            )
+            .unwrap();
+        app.conn
+            .execute(
+                "INSERT INTO review_findings(
+                   id, run_id, gate_id, attempt_id, severity, target, owner_worker_id, status,
+                   invalidated_evidence_ids_json, created_at, resolved_at
+                 ) VALUES ('finding-historical', ?1, 'gate-lineage', 'attempt-lineage', 'high',
+                   'src/settlement.rs', ?2, 'resolved', '[\"pob-settle\"]',
+                   '2000-01-01 00:00:00', '2000-01-03 00:00:00')",
+                params![run.run.id, worker_id()],
+            )
+            .unwrap();
+        app.conn
+            .execute(
+                "INSERT INTO feature_run_evidence_invalidations(
+                   id, run_id, freeze_id, finding_id, reason, affected_evidence_ids_json, created_at
+                 ) VALUES ('invalidation-historical', ?1, 'freeze-historical',
+                   'finding-historical', 'final_review_product_finding', '[\"pob-settle\"]',
+                   '2000-01-02 00:00:00')",
+                [&run.run.id],
+            )
+            .unwrap();
+        app.conn
+            .execute(
+                "INSERT INTO final_review_source_bindings(
+                   gate_id, freeze_id, source_revision, source_digest, receipt_lineage_json
+                 ) VALUES ('gate-lineage', ?1, ?2, ?3, ?4)",
+                params![
+                    active.id,
+                    active.source_revision,
+                    active.source_digest,
+                    coverage.receipt_lineage.to_string(),
+                ],
+            )
+            .unwrap();
+        let input = json!({
+            "schema": "planr.evidence.reconcile_historical_invalidation.v1",
+            "plan_id": "plan-a",
+            "run_id": run.run.id,
+            "invalidation_id": "invalidation-historical",
+            "superseding_freeze_id": active.id,
+            "review_gate_id": "gate-lineage",
+            "receipt_id": "erec-settle",
+            "next_item_id": "item-after-verification",
+        });
+        (root, app, input)
+    }
+
+    #[test]
+    fn proven_historical_invalidation_reconciles_once_and_leaves_ordinary_work() {
+        let (_root, app, input) = historical_invalidation_reconciliation_app();
+        let before = app
+            .repair_work_packet_value("plan-a")
+            .expect_err("historical invalidation reproduces false-open repair classification");
+        assert!(
+            before
+                .to_string()
+                .contains("product_finding_repair_verification_item_missing")
+        );
+
+        let reconciled = app
+            .recover_verification_settlement_value(input.clone())
+            .expect("later exact lineage reconciles historical invalidation");
+        assert_eq!(reconciled["created"], true);
+        assert_eq!(
+            reconciled["schema"],
+            "planr.evidence.reconcile_historical_invalidation.result.v1"
+        );
+        assert!(app.repair_work_packet_value("plan-a").unwrap().is_none());
+
+        let repeated = app
+            .recover_verification_settlement_value(input)
+            .expect("repeat converges without another write");
+        assert_eq!(repeated["created"], false);
+        let events: i64 = app
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM events
+                 WHERE event_type = 'historical_invalidation_reconciled'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(events, 1);
+    }
+
+    #[test]
+    fn historical_invalidation_reconciliation_fails_closed_for_unproven_lineage() {
+        for case in [
+            "genuine_product_repair",
+            "unresolved_finding",
+            "stale_source",
+            "review_source_mismatch",
+            "missing_receipt",
+            "receipt_source_mismatch",
+            "waived_coverage",
+        ] {
+            let (_root, app, mut input) = historical_invalidation_reconciliation_app();
+            match case {
+                "genuine_product_repair" => {
+                    app.conn
+                        .execute(
+                            "UPDATE feature_run_evidence_invalidations SET finding_id = NULL
+                             WHERE id = 'invalidation-historical'",
+                            [],
+                        )
+                        .unwrap();
+                }
+                "unresolved_finding" => {
+                    app.conn
+                        .execute(
+                            "UPDATE review_findings SET status = 'open', resolved_at = NULL
+                             WHERE id = 'finding-historical'",
+                            [],
+                        )
+                        .unwrap();
+                }
+                "stale_source" => std::fs::write(app.root.join("stale.txt"), "stale").unwrap(),
+                "review_source_mismatch" => {
+                    app.conn
+                        .execute(
+                            "UPDATE final_review_source_bindings SET source_digest =
+                             'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+                             WHERE gate_id = 'gate-lineage'",
+                            [],
+                        )
+                        .unwrap();
+                }
+                "missing_receipt" => input["receipt_id"] = json!("missing-receipt"),
+                "receipt_source_mismatch" => {
+                    app.conn
+                        .execute(
+                            "UPDATE evidence_receipts SET trusted_binding_json =
+                             json_set(trusted_binding_json, '$.source.revision', 'wrong-revision')
+                             WHERE id = 'erec-settle'",
+                            [],
+                        )
+                        .unwrap();
+                }
+                "waived_coverage" => {
+                    let observations: String = app
+                        .conn
+                        .query_row(
+                            "SELECT observation_requirements_json FROM proof_obligations
+                             WHERE id = 'pob-settle'",
+                            [],
+                            |row| row.get(0),
+                        )
+                        .unwrap();
+                    let mut observations: Value = serde_json::from_str(&observations).unwrap();
+                    let mut waived = observations[0].clone();
+                    waived["id"] = json!("obs-settle-waived");
+                    observations.as_array_mut().unwrap().push(waived);
+                    app.conn
+                        .execute_batch("DROP TRIGGER proof_obligations_no_update")
+                        .unwrap();
+                    app.conn
+                        .execute(
+                            "UPDATE proof_obligations SET observation_requirements_json = ?1
+                             WHERE id = 'pob-settle'",
+                            [observations.to_string()],
+                        )
+                        .unwrap();
+                    let source = capture_repository_snapshot(&app.root).unwrap().source;
+                    let waiver = json!({
+                        "id": "waiver-settle-lineage",
+                        "schema_version": crate::evidence::model::EVIDENCE_CONTRACT_V1,
+                        "scope": {"kind": "plan", "id": "plan-a"},
+                        "observation_ids": ["obs-settle-waived"],
+                        "source": source,
+                        "target": {"kind": "process", "uri": "local://ready"},
+                        "reason": "lineage test waiver",
+                        "created_by": "reviewer",
+                        "created_at": "2026-08-08T00:00:00Z",
+                        "expires_at": "2099-01-01T00:00:00Z",
+                        "approval_ref": "item-lineage-waiver-approval",
+                        "audit_trail": [{"event": "created", "at": "2026-08-08T00:00:00Z"}]
+                    });
+                    let waiver_digest = crate::canonical_json::sha256_json_digest(&waiver).unwrap();
+                    app.conn
+                        .execute(
+                            "INSERT INTO items(
+                               id, project_id, title, description, status, work_type, worker_id,
+                               plan_path, approval_status, approved_by, created_at, updated_at,
+                               completed_at
+                             ) VALUES ('item-lineage-waiver-approval', 'project-a', 'waiver',
+                               'waiver', 'closed', 'approval', 'reviewer', 'plan-a.md', 'approved',
+                               'reviewer', datetime('now'), datetime('now'), datetime('now'))",
+                            [],
+                        )
+                        .unwrap();
+                    app.conn
+                        .execute(
+                            "INSERT INTO evidence_waivers(
+                               id, project_id, approval_item_id, obligation_id, observation_id,
+                               scope_kind, scope_id, waiver_digest, reason, expires_at, created_by,
+                               waiver_json, created_at
+                             ) VALUES ('waiver-settle-lineage', 'project-a',
+                               'item-lineage-waiver-approval', 'pob-settle', 'obs-settle-waived',
+                               'plan', 'plan-a', ?1, 'lineage test waiver',
+                               '2099-01-01T00:00:00Z', 'reviewer', ?2,
+                               '2026-08-08T00:00:00Z')",
+                            params![waiver_digest, waiver.to_string()],
+                        )
+                        .unwrap();
+                }
+                _ => unreachable!(),
+            }
+            app.recover_verification_settlement_value(input)
+                .unwrap_err();
+            let events: i64 = app
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM events
+                     WHERE event_type = 'historical_invalidation_reconciled'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(events, 0, "case {case}");
+        }
+    }
+
+    #[test]
+    fn concurrent_historical_invalidation_reconciliation_converges_once() {
+        let (root, app, input) = historical_invalidation_reconciliation_app();
+        let database_path = app.db_path.clone();
+        drop(app);
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let mut handles = Vec::new();
+        for _ in 0..2 {
+            let database_path = database_path.clone();
+            let repository_root = root.path().to_path_buf();
+            let input = input.clone();
+            let barrier = barrier.clone();
+            handles.push(std::thread::spawn(move || {
+                let conn = Connection::open(&database_path).unwrap();
+                conn.busy_timeout(std::time::Duration::from_secs(5))
+                    .unwrap();
+                let app = App::new(conn, repository_root, database_path, true, false);
+                barrier.wait();
+                app.recover_verification_settlement_value(input).unwrap()["created"]
+                    .as_bool()
+                    .unwrap()
+            }));
+        }
+        let mut created = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect::<Vec<_>>();
+        created.sort();
+        assert_eq!(created, vec![false, true]);
+
+        let conn = Connection::open(database_path).unwrap();
+        let events: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM events
+                 WHERE event_type = 'historical_invalidation_reconciled'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(events, 1);
+    }
+
+    #[test]
+    fn historical_invalidation_reconciliation_rolls_back_late_failure() {
+        let (_root, app, input) = historical_invalidation_reconciliation_app();
+        app.conn
+            .execute_batch(
+                "CREATE TRIGGER reject_historical_reconciliation
+                 BEFORE INSERT ON events
+                 WHEN NEW.event_type = 'historical_invalidation_reconciled'
+                 BEGIN SELECT RAISE(ABORT, 'forced historical reconciliation failure'); END;",
+            )
+            .unwrap();
+
+        let error = app
+            .recover_verification_settlement_value(input)
+            .expect_err("late event write failure rolls back");
+        assert!(
+            error
+                .to_string()
+                .contains("forced historical reconciliation failure")
+        );
+        assert!(app.repair_work_packet_value("plan-a").is_err());
+        let events: i64 = app
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM events
+                 WHERE event_type = 'historical_invalidation_reconciled'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(events, 0);
+    }
+
+    #[test]
+    fn historical_invalidation_reconciliation_mcp_and_http_share_typed_result() {
+        let (_mcp_root, mcp_app, mcp_input) = historical_invalidation_reconciliation_app();
+        let mcp = mcp_app
+            .mcp_evidence_tool_call(
+                "planr_evidence_recover_settlement",
+                json!({"input": mcp_input}),
+            )
+            .unwrap();
+        let mcp_envelope: Value =
+            serde_json::from_str(mcp["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            mcp_envelope["object"]["schema"],
+            "planr.evidence.reconcile_historical_invalidation.result.v1"
+        );
+        assert_eq!(mcp_envelope["object"]["created"], true);
+
+        let (_http_root, http_app, http_input) = historical_invalidation_reconciliation_app();
+        let (status, body) = http_app
+            .http_evidence_route(
+                "POST",
+                "/v1/evidence/recover-settlement",
+                "",
+                &json!({"input": http_input}),
+            )
+            .unwrap();
+        let http_envelope: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(status, "200 OK");
+        assert_eq!(
+            http_envelope["object"]["schema"],
+            mcp_envelope["object"]["schema"]
+        );
+        assert_eq!(http_envelope["object"]["created"], true);
     }
 
     #[test]
