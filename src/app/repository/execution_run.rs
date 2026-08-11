@@ -1152,11 +1152,11 @@ impl<'conn> ExecutionRunRepository<'conn> {
         )?;
         require_nonempty("final_review_binding.source_digest", &binding.source_digest)?;
         let updated = self.conn.execute(
-            "UPDATE review_gates SET source_revision = ?1, updated_at = datetime('now') WHERE id = ?2 AND kind = 'final_product' AND status = 'changes_requested'",
+            "UPDATE review_gates SET source_revision = ?1, updated_at = datetime('now') WHERE id = ?2 AND status = 'changes_requested'",
             params![binding.source_revision, binding.gate_id],
         )?;
         if updated != 1 {
-            bail!("final_review_gate_rebind_rejected:{}", binding.gate_id);
+            bail!("review_gate_rebind_rejected:{}", binding.gate_id);
         }
         self.conn.execute(
             "INSERT INTO final_review_source_bindings(gate_id, freeze_id, source_revision, source_digest, receipt_lineage_json) VALUES (?1, ?2, ?3, ?4, ?5)

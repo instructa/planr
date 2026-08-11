@@ -1,8 +1,9 @@
 use super::App;
 use super::lease::PickFilter;
 use super::repository::execution_run::{
-    ExecutionRunRepository, PersistedFeatureRun, ReviewGateKind, ReviewGateRecord,
-    ReviewGateStatus, SourceFreezeRecord, SourceFreezeStatus,
+    EvidenceInvalidationRecord, ExecutionRunRepository, PersistedFeatureRun, ReviewGateKind,
+    ReviewGateRecord, ReviewGateStatus, ReviewSourceBindingRecord, SourceFreezeRecord,
+    SourceFreezeStatus,
 };
 use crate::evidence::policy::capture_repository_snapshot;
 use crate::execution_run::{
@@ -16,6 +17,73 @@ use rusqlite::params;
 use serde_json::{Value, json};
 
 impl App {
+    pub(crate) fn refresh_risk_review_binding_after_finding_repair(
+        &self,
+        repository: &ExecutionRunRepository<'_>,
+        persisted: &PersistedFeatureRun,
+        gate: &ReviewGateRecord,
+        finding_ids: &[String],
+    ) -> Result<()> {
+        if gate.kind != ReviewGateKind::RiskCheckpoint {
+            return Ok(());
+        }
+        let Some(binding) = repository.review_source_binding(&gate.id)? else {
+            return Ok(());
+        };
+        let active = repository
+            .active_source_freeze(&gate.run_id)?
+            .ok_or_else(|| anyhow!("risk_review_repair_missing_bound_freeze:{}", gate.id))?;
+        if active.id != binding.freeze_id
+            || active.source_revision != binding.source_revision
+            || active.source_digest != binding.source_digest
+        {
+            bail!("risk_review_repair_bound_freeze_mismatch:{}", gate.id);
+        }
+        let snapshot = capture_repository_snapshot(&self.root)
+            .map_err(|error| anyhow!("risk_review_repair_source_capture:{error}"))?;
+        if snapshot.source.revision == active.source_revision
+            && snapshot.source.tree_digest.as_str() == active.source_digest
+        {
+            return Ok(());
+        }
+        self.reconcile_active_phase_wall(&gate.run_id, BudgetPhase::Repair)?;
+        let obligation_ids = self
+            .conn
+            .prepare(
+                "SELECT id FROM proof_obligations WHERE plan_id = ?1 AND binding = 1 ORDER BY id",
+            )?
+            .query_map([&persisted.run.plan_id], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        repository.invalidate_source(&EvidenceInvalidationRecord {
+            id: short_id("invalidation"),
+            run_id: gate.run_id.clone(),
+            freeze_id: active.id,
+            finding_id: finding_ids.first().cloned(),
+            reason: "resolved_risk_review_repair_source_changed".to_string(),
+            affected_evidence_ids: obligation_ids,
+        })?;
+        let replacement = SourceFreezeRecord {
+            id: short_id("freeze"),
+            run_id: gate.run_id.clone(),
+            source_revision: snapshot.source.revision,
+            source_digest: snapshot.source.tree_digest.as_str().to_string(),
+            status: SourceFreezeStatus::Active,
+        };
+        repository.freeze_source(&replacement)?;
+        repository.rebind_review_gate_source(&ReviewSourceBindingRecord {
+            gate_id: gate.id.clone(),
+            freeze_id: replacement.id,
+            source_revision: replacement.source_revision,
+            source_digest: replacement.source_digest,
+            receipt_lineage: json!({
+                "kind": "risk_review_finding_repair",
+                "finding_ids": finding_ids,
+                "supersedes": binding.receipt_lineage,
+            }),
+        })?;
+        Ok(())
+    }
+
     fn accepted_risk_bound_freeze(
         &self,
         repository: &ExecutionRunRepository<'_>,

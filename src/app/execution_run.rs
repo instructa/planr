@@ -761,6 +761,12 @@ impl App {
             .execute_batch("BEGIN IMMEDIATE; SAVEPOINT resolve_review_findings")?;
         let result = (|| -> Result<Value> {
             let persisted = repository.feature_run(&gate.run_id)?;
+            self.refresh_risk_review_binding_after_finding_repair(
+                &repository,
+                &persisted,
+                &gate,
+                finding_ids,
+            )?;
             if gate.kind == ReviewGateKind::FinalProduct
                 && persisted.run.phase == FeatureRunPhase::Verification
                 && let Some(active) = repository.active_source_freeze(&gate.run_id)?
@@ -1625,6 +1631,81 @@ mod tests {
             .expect("idempotent recovery")
             .expect("handoff");
         assert_eq!(repeated["work_packet"]["source_freeze"]["id"], bound.id);
+    }
+
+    #[test]
+    fn risk_review_finding_repair_refreezes_and_rebinds_changed_source_before_rereview() {
+        let root = tempfile::tempdir().expect("root");
+        initialize_test_git(root.path());
+        let app = test_app_at(root.path().to_path_buf());
+        add_outcome(&app, "item-risk-refreeze");
+        add_ready_verification(&app, "item-risk-verification");
+        app.outcome_work_packet("item-risk-refreeze")
+            .expect("maker packet");
+        let settled = app
+            .settle_feature_run_outcome(OutcomeSettlement {
+                item_id: "item-risk-refreeze",
+                summary: "protected repaired outcome",
+                materiality: &materiality(true),
+                escalation: None,
+            })
+            .expect("risk settlement");
+        let gate_id = settled["review_gate"]["id"].as_str().unwrap();
+        let old_freeze = bind_risk_gate_to_active_freeze(&app, gate_id);
+        app.review_gate_pick_value_for_worker("plan-a", false, "checker-risk")
+            .expect("review pick")
+            .expect("review packet");
+        app.complete_review_gate_value(
+            gate_id,
+            ReviewVerdict::ChangesRequested,
+            &["repair accepted handoff".to_string()],
+            Some("checker-risk"),
+        )
+        .expect("changes requested");
+        let finding_id = ExecutionRunRepository::new(&app.conn)
+            .findings(gate_id)
+            .expect("findings")
+            .into_iter()
+            .next()
+            .expect("finding")
+            .id;
+        fs::write(root.path().join("plan-a.md"), "# Repaired\n").expect("repair source");
+        let resolved = app
+            .resolve_review_gate_findings_value(gate_id, std::slice::from_ref(&finding_id))
+            .expect("resolve finding");
+        assert_eq!(
+            resolved["execution_state"]["review_gate"]["status"],
+            "pending"
+        );
+        assert_eq!(
+            resolved["execution_state"]["review_source_binding"]["receipt_lineage"]["kind"],
+            "risk_review_finding_repair"
+        );
+        let new_freeze_id = resolved["execution_state"]["review_source_binding"]["freeze_id"]
+            .as_str()
+            .expect("new freeze");
+        assert_ne!(new_freeze_id, old_freeze.id);
+        let repository = ExecutionRunRepository::new(&app.conn);
+        assert_eq!(
+            repository
+                .active_source_freeze(&old_freeze.run_id)
+                .expect("active freeze")
+                .expect("replacement freeze")
+                .id,
+            new_freeze_id
+        );
+        assert_eq!(
+            repository
+                .source_freeze(&old_freeze.id)
+                .expect("old freeze")
+                .status,
+            SourceFreezeStatus::Invalidated
+        );
+        assert_eq!(resolved["execution_state"]["phase"], "implementation");
+        assert_eq!(
+            resolved["execution_state"]["owner"]["worker_id"],
+            worker_id()
+        );
     }
 
     #[test]
