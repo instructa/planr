@@ -53,11 +53,12 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
 async function runCli(argv) {
   const inputPath = valueAfter("--input", argv);
   const resultPath = valueAfter("--result", argv);
+  const admitOnly = argv.includes("--admit-only");
   if (!inputPath) {
-    throw new Error("usage: node scripts/ac014-fresh-arm-runner.mjs --input <run.json> [--result <result.json>]");
+    throw new Error("usage: node scripts/ac014-fresh-arm-runner.mjs --input <run.json> [--admit-only] [--result <result.json>]");
   }
   const input = readJson(inputPath);
-  const result = await runFreshArmEntry(input);
+  const result = admitOnly ? admitFreshArmEntry(input) : await runFreshArmEntry(input);
   const serialized = `${JSON.stringify(result, null, 2)}\n`;
   if (resultPath) {
     mkdirSync(path.dirname(path.resolve(resultPath)), { recursive: true });
@@ -70,6 +71,31 @@ async function runCli(argv) {
 
 export async function runFreshArmForTest(input, options = {}) {
   return runFreshArmEntry(input, { testCodexCommand: options.testCodexCommand ?? null });
+}
+
+export function admitFreshArmForTest(input, options = {}) {
+  return admissionSummary(admitFreshArm(input, { testCodexCommand: options.testCodexCommand ?? null }));
+}
+
+function admitFreshArmEntry(input) {
+  try {
+    return admissionSummary(admitFreshArm(input));
+  } catch (error) {
+    return classifiedResult(error, []);
+  }
+}
+
+function admissionSummary(admitted) {
+  return {
+    schema_version: "planr.ac014.fresh_arm_admission.v1",
+    status: "passed",
+    fresh_root: admitted.freshRoot,
+    baseline_root: admitted.baselineRoot,
+    control_handoff: admitted.controlHandoff,
+    planr_candidate: admitted.planrCandidateIdentity,
+    observed_contract: admitted.staticContract,
+    side_effects: "none",
+  };
 }
 
 async function runFreshArmEntry(input, options = {}) {
@@ -88,20 +114,15 @@ async function runFreshArmEntry(input, options = {}) {
 }
 
 async function runFreshArm(config, commands, options = {}) {
-  requireSchema(config);
-  const controlHandoff = validateControlHandoff(config.control_handoff);
-  if ("replace_fresh_root" in config) {
-    throw admission("AC-014 fresh_root must never be destructively replaced");
-  }
-  const baselineRoot = canonicalExistingDir(config.baseline_root, "baseline_root");
-  const freshRoot = path.resolve(config.fresh_root);
-  if (isPathInside(freshRoot, baselineRoot) || isPathInside(baselineRoot, freshRoot)) {
-    throw admission(`fresh_root and baseline_root must be separate: ${freshRoot}`);
-  }
-  if (existsSync(freshRoot)) {
-    throw admission(`fresh_root must be a new non-existing path: ${freshRoot}`, { rejected_fresh_root: freshRoot });
-  }
-  validateBaselineNoSymlinkEscapes(baselineRoot);
+  const admitted = admitFreshArm(config, options);
+  const {
+    baselineRoot,
+    freshRoot,
+    controlHandoff,
+    planrBin,
+    planrCandidateIdentity,
+    staticContract,
+  } = admitted;
 
   mkdirSync(path.dirname(freshRoot), { recursive: true });
   cpSync(baselineRoot, freshRoot, {
@@ -116,16 +137,12 @@ async function runFreshArm(config, commands, options = {}) {
     },
   });
   const freshCanonical = realpathSync(freshRoot);
-  if ("metrics" in config || "metrics_path" in config) {
-    throw admission("AC-014 metrics must be derived from CODEX_HOME sessions, not supplied by config");
+  const copiedStaticContract = observeStaticContract(config, freshCanonical, planrBin);
+  if (JSON.stringify(copiedStaticContract) !== JSON.stringify(staticContract)) {
+    throw admission("AC-014 copied fresh root no longer matches the admitted static contract");
   }
-
-  const planrBin = path.resolve(config.planr_bin ?? process.env.PLANR_BIN ?? "target/debug/planr");
-  assertExecutable(planrBin);
-  const planrCandidateIdentity = validatePlanrCandidateIdentity(controlHandoff?.planr_candidate, planrBin);
-  validateOracleContract(config, planrCandidateIdentity);
   const preCodexContract = {
-    ...observeStaticContract(config, freshCanonical, planrBin),
+    ...copiedStaticContract,
     planr_candidate: planrCandidateIdentity,
   };
   const dbPath = resolveFreshPath(config.db_path ?? ".planr/planr.sqlite", freshCanonical, "db_path", false);
@@ -146,7 +163,6 @@ async function runFreshArm(config, commands, options = {}) {
     freshCanonical,
     "--apply",
   ], commands, "instrumentation");
-
   const validation = validateLocalPlanrState(planrBin, dbPath, freshCanonical, commands);
   const evidencePreparation = runEvidencePreparation(config, freshCanonical, planrBin, commands);
   const migrationInput = resolveFreshPath(
@@ -267,9 +283,8 @@ async function runFreshArm(config, commands, options = {}) {
       oracle,
     };
     writeImmutableArtifacts(config, freshCanonical, { ...payload, observed_contract: observedContract }, "failed", "oracle_failed", armMonitor);
-    throw product("AC-014 exact product oracle failed", payload);
+    throw product("AC-014 oracle failed", payload);
   }
-
   const passed = {
     schema_version: "planr.ac014.fresh_arm_result.v1",
     status: "passed",
@@ -296,18 +311,79 @@ async function runFreshArm(config, commands, options = {}) {
   return passed;
 }
 
+function admitFreshArm(config, options = {}) {
+  requireSchema(config);
+  const controlHandoff = validateControlHandoff(config.control_handoff);
+  if ("replace_fresh_root" in config) {
+    throw admission("AC-014 fresh_root must never be destructively replaced");
+  }
+  const baselineRoot = canonicalExistingDir(config.baseline_root, "baseline_root");
+  const freshRoot = path.resolve(config.fresh_root);
+  if (isPathInside(freshRoot, baselineRoot) || isPathInside(baselineRoot, freshRoot)) {
+    throw admission(`fresh_root and baseline_root must be separate: ${freshRoot}`);
+  }
+  if (existsSync(freshRoot)) {
+    throw admission(`fresh_root must be a new non-existing path: ${freshRoot}`, { rejected_fresh_root: freshRoot });
+  }
+  validateBaselineNoSymlinkEscapes(baselineRoot);
+
+  if ("metrics" in config || "metrics_path" in config) {
+    throw admission("AC-014 metrics must be derived from CODEX_HOME sessions, not supplied by config");
+  }
+
+  const declaredPlanrBin = requiredString(config.planr_bin, "planr_bin");
+  if (!path.isAbsolute(declaredPlanrBin)) {
+    throw admission("AC-014 planr_bin must be an explicit absolute path");
+  }
+  const planrBin = path.resolve(declaredPlanrBin);
+  assertExecutable(planrBin);
+  const planrCandidateIdentity = validatePlanrCandidateIdentity(controlHandoff?.planr_candidate, planrBin);
+  validateOracleContract(config, planrCandidateIdentity);
+  requiredString(config.project_id, "project_id");
+  resolveFreshPath(config.db_path ?? ".planr/planr.sqlite", baselineRoot, "db_path", true);
+  resolveFreshPath(requiredString(config.evidence_migration_input, "evidence_migration_input"), baselineRoot, "evidence_migration_input", true);
+  const preparation = config.evidence_prepare_commands ?? [];
+  if (!Array.isArray(preparation)) {
+    throw admission("evidence_prepare_commands must be an array of command arrays");
+  }
+  preparation.forEach((command, index) => {
+    const admittedCommand = requiredCommand(command, `evidence_prepare_commands[${index}]`);
+    if (!path.isAbsolute(admittedCommand[0])) {
+      throw admission(`evidence_prepare_commands[${index}] executable must be an absolute path`);
+    }
+    assertExecutable(admittedCommand[0]);
+  });
+  if (options.testCodexCommand) {
+    requiredCommand(options.testCodexCommand, "testCodexCommand");
+  } else {
+    assertExecutable(EXPECTED.codex_launch_path);
+  }
+  const staticContract = observeStaticContract(config, baselineRoot, planrBin);
+  return {
+    baselineRoot,
+    freshRoot,
+    controlHandoff,
+    planrBin,
+    planrCandidateIdentity,
+    staticContract,
+  };
+}
+
 function runEvidencePreparation(config, freshRoot, planrBin, commands) {
   const configured = config.evidence_prepare_commands ?? [];
   if (!Array.isArray(configured)) {
     throw admission("evidence_prepare_commands must be an array of command arrays");
   }
-  const pathValue = [path.dirname(planrBin), process.env.PATH].filter(Boolean).join(path.delimiter);
   return configured.map((value, index) => {
     const command = requiredCommand(value, `evidence_prepare_commands[${index}]`);
     const output = spawnSync(command[0], command.slice(1), {
       cwd: freshRoot,
       encoding: "utf8",
-      env: { ...process.env, PATH: pathValue },
+      env: {
+        ...process.env,
+        PLANR_BIN: planrBin,
+        PLANR_AC014_CANDIDATE_BIN: planrBin,
+      },
     });
     const record = {
       command: command.join(" "),
@@ -689,7 +765,7 @@ function isolatedCodexHome(config, baselineRoot, freshRoot) {
   }
   const activeCodexHome = activeSharedCodexHomes().find((sharedHome) => codexHome === sharedHome);
   if (activeCodexHome) {
-    throw admission(`AC-014 codex_home must not be the active shared Codex profile: ${codexHome}`);
+    throw admission(`AC-014 codex_home must not be an active shared CODEX_HOME: ${codexHome}`);
   }
   return codexHome;
 }
@@ -698,7 +774,6 @@ function activeSharedCodexHomes() {
   const candidates = [
     process.env.CODEX_HOME,
     path.join(process.env.HOME ?? "", ".codex"),
-    path.join(process.env.HOME ?? "", ".codex-kevin"),
   ].filter(Boolean);
   const homes = [];
   for (const candidate of candidates) {
@@ -1309,9 +1384,10 @@ function writeFailureArtifacts(config, error, commands) {
   const freshRoot = path.resolve(config.fresh_root);
   const rejected = error.details?.rejected_fresh_root === freshRoot;
   const collision = /immutable artifact already exists/.test(error.message ?? "");
+  const admissionFailure = error.failure_class === "admission";
   const artifactRoot = config.failure_artifact_root
     ? path.resolve(config.failure_artifact_root)
-    : rejected || collision
+    : admissionFailure || rejected || collision
       ? path.join(path.dirname(freshRoot), ".planr-ac014-failures", path.basename(freshRoot))
       : freshRoot;
   const artifactDir = path.join(artifactRoot, config.artifact_dir ?? ".planr/artifacts/ac014");
@@ -1530,6 +1606,11 @@ function validatePlanrCandidateIdentity(candidate, planrBin) {
 }
 
 function validateOracleContract(config, candidate) {
+  const oracleCommand = requiredCommand(config.oracle_command, "oracle_command");
+  if (!path.isAbsolute(oracleCommand[0])) {
+    throw admission("AC-014 oracle executable must be an absolute path");
+  }
+  assertExecutable(oracleCommand[0]);
   requiredString(config.oracle_plan_id, "oracle_plan_id");
   if (config.fixed_contract?.oracle_plan_id !== config.oracle_plan_id) {
     throw admission("AC-014 fixed contract oracle_plan_id mismatch");

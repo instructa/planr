@@ -6,7 +6,7 @@ use super::repository::execution_run::{
 use crate::execution_run::{
     ExecutionBatch, FeatureRun, FeatureRunBudgetContractCompatibility, FeatureRunHoldReason,
     FeatureRunPhase, FeatureRunRestartDisposition, FeatureRunRestartReason, FeatureRunStatus,
-    RoleOwner, RunRole,
+    FeatureRunTerminalReason, RoleOwner, RunRole,
 };
 use crate::usage_policy::{
     BudgetAmounts, BudgetProvenance, BudgetSnapshot, FeatureRunBudgetMode, FeatureRunBudgetPhase,
@@ -142,7 +142,9 @@ fn digest_open_file(file: &mut File) -> Result<(String, u64)> {
     Ok((format!("sha256:{:x}", digest.finalize()), size_bytes))
 }
 
-fn observe_planr_executable_identity(path: &Path) -> Result<CanonicalPlanrExecutableIdentity> {
+pub(crate) fn observe_planr_executable_identity(
+    path: &Path,
+) -> Result<CanonicalPlanrExecutableIdentity> {
     observe_planr_executable_identity_with_hook(path, || Ok(()))
 }
 
@@ -413,6 +415,12 @@ impl App {
                 reason_code,
             })
         });
+        let legacy_nonbinding_source_frozen =
+            if persisted.run.phase == FeatureRunPhase::SourceFrozen {
+                !self.plan_has_active_binding_obligations(&persisted.run.plan_id)?
+            } else {
+                false
+            };
         let (reason_code, next_action) = if restart
             .as_ref()
             .is_some_and(|restart| restart.status == "required")
@@ -448,6 +456,9 @@ impl App {
                     ("implementation_in_progress", "settle_next_outcome")
                 }
                 FeatureRunPhase::RiskReview => ("risk_review_in_progress", "complete_review_gate"),
+                FeatureRunPhase::SourceFrozen if legacy_nonbinding_source_frozen => {
+                    ("legacy_nonbinding_source_frozen", "open_final_review")
+                }
                 FeatureRunPhase::SourceFrozen => ("source_frozen", "lease_verification"),
                 FeatureRunPhase::Verification => {
                     ("verification_in_progress", "complete_binding_evidence")
@@ -464,6 +475,12 @@ impl App {
                     }
                 },
                 FeatureRunPhase::Complete => ("feature_run_complete", "none"),
+                FeatureRunPhase::Cancelled
+                    if persisted.run.terminal_reason
+                        == Some(FeatureRunTerminalReason::VerificationAttemptsExhausted) =>
+                {
+                    ("verification_attempts_exhausted", "none")
+                }
                 FeatureRunPhase::Cancelled => ("feature_run_cancelled", "none"),
             }
         };
@@ -508,8 +525,24 @@ impl App {
         source_freeze: Value,
     ) -> Result<Value> {
         let planr_executable = observe_planr_executable_identity(&std::env::current_exe()?)?;
-        // Observation hashes the exact canonical path here, for every packet. Its before/after
-        // metadata check rejects a replacement racing the read; no metadata cache is authority.
+        self.canonical_verification_handoff_value_with_identity(
+            plan_id,
+            verification_item_id,
+            source_freeze,
+            &planr_executable,
+        )
+    }
+
+    pub(crate) fn canonical_verification_handoff_value_with_identity(
+        &self,
+        plan_id: &str,
+        verification_item_id: Option<String>,
+        source_freeze: Value,
+        planr_executable: &CanonicalPlanrExecutableIdentity,
+    ) -> Result<Value> {
+        // The supplied observation hashes the exact canonical path for this packet. Its
+        // before/after metadata check rejects a replacement racing the read; no metadata cache
+        // is authority.
         let execution_state = self
             .canonical_execution_state_for_plan_value(plan_id)?
             .ok_or_else(|| {
@@ -554,6 +587,75 @@ impl App {
                     "readiness": readiness,
                 },
                 "next_action": "lease_verifier_then_run_readiness",
+            }
+        }))
+    }
+
+    pub(crate) fn canonical_source_frozen_handoff_value(
+        &self,
+        plan_id: &str,
+        verification_item_id: Option<String>,
+        source_freeze: Value,
+    ) -> Result<Value> {
+        let planr_executable = observe_planr_executable_identity(&std::env::current_exe()?)?;
+        self.canonical_source_frozen_handoff_value_with_identity(
+            plan_id,
+            verification_item_id,
+            source_freeze,
+            &planr_executable,
+        )
+    }
+
+    pub(crate) fn canonical_source_frozen_handoff_value_with_identity(
+        &self,
+        plan_id: &str,
+        verification_item_id: Option<String>,
+        source_freeze: Value,
+        planr_executable: &CanonicalPlanrExecutableIdentity,
+    ) -> Result<Value> {
+        if self.plan_has_active_binding_obligations(plan_id)? {
+            return self.canonical_verification_handoff_value_with_identity(
+                plan_id,
+                verification_item_id,
+                source_freeze,
+                planr_executable,
+            );
+        }
+        let proof = self.proof_status_for_plan(plan_id)?;
+        if proof["status"] != "legacy_nonbinding"
+            || proof["active_binding"].as_bool() != Some(false)
+        {
+            bail!("source_frozen_handoff_proof_authority_unknown:{plan_id}");
+        }
+        let execution_state = self
+            .canonical_execution_state_for_plan_value(plan_id)?
+            .ok_or_else(|| {
+                anyhow::anyhow!("final_review_handoff_execution_state_missing:{plan_id}")
+            })?;
+        let open_final_review = canonical_planr_command(
+            &planr_executable,
+            vec![
+                "plan".to_string(),
+                "final-review".to_string(),
+                plan_id.to_string(),
+                "--json".to_string(),
+            ],
+        );
+        Ok(json!({
+            "item": null,
+            "reason": "final_review_handoff_source_frozen",
+            "work_packet": {
+                "schema_version": "planr.final_review_handoff.v1",
+                "kind": "final_review_handoff",
+                "plan_id": plan_id,
+                "execution_state": execution_state,
+                "source_freeze": source_freeze,
+                "proof": proof,
+                "planr_executable": planr_executable,
+                "commands": {
+                    "open_final_review": open_final_review,
+                },
+                "next_action": "open_final_review_then_lease_independent_reviewer",
             }
         }))
     }

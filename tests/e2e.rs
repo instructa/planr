@@ -22196,6 +22196,7 @@ fn capped_cli_batch_roll_preserves_same_maker_and_fourth_outcome_continues_clean
     )
     .unwrap();
     drop(conn);
+    init_git_repo(dir.path());
 
     let settle = |ordinal: u32, next: bool| -> Value {
         let mut command = planr();
@@ -22271,6 +22272,11 @@ fn capped_cli_batch_roll_preserves_same_maker_and_fourth_outcome_continues_clean
     assert_eq!(sixth["work_packet"]["transition"], "batch_cap_reached");
     assert_eq!(sixth["work_packet"]["rollover"], Value::Null);
     assert_eq!(sixth["next"]["item"], Value::Null);
+    assert_eq!(
+        sixth["next"]["reason"],
+        "final_review_handoff_source_frozen"
+    );
+    assert_eq!(sixth["next"]["work_packet"]["kind"], "final_review_handoff");
 
     let conn = Connection::open(&db).unwrap();
     let scalar = |sql: &str| -> i64 { conn.query_row(sql, [], |row| row.get(0)).unwrap() };
@@ -22279,13 +22285,22 @@ fn capped_cli_batch_roll_preserves_same_maker_and_fourth_outcome_continues_clean
         scalar(
             "SELECT COUNT(*) FROM execution_batches WHERE status = 'ended' AND replacement_reason IS NULL AND replaced_maker_worker_id IS NULL AND successor_maker_worker_id IS NULL"
         ),
-        1
+        2
     );
     assert_eq!(
         scalar(
             "SELECT COUNT(*) FROM execution_batches WHERE status = 'active' AND maker_worker_id = 'maker-roll-e2e'"
         ),
-        1
+        0
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT phase FROM feature_runs WHERE plan_id = 'plan-same-maker-roll'",
+            [],
+            |row| row.get::<_, String>(0)
+        )
+        .unwrap(),
+        "source_frozen"
     );
     assert_eq!(scalar("SELECT COUNT(*) FROM execution_run_outcomes"), 6);
     assert_eq!(
@@ -22399,7 +22414,7 @@ fn done_next_stops_at_review_gate_without_leasing_more_work() {
 }
 
 #[test]
-fn done_next_freezes_source_and_stops_before_verification_work() {
+fn done_next_freezes_source_without_authored_verification_item() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
     planr()
@@ -22431,13 +22446,21 @@ fn done_next_freezes_source_and_stops_before_verification_work() {
         rusqlite::params![project_id, plan_path.to_string_lossy()],
     )
     .unwrap();
-    conn.execute(
-        "INSERT INTO items(id, project_id, title, description, status, work_type, plan_path, created_at, updated_at)
-         VALUES ('item-verification-handoff', ?1, 'Verification', 'must not lease to maker code batch', 'ready', 'verification', ?2, datetime('now'), datetime('now'))",
-        rusqlite::params![project_id, plan_path.to_string_lossy()],
-    )
-    .unwrap();
     drop(conn);
+    let mut obligation = evidence_obligation(
+        "pob-verification-handoff-without-item",
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        json!({"kind": "local", "id": "verification-handoff"}),
+    );
+    obligation["plan_id"] = json!("plan-verification-handoff");
+    obligation["item_id"] = Value::Null;
+    obligation["criterion_id"] = json!("crit-verification-handoff-without-item");
+    add_evidence_obligation_value(
+        dir.path(),
+        &db,
+        "pob-verification-handoff-without-item",
+        &obligation,
+    );
     init_git_repo(dir.path());
 
     let hostile_bin = dir.path().join("installed-old-global/bin");
@@ -22484,7 +22507,7 @@ fn done_next_freezes_source_and_stops_before_verification_work() {
     assert_eq!(done["next"]["work_packet"]["kind"], "verification_handoff");
     assert_eq!(
         done["next"]["work_packet"]["verification_item_id"],
-        "item-verification-handoff"
+        Value::Null
     );
     let packet = &done["next"]["work_packet"];
     let identity = &packet["planr_executable"];
@@ -22576,14 +22599,15 @@ fn done_next_freezes_source_and_stops_before_verification_work() {
         ));
 
     let conn = Connection::open(&db).unwrap();
-    let verification_state: (String, Option<String>) = conn
-        .query_row(
-            "SELECT status, worker_id FROM items WHERE id = 'item-verification-handoff'",
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM items WHERE work_type = 'verification'",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| row.get::<_, i64>(0)
         )
-        .unwrap();
-    assert_eq!(verification_state, ("ready".to_string(), None));
+        .unwrap(),
+        0
+    );
     let phase: String = conn
         .query_row(
             "SELECT phase FROM feature_runs WHERE plan_id = 'plan-verification-handoff'",
@@ -22604,6 +22628,177 @@ fn done_next_freezes_source_and_stops_before_verification_work() {
     assert_eq!(
         conn.query_row(
             "SELECT COUNT(*) FROM execution_batches WHERE status = 'ended'",
+            [],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn done_next_routes_legacy_nonbinding_freeze_to_independent_final_review() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "project",
+            "init",
+            "Legacy Final Review Handoff",
+        ])
+        .assert()
+        .success();
+    let plan_path = dir.path().join("legacy-final-review.plan.md");
+    fs::write(&plan_path, "# Legacy Final Review\n").unwrap();
+    let conn = Connection::open(&db).unwrap();
+    let project_id: String = conn
+        .query_row("SELECT id FROM projects LIMIT 1", [], |row| row.get(0))
+        .unwrap();
+    conn.execute(
+        "INSERT INTO plans(id, project_id, stage, path, title, slug, parse_status, content_hash, created_at, updated_at)
+         VALUES ('plan-legacy-final-review', ?1, 'build', ?2, 'Legacy Final Review', 'legacy-final-review', 'ok', 'sha256:legacy-final-review', datetime('now'), datetime('now'))",
+        rusqlite::params![project_id, plan_path.to_string_lossy()],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO items(id, project_id, title, description, status, work_type, worker_id, plan_path, created_at, updated_at)
+         VALUES ('item-legacy-final-code', ?1, 'Legacy final code', 'settle legacy implementation', 'picked', 'code', 'maker-legacy-final', ?2, datetime('now'), datetime('now'))",
+        rusqlite::params![project_id, plan_path.to_string_lossy()],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO items(id, project_id, title, description, status, work_type, plan_path, created_at, updated_at)
+         VALUES ('item-legacy-authored-verification', ?1, 'Legacy authored verification', 'must not force Evidence admission', 'ready', 'verification', ?2, datetime('now'), datetime('now'))",
+        rusqlite::params![project_id, plan_path.to_string_lossy()],
+    )
+    .unwrap();
+    drop(conn);
+    init_git_repo(dir.path());
+
+    let output = planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "maker-legacy-final")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "done",
+            "item-legacy-final-code",
+            "--summary",
+            "legacy implementation settled",
+            "--cmd",
+            "true",
+            "--tests",
+            "true",
+            "--next",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let done: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(done["next"]["reason"], "final_review_handoff_source_frozen");
+    let packet = &done["next"]["work_packet"];
+    assert_eq!(packet["kind"], "final_review_handoff");
+    assert_eq!(packet["proof"]["status"], "legacy_nonbinding");
+    assert_eq!(
+        packet["execution_state"]["next_action"],
+        "open_final_review"
+    );
+    assert_eq!(packet["planr_executable"]["path_lookup_allowed"], false);
+    assert_eq!(
+        packet["commands"]["open_final_review"]["argv"],
+        json!(["plan", "final-review", "plan-legacy-final-review", "--json"])
+    );
+    let original_freeze_id = packet["source_freeze"]["source_freeze"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    fs::write(
+        &plan_path,
+        "# Legacy Final Review\n\nChanged before final review.\n",
+    )
+    .unwrap();
+
+    let opened = planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "maker-legacy-final")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "plan",
+            "final-review",
+            "plan-legacy-final-review",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let opened: Value = serde_json::from_slice(&opened).unwrap();
+    assert_eq!(opened["created"], true);
+    assert_eq!(
+        opened["execution_state"]["review_source_binding"]["receipt_lineage"],
+        json!([])
+    );
+    assert_ne!(
+        opened["execution_state"]["review_source_binding"]["freeze_id"],
+        original_freeze_id
+    );
+    let leased = planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "reviewer-legacy-final")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "pick",
+            "--plan",
+            "plan-legacy-final-review",
+            "--work-type",
+            "review",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let leased: Value = serde_json::from_slice(&leased).unwrap();
+    assert_eq!(
+        leased["work_packet"]["execution_state"]["phase"],
+        "final_review"
+    );
+    let conn = Connection::open(&db).unwrap();
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM feature_run_role_leases WHERE role = 'verifier'",
+            [],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        item_status(&db, "item-legacy-authored-verification"),
+        "ready"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM feature_run_source_freezes WHERE status = 'invalidated'",
+            [],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM feature_run_evidence_invalidations WHERE reason = 'legacy_final_review_source_changed'",
             [],
             |row| row.get::<_, i64>(0)
         )
@@ -23150,6 +23345,7 @@ fn unplanned_done_records_missing_materiality_policy_without_a_review_gate() {
             "docs/README.md",
             "--cmd",
             "true",
+            "--next",
         ])
         .assert()
         .success()
@@ -23159,6 +23355,7 @@ fn unplanned_done_records_missing_materiality_policy_without_a_review_gate() {
     let done: Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(done["item"]["status"], "closed");
     assert_eq!(done["work_packet"]["review_gate"], Value::Null);
+    assert_eq!(done["next"]["reason"], "all_settled");
     assert_eq!(done["materiality"]["policy"]["reason"], "missing");
     assert_eq!(
         done["materiality"]["effective_review"]["reason"],

@@ -14,7 +14,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { runFreshArmForTest } from "./ac014-fresh-arm-runner.mjs";
+import { admitFreshArmForTest, runFreshArmForTest } from "./ac014-fresh-arm-runner.mjs";
 
 const repoRoot = path.dirname(path.dirname(new URL(import.meta.url).pathname));
 const root = mkdtempSync(path.join(tmpdir(), "planr-ac014-runner-"));
@@ -103,6 +103,51 @@ const controlHandoff = {
 };
 
 const fresh = path.join(root, "fresh");
+const admissionFresh = path.join(root, "fresh-admission-only");
+const admitted = admitFreshArmForTest(config({
+  fresh_root: admissionFresh,
+  oracle_command: [oracleStubPath],
+}), { testCodexCommand: codexCommand(codexStubPath) });
+assert.equal(admitted.status, "passed");
+assert.equal(admitted.side_effects, "none");
+assert.equal(admitted.planr_candidate.binary_path, realpathSync(stubPath));
+assert.equal(existsSync(admissionFresh), false);
+
+const relativeFresh = path.join(root, "fresh-relative-planr");
+assert.throws(
+  () => admitFreshArmForTest(config({
+    fresh_root: relativeFresh,
+    planr_bin: path.relative(repoRoot, stubPath),
+    oracle_command: [oracleStubPath],
+  }), { testCodexCommand: codexCommand(codexStubPath) }),
+  /planr_bin must be an explicit absolute path/,
+);
+assert.equal(existsSync(relativeFresh), false);
+
+const relativeExecutionFresh = path.join(root, "fresh-relative-planr-execution");
+const relativeExecution = await run(config({
+  fresh_root: relativeExecutionFresh,
+  planr_bin: path.relative(repoRoot, stubPath),
+  oracle_command: [oracleStubPath],
+}), path.join(root, "relative-planr-execution-result.json"), path.join(root, "calls-relative-planr-execution.jsonl"), codexCommand(codexStubPath));
+assert.equal(relativeExecution.status, 1);
+assert.equal(existsSync(relativeExecutionFresh), false);
+assert.equal(
+  statSync(path.join(root, ".planr-ac014-failures", path.basename(relativeExecutionFresh), ".planr", "artifacts", "ac014", "BENCHMARK_RESULT.json")).isFile(),
+  true,
+);
+
+const unreviewedFresh = path.join(root, "fresh-unreviewed");
+assert.throws(
+  () => admitFreshArmForTest(config({
+    fresh_root: unreviewedFresh,
+    control_handoff: { ...controlHandoff, review_required: false },
+    oracle_command: [oracleStubPath],
+  }), { testCodexCommand: codexCommand(codexStubPath) }),
+  /must require accepted review/,
+);
+assert.equal(existsSync(unreviewedFresh), false);
+
 const passed = await run(config({
   fresh_root: fresh,
   oracle_command: [oracleStubPath],
@@ -150,11 +195,8 @@ assert.equal(result.codex.launch_identity.environment.codex_home, codexHome);
 assert.equal(result.codex.launch_identity.environment.node_realpath, realpathSync(process.execPath));
 assert.equal(result.codex.launch_identity.environment.injection_variables_absent, true);
 const preflight = JSON.parse(readFileSync(path.join(fresh, ".planr", "artifacts", "ac014", "PREFLIGHT.json"), "utf8"));
-assert.deepEqual(preflight.control_handoff, controlHandoff);
-assert.equal(preflight.codex_launch_identity.model, "gpt-5.6-sol");
-assert.equal(preflight.codex_launch_identity.effort_config, 'model_reasoning_effort="medium"');
-assert.equal(preflight.codex_launch_identity.prompt_delivery.sha256, fixedContract.prompt_digest);
-assert.equal(preflight.codex_launch_identity.environment.codex_home, codexHome);
+assert.deepEqual(preflight.control_handoff, result.control_handoff);
+assert.deepEqual(preflight.codex_launch_identity, result.codex.launch_identity);
 assert.equal(result.validation.all_paths_local, true);
 assert.equal(result.validation.descendant_counts["item-parent"], 1);
 assert.deepEqual(result.sessions.map((session) => session.id), ["session-child", "session-root"]);
@@ -230,7 +272,7 @@ const activeSharedCodexHomeRun = await withEnv("CODEX_HOME", activeSharedCodexHo
   codex_home: activeSharedCodexHome,
 }), path.join(root, "active-shared-codex-home-result.json"), path.join(root, "calls-active-shared-codex-home.jsonl"), codexCommand(codexStubPath)));
 assert.equal(activeSharedCodexHomeRun.status, 1);
-assert.match(JSON.parse(readFileSync(path.join(root, "active-shared-codex-home-result.json"), "utf8")).error, /active shared Codex profile/);
+assert.match(JSON.parse(readFileSync(path.join(root, "active-shared-codex-home-result.json"), "utf8")).error, /active shared CODEX_HOME/);
 
 const defaultHome = path.join(root, "default-home");
 const defaultSharedCodexHome = path.join(defaultHome, ".codex");
@@ -241,18 +283,7 @@ const defaultSharedCodexHomeRun = await withEnv("HOME", defaultHome, () => run(c
   codex_home: defaultSharedCodexHome,
 }), path.join(root, "default-shared-codex-home-result.json"), path.join(root, "calls-default-shared-codex-home.jsonl"), codexCommand(codexStubPath)));
 assert.equal(defaultSharedCodexHomeRun.status, 1);
-assert.match(JSON.parse(readFileSync(path.join(root, "default-shared-codex-home-result.json"), "utf8")).error, /active shared Codex profile/);
-
-const userSharedCodexHome = path.join(process.env.HOME ?? "", ".codex-kevin");
-if (existsSync(userSharedCodexHome)) {
-  const userSharedCodexHomeRun = await run(config({
-    fresh_root: path.join(root, "fresh-user-shared-codex-home"),
-    oracle_command: [oracleStubPath],
-    codex_home: userSharedCodexHome,
-  }), path.join(root, "user-shared-codex-home-result.json"), path.join(root, "calls-user-shared-codex-home.jsonl"), codexCommand(codexStubPath));
-  assert.equal(userSharedCodexHomeRun.status, 1);
-  assert.match(JSON.parse(readFileSync(path.join(root, "user-shared-codex-home-result.json"), "utf8")).error, /active shared Codex profile/);
-}
+assert.match(JSON.parse(readFileSync(path.join(root, "default-shared-codex-home-result.json"), "utf8")).error, /active shared CODEX_HOME/);
 
 const nestedCodexHome = path.join(baseline, "nested-codex-home");
 mkdirSync(nestedCodexHome);
@@ -360,7 +391,8 @@ const suppliedMetrics = await run(config({
 }), path.join(root, "supplied-metrics-result.json"), path.join(root, "calls-supplied-metrics.jsonl"), codexCommand(codexStubPath));
 assert.equal(suppliedMetrics.status, 1);
 assert.equal(JSON.parse(readFileSync(path.join(root, "supplied-metrics-result.json"), "utf8")).failure_class, "admission");
-assertCompleteArtifactSet(path.join(root, "fresh-supplied-metrics"));
+assert.equal(existsSync(path.join(root, "fresh-supplied-metrics")), false);
+assertCompleteArtifactSet(path.join(root, ".planr-ac014-failures", "fresh-supplied-metrics"));
 
 const mismatch = await run(config({
   fresh_root: path.join(root, "fresh-contract-mismatch"),

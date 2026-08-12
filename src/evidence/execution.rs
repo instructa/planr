@@ -178,13 +178,14 @@ pub(crate) fn run_configured_process_adapter(
     conn: &Connection,
     input: ConfiguredProcessRunInput<'_>,
 ) -> Result<ConfiguredProcessRunOutput> {
-    run_configured_process_adapter_guarded(conn, input, &|_| Ok(()))
+    run_configured_process_adapter_guarded(conn, input, &|_| Ok(()), &|_, _, _| Ok(()))
 }
 
 pub(crate) fn run_configured_process_adapter_guarded(
     conn: &Connection,
     input: ConfiguredProcessRunInput<'_>,
     feature_run_guard: &dyn Fn(&Connection) -> Result<()>,
+    trusted_evidence_settlement: &dyn Fn(&Connection, &EvidenceAttempt, &Value) -> Result<()>,
 ) -> Result<ConfiguredProcessRunOutput> {
     ensure_autocommit_storage_boundary(conn)?;
     feature_run_guard(conn)?;
@@ -468,6 +469,7 @@ pub(crate) fn run_configured_process_adapter_guarded(
                 bail!(RepositorySnapshotPreCommitMismatch { mismatch });
             }
             feature_run_guard(tx)?;
+            trusted_evidence_settlement(tx, &attempt, &receipt_value)?;
             Ok(())
         },
         TrustedEvidencePersistenceInput {

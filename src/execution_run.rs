@@ -95,6 +95,7 @@ pub enum FeatureRunTerminalReason {
     Completed,
     UserCancelled,
     PolicyCancelled,
+    VerificationAttemptsExhausted,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -224,6 +225,7 @@ pub enum PhaseTransitionCause {
     HoldResolved,
     UserCancelled,
     PolicyCancelled,
+    VerificationAttemptsExhausted,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -283,7 +285,7 @@ pub const ALL_FEATURE_RUN_PHASES: [FeatureRunPhase; 8] = [
     FeatureRunPhase::Cancelled,
 ];
 
-pub const ALL_PHASE_TRANSITION_CAUSES: [PhaseTransitionCause; 14] = [
+pub const ALL_PHASE_TRANSITION_CAUSES: [PhaseTransitionCause; 15] = [
     PhaseTransitionCause::ProtectedRiskDiscovered,
     PhaseTransitionCause::RiskCheckpointAccepted,
     PhaseTransitionCause::ImplementationSettled,
@@ -298,6 +300,7 @@ pub const ALL_PHASE_TRANSITION_CAUSES: [PhaseTransitionCause; 14] = [
     PhaseTransitionCause::HoldResolved,
     PhaseTransitionCause::UserCancelled,
     PhaseTransitionCause::PolicyCancelled,
+    PhaseTransitionCause::VerificationAttemptsExhausted,
 ];
 
 pub fn is_legal_phase_transition(
@@ -353,6 +356,10 @@ pub fn is_legal_phase_transition(
             FeatureRunPhase::FinalReview,
             FeatureRunPhase::Complete,
             PhaseTransitionCause::FinalReviewAccepted
+        ) | (
+            FeatureRunPhase::Verification,
+            FeatureRunPhase::Cancelled,
+            PhaseTransitionCause::VerificationAttemptsExhausted
         ) | (
             FeatureRunPhase::Implementation
                 | FeatureRunPhase::RiskReview
@@ -451,7 +458,9 @@ pub fn validate_feature_run(run: &FeatureRun) -> Result<(), RunContractViolation
         | (
             FeatureRunPhase::Cancelled,
             Some(
-                FeatureRunTerminalReason::UserCancelled | FeatureRunTerminalReason::PolicyCancelled,
+                FeatureRunTerminalReason::UserCancelled
+                | FeatureRunTerminalReason::PolicyCancelled
+                | FeatureRunTerminalReason::VerificationAttemptsExhausted,
             ),
         ) => {}
         (FeatureRunPhase::Complete | FeatureRunPhase::Cancelled, _) => {
@@ -567,6 +576,9 @@ pub fn apply_phase_transition(
         }
         (FeatureRunPhase::Cancelled, PhaseTransitionCause::PolicyCancelled) => {
             Some(FeatureRunTerminalReason::PolicyCancelled)
+        }
+        (FeatureRunPhase::Cancelled, PhaseTransitionCause::VerificationAttemptsExhausted) => {
+            Some(FeatureRunTerminalReason::VerificationAttemptsExhausted)
         }
         _ => None,
     };
@@ -1110,6 +1122,55 @@ mod tests {
     }
 
     #[test]
+    fn exhausted_verification_is_terminal_and_releases_the_verifier() {
+        let source_frozen = apply_phase_transition(
+            &run(),
+            &transition(
+                FeatureRunPhase::SourceFrozen,
+                PhaseTransitionCause::ImplementationSettled,
+                None,
+            ),
+        )
+        .expect("freeze source");
+        let verification = apply_phase_transition(
+            &source_frozen,
+            &transition(
+                FeatureRunPhase::Verification,
+                PhaseTransitionCause::VerificationStarted,
+                Some(owner(RunRole::Verifier, "verifier-a", 2)),
+            ),
+        )
+        .expect("start verification");
+        let terminal = apply_phase_transition(
+            &verification,
+            &transition(
+                FeatureRunPhase::Cancelled,
+                PhaseTransitionCause::VerificationAttemptsExhausted,
+                None,
+            ),
+        )
+        .expect("settle exhausted verification");
+        assert_eq!(terminal.status, FeatureRunStatus::Cancelled);
+        assert_eq!(terminal.phase, FeatureRunPhase::Cancelled);
+        assert_eq!(
+            terminal.terminal_reason,
+            Some(FeatureRunTerminalReason::VerificationAttemptsExhausted)
+        );
+        assert!(terminal.role_owners.is_empty());
+        assert_eq!(
+            apply_phase_transition(
+                &source_frozen,
+                &transition(
+                    FeatureRunPhase::Cancelled,
+                    PhaseTransitionCause::VerificationAttemptsExhausted,
+                    None,
+                ),
+            ),
+            Err(RunContractViolation::IllegalPhaseTransition)
+        );
+    }
+
+    #[test]
     fn incompatible_budget_retirement_is_typed_and_preserves_run_history() {
         for incompatibility in [
             FeatureRunBudgetContractCompatibility::Missing,
@@ -1338,6 +1399,11 @@ mod tests {
             None,
             Some(FeatureRunTerminalReason::PolicyCancelled),
         ));
+        states.push(state_for_phase_and_terminal(
+            FeatureRunPhase::Cancelled,
+            None,
+            Some(FeatureRunTerminalReason::VerificationAttemptsExhausted),
+        ));
         for held_from in [
             FeatureRunPhase::Implementation,
             FeatureRunPhase::RiskReview,
@@ -1394,7 +1460,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(legal_count, 41);
+        assert_eq!(legal_count, 42);
     }
 
     #[test]

@@ -18,6 +18,7 @@ const LEGACY_REVIEW_SETTLEMENT_VERSION: &str = "1";
 /// they remain historical records in their original tables while every new
 /// execution producer writes only these canonical tables.
 pub(super) fn ensure_execution_run_schema(conn: &Connection) -> Result<()> {
+    upgrade_feature_run_terminal_reason_constraint(conn)?;
     conn.execute_batch("SAVEPOINT execution_run_schema_upgrade")?;
     let result = conn.execute_batch(
         r#"
@@ -35,7 +36,7 @@ CREATE TABLE IF NOT EXISTS feature_runs(
   batch_outcome_count INTEGER NOT NULL DEFAULT 0 CHECK(batch_outcome_count >= 0),
   held_from_phase TEXT CHECK(held_from_phase IN ('implementation','risk_review','source_frozen','verification','final_review')),
   hold_reason TEXT CHECK(hold_reason IN ('budget','capability')),
-  terminal_reason TEXT CHECK(terminal_reason IN ('completed','user_cancelled','policy_cancelled')),
+  terminal_reason TEXT CHECK(terminal_reason IN ('completed','user_cancelled','policy_cancelled','verification_attempts_exhausted')),
   revision INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0),
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -262,6 +263,96 @@ CREATE INDEX IF NOT EXISTS idx_events_item_type_timestamp ON events(item_id, eve
             Err(error.into())
         }
     }
+}
+
+fn upgrade_feature_run_terminal_reason_constraint(conn: &Connection) -> Result<()> {
+    let Some(table_sql) = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'feature_runs'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+    else {
+        return Ok(());
+    };
+    if table_sql.contains("verification_attempts_exhausted") {
+        return Ok(());
+    }
+    add_column_if_missing(conn, "feature_runs", "budget_contract_digest", "TEXT")?;
+    if !column_exists(conn, "feature_runs", "hold_reason")? {
+        conn.execute_batch(
+            "ALTER TABLE feature_runs ADD COLUMN hold_reason TEXT CHECK(hold_reason IN ('budget','capability'));",
+        )?;
+    }
+    if !conn.is_autocommit() {
+        anyhow::bail!("feature_runs terminal-reason upgrade requires autocommit");
+    }
+
+    let foreign_keys_enabled =
+        conn.query_row("PRAGMA foreign_keys", [], |row| row.get::<_, bool>(0))?;
+    let legacy_alter_table =
+        conn.query_row("PRAGMA legacy_alter_table", [], |row| row.get::<_, bool>(0))?;
+    if foreign_keys_enabled {
+        conn.execute_batch("PRAGMA foreign_keys = OFF")?;
+    }
+    if !legacy_alter_table {
+        conn.execute_batch("PRAGMA legacy_alter_table = ON")?;
+    }
+    let migration = (|| -> Result<()> {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
+            r#"
+ALTER TABLE feature_runs RENAME TO feature_runs_terminal_reason_old;
+CREATE TABLE feature_runs(
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  plan_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('active','held','complete','cancelled')),
+  phase TEXT NOT NULL CHECK(phase IN ('implementation','risk_review','source_frozen','verification','final_review','complete','held','cancelled')),
+  policy_digest TEXT NOT NULL,
+  budget_contract_digest TEXT,
+  source_revision TEXT,
+  active_batch_id TEXT,
+  outcomes_settled INTEGER NOT NULL DEFAULT 0 CHECK(outcomes_settled >= 0),
+  batch_outcome_count INTEGER NOT NULL DEFAULT 0 CHECK(batch_outcome_count >= 0),
+  held_from_phase TEXT CHECK(held_from_phase IN ('implementation','risk_review','source_frozen','verification','final_review')),
+  hold_reason TEXT CHECK(hold_reason IN ('budget','capability')),
+  terminal_reason TEXT CHECK(terminal_reason IN ('completed','user_cancelled','policy_cancelled','verification_attempts_exhausted')),
+  revision INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY(active_batch_id, id) REFERENCES execution_batches(id, run_id) DEFERRABLE INITIALLY DEFERRED
+);
+INSERT INTO feature_runs(
+  id, project_id, plan_id, status, phase, policy_digest, budget_contract_digest,
+  source_revision, active_batch_id, outcomes_settled, batch_outcome_count,
+  held_from_phase, hold_reason, terminal_reason, revision, created_at, updated_at
+)
+SELECT
+  id, project_id, plan_id, status, phase, policy_digest, budget_contract_digest,
+  source_revision, active_batch_id, outcomes_settled, batch_outcome_count,
+  held_from_phase, hold_reason, terminal_reason, revision, created_at, updated_at
+FROM feature_runs_terminal_reason_old;
+DROP TABLE feature_runs_terminal_reason_old;
+"#,
+        )?;
+        let foreign_key_violation: Option<String> = tx
+            .query_row("PRAGMA foreign_key_check", [], |row| row.get(0))
+            .optional()?;
+        if let Some(table) = foreign_key_violation {
+            anyhow::bail!("feature_runs terminal-reason upgrade broke foreign key: {table}");
+        }
+        tx.commit()?;
+        Ok(())
+    })();
+    if !legacy_alter_table {
+        conn.execute_batch("PRAGMA legacy_alter_table = OFF")?;
+    }
+    if foreign_keys_enabled {
+        conn.execute_batch("PRAGMA foreign_keys = ON")?;
+    }
+    migration
 }
 
 fn ensure_execution_run_additive_columns(conn: &Connection) -> rusqlite::Result<()> {
@@ -979,6 +1070,97 @@ INSERT INTO events(item_id, event_type, payload) VALUES
             )
             .expect("historical table inspection");
         assert_eq!(historical_table, 1);
+    }
+
+    #[test]
+    fn terminal_reason_constraint_upgrade_preserves_rows_and_is_restart_idempotent() {
+        let conn = legacy_database();
+        conn.execute_batch(
+            r#"
+CREATE TABLE feature_runs(
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  plan_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('active','held','complete','cancelled')),
+  phase TEXT NOT NULL CHECK(phase IN ('implementation','risk_review','source_frozen','verification','final_review','complete','held','cancelled')),
+  policy_digest TEXT NOT NULL,
+  source_revision TEXT,
+  active_batch_id TEXT,
+  outcomes_settled INTEGER NOT NULL DEFAULT 0 CHECK(outcomes_settled >= 0),
+  batch_outcome_count INTEGER NOT NULL DEFAULT 0 CHECK(batch_outcome_count >= 0),
+  held_from_phase TEXT CHECK(held_from_phase IN ('implementation','risk_review','source_frozen','verification','final_review')),
+  terminal_reason TEXT CHECK(terminal_reason IN ('completed','user_cancelled','policy_cancelled')),
+  revision INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+INSERT INTO feature_runs(
+  id, project_id, plan_id, status, phase, policy_digest, source_revision
+) VALUES (
+  'run-existing', 'project-existing', 'plan-existing', 'active', 'verification',
+  'sha256:policy', 'source-existing'
+);
+CREATE TABLE trigger_probe(id TEXT PRIMARY KEY, run_id TEXT NOT NULL);
+CREATE TRIGGER trigger_probe_requires_feature_run
+BEFORE INSERT ON trigger_probe
+WHEN NOT EXISTS(SELECT 1 FROM feature_runs WHERE id = NEW.run_id)
+BEGIN
+  SELECT RAISE(ABORT, 'missing feature run');
+END;
+"#,
+        )
+        .expect("legacy feature run schema");
+        conn.execute_batch("PRAGMA foreign_keys = ON")
+            .expect("foreign keys enabled");
+
+        ensure_execution_run_schema(&conn).expect("terminal reason constraint upgrade");
+
+        let row: (String, String, String) = conn
+            .query_row(
+                "SELECT status, phase, source_revision FROM feature_runs WHERE id = 'run-existing'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("preserved feature run");
+        assert_eq!(
+            row,
+            (
+                "active".to_owned(),
+                "verification".to_owned(),
+                "source-existing".to_owned()
+            )
+        );
+        conn.execute(
+            "UPDATE feature_runs SET status = 'cancelled', phase = 'cancelled', terminal_reason = 'verification_attempts_exhausted' WHERE id = 'run-existing'",
+            [],
+        )
+        .expect("new terminal reason accepted");
+        assert!(
+            conn.query_row("PRAGMA foreign_keys", [], |row| row.get::<_, bool>(0))
+                .expect("foreign key state")
+        );
+        let violations: i64 = conn
+            .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })
+            .expect("foreign key check");
+        assert_eq!(violations, 0);
+        conn.execute(
+            "INSERT INTO trigger_probe(id, run_id) VALUES ('probe-existing', 'run-existing')",
+            [],
+        )
+        .expect("external trigger still resolves feature_runs");
+
+        ensure_execution_run_schema(&conn).expect("restart upgrade");
+        assert_eq!(object_count(&conn, "feature_runs"), 1);
+        let terminal_reason: String = conn
+            .query_row(
+                "SELECT terminal_reason FROM feature_runs WHERE id = 'run-existing'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("terminal reason after restart");
+        assert_eq!(terminal_reason, "verification_attempts_exhausted");
     }
 
     #[test]

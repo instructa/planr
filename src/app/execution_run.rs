@@ -3,12 +3,10 @@ use super::feature_run_evidence::{BudgetUsageReport, FeatureRunBudgetAdmission};
 use super::repository::execution_run::{
     EvidenceInvalidationRecord, ExecutionRunRepository, FindingRecord, FindingStatus,
     PersistedFeatureRun, ReviewAttemptRecord, ReviewGateKind, ReviewGateRecord, ReviewGateStatus,
-    ReviewScopeKind, ReviewSourceBindingRecord, ReviewVerdict, RunOutcomeRecord,
-    SourceFreezeRecord, SourceFreezeStatus,
+    ReviewScopeKind, ReviewVerdict, RunOutcomeRecord, SourceFreezeRecord, SourceFreezeStatus,
 };
 use crate::canonical_json::sha256_json_digest;
 use crate::cli::{RunBatchCommand, RunCommand};
-use crate::evidence::coverage::evaluate_plan_coverage;
 use crate::evidence::policy::capture_repository_snapshot;
 use crate::execution_run::{
     DEFAULT_BATCH_OUTCOME_CAP, ExecutionBatch, ExecutionBatchStatus, FeatureRun, FeatureRunPhase,
@@ -25,9 +23,8 @@ use crate::usage_policy::{
 };
 use crate::util::{short_id, worker_id};
 use anyhow::{Result, anyhow, bail};
-use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
-use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use time::OffsetDateTime;
 #[derive(Clone, Debug)]
 pub(crate) struct OutcomeSettlement<'a> {
     pub(crate) item_id: &'a str,
@@ -36,51 +33,6 @@ pub(crate) struct OutcomeSettlement<'a> {
     pub(crate) escalation: Option<ReviewEscalation>,
 }
 impl App {
-    fn capture_final_review_source_binding(
-        &self,
-        gate_id: &str,
-        run_id: &str,
-        plan_id: &str,
-    ) -> Result<ReviewSourceBindingRecord> {
-        let repository = ExecutionRunRepository::new(&self.conn);
-        let freeze = repository.active_source_freeze(run_id)?.ok_or_else(|| {
-            anyhow!("final_product_review_requires_active_source_freeze:{plan_id}")
-        })?;
-        let snapshot = capture_repository_snapshot(&self.root)
-            .map_err(|error| anyhow!("final_product_review_source_capture_failed:{error}"))?;
-        if snapshot.source.revision != freeze.source_revision
-            || snapshot.source.tree_digest.as_str() != freeze.source_digest
-        {
-            bail!("final_product_review_source_freeze_stale:{plan_id}");
-        }
-        let project = self.default_project()?;
-        let has_binding_obligations = self.conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM proof_obligations WHERE project_id = ?1 AND plan_id = ?2 AND binding = 1)",
-            params![project.id, plan_id],
-            |row| row.get::<_, bool>(0),
-        )?;
-        let receipt_lineage = if has_binding_obligations {
-            let evaluated_at = OffsetDateTime::now_utc().format(&Rfc3339)?;
-            let coverage = evaluate_plan_coverage(&self.conn, &project.id, plan_id, &evaluated_at)
-                .map_err(|error| anyhow!("{error}"))?;
-            if coverage.status.as_str() != "satisfied" {
-                bail!(
-                    "final_product_review_requires_satisfied_exact_source_coverage:{plan_id}:{}",
-                    coverage.status.as_str()
-                );
-            }
-            coverage.receipt_lineage
-        } else {
-            json!([])
-        };
-        Ok(ReviewSourceBindingRecord {
-            gate_id: gate_id.to_string(),
-            freeze_id: freeze.id,
-            source_revision: freeze.source_revision,
-            source_digest: freeze.source_digest,
-            receipt_lineage,
-        })
-    }
     pub(crate) fn execution_run(&self, command: RunCommand) -> Result<()> {
         match command {
             RunCommand::Batch(args) => match args.command {
@@ -1015,156 +967,6 @@ impl App {
         }
     }
 
-    pub(crate) fn ensure_final_product_review_gate_value(&self, plan_id: &str) -> Result<Value> {
-        let plan = self.get_plan(plan_id)?;
-        let repository = ExecutionRunRepository::new(&self.conn);
-        let run_id = self
-            .canonical_execution_run_id_for_plan(plan_id)?
-            .ok_or_else(|| anyhow!("feature_run_not_found_for_plan:{plan_id}"))?;
-        if let Some(mut gate) = repository
-            .review_gates_for_run(&run_id, false)?
-            .into_iter()
-            .find(|gate| {
-                gate.kind == ReviewGateKind::FinalProduct
-                    && gate.scope_kind == ReviewScopeKind::Plan
-                    && gate.scope_id == plan_id
-            })
-        {
-            if gate.status == ReviewGateStatus::ChangesRequested
-                && !repository
-                    .findings(&gate.id)?
-                    .iter()
-                    .any(|finding| finding.status == FindingStatus::Open)
-            {
-                let binding = self.capture_final_review_source_binding(
-                    &gate.id,
-                    &gate.run_id,
-                    &gate.scope_id,
-                )?;
-                self.conn.execute_batch(
-                    "BEGIN IMMEDIATE; SAVEPOINT reopen_repaired_final_review_gate",
-                )?;
-                let reopen = (|| -> Result<()> {
-                    repository.rebind_review_gate_source(&binding)?;
-                    repository.set_review_gate_status(
-                        &gate.id,
-                        ReviewGateStatus::ChangesRequested,
-                        ReviewGateStatus::Pending,
-                    )?;
-                    Ok(())
-                })();
-                match reopen {
-                    Ok(()) => self
-                        .conn
-                        .execute_batch("RELEASE reopen_repaired_final_review_gate; COMMIT")?,
-                    Err(error) => {
-                        let _ = self.conn.execute_batch("ROLLBACK TO reopen_repaired_final_review_gate; RELEASE reopen_repaired_final_review_gate; ROLLBACK");
-                        return Err(error);
-                    }
-                }
-                gate = repository.review_gate(&gate.id)?;
-            }
-            return Ok(
-                json!({"plan": plan, "execution_state": self.canonical_execution_state_value(&gate.run_id, Some(&gate.id))?, "created": false}),
-            );
-        }
-        let run = repository.feature_run(&run_id)?;
-        let verification_item: Option<(String, String)> = self
-            .conn
-            .query_row(
-                "SELECT id, status FROM items
-                 WHERE project_id = ?1
-                   AND plan_path = ?2
-                   AND work_type = 'verification'
-                 ORDER BY priority DESC, created_at
-                 LIMIT 1",
-                params![self.default_project()?.id, plan.path],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()?;
-        let verification_closed = verification_item
-            .as_ref()
-            .is_some_and(|(_, status)| status == "closed");
-        if run.run.phase != FeatureRunPhase::Verification
-            && !(run.run.phase == FeatureRunPhase::SourceFrozen && verification_closed)
-        {
-            bail!(
-                "final_product_review_requires_verification_phase:phase={}: run `planr pick --plan {} --work-type verification --json`",
-                serde_json::to_string(&run.run.phase)?.trim_matches('"'),
-                plan_id
-            );
-        }
-        if let Some((item_id, status)) = verification_item {
-            if status != "closed" {
-                bail!("final_product_review_requires_closed_verification_item:{item_id}");
-            }
-            let evaluated_at = OffsetDateTime::now_utc().format(&Rfc3339)?;
-            let project = self.default_project()?;
-            let coverage = evaluate_plan_coverage(&self.conn, &project.id, plan_id, &evaluated_at)
-                .map_err(|err| anyhow!("{err}"))?;
-            if coverage.status.as_str() != "satisfied" {
-                bail!(
-                    "final_product_review_requires_satisfied_exact_source_coverage:{plan_id}:{}",
-                    coverage.status.as_str()
-                );
-            }
-        }
-        let responsible_maker_id = run
-            .run
-            .role_owners
-            .iter()
-            .find(|owner| owner.role == RunRole::Maker)
-            .map(|owner| owner.worker_id.clone())
-            .or_else(|| {
-                self.conn
-                    .query_row(
-                        "SELECT worker_id FROM feature_run_role_leases WHERE run_id = ?1 AND role = 'maker' ORDER BY lease_generation DESC LIMIT 1",
-                        [&run.run.id],
-                        |row| row.get::<_, String>(0),
-                    )
-                    .ok()
-            })
-            .ok_or_else(|| anyhow!("final_product_review_missing_responsible_maker:{plan_id}"))?;
-        let gate_id = short_id("gate");
-        let binding = self.capture_final_review_source_binding(&gate_id, &run.run.id, plan_id)?;
-        let gate = ReviewGateRecord {
-            id: gate_id,
-            run_id: run.run.id,
-            scope_kind: ReviewScopeKind::Plan,
-            scope_id: plan_id.to_string(),
-            kind: ReviewGateKind::FinalProduct,
-            status: ReviewGateStatus::Pending,
-            required_risk: None,
-            responsible_maker_id,
-            latest_attempt: 0,
-            source_revision: Some(binding.source_revision.clone()),
-        };
-        self.conn
-            .execute_batch("BEGIN IMMEDIATE; SAVEPOINT create_final_review_gate")?;
-        let create_result = (|| -> Result<()> {
-            repository.create_review_gate(&gate)?;
-            repository.create_review_source_binding(&binding)?;
-            Ok(())
-        })();
-        match create_result {
-            Ok(()) => self
-                .conn
-                .execute_batch("RELEASE create_final_review_gate; COMMIT")?,
-            Err(error) => {
-                let _ = self.conn.execute_batch("ROLLBACK TO create_final_review_gate; RELEASE create_final_review_gate; ROLLBACK");
-                return Err(error);
-            }
-        }
-        self.record_event(
-            "final_review_opened",
-            None,
-            json!({"plan_id": plan_id, "gate_id": gate.id, "run_id": gate.run_id}),
-        )?;
-        Ok(
-            json!({"plan": plan, "execution_state": self.canonical_execution_state_value(&gate.run_id, Some(&gate.id))?, "created": true}),
-        )
-    }
-
     pub(crate) fn complete_review_gate_value(
         &self,
         gate_id: &str,
@@ -1311,9 +1113,11 @@ impl App {
             )?;
             if verdict == ReviewVerdict::Accepted {
                 let accepted_gate = repository.review_gate(&gate.id)?;
-                if let Some(handoff) = self
-                    .accepted_risk_verification_handoff_locked(persisted.clone(), &accepted_gate)?
-                {
+                if let Some(handoff) = self.accepted_risk_verification_handoff_locked(
+                    persisted.clone(),
+                    &accepted_gate,
+                    None,
+                )? {
                     persisted = repository.feature_run(&gate.run_id)?;
                     if let Some(reservation) = review_reservation {
                         self.reconcile_feature_run_budget(
@@ -1487,9 +1291,41 @@ mod tests {
         }
     }
 
-    fn bind_risk_gate_to_active_freeze(app: &App, gate_id: &str) -> SourceFreezeRecord {
+    fn bind_risk_gate_source(
+        app: &App,
+        gate_id: &str,
+        receipt_lineage: Value,
+    ) -> SourceFreezeRecord {
         let repository = ExecutionRunRepository::new(&app.conn);
         let gate = repository.review_gate(gate_id).expect("risk gate");
+        let snapshot = capture_repository_snapshot(&app.root).expect("source snapshot");
+        let freeze = SourceFreezeRecord {
+            id: short_id("freeze"),
+            run_id: gate.run_id,
+            source_revision: snapshot.source.revision,
+            source_digest: snapshot.source.tree_digest.as_str().to_string(),
+            status: SourceFreezeStatus::Active,
+        };
+        repository.freeze_source(&freeze).expect("bound freeze");
+        app.conn
+            .execute(
+                "UPDATE review_gates SET source_revision = ?1 WHERE id = ?2",
+                params![freeze.source_revision, gate_id],
+            )
+            .expect("gate source revision");
+        repository
+            .create_review_source_binding(&ReviewSourceBindingRecord {
+                gate_id: gate_id.to_string(),
+                freeze_id: freeze.id.clone(),
+                source_revision: freeze.source_revision.clone(),
+                source_digest: freeze.source_digest.clone(),
+                receipt_lineage,
+            })
+            .expect("review source binding");
+        freeze
+    }
+
+    fn bind_risk_gate_to_active_freeze(app: &App, gate_id: &str) -> SourceFreezeRecord {
         let verification_item_id: String = app
             .conn
             .query_row(
@@ -1531,34 +1367,44 @@ mod tests {
                 [&verification_item_id],
             )
             .expect("active risk obligation");
-        let snapshot = capture_repository_snapshot(&app.root).expect("source snapshot");
-        let freeze = SourceFreezeRecord {
-            id: short_id("freeze"),
-            run_id: gate.run_id,
-            source_revision: snapshot.source.revision,
-            source_digest: snapshot.source.tree_digest.as_str().to_string(),
-            status: SourceFreezeStatus::Active,
-        };
-        repository.freeze_source(&freeze).expect("bound freeze");
+        bind_risk_gate_source(
+            app,
+            gate_id,
+            json!({
+                "kind": "product_repair",
+                "selective_obligation_ids": ["pob-risk-legacy"]
+            }),
+        )
+    }
+
+    fn bind_risk_gate_without_verification_item(app: &App, gate_id: &str) -> SourceFreezeRecord {
+        add_plan_wide_binding_obligation(app, "pob-risk-plan-wide");
+        bind_risk_gate_source(
+            app,
+            gate_id,
+            json!({
+                "kind": "product_repair",
+                "selective_obligation_ids": []
+            }),
+        )
+    }
+
+    fn add_plan_wide_binding_obligation(app: &App, obligation_id: &str) {
         app.conn
             .execute(
-                "UPDATE review_gates SET source_revision = ?1 WHERE id = ?2",
-                params![freeze.source_revision, gate_id],
+                "INSERT OR IGNORE INTO proof_obligations(
+                   id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
+                   binding, observation_requirements_json, fixture_policy_json,
+                   freshness_policy_json, assurance_policy_json, policy_digest, config_digest,
+                   source_digest, created_at, retry_aggregation, obligation_shape
+                 ) VALUES (?1, 'project-a', 'plan-a', NULL, 'crit-risk-plan-wide', 1,
+                   'plan-wide risk obligation', 1, '[]', '{}', '{}', '{}',
+                   'sha256:0000000000000000000000000000000000000000000000000000000000000000',
+                   'sha256:0000000000000000000000000000000000000000000000000000000000000000',
+                   NULL, datetime('now'), 'latest_applicable_pass', 'semantic_v1')",
+                [obligation_id],
             )
-            .expect("gate source revision");
-        repository
-            .create_review_source_binding(&ReviewSourceBindingRecord {
-                gate_id: gate_id.to_string(),
-                freeze_id: freeze.id.clone(),
-                source_revision: freeze.source_revision.clone(),
-                source_digest: freeze.source_digest.clone(),
-                receipt_lineage: json!({
-                    "kind": "product_repair",
-                    "selective_obligation_ids": ["pob-risk-legacy"]
-                }),
-            })
-            .expect("review source binding");
-        freeze
+            .expect("plan-wide risk obligation");
     }
 
     fn materiality(review: bool) -> Value {
@@ -1577,7 +1423,6 @@ mod tests {
         initialize_test_git(root.path());
         let app = test_app_at(root.path().to_path_buf());
         add_outcome(&app, "item-risk-final");
-        add_ready_verification(&app, "item-risk-verification");
         app.outcome_work_packet("item-risk-final")
             .expect("maker packet");
         let settled = app
@@ -1589,7 +1434,7 @@ mod tests {
             })
             .expect("risk settlement");
         let gate_id = settled["review_gate"]["id"].as_str().unwrap();
-        bind_risk_gate_to_active_freeze(&app, gate_id);
+        bind_risk_gate_without_verification_item(&app, gate_id);
         app.review_gate_pick_value_for_worker("plan-a", false, "checker-risk")
             .expect("review pick")
             .expect("review packet");
@@ -1598,10 +1443,7 @@ mod tests {
             .expect("accepted review");
         let handoff = &accepted["verification_handoff"];
         assert_eq!(handoff["reason"], "verification_handoff_source_frozen");
-        assert_eq!(
-            handoff["work_packet"]["verification_item_id"],
-            "item-risk-verification"
-        );
+        assert_eq!(handoff["work_packet"]["verification_item_id"], Value::Null);
         assert_eq!(accepted["execution_state"]["phase"], "source_frozen");
         assert!(accepted["execution_state"]["owner"].is_null());
         assert_eq!(
@@ -1616,7 +1458,7 @@ mod tests {
             sealed.receipt_lineage,
             json!({
                 "kind": "risk_review_acceptance",
-                "active_obligation_ids": ["pob-risk-active"]
+                "active_obligation_ids": ["pob-risk-plan-wide"]
             })
         );
         let freeze_id = handoff["work_packet"]["source_freeze"]["id"]
@@ -2026,6 +1868,71 @@ mod tests {
                 )
                 .expect("freeze count"),
             1
+        );
+    }
+
+    #[test]
+    fn late_binding_between_legacy_preflight_and_refresh_fails_without_mutation() {
+        let root = tempfile::tempdir().expect("root");
+        let state = tempfile::tempdir().expect("state");
+        initialize_test_git(root.path());
+        let db = state.path().join("planr.sqlite");
+        let app = test_file_app(root.path(), &db, true);
+        add_outcome(&app, "item-late-binding");
+        app.outcome_work_packet("item-late-binding")
+            .expect("maker packet");
+        let frozen = app
+            .freeze_feature_run_source_value("plan-a")
+            .expect("freeze")
+            .expect("frozen run");
+        let run_id = frozen["feature_run"]["id"].as_str().unwrap();
+        let original_freeze_id = frozen["source_freeze"]["id"].as_str().unwrap();
+        assert!(
+            !app.plan_has_active_binding_obligations("plan-a")
+                .expect("legacy preflight")
+        );
+
+        let migration = test_file_app(root.path(), &db, false);
+        add_plan_wide_binding_obligation(&migration, "pob-late-binding");
+        drop(migration);
+        fs::write(root.path().join("late-binding-change.txt"), "changed")
+            .expect("change source after freeze");
+
+        let error = app
+            .refresh_legacy_final_review_source_freeze("plan-a", run_id)
+            .expect_err("late binding must fail closed");
+        assert_eq!(
+            error.to_string(),
+            "legacy_final_review_refresh_binding_activated:plan-a"
+        );
+        let repository = ExecutionRunRepository::new(&app.conn);
+        assert_eq!(
+            repository
+                .active_source_freeze(run_id)
+                .expect("active freeze")
+                .expect("freeze")
+                .id,
+            original_freeze_id
+        );
+        assert!(
+            repository
+                .invalidations(run_id)
+                .expect("invalidations")
+                .is_empty()
+        );
+        let gate_error = app
+            .ensure_final_product_review_gate_value("plan-a")
+            .expect_err("late binding must block final-review admission");
+        assert!(
+            gate_error
+                .to_string()
+                .starts_with("final_product_review_requires_verification_phase:")
+        );
+        assert!(
+            repository
+                .review_gates_for_run(run_id, false)
+                .expect("review gates")
+                .is_empty()
         );
     }
 
@@ -2523,9 +2430,10 @@ mod tests {
     }
 
     #[test]
-    fn normal_feature_has_one_current_independent_final_product_gate() {
+    fn legacy_nonbinding_feature_has_one_current_independent_final_product_gate() {
         let app = test_app();
         add_outcome(&app, "item-final");
+        add_ready_verification(&app, "item-legacy-verification");
         let persisted = app
             .ensure_outcome_feature_run("item-final")
             .expect("ensure run")
@@ -2549,7 +2457,7 @@ mod tests {
             },
         )
         .expect("freeze transition");
-        let revision = repository
+        repository
             .save_feature_run(&frozen, persisted.revision)
             .expect("save frozen");
         repository
@@ -2561,43 +2469,40 @@ mod tests {
                 status: SourceFreezeStatus::Active,
             })
             .expect("persist source freeze");
-        let premature = app
-            .ensure_final_product_review_gate_value("plan-a")
-            .expect_err("source-frozen run must require verification first");
-        assert_eq!(
-            premature.to_string(),
-            "final_product_review_requires_verification_phase:phase=source_frozen: run `planr pick --plan plan-a --work-type verification --json`"
-        );
+        app.conn
+            .execute_batch(
+                "INSERT INTO proof_obligations(
+                   id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
+                   binding, observation_requirements_json, fixture_policy_json,
+                   freshness_policy_json, assurance_policy_json, policy_digest, config_digest,
+                   source_digest, created_at, retry_aggregation, obligation_shape
+                 ) VALUES (
+                   'pob-superseded-history', 'project-a', 'plan-a', NULL, 'crit-superseded', 1,
+                   'superseded history', 1, '[]', '{}', '{}', '{}',
+                   'sha256:0000000000000000000000000000000000000000000000000000000000000000',
+                   'sha256:0000000000000000000000000000000000000000000000000000000000000000',
+                   NULL, datetime('now'), 'latest_applicable_pass', 'semantic_v1'
+                 );
+                 INSERT INTO proof_obligations(
+                   id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
+                   binding, observation_requirements_json, fixture_policy_json,
+                   freshness_policy_json, assurance_policy_json, policy_digest, config_digest,
+                   source_digest, supersedes_obligation_id, created_at, retry_aggregation,
+                   obligation_shape
+                 ) VALUES (
+                   'pob-nonbinding-successor', 'project-a', 'plan-a', NULL, 'crit-superseded', 2,
+                   'nonbinding successor', 0, '[]', '{}', '{}', '{}',
+                   'sha256:0000000000000000000000000000000000000000000000000000000000000000',
+                   'sha256:0000000000000000000000000000000000000000000000000000000000000000',
+                   NULL, 'pob-superseded-history', datetime('now'), 'latest_applicable_pass',
+                   'semantic_v1'
+                 );",
+            )
+            .expect("superseded-only binding history");
         assert!(
-            repository
-                .review_gates_for_run(&frozen.id, false)
-                .expect("review gates")
-                .is_empty(),
-            "premature final-review admission must not create a gate"
+            !app.plan_has_active_binding_obligations("plan-a")
+                .expect("authoritative supersession")
         );
-        let verification = apply_phase_transition(
-            &frozen,
-            &PhaseTransition {
-                to: FeatureRunPhase::Verification,
-                cause: PhaseTransitionCause::VerificationStarted,
-                reference: "verification:ready".into(),
-                owner: Some(RoleOwner {
-                    role: RunRole::Verifier,
-                    worker_id: "verifier-a".into(),
-                    lease_generation: 1,
-                }),
-            },
-        )
-        .expect("verification transition");
-        repository
-            .save_feature_run(&verification, revision)
-            .expect("save verification");
-        let verification_packet = app
-            .verification_work_packet_value("plan-a", true)
-            .expect("verification packet")
-            .expect("verification ready");
-        assert_eq!(verification_packet["work_packet"]["kind"], "verification");
-
         let first = app
             .ensure_final_product_review_gate_value("plan-a")
             .expect("final gate");
@@ -2744,6 +2649,56 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn accepted_risk_legacy_plan_with_authored_verification_item_routes_to_final_review() {
+        let root = tempfile::tempdir().expect("root");
+        initialize_test_git(root.path());
+        let app = test_app_at(root.path().to_path_buf());
+        add_outcome(&app, "item-risk-legacy-final");
+        add_ready_verification(&app, "item-risk-legacy-verification");
+        app.outcome_work_packet("item-risk-legacy-final")
+            .expect("maker packet");
+        let settled = app
+            .settle_feature_run_outcome(OutcomeSettlement {
+                item_id: "item-risk-legacy-final",
+                summary: "protected legacy outcome",
+                materiality: &materiality(true),
+                escalation: None,
+            })
+            .expect("risk settlement");
+        let gate_id = settled["review_gate"]["id"].as_str().unwrap();
+        bind_risk_gate_source(
+            &app,
+            gate_id,
+            json!({"kind": "product_repair", "selective_obligation_ids": []}),
+        );
+        app.review_gate_pick_value_for_worker("plan-a", false, "checker-risk-legacy")
+            .expect("risk review pick")
+            .expect("risk review packet");
+        let accepted = app
+            .complete_review_gate_value(
+                gate_id,
+                ReviewVerdict::Accepted,
+                &[],
+                Some("checker-risk-legacy"),
+            )
+            .expect("accepted legacy risk review");
+        assert_eq!(
+            accepted["verification_handoff"]["work_packet"]["kind"],
+            "final_review_handoff"
+        );
+        assert_eq!(
+            app.get_item("item-risk-legacy-verification")
+                .expect("verification item")
+                .status,
+            crate::model::ItemStatus::Ready
+        );
+        let final_gate = app
+            .ensure_final_product_review_gate_value("plan-a")
+            .expect("legacy final gate");
+        assert_eq!(final_gate["created"], true);
     }
 
     #[test]

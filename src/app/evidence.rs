@@ -42,6 +42,7 @@ use crate::util::short_id;
 use anyhow::{Context, Result, anyhow, bail};
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
+use std::cell::RefCell;
 use std::fmt;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -1385,7 +1386,11 @@ impl App {
                 EvidenceCommandError::bad_request("evidence run-index entry requires input")
             })?;
             let obligation_id = string_field(&input, "obligation_id")?;
-            let result = self.evidence_run_single_value_with_routing(input, false)?;
+            let result = self.evidence_run_single_value_with_routing(
+                input,
+                false,
+                product_findings.is_empty(),
+            )?;
             let product_failed = result["receipt"]["proof_gaps"]
                 .as_array()
                 .is_some_and(|gaps| {
@@ -1405,7 +1410,11 @@ impl App {
                     obligation_id,
                 ));
             }
+            let terminally_exhausted = !result["terminal_exhaustion"].is_null();
             results.push(result);
+            if terminally_exhausted {
+                break;
+            }
         }
         if let Some((_, run_id, freeze_id, _)) = product_findings.first() {
             if product_findings
@@ -1422,17 +1431,22 @@ impl App {
                 .collect::<Vec<_>>();
             let finding =
                 self.route_evidence_product_findings_value(run_id, freeze_id, &obligation_ids)?;
-            for (index, _, _, _) in product_findings {
-                results[index]["product_finding"] = finding.clone();
+            for (index, _, _, _) in &product_findings {
+                results[*index]["product_finding"] = finding.clone();
             }
         }
         let verdict = evidence_run_index_verdict(&results);
+        let terminal_exhaustion = results.iter().find_map(|result| {
+            (!result["terminal_exhaustion"].is_null())
+                .then(|| result["terminal_exhaustion"].clone())
+        });
         Ok(json!({
             "schema_version": "planr.evidence.run-index.result.v1",
             "run_index_digest": declared_digest,
             "status": verdict,
             "verdict": verdict,
             "results": results,
+            "terminal_exhaustion": terminal_exhaustion,
         }))
     }
 
@@ -1606,13 +1620,14 @@ impl App {
     }
 
     fn evidence_run_single_value(&self, value: Value) -> Result<Value> {
-        self.evidence_run_single_value_with_routing(value, true)
+        self.evidence_run_single_value_with_routing(value, true, true)
     }
 
     fn evidence_run_single_value_with_routing(
         &self,
         value: Value,
         route_product_finding: bool,
+        settle_terminal_exhaustion_atomically: bool,
     ) -> Result<Value> {
         reject_trusted_receipt_input(&value)?;
         if value.get("feature_run_binding").is_some() {
@@ -1632,6 +1647,7 @@ impl App {
         };
         let obligation = self.load_proof_obligation(&obligation_id)?;
         let instance = self.load_capability_instance(&instance_id)?;
+        let manifest = self.load_capability_manifest(&instance_id)?;
         let execution_contract: ProcessExecutionContract =
             match value.get("execution_contract").cloned() {
                 Some(value) => serde_json::from_value(value)?,
@@ -1731,10 +1747,10 @@ impl App {
             .get("attempt_index")
             .and_then(Value::as_u64)
             .unwrap_or(0) as u32;
-        let max_attempts = value
-            .get("max_attempts")
-            .and_then(Value::as_u64)
-            .unwrap_or(3) as u32;
+        let max_attempts = admitted_max_attempts(
+            &manifest.repeatability,
+            value.get("max_attempts").and_then(Value::as_u64),
+        )?;
         let hermetic_reuse = if retry_of.is_none() && attempt_index == 0 {
             self.hermetic_reuse_binding(HermeticReuseInput {
                 obligation: &obligation,
@@ -1767,6 +1783,41 @@ impl App {
             };
             self.validate_feature_run_evidence_lease(conn, lease)
         };
+        let terminal_settlement = RefCell::new(None);
+        let settle_trusted_evidence = |conn: &rusqlite::Connection,
+                                       attempt: &EvidenceAttempt,
+                                       receipt: &Value| {
+            let verdict = evidence_run_verdict(attempt.status, &attempt.exit, &attempt.raw_result);
+            let product_failed = receipt["proof_gaps"].as_array().is_some_and(|gaps| {
+                gaps.iter().any(|gap| {
+                    gap.as_str() == Some("product_failed")
+                        || gap.get("reason").and_then(Value::as_str) == Some("product_failed")
+                })
+            });
+            if settle_terminal_exhaustion_atomically
+                && should_settle_terminal_exhaustion(
+                    &verdict,
+                    product_failed,
+                    lease.is_some(),
+                    &manifest.repeatability,
+                    attempt_index,
+                    max_attempts,
+                )
+            {
+                let lease = lease.as_ref().expect("predicate requires FeatureRun lease");
+                let settlement = self.settle_exhausted_verification_attempt_in_transaction(
+                    conn,
+                    lease,
+                    obligation_id.as_str(),
+                    attempt.id.as_str(),
+                    attempt_index,
+                    max_attempts,
+                    &manifest.repeatability,
+                )?;
+                *terminal_settlement.borrow_mut() = Some(settlement);
+            }
+            Ok(())
+        };
         let output = run_configured_process_adapter_guarded(
             &self.conn,
             ConfiguredProcessRunInput {
@@ -1787,6 +1838,7 @@ impl App {
                 cancellation: &cancellation,
             },
             &guard,
+            &settle_trusted_evidence,
         );
         let output = output?;
         let verdict = evidence_run_verdict(
@@ -1828,6 +1880,17 @@ impl App {
         } else {
             None
         };
+        let terminal_exhaustion = terminal_settlement
+            .into_inner()
+            .map(|(item_id, run_id)| {
+                Ok::<_, anyhow::Error>(json!({
+                    "schema_version": "planr.verification-exhaustion.v1",
+                    "status": "terminal_non_covering",
+                    "item": self.get_item(&item_id)?,
+                    "execution_state": self.canonical_execution_state_value(&run_id, None)?,
+                }))
+            })
+            .transpose()?;
         Ok(json!({
             "attempt": output.attempt,
             "receipt": output.receipt_value,
@@ -1837,6 +1900,7 @@ impl App {
             "reuse_key": hermetic_reuse.as_ref().map(|binding| binding.key.as_str()),
             "product_finding": product_finding,
             "feature_run_lease": lease,
+            "terminal_exhaustion": terminal_exhaustion,
         }))
     }
 
@@ -3170,6 +3234,22 @@ impl App {
         Ok(manifest.availability_probe.execution)
     }
 
+    fn load_capability_manifest(
+        &self,
+        instance_id: &str,
+    ) -> Result<VerificationCapabilityManifest> {
+        let manifest_json: String = self.conn.query_row(
+            "SELECT m.manifest_json
+             FROM verification_capability_instances i
+             JOIN verification_capability_manifests m
+               ON m.id = i.manifest_id AND m.version = i.manifest_version
+             WHERE i.id = ?1",
+            params![instance_id],
+            |row| row.get(0),
+        )?;
+        serde_json::from_str(&manifest_json).context("decoding capability manifest")
+    }
+
     fn evidence_attempt_record_value(&self, id: &str) -> Result<Value> {
         self.conn
             .query_row(
@@ -3320,6 +3400,37 @@ fn evidence_run_verdict(status: AttemptStatus, exit: &Value, raw_result: &Value)
         })
         .unwrap_or_else(|| status.as_str())
         .to_string()
+}
+
+fn should_settle_terminal_exhaustion(
+    verdict: &str,
+    product_failed: bool,
+    has_feature_run_lease: bool,
+    repeatability: &str,
+    attempt_index: u32,
+    max_attempts: u32,
+) -> bool {
+    verdict != "passed"
+        && !product_failed
+        && has_feature_run_lease
+        && repeatability == "non_repeatable_one_shot"
+        && max_attempts > 0
+        && attempt_index.checked_add(1) == Some(max_attempts)
+}
+
+fn admitted_max_attempts(repeatability: &str, declared: Option<u64>) -> Result<u32> {
+    let declared = declared
+        .map(u32::try_from)
+        .transpose()
+        .context("max_attempts does not fit u32")?;
+    if repeatability == "non_repeatable_one_shot" {
+        if declared.is_some_and(|max_attempts| max_attempts != 1) {
+            bail!("non_repeatable_one_shot requires max_attempts = 1");
+        }
+        Ok(1)
+    } else {
+        Ok(declared.unwrap_or(3))
+    }
 }
 
 fn evidence_run_index_verdict(results: &[Value]) -> &'static str {
@@ -4703,6 +4814,45 @@ mod tests {
             evidence_run_verdict(AttemptStatus::Failed, &exit, &json!({})),
             "failed"
         );
+    }
+
+    #[test]
+    fn terminal_exhaustion_requires_one_shot_final_non_product_attempt_with_lease() {
+        assert_eq!(
+            admitted_max_attempts("non_repeatable_one_shot", None).unwrap(),
+            1
+        );
+        assert!(
+            admitted_max_attempts("non_repeatable_one_shot", Some(2))
+                .unwrap_err()
+                .to_string()
+                .contains("requires max_attempts = 1")
+        );
+        assert_eq!(admitted_max_attempts("repeatable", None).unwrap(), 3);
+        assert!(should_settle_terminal_exhaustion(
+            "failed",
+            false,
+            true,
+            "non_repeatable_one_shot",
+            0,
+            1,
+        ));
+        for candidate in [
+            ("passed", false, true, "non_repeatable_one_shot", 0, 1),
+            ("failed", true, true, "non_repeatable_one_shot", 0, 1),
+            ("failed", false, false, "non_repeatable_one_shot", 0, 1),
+            ("failed", false, true, "repeatable", 0, 1),
+            ("failed", false, true, "non_repeatable_one_shot", 0, 2),
+        ] {
+            assert!(!should_settle_terminal_exhaustion(
+                candidate.0,
+                candidate.1,
+                candidate.2,
+                candidate.3,
+                candidate.4,
+                candidate.5,
+            ));
+        }
     }
 
     #[test]

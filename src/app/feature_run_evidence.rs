@@ -552,6 +552,102 @@ impl App {
         Ok(())
     }
 
+    pub(crate) fn settle_exhausted_verification_attempt_in_transaction(
+        &self,
+        conn: &rusqlite::Connection,
+        lease: &CanonicalFeatureRunEvidenceLease,
+        obligation_id: &str,
+        attempt_id: &str,
+        attempt_index: u32,
+        max_attempts: u32,
+        repeatability: &str,
+    ) -> Result<(String, String)> {
+        if conn.is_autocommit() {
+            bail!("verification_exhaustion_requires_active_transaction");
+        }
+        if obligation_id.trim().is_empty() || attempt_id.trim().is_empty() {
+            bail!("verification_exhaustion_identity_required");
+        }
+        if repeatability != "non_repeatable_one_shot" {
+            bail!("verification_exhaustion_requires_explicit_one_shot");
+        }
+        if max_attempts == 0 || attempt_index.checked_add(1) != Some(max_attempts) {
+            bail!("verification_exhaustion_requires_final_declared_attempt");
+        }
+        self.validate_feature_run_evidence_lease(conn, lease)?;
+        let repository = ExecutionRunRepository::new(conn);
+        let persisted = repository.feature_run(&lease.run_id)?;
+        let verifier = owner_for_role(&persisted.run, RunRole::Verifier)
+            .ok_or_else(|| anyhow!("verification_exhaustion_missing_verifier:{}", lease.run_id))?;
+        if verifier.worker_id != lease.verifier_worker_id
+            || verifier.lease_generation != lease.lease_generation
+        {
+            bail!("verification_exhaustion_stale_lease:{}", lease.run_id);
+        }
+        let item_ids = conn
+            .prepare(
+                "SELECT items.id
+                 FROM items JOIN plans ON plans.path = items.plan_path
+                 WHERE plans.id = ?1 AND items.work_type = 'verification'
+                   AND items.status IN ('picked','running') AND items.worker_id = ?2
+                 ORDER BY items.created_at, items.id",
+            )?
+            .query_map(params![lease.plan_id, lease.verifier_worker_id], |row| {
+                row.get::<_, String>(0)
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let [item_id] = item_ids.as_slice() else {
+            bail!(
+                "verification_exhaustion_requires_one_active_item:{}:{}",
+                lease.plan_id,
+                item_ids.len()
+            );
+        };
+        let terminal = apply_phase_transition(
+            &persisted.run,
+            &PhaseTransition {
+                to: FeatureRunPhase::Cancelled,
+                cause: PhaseTransitionCause::VerificationAttemptsExhausted,
+                reference: format!("evidence_attempt:{attempt_id}"),
+                owner: None,
+            },
+        )
+        .map_err(|violation| anyhow!("verification_exhaustion_transition:{violation:?}"))?;
+        self.reconcile_active_phase_wall(&lease.run_id, BudgetPhase::Verification)?;
+        repository.save_feature_run(&terminal, persisted.revision)?;
+        let changed = conn.execute(
+            "UPDATE items
+             SET status = 'failed', error = ?2, worker_id = NULL, pick_token = NULL,
+                 last_heartbeat_at = NULL, paused_at = NULL, updated_at = datetime('now')
+             WHERE id = ?1 AND work_type = 'verification'
+               AND status IN ('picked','running') AND worker_id = ?3",
+            params![
+                item_id,
+                format!(
+                    "non-repeatable verification attempt {attempt_id} exhausted {max_attempts} allowed attempt(s)"
+                ),
+                lease.verifier_worker_id,
+            ],
+        )?;
+        if changed != 1 {
+            bail!("verification_exhaustion_stale_item:{item_id}");
+        }
+        self.record_event(
+            "verification_attempts_exhausted",
+            Some(item_id),
+            json!({
+                "run_id": lease.run_id,
+                "freeze_id": lease.freeze_id,
+                "obligation_id": obligation_id,
+                "attempt_id": attempt_id,
+                "attempt_index": attempt_index,
+                "max_attempts": max_attempts,
+                "repeatability": repeatability,
+            }),
+        )?;
+        Ok((item_id.clone(), terminal.id))
+    }
+
     // Admission and reservation share one immediate transaction. Every bounded reservation stores
     // the exact numeric maxima selected from the persisted snapshot; no caller projection is ever
     // converted into an observation or metering claim.
@@ -1857,6 +1953,84 @@ impl App {
         Ok(())
     }
 
+    pub(crate) fn refresh_legacy_final_review_source_freeze(
+        &self,
+        plan_id: &str,
+        run_id: &str,
+    ) -> Result<bool> {
+        let owns_transaction = self.conn.is_autocommit();
+        if owns_transaction {
+            self.conn.execute_batch(
+                "BEGIN IMMEDIATE; SAVEPOINT refresh_legacy_final_review_source_freeze",
+            )?;
+        }
+        let result = (|| -> Result<Option<(EvidenceInvalidationRecord, SourceFreezeRecord)>> {
+            if self.plan_has_active_binding_obligations(plan_id)? {
+                bail!("legacy_final_review_refresh_binding_activated:{plan_id}");
+            }
+            let snapshot = capture_repository_snapshot(&self.root)
+                .map_err(|error| anyhow!("capturing legacy final-review source: {error}"))?;
+            let repository = ExecutionRunRepository::new(&self.conn);
+            let active = repository
+                .active_source_freeze(run_id)?
+                .ok_or_else(|| anyhow!("legacy_final_review_source_freeze_missing:{plan_id}"))?;
+            if active.source_revision == snapshot.source.revision
+                && active.source_digest == snapshot.source.tree_digest.as_str()
+            {
+                return Ok(None);
+            }
+            let invalidation = EvidenceInvalidationRecord {
+                id: short_id("invalidation"),
+                run_id: run_id.to_string(),
+                freeze_id: active.id,
+                finding_id: None,
+                reason: "legacy_final_review_source_changed".to_string(),
+                affected_evidence_ids: Vec::new(),
+            };
+            let replacement = SourceFreezeRecord {
+                id: short_id("freeze"),
+                run_id: run_id.to_string(),
+                source_revision: snapshot.source.revision.clone(),
+                source_digest: snapshot.source.tree_digest.as_str().to_string(),
+                status: SourceFreezeStatus::Active,
+            };
+            repository.invalidate_source(&invalidation)?;
+            repository.freeze_source(&replacement)?;
+            let persisted = repository.feature_run(run_id)?;
+            let mut refreshed = persisted.run;
+            refreshed.source_revision = Some(replacement.source_revision.clone());
+            repository.save_feature_run(&refreshed, persisted.revision)?;
+            self.record_event(
+                "legacy_final_review_source_refrozen",
+                None,
+                json!({
+                    "plan_id": plan_id,
+                    "run_id": run_id,
+                    "invalidation_id": invalidation.id,
+                    "invalidated_source_freeze_id": invalidation.freeze_id,
+                    "source_freeze_id": replacement.id,
+                }),
+            )?;
+            Ok(Some((invalidation, replacement)))
+        })();
+        if !owns_transaction {
+            return result.map(|value| value.is_some());
+        }
+        match result {
+            Ok(value) => {
+                self.conn
+                    .execute_batch("RELEASE refresh_legacy_final_review_source_freeze; COMMIT")?;
+                Ok(value.is_some())
+            }
+            Err(error) => {
+                let _ = self.conn.execute_batch(
+                    "ROLLBACK TO refresh_legacy_final_review_source_freeze; RELEASE refresh_legacy_final_review_source_freeze; ROLLBACK",
+                );
+                Err(error)
+            }
+        }
+    }
+
     pub(crate) fn freeze_feature_run_source_value(&self, plan_id: &str) -> Result<Option<Value>> {
         let project = self.default_project()?;
         let repository = ExecutionRunRepository::new(&self.conn);
@@ -2454,6 +2628,14 @@ allow_overwrite = true
     }
 
     fn write_ready_evidence_policy(root: &Path) -> String {
+        write_evidence_policy(root, "repeatable", "printf '{\"status\":\"ready\"}'")
+    }
+
+    fn write_one_shot_failure_evidence_policy(root: &Path) -> String {
+        write_evidence_policy(root, "non_repeatable_one_shot", "printf 'not-json'")
+    }
+
+    fn write_evidence_policy(root: &Path, repeatability: &str, shell_script: &str) -> String {
         let schema_path =
             root.join(".planr/evidence/schemas/com.example.ready.status.v1.schema.json");
         let manifest_path = root.join(".planr/evidence/adapters/ready.manifest.json");
@@ -2477,7 +2659,7 @@ allow_overwrite = true
         let execution = json!({
             "kind": "process",
             "executable": "sh",
-            "args": ["-c", "printf '{\"status\":\"ready\"}'"],
+            "args": ["-c", shell_script],
             "working_directory": ".",
             "timeout_ms": 5000,
             "stdout_limit_bytes": 4096,
@@ -2505,7 +2687,7 @@ allow_overwrite = true
             "permissions": {"network": "none", "filesystem": "read_workspace"},
             "costs": {},
             "determinism": "deterministic",
-            "repeatability": "repeatable",
+            "repeatability": repeatability,
             "independence": "repository-owned test adapter",
             "blind_spots": [],
             "availability_probe": {"kind": "process", "execution": execution}
@@ -2846,6 +3028,71 @@ allow_overwrite = true
     }
 
     #[test]
+    fn exhausted_one_shot_atomically_fails_item_and_terminally_releases_lease() {
+        let (_root, app, run_id, _freeze_id) = verification_fixture();
+        let lease = app
+            .resolve_feature_run_evidence_lease("project-a", "plan-a")
+            .unwrap()
+            .unwrap();
+
+        app.conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let repeatable = app
+            .settle_exhausted_verification_attempt_in_transaction(
+                &app.conn,
+                &lease,
+                "pob-phase-ready",
+                "attempt-repeatable",
+                0,
+                1,
+                "repeatable",
+            )
+            .unwrap_err();
+        app.conn.execute_batch("ROLLBACK").unwrap();
+        assert!(
+            repeatable
+                .to_string()
+                .contains("requires_explicit_one_shot")
+        );
+        let still_active = ExecutionRunRepository::new(&app.conn)
+            .feature_run(&run_id)
+            .unwrap();
+        assert_eq!(still_active.run.phase, FeatureRunPhase::Verification);
+
+        app.conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let (item_id, settled_run_id) = app
+            .settle_exhausted_verification_attempt_in_transaction(
+                &app.conn,
+                &lease,
+                "pob-phase-ready",
+                "attempt-final",
+                0,
+                1,
+                "non_repeatable_one_shot",
+            )
+            .unwrap();
+        app.conn.execute_batch("COMMIT").unwrap();
+        assert_eq!(app.get_item(&item_id).unwrap().status.as_str(), "failed");
+        let settled = app
+            .canonical_execution_state_value(&settled_run_id, None)
+            .unwrap();
+        assert_eq!(settled["reason_code"], "verification_attempts_exhausted");
+        assert_eq!(settled["next_action"], "none");
+        assert_eq!(
+            settled["feature_run"]["terminal_reason"],
+            "verification_attempts_exhausted"
+        );
+        let active_verifiers: u64 = app
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM feature_run_role_leases WHERE run_id = ?1 AND role = 'verifier' AND released_at IS NULL",
+                [&run_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(active_verifiers, 0);
+    }
+
+    #[test]
     fn verification_repair_retires_the_verifier_and_routes_the_recorded_maker() {
         let (_root, app, run_id, _freeze_id) = verification_fixture();
         app.release_verification_pick_value("verification-phase", false, None)
@@ -3070,6 +3317,120 @@ allow_overwrite = true
             .unwrap();
         assert_eq!(persisted.run.phase, FeatureRunPhase::Verification);
         assert_eq!(persisted.run.role_owners[0].role, RunRole::Verifier);
+    }
+
+    #[test]
+    fn sealed_one_shot_failure_atomically_commits_evidence_and_terminal_settlement() {
+        let root = tempfile::tempdir().unwrap();
+        write_budget_policy(root.path());
+        let policy_digest = write_one_shot_failure_evidence_policy(root.path());
+        initialize_git(root.path());
+        let app = test_app(root.path().to_path_buf());
+        add_outcome(&app, "item-one-shot");
+        add_verification_outcome(&app, "item-one-shot-verifier");
+        let run = app
+            .ensure_outcome_feature_run("item-one-shot")
+            .unwrap()
+            .unwrap();
+        app.conn
+            .execute(
+                "UPDATE feature_run_role_leases SET worker_id = 'maker-other' WHERE run_id = ?1 AND role = 'maker' AND released_at IS NULL",
+                [&run.run.id],
+            )
+            .unwrap();
+        app.conn
+            .execute(
+                "INSERT INTO proof_obligations(
+                  id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
+                  binding, observation_requirements_json, fixture_policy_json, freshness_policy_json,
+                  assurance_policy_json, retry_aggregation, policy_digest, config_digest,
+                  source_digest, supersedes_obligation_id, created_at, obligation_shape
+                ) VALUES (
+                  'pob-one-shot', 'project-a', 'plan-a', 'item-one-shot', 'criterion-one-shot', 1,
+                  'one-shot process', 1, ?1, '{}', '{}', '{}', 'all_applicable_pass', ?2, ?2, ?2, NULL,
+                  datetime('now'), 'semantic_v1'
+                )",
+                params![
+                    json!([{
+                        "id": "obs-one-shot",
+                        "type": "com.example.ready.status",
+                        "subject": "one-shot process",
+                        "expected": {"status": "ready"},
+                        "target": {"kind": "process", "uri": "local://ready"},
+                        "payload_schema": {"schema_ref": "com.example.ready.status@v1"}
+                    }])
+                    .to_string(),
+                    policy_digest,
+                ],
+            )
+            .unwrap();
+        assert!(
+            app.evidence_readiness_value(EvidenceCoverageScope::Plan, "plan-a")
+                .unwrap_err()
+                .to_string()
+                .contains("--work-type verification --json")
+        );
+        let packet = app
+            .verification_work_packet_value("plan-a", false)
+            .unwrap()
+            .unwrap();
+        let run_index = packet["work_packet"]["sealed_run_index"].clone();
+
+        app.conn
+            .execute_batch(
+                "CREATE TRIGGER reject_one_shot_settlement
+                 BEFORE UPDATE OF status ON items
+                 WHEN NEW.status = 'failed'
+                 BEGIN SELECT RAISE(ABORT, 'injected terminal settlement failure'); END;",
+            )
+            .unwrap();
+        let error = app.evidence_run_value(run_index.clone()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("injected terminal settlement failure"),
+            "{error}"
+        );
+        for table in ["evidence_attempts", "evidence_receipts"] {
+            let count: u64 = app
+                .conn
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(count, 0, "{table} must roll back with settlement");
+        }
+        assert_eq!(
+            ExecutionRunRepository::new(&app.conn)
+                .feature_run(&run.run.id)
+                .unwrap()
+                .run
+                .phase,
+            FeatureRunPhase::Verification
+        );
+
+        app.conn
+            .execute_batch("DROP TRIGGER reject_one_shot_settlement")
+            .unwrap();
+        let result = app.evidence_run_value(run_index).unwrap();
+        assert_eq!(result["verdict"], "failed");
+        assert_eq!(
+            result["terminal_exhaustion"]["status"],
+            "terminal_non_covering"
+        );
+        assert_eq!(
+            result["terminal_exhaustion"]["execution_state"]["reason_code"],
+            "verification_attempts_exhausted"
+        );
+        assert_eq!(
+            result["results"][0]["attempt"]["retry_lineage"]["max_attempts"],
+            1
+        );
+        let persisted = ExecutionRunRepository::new(&app.conn)
+            .feature_run(&run.run.id)
+            .unwrap();
+        assert_eq!(persisted.run.phase, FeatureRunPhase::Cancelled);
+        assert!(persisted.run.role_owners.is_empty());
     }
 
     #[test]

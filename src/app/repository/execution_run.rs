@@ -2242,7 +2242,8 @@ string_enum!(feature_run_phase_str, parse_feature_run_phase, FeatureRunPhase, {
 });
 string_enum!(terminal_reason_str, parse_terminal_reason, FeatureRunTerminalReason, {
     FeatureRunTerminalReason::Completed => "completed", FeatureRunTerminalReason::UserCancelled => "user_cancelled",
-    FeatureRunTerminalReason::PolicyCancelled => "policy_cancelled"
+    FeatureRunTerminalReason::PolicyCancelled => "policy_cancelled",
+    FeatureRunTerminalReason::VerificationAttemptsExhausted => "verification_attempts_exhausted"
 });
 string_enum!(hold_reason_str, parse_hold_reason, FeatureRunHoldReason, {
     FeatureRunHoldReason::Budget => "budget", FeatureRunHoldReason::Capability => "capability"

@@ -5,6 +5,9 @@ use super::repository::execution_run::{
     ReviewGateRecord, ReviewGateStatus, ReviewSourceBindingRecord, SourceFreezeRecord,
     SourceFreezeStatus,
 };
+use crate::app::execution_state::{
+    CanonicalPlanrExecutableIdentity, observe_planr_executable_identity,
+};
 use crate::evidence::policy::capture_repository_snapshot;
 use crate::execution_run::{
     ExecutionBatchStatus, FeatureRunPhase, PhaseTransition, PhaseTransitionCause, RunRole,
@@ -20,13 +23,14 @@ impl App {
     fn active_risk_review_obligation_ids(
         &self,
         plan_id: &str,
-        verification_item_id: &str,
+        verification_item_id: Option<&str>,
     ) -> Result<Vec<String>> {
         let obligation_ids = self
             .conn
             .prepare(
                 "SELECT obligations.id FROM proof_obligations obligations
-                 WHERE obligations.plan_id = ?1 AND obligations.item_id = ?2
+                 WHERE obligations.plan_id = ?1
+                   AND (?2 IS NULL OR obligations.item_id = ?2)
                    AND obligations.binding = 1
                    AND NOT EXISTS(
                      SELECT 1 FROM proof_obligations successors
@@ -38,7 +42,9 @@ impl App {
                 row.get::<_, String>(0)
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        if obligation_ids.is_empty() {
+        if obligation_ids.is_empty()
+            && let Some(verification_item_id) = verification_item_id
+        {
             bail!("risk_review_active_obligations_missing:{verification_item_id}");
         }
         Ok(obligation_ids)
@@ -142,6 +148,7 @@ impl App {
         &self,
         persisted: PersistedFeatureRun,
         gate: &ReviewGateRecord,
+        planr_executable: Option<&CanonicalPlanrExecutableIdentity>,
     ) -> Result<Option<Value>> {
         if gate.kind != ReviewGateKind::RiskCheckpoint || gate.status != ReviewGateStatus::Accepted
         {
@@ -173,13 +180,21 @@ impl App {
             }
             let verification_item_id =
                 self.ready_verification_item_for_plan_path(Some(plan.path.as_str()))?;
-            return self
-                .canonical_verification_handoff_value(
+            let source_freeze = serde_json::to_value(freeze)?;
+            return match planr_executable {
+                Some(identity) => self.canonical_source_frozen_handoff_value_with_identity(
                     &persisted.run.plan_id,
                     verification_item_id,
-                    serde_json::to_value(freeze)?,
-                )
-                .map(Some);
+                    source_freeze,
+                    identity,
+                ),
+                None => self.canonical_source_frozen_handoff_value(
+                    &persisted.run.plan_id,
+                    verification_item_id,
+                    source_freeze,
+                ),
+            }
+            .map(Some);
         }
         if persisted.run.phase != FeatureRunPhase::Implementation {
             return Ok(None);
@@ -203,11 +218,8 @@ impl App {
         {
             return Ok(None);
         }
-        let Some(verification_item_id) =
-            self.ready_verification_item_for_plan_path(Some(plan.path.as_str()))?
-        else {
-            return Ok(None);
-        };
+        let verification_item_id =
+            self.ready_verification_item_for_plan_path(Some(plan.path.as_str()))?;
         let snapshot = capture_repository_snapshot(&self.root)
             .map_err(|error| anyhow!("capturing accepted-risk source freeze: {error}"))?;
         let bound_freeze = self.accepted_risk_bound_freeze(
@@ -248,8 +260,15 @@ impl App {
         if create_freeze {
             repository.freeze_source(&freeze)?;
         }
-        let active_obligation_ids =
-            self.active_risk_review_obligation_ids(&persisted.run.plan_id, &verification_item_id)?;
+        let active_binding = self.plan_has_active_binding_obligations(&persisted.run.plan_id)?;
+        let active_obligation_ids = if active_binding {
+            self.active_risk_review_obligation_ids(
+                &persisted.run.plan_id,
+                verification_item_id.as_deref(),
+            )?
+        } else {
+            Vec::new()
+        };
         repository.seal_accepted_risk_review_source_binding(&ReviewSourceBindingRecord {
             gate_id: gate.id.clone(),
             freeze_id: freeze.id.clone(),
@@ -260,32 +279,48 @@ impl App {
                 "active_obligation_ids": active_obligation_ids,
             }),
         })?;
-        let released = self.conn.execute(
-            "UPDATE items SET status = 'ready', worker_id = NULL, pick_token = NULL,
-                    picked_at = NULL, last_heartbeat_at = NULL, updated_at = datetime('now')
-             WHERE id = ?1 AND plan_path = ?2 AND work_type = 'verification'
-               AND status = 'ready'",
-            params![verification_item_id, plan.path],
-        )?;
-        if released != 1 {
-            bail!("accepted_risk_verification_item_not_ready:{verification_item_id}");
+        if let Some(verification_item_id) = verification_item_id.as_deref() {
+            let released = self.conn.execute(
+                "UPDATE items SET status = 'ready', worker_id = NULL, pick_token = NULL,
+                        picked_at = NULL, last_heartbeat_at = NULL, updated_at = datetime('now')
+                 WHERE id = ?1 AND plan_path = ?2 AND work_type = 'verification'
+                   AND status = 'ready'",
+                params![verification_item_id, plan.path],
+            )?;
+            if released != 1 {
+                bail!("accepted_risk_verification_item_not_ready:{verification_item_id}");
+            }
         }
+        let source_freeze = serde_json::to_value(&freeze)?;
+        let handoff = match planr_executable {
+            Some(identity) => self.canonical_source_frozen_handoff_value_with_identity(
+                &persisted.run.plan_id,
+                verification_item_id,
+                source_freeze,
+                identity,
+            ),
+            None => self.canonical_source_frozen_handoff_value(
+                &persisted.run.plan_id,
+                verification_item_id,
+                source_freeze,
+            ),
+        }?;
+        let event_kind = if handoff["work_packet"]["kind"] == "verification_handoff" {
+            "accepted_risk_verification_handoff"
+        } else {
+            "accepted_risk_final_review_handoff"
+        };
         self.record_event(
-            "accepted_risk_verification_handoff",
+            event_kind,
             Some(&gate.scope_id),
             json!({
                 "gate_id": gate.id,
                 "run_id": persisted.run.id,
-                "verification_item_id": verification_item_id,
+                "verification_item_id": handoff["work_packet"]["verification_item_id"],
                 "source_freeze_id": freeze.id,
             }),
         )?;
-        self.canonical_verification_handoff_value(
-            &persisted.run.plan_id,
-            Some(verification_item_id),
-            serde_json::to_value(freeze)?,
-        )
-        .map(Some)
+        Ok(Some(handoff))
     }
 
     pub(crate) fn resume_accepted_risk_verification_handoff_value(
@@ -317,8 +352,13 @@ impl App {
             );
         }
         if !self.conn.is_autocommit() {
-            return self.accepted_risk_verification_handoff_locked(preflight_run, &preflight_gate);
+            return self.accepted_risk_verification_handoff_locked(
+                preflight_run,
+                &preflight_gate,
+                None,
+            );
         }
+        let planr_executable = observe_planr_executable_identity(&std::env::current_exe()?)?;
         self.conn.execute_batch(
             "BEGIN IMMEDIATE; SAVEPOINT resume_accepted_risk_verification_handoff",
         )?;
@@ -345,7 +385,11 @@ impl App {
                     gate.id
                 );
             }
-            self.accepted_risk_verification_handoff_locked(persisted, &gate)
+            self.accepted_risk_verification_handoff_locked(
+                persisted,
+                &gate,
+                Some(&planr_executable),
+            )
         })();
         match result {
             Ok(value) => {

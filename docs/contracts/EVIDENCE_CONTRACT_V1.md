@@ -1,8 +1,8 @@
 # Evidence Contract v1
 
-Status: frozen for implementation
+Status: frozen for implementation; v1.1 additive one-shot lifecycle amendment frozen for implementation
 
-Evidence Contract v1 is Planr's local-first contract for proving acceptance criteria. It defines the durable vocabulary for proof obligations, observation requirements, capability declarations, execution attempts, untrusted proposals, trusted receipts, coverage verdicts, policy, presets, waivers, statuses, compatibility, and extension naming. It does not add public commands by itself and does not grant closure authority until later implementation slices wire the contract into storage, audit, review, trace, pick, and active-goal enforcement.
+Evidence Contract v1 is Planr's local-first contract for proving acceptance criteria. It defines the durable vocabulary for proof obligations, observation requirements, capability declarations, execution attempts, untrusted proposals, trusted receipts, coverage verdicts, policy, presets, waivers, statuses, compatibility, and extension naming. It does not add public commands by itself and does not grant closure authority until later implementation slices wire the contract into storage, audit, review, trace, pick, and active-goal enforcement. The v1.1 amendment is additive: it binds an explicitly non-repeatable capability to one terminal attempt without changing existing object shapes or repeatable-capability behavior.
 
 ## Ownership
 
@@ -88,6 +88,7 @@ Required fields:
 
 - `id`, `schema_version`, `version`, `adapter_kind`, `adapter_digest`.
 - Supported surfaces, observation type/schema/digest triples, interactions, artifacts, runtime targets, provenance path, permissions, costs, determinism, repeatability, independence, blind spots, and availability probe contract.
+- When a capability explicitly declares `repeatability = non_repeatable_one_shot`, Planr derives `max_attempts = 1`; any conflicting caller declaration is rejected before launch. Its committed non-passing attempt (`attempt_index + 1 = max_attempts`) atomically exhausts that FeatureRun verification allowance with the attempt and receipt. Planr records `verification_attempts_exhausted`, releases the verifier lease, and exposes no next verification action. Missing or other repeatability values never infer one-shot behavior.
 - Process adapters declare a closed `availability_probe.kind = process` contract with executable name, arguments, optional working directory, timeout, stdout/stderr byte limits, and the payload schema binding for emitted observations.
 
 A manifest is a claim about what a method can observe. It is not proof that the method is available now.

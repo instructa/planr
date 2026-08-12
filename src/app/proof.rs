@@ -3,11 +3,18 @@ use super::proof_coverage::proof_status_from_coverages;
 use crate::evidence::coverage::{
     authoritative_obligation_ids_for_scope, canonical_evaluation_error_proof,
 };
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
 
 impl App {
+    pub(crate) fn plan_has_active_binding_obligations(&self, plan_id: &str) -> Result<bool> {
+        let project = self.default_project()?;
+        authoritative_obligation_ids_for_scope(&self.conn, &project.id, "plan", plan_id)
+            .map(|ids| !ids.is_empty())
+            .map_err(|error| anyhow!(error))
+    }
+
     pub(crate) fn proof_status_for_item(&self, item_id: &str) -> Result<Value> {
         let item = self.get_item(item_id)?;
         let project = self.default_project()?;

@@ -1005,16 +1005,16 @@ impl App {
                     }
                     if compatible_code_ready {
                         Some(self.next_pick_value(None, Some("code"), plan_id.as_deref())?)
-                    } else if let Some(verification_item_id) =
-                        self.ready_verification_item_for_plan_path(item.plan_path.as_deref())?
-                    {
+                    } else if plan_id.is_some() {
+                        let verification_item_id =
+                            self.ready_verification_item_for_plan_path(item.plan_path.as_deref())?;
                         Some(json!({
                             "item": null,
                             "reason": "verification_handoff_pending_source_freeze",
                             "verification_item_id": verification_item_id,
                         }))
                     } else {
-                        Some(self.next_pick_value(None, Some("code"), plan_id.as_deref())?)
+                        Some(self.next_pick_value(None, Some("code"), None)?)
                     }
                 }
             } else {
@@ -1056,7 +1056,7 @@ impl App {
                 .as_ref()
                 .and_then(|next| next["verification_item_id"].as_str())
                 .map(ToOwned::to_owned);
-            fused_next = Some(self.canonical_verification_handoff_value(
+            fused_next = Some(self.canonical_source_frozen_handoff_value(
                 plan_id,
                 verification_item_id,
                 source_freeze,
@@ -1108,6 +1108,9 @@ impl App {
                     }
                     None if next["reason"] == "verification_handoff_source_frozen" => {
                         human.push_str("; source frozen for verification handoff")
+                    }
+                    None if next["reason"] == "final_review_handoff_source_frozen" => {
+                        human.push_str("; source frozen for independent final review")
                     }
                     None => human.push_str("; no ready item"),
                 }

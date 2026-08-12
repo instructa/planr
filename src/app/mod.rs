@@ -16,6 +16,7 @@ mod evidence;
 mod execution_run;
 mod execution_state;
 mod feature_run_evidence;
+mod final_review_admission;
 mod flow;
 mod git_review;
 mod graph;
