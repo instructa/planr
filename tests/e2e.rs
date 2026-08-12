@@ -22612,6 +22612,228 @@ fn done_next_freezes_source_and_stops_before_verification_work() {
     );
 }
 
+fn seed_transport_risk_handoff(root: &Path, db: &Path) -> (String, String) {
+    planr()
+        .current_dir(root)
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "project",
+            "init",
+            "Transport handoff",
+        ])
+        .assert()
+        .success();
+    let plan_path = root.join("transport-handoff.plan.md");
+    fs::write(&plan_path, "# Transport Handoff\n").unwrap();
+    let conn = Connection::open(db).unwrap();
+    let project_id: String = conn
+        .query_row("SELECT id FROM projects LIMIT 1", [], |row| row.get(0))
+        .unwrap();
+    conn.execute(
+        "INSERT INTO plans(id, project_id, stage, path, title, slug, parse_status, content_hash, created_at, updated_at)
+         VALUES ('plan-transport-handoff', ?1, 'build', ?2, 'Transport Handoff', 'transport-handoff', 'ok', 'sha256:transport', datetime('now'), datetime('now'))",
+        rusqlite::params![project_id, plan_path.to_string_lossy()],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO items(id, project_id, title, description, status, work_type, worker_id, plan_path, created_at, updated_at)
+         VALUES ('item-transport-code', ?1, 'Code', 'protected transport change', 'picked', 'code', 'maker-transport', ?2, datetime('now'), datetime('now'))",
+        rusqlite::params![project_id, plan_path.to_string_lossy()],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO items(id, project_id, title, description, status, work_type, plan_path, created_at, updated_at)
+         VALUES ('item-transport-verification', ?1, 'Verification', 'independent verification', 'ready', 'verification', ?2, datetime('now'), datetime('now'))",
+        rusqlite::params![project_id, plan_path.to_string_lossy()],
+    )
+    .unwrap();
+    drop(conn);
+    init_git_repo(root);
+    let done = single_json_document(
+        &planr()
+            .current_dir(root)
+            .env("PLANR_WORKER_ID", "maker-transport")
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "done",
+                "item-transport-code",
+                "--summary",
+                "protected handoff transport",
+                "--cmd",
+                "true",
+                "--escalate",
+                "user-requested",
+                "--escalation-ref",
+                "transport:test",
+                "--escalation-explanation",
+                "transport parity",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    let gate = done["work_packet"]["review_gate"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let conn = Connection::open(db).unwrap();
+    conn.execute(
+        "INSERT INTO proof_obligations(
+           id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
+           binding, observation_requirements_json, fixture_policy_json,
+           freshness_policy_json, assurance_policy_json, policy_digest, config_digest,
+           source_digest, created_at, retry_aggregation, obligation_shape
+         ) VALUES ('pob-transport-handoff', ?1, 'plan-transport-handoff',
+           'item-transport-verification', 'crit-transport', 1, 'transport obligation', 1,
+           '[]', '{}', '{}', '{}',
+           'sha256:0000000000000000000000000000000000000000000000000000000000000000',
+           'sha256:0000000000000000000000000000000000000000000000000000000000000000',
+           NULL, datetime('now'), 'latest_applicable_pass', 'semantic_v1')",
+        [&project_id],
+    )
+    .unwrap();
+    drop(conn);
+    planr()
+        .current_dir(root)
+        .env("PLANR_WORKER_ID", "reviewer-transport")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "pick",
+            "--plan",
+            "plan-transport-handoff",
+            "--work-type",
+            "review",
+        ])
+        .assert()
+        .success();
+    ("plan-transport-handoff".to_string(), gate)
+}
+
+fn assert_typed_handoff_transport(value: &Value, plan_id: &str) {
+    let packet = &value["verification_handoff"]["work_packet"];
+    assert_eq!(packet["schema_version"], "planr.verification_handoff.v2");
+    let identity = &packet["planr_executable"];
+    let executable = Path::new(identity["path"].as_str().unwrap());
+    assert!(executable.is_absolute());
+    assert_eq!(identity["path_lookup_allowed"], false);
+    assert_eq!(
+        identity["sha256"],
+        format!("sha256:{:x}", Sha256::digest(fs::read(executable).unwrap()))
+    );
+    for command in ["lease_verifier", "readiness"] {
+        assert_eq!(packet["commands"][command]["executable"], identity["path"]);
+        assert_eq!(
+            packet["commands"][command]["executable_sha256"],
+            identity["sha256"]
+        );
+        assert_eq!(packet["commands"][command]["path_lookup_allowed"], false);
+    }
+    assert_eq!(
+        packet["commands"]["lease_verifier"]["argv"],
+        json!([
+            "pick",
+            "--plan",
+            plan_id,
+            "--work-type",
+            "verification",
+            "--json"
+        ])
+    );
+    assert!(!packet["commands"].to_string().contains("planr pick"));
+}
+
+#[test]
+fn canonical_handoff_identity_is_real_and_path_independent_across_cli_mcp_http() {
+    let hostile = tempdir().unwrap();
+    let fake = hostile.path().join("planr");
+    fs::write(&fake, "#!/bin/sh\nexit 97\n").unwrap();
+    #[cfg(unix)]
+    fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+    let hostile_path = std::env::join_paths(std::iter::once(hostile.path().to_path_buf()).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .unwrap();
+
+    let cli_root = tempdir().unwrap();
+    let cli_db = cli_root.path().join(".planr/planr.sqlite");
+    let (plan_id, cli_gate) = seed_transport_risk_handoff(cli_root.path(), &cli_db);
+    let cli = single_json_document(
+        &planr()
+            .current_dir(cli_root.path())
+            .env("PLANR_WORKER_ID", "reviewer-transport")
+            .env("PATH", &hostile_path)
+            .args([
+                "--db",
+                cli_db.to_str().unwrap(),
+                "--json",
+                "review",
+                "close",
+                &cli_gate,
+                "--verdict",
+                "complete",
+                "--reviewer",
+                "reviewer-transport",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    assert_typed_handoff_transport(&cli, &plan_id);
+
+    let mcp_root = tempdir().unwrap();
+    let mcp_db = mcp_root.path().join(".planr/planr.sqlite");
+    let (_, mcp_gate) = seed_transport_risk_handoff(mcp_root.path(), &mcp_db);
+    let mcp = mcp_tool_response_with_env(
+        mcp_root.path(),
+        &mcp_db,
+        1,
+        "planr_review_gate_close",
+        json!({"review_gate_id": mcp_gate, "verdict": "complete", "reviewer": "reviewer-transport"}),
+        &[
+            ("PLANR_WORKER_ID", "reviewer-transport"),
+            ("PATH", hostile_path.to_str().unwrap()),
+        ],
+    );
+    assert_typed_handoff_transport(&mcp_text_value(&mcp), &plan_id);
+
+    let http_root = tempdir().unwrap();
+    let http_db = http_root.path().join(".planr/planr.sqlite");
+    let (_, http_gate) = seed_transport_risk_handoff(http_root.path(), &http_db);
+    let port = free_port();
+    let binary = assert_cmd::cargo::cargo_bin("planr");
+    let mut server = StdCommand::new(binary)
+        .current_dir(http_root.path())
+        .env("PLANR_WORKER_ID", "reviewer-transport")
+        .env("PATH", &hostile_path)
+        .args([
+            "--db",
+            http_db.to_str().unwrap(),
+            "serve",
+            "--port",
+            &port.to_string(),
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    wait_for_http_server(port);
+    let http = http_json(&http_request(
+        port,
+        "POST",
+        &format!("/v1/review-gates/{http_gate}/close"),
+        &json!({"verdict":"complete", "reviewer":"reviewer-transport"}).to_string(),
+    ));
+    let _ = server.kill();
+    let _ = server.wait();
+    assert_typed_handoff_transport(&http, &plan_id);
+}
+
 #[test]
 fn unplanned_materiality_records_missing_change_facts_without_a_review_gate() {
     let dir = tempdir().unwrap();

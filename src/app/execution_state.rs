@@ -18,8 +18,6 @@ use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
-use std::time::SystemTime;
 
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct CanonicalExecutionBudgetDto {
@@ -114,13 +112,7 @@ pub(crate) struct CanonicalPlanrExecutableIdentity {
     pub(crate) size_bytes: u64,
     pub(crate) version: &'static str,
     pub(crate) path_lookup_allowed: bool,
-    #[serde(skip)]
-    modified: SystemTime,
 }
-
-static CURRENT_PLANR_EXECUTABLE_IDENTITY: OnceLock<
-    std::result::Result<CanonicalPlanrExecutableIdentity, String>,
-> = OnceLock::new();
 
 #[derive(Clone, Debug, Serialize)]
 struct CanonicalPlanrCommand {
@@ -190,75 +182,7 @@ fn observe_planr_executable_identity(path: &Path) -> Result<CanonicalPlanrExecut
         size_bytes,
         version: env!("CARGO_PKG_VERSION"),
         path_lookup_allowed: false,
-        modified: after.modified()?,
     })
-}
-
-fn current_planr_executable_identity() -> Result<CanonicalPlanrExecutableIdentity> {
-    let identity = CURRENT_PLANR_EXECUTABLE_IDENTITY.get_or_init(|| {
-        std::env::current_exe()
-            .map_err(|error| format!("planr_executable_identity_unavailable:error={error}"))
-            .and_then(|path| {
-                observe_planr_executable_identity(&path).map_err(|error| error.to_string())
-            })
-    });
-    identity.clone().map_err(anyhow::Error::msg)
-}
-
-pub(crate) fn initialize_planr_executable_identity() {
-    // Capture the running executable before any command transaction begins. Handoff generation
-    // then performs only a metadata recheck while holding workflow locks; consumers re-hash the
-    // emitted digest immediately before executing the structured command.
-    let _ = current_planr_executable_identity();
-}
-
-fn validate_cached_planr_executable_identity(
-    identity: &CanonicalPlanrExecutableIdentity,
-) -> Result<()> {
-    if identity.path_lookup_allowed {
-        bail!("planr_executable_identity_path_lookup_forbidden");
-    }
-    let canonical = identity.path.canonicalize().map_err(|error| {
-        anyhow::anyhow!(
-            "planr_executable_identity_unavailable:path={}:error={error}",
-            identity.path.display()
-        )
-    })?;
-    let metadata = canonical.metadata()?;
-    if canonical != identity.path
-        || !metadata.is_file()
-        || metadata.len() != identity.size_bytes
-        || metadata.modified()? != identity.modified
-    {
-        bail!(
-            "planr_executable_identity_mismatch:expected_path={}:expected_sha256={}",
-            identity.path.display(),
-            identity.sha256
-        );
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-fn validate_planr_executable_identity(identity: &CanonicalPlanrExecutableIdentity) -> Result<()> {
-    if identity.path_lookup_allowed {
-        bail!("planr_executable_identity_path_lookup_forbidden");
-    }
-    let observed = observe_planr_executable_identity(&identity.path)?;
-    if observed.path != identity.path
-        || observed.sha256 != identity.sha256
-        || observed.size_bytes != identity.size_bytes
-        || observed.version != identity.version
-    {
-        bail!(
-            "planr_executable_identity_mismatch:expected_path={}:expected_sha256={}:observed_path={}:observed_sha256={}",
-            identity.path.display(),
-            identity.sha256,
-            observed.path.display(),
-            observed.sha256
-        );
-    }
-    Ok(())
 }
 
 fn canonical_planr_command(
@@ -501,8 +425,9 @@ impl App {
         verification_item_id: Option<String>,
         source_freeze: Value,
     ) -> Result<Value> {
-        let planr_executable = current_planr_executable_identity()?;
-        validate_cached_planr_executable_identity(&planr_executable)?;
+        let planr_executable = observe_planr_executable_identity(&std::env::current_exe()?)?;
+        // Observation hashes the exact canonical path here, for every packet. Its before/after
+        // metadata check rejects a replacement racing the read; no metadata cache is authority.
         let execution_state = self
             .canonical_execution_state_for_plan_value(plan_id)?
             .ok_or_else(|| {
@@ -1084,24 +1009,33 @@ mod tests {
         assert!(identity.path.is_absolute());
         assert!(!identity.path_lookup_allowed);
         assert!(identity.sha256.starts_with("sha256:"));
-        validate_planr_executable_identity(&identity).expect("unchanged identity");
-
-        let mut wrong_digest = identity.clone();
-        wrong_digest.sha256 = format!("sha256:{}", "0".repeat(64));
-        assert!(
-            validate_planr_executable_identity(&wrong_digest)
-                .unwrap_err()
-                .to_string()
-                .contains("planr_executable_identity_mismatch")
+        assert_eq!(
+            observe_planr_executable_identity(&executable)
+                .expect("unchanged identity")
+                .sha256,
+            identity.sha256
         );
 
-        std::fs::write(&executable, b"installed-old-global-planr").expect("replace executable");
-        let error = validate_planr_executable_identity(&identity).unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("planr_executable_identity_mismatch")
+        let original_modified = executable.metadata().unwrap().modified().unwrap();
+        let replacement = b"installed-global!";
+        assert_eq!(replacement.len(), b"reviewed-planr-v1".len());
+        std::fs::write(&executable, replacement).expect("equal-size replacement executable");
+        let mut restored_times = std::fs::FileTimes::new();
+        restored_times = restored_times.set_modified(original_modified);
+        std::fs::File::options()
+            .write(true)
+            .open(&executable)
+            .unwrap()
+            .set_times(restored_times)
+            .expect("restore original mtime");
+        assert_eq!(executable.metadata().unwrap().len(), identity.size_bytes);
+        assert_eq!(
+            executable.metadata().unwrap().modified().unwrap(),
+            original_modified
         );
+        let replacement_identity =
+            observe_planr_executable_identity(&executable).expect("replacement identity");
+        assert_ne!(replacement_identity.sha256, identity.sha256);
 
         let missing = dir.path().join("missing-planr");
         let error = observe_planr_executable_identity(&missing).unwrap_err();
@@ -1113,18 +1047,9 @@ mod tests {
     }
 
     #[test]
-    fn executable_identity_rejects_path_lookup_and_command_serialization_is_structured() {
+    fn executable_identity_forbids_path_lookup_and_command_serialization_is_structured() {
         let current = std::env::current_exe().expect("current executable");
-        let mut identity = observe_planr_executable_identity(&current).expect("identity");
-        identity.path_lookup_allowed = true;
-        assert_eq!(
-            validate_planr_executable_identity(&identity)
-                .unwrap_err()
-                .to_string(),
-            "planr_executable_identity_path_lookup_forbidden"
-        );
-
-        identity.path_lookup_allowed = false;
+        let identity = observe_planr_executable_identity(&current).expect("identity");
         let command = serde_json::to_value(canonical_planr_command(
             &identity,
             vec!["pick".into(), "--json".into()],
