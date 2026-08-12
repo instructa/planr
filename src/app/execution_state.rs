@@ -14,6 +14,12 @@ use crate::usage_policy::{
 use anyhow::{Result, bail};
 use serde::Serialize;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use std::fs::File;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+use std::time::SystemTime;
 
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct CanonicalExecutionBudgetDto {
@@ -98,6 +104,174 @@ pub(crate) struct CanonicalFeatureRunRestartDto {
     pub(crate) reason: FeatureRunRestartReason,
     pub(crate) incompatibility: FeatureRunBudgetContractCompatibility,
     pub(crate) disposition: Option<FeatureRunRestartDisposition>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct CanonicalPlanrExecutableIdentity {
+    pub(crate) schema_version: &'static str,
+    pub(crate) path: PathBuf,
+    pub(crate) sha256: String,
+    pub(crate) size_bytes: u64,
+    pub(crate) version: &'static str,
+    pub(crate) path_lookup_allowed: bool,
+    #[serde(skip)]
+    modified: SystemTime,
+}
+
+static CURRENT_PLANR_EXECUTABLE_IDENTITY: OnceLock<
+    std::result::Result<CanonicalPlanrExecutableIdentity, String>,
+> = OnceLock::new();
+
+#[derive(Clone, Debug, Serialize)]
+struct CanonicalPlanrCommand {
+    schema_version: &'static str,
+    executable: PathBuf,
+    executable_sha256: String,
+    path_lookup_allowed: bool,
+    argv: Vec<String>,
+}
+
+fn digest_file(path: &Path) -> Result<(String, u64)> {
+    let mut file = File::open(path).map_err(|error| {
+        anyhow::anyhow!(
+            "planr_executable_identity_unavailable:path={}:error={error}",
+            path.display()
+        )
+    })?;
+    let mut digest = Sha256::new();
+    let mut size_bytes = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+        size_bytes = size_bytes.saturating_add(read as u64);
+    }
+    Ok((format!("sha256:{:x}", digest.finalize()), size_bytes))
+}
+
+fn observe_planr_executable_identity(path: &Path) -> Result<CanonicalPlanrExecutableIdentity> {
+    let path = path.canonicalize().map_err(|error| {
+        anyhow::anyhow!(
+            "planr_executable_identity_unavailable:path={}:error={error}",
+            path.display()
+        )
+    })?;
+    if !path.is_absolute() {
+        bail!(
+            "planr_executable_identity_path_not_absolute:path={}",
+            path.display()
+        );
+    }
+    let before = path.metadata()?;
+    if !before.is_file() {
+        bail!(
+            "planr_executable_identity_not_regular_file:path={}",
+            path.display()
+        );
+    }
+    let (sha256, size_bytes) = digest_file(&path)?;
+    let after = path.metadata()?;
+    if before.len() != after.len()
+        || size_bytes != after.len()
+        || before.modified()? != after.modified()?
+    {
+        bail!(
+            "planr_executable_identity_mutated_during_observation:path={}",
+            path.display()
+        );
+    }
+    Ok(CanonicalPlanrExecutableIdentity {
+        schema_version: "planr.executable_identity.v1",
+        path,
+        sha256,
+        size_bytes,
+        version: env!("CARGO_PKG_VERSION"),
+        path_lookup_allowed: false,
+        modified: after.modified()?,
+    })
+}
+
+fn current_planr_executable_identity() -> Result<CanonicalPlanrExecutableIdentity> {
+    let identity = CURRENT_PLANR_EXECUTABLE_IDENTITY.get_or_init(|| {
+        std::env::current_exe()
+            .map_err(|error| format!("planr_executable_identity_unavailable:error={error}"))
+            .and_then(|path| {
+                observe_planr_executable_identity(&path).map_err(|error| error.to_string())
+            })
+    });
+    identity.clone().map_err(anyhow::Error::msg)
+}
+
+pub(crate) fn initialize_planr_executable_identity() {
+    // Capture the running executable before any command transaction begins. Handoff generation
+    // then performs only a metadata recheck while holding workflow locks; consumers re-hash the
+    // emitted digest immediately before executing the structured command.
+    let _ = current_planr_executable_identity();
+}
+
+fn validate_cached_planr_executable_identity(
+    identity: &CanonicalPlanrExecutableIdentity,
+) -> Result<()> {
+    if identity.path_lookup_allowed {
+        bail!("planr_executable_identity_path_lookup_forbidden");
+    }
+    let canonical = identity.path.canonicalize().map_err(|error| {
+        anyhow::anyhow!(
+            "planr_executable_identity_unavailable:path={}:error={error}",
+            identity.path.display()
+        )
+    })?;
+    let metadata = canonical.metadata()?;
+    if canonical != identity.path
+        || !metadata.is_file()
+        || metadata.len() != identity.size_bytes
+        || metadata.modified()? != identity.modified
+    {
+        bail!(
+            "planr_executable_identity_mismatch:expected_path={}:expected_sha256={}",
+            identity.path.display(),
+            identity.sha256
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn validate_planr_executable_identity(identity: &CanonicalPlanrExecutableIdentity) -> Result<()> {
+    if identity.path_lookup_allowed {
+        bail!("planr_executable_identity_path_lookup_forbidden");
+    }
+    let observed = observe_planr_executable_identity(&identity.path)?;
+    if observed.path != identity.path
+        || observed.sha256 != identity.sha256
+        || observed.size_bytes != identity.size_bytes
+        || observed.version != identity.version
+    {
+        bail!(
+            "planr_executable_identity_mismatch:expected_path={}:expected_sha256={}:observed_path={}:observed_sha256={}",
+            identity.path.display(),
+            identity.sha256,
+            observed.path.display(),
+            observed.sha256
+        );
+    }
+    Ok(())
+}
+
+fn canonical_planr_command(
+    identity: &CanonicalPlanrExecutableIdentity,
+    argv: Vec<String>,
+) -> CanonicalPlanrCommand {
+    CanonicalPlanrCommand {
+        schema_version: "planr.command.v1",
+        executable: identity.path.clone(),
+        executable_sha256: identity.sha256.clone(),
+        path_lookup_allowed: false,
+        argv,
+    }
 }
 
 impl App {
@@ -327,23 +501,50 @@ impl App {
         verification_item_id: Option<String>,
         source_freeze: Value,
     ) -> Result<Value> {
+        let planr_executable = current_planr_executable_identity()?;
+        validate_cached_planr_executable_identity(&planr_executable)?;
         let execution_state = self
             .canonical_execution_state_for_plan_value(plan_id)?
             .ok_or_else(|| {
                 anyhow::anyhow!("verification_handoff_execution_state_missing:{plan_id}")
             })?;
+        let lease_verifier = canonical_planr_command(
+            &planr_executable,
+            vec![
+                "pick".to_string(),
+                "--plan".to_string(),
+                plan_id.to_string(),
+                "--work-type".to_string(),
+                "verification".to_string(),
+                "--json".to_string(),
+            ],
+        );
+        let readiness = canonical_planr_command(
+            &planr_executable,
+            vec![
+                "evidence".to_string(),
+                "readiness".to_string(),
+                "--scope".to_string(),
+                "plan".to_string(),
+                "--id".to_string(),
+                plan_id.to_string(),
+                "--json".to_string(),
+            ],
+        );
         Ok(json!({
             "item": null,
             "reason": "verification_handoff_source_frozen",
             "work_packet": {
+                "schema_version": "planr.verification_handoff.v2",
                 "kind": "verification_handoff",
                 "plan_id": plan_id,
                 "verification_item_id": verification_item_id,
                 "execution_state": execution_state,
                 "source_freeze": source_freeze,
+                "planr_executable": planr_executable,
                 "commands": {
-                    "lease_verifier": format!("planr pick --plan {plan_id} --work-type verification --json"),
-                    "readiness": format!("planr evidence readiness --scope plan --id {plan_id}"),
+                    "lease_verifier": lease_verifier,
+                    "readiness": readiness,
                 },
                 "next_action": "lease_verifier_then_run_readiness",
             }
@@ -871,5 +1072,83 @@ mod tests {
         let runtime = include_str!("feature_run_evidence.rs");
         assert_eq!(admission.matches("pub fn admit_budget_task(").count(), 1);
         assert_eq!(runtime.matches("admit_budget_task(").count(), 1);
+    }
+
+    #[test]
+    fn executable_identity_rejects_missing_and_digest_drift_without_path_lookup() {
+        let dir = tempfile::tempdir().expect("temporary executable root");
+        let executable = dir.path().join("planr-reviewed");
+        std::fs::write(&executable, b"reviewed-planr-v1").expect("test executable");
+        let identity = observe_planr_executable_identity(&executable).expect("identity");
+
+        assert!(identity.path.is_absolute());
+        assert!(!identity.path_lookup_allowed);
+        assert!(identity.sha256.starts_with("sha256:"));
+        validate_planr_executable_identity(&identity).expect("unchanged identity");
+
+        let mut wrong_digest = identity.clone();
+        wrong_digest.sha256 = format!("sha256:{}", "0".repeat(64));
+        assert!(
+            validate_planr_executable_identity(&wrong_digest)
+                .unwrap_err()
+                .to_string()
+                .contains("planr_executable_identity_mismatch")
+        );
+
+        std::fs::write(&executable, b"installed-old-global-planr").expect("replace executable");
+        let error = validate_planr_executable_identity(&identity).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("planr_executable_identity_mismatch")
+        );
+
+        let missing = dir.path().join("missing-planr");
+        let error = observe_planr_executable_identity(&missing).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("planr_executable_identity_unavailable")
+        );
+    }
+
+    #[test]
+    fn executable_identity_rejects_path_lookup_and_command_serialization_is_structured() {
+        let current = std::env::current_exe().expect("current executable");
+        let mut identity = observe_planr_executable_identity(&current).expect("identity");
+        identity.path_lookup_allowed = true;
+        assert_eq!(
+            validate_planr_executable_identity(&identity)
+                .unwrap_err()
+                .to_string(),
+            "planr_executable_identity_path_lookup_forbidden"
+        );
+
+        identity.path_lookup_allowed = false;
+        let command = serde_json::to_value(canonical_planr_command(
+            &identity,
+            vec!["pick".into(), "--json".into()],
+        ))
+        .expect("command JSON");
+        assert_eq!(command["schema_version"], "planr.command.v1");
+        assert_eq!(command["executable"], json!(identity.path));
+        assert_eq!(command["executable_sha256"], identity.sha256);
+        assert_eq!(command["path_lookup_allowed"], false);
+        assert_eq!(command["argv"], json!(["pick", "--json"]));
+        assert!(!command.to_string().contains("\"planr pick"));
+
+        let serialized = serde_json::to_vec(&command).expect("canonical command bytes");
+        for projection in [
+            json!({"cli": command.clone()}),
+            json!({"mcp": command.clone()}),
+            json!({"http": command.clone()}),
+        ] {
+            let projected = projection
+                .get("cli")
+                .or_else(|| projection.get("mcp"))
+                .or_else(|| projection.get("http"))
+                .expect("transport projection");
+            assert_eq!(serde_json::to_vec(projected).unwrap(), serialized);
+        }
     }
 }

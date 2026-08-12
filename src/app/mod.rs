@@ -65,6 +65,7 @@ impl App {
         json: bool,
         color: bool,
     ) -> Self {
+        execution_state::initialize_planr_executable_identity();
         Self {
             conn,
             root,

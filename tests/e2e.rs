@@ -22440,9 +22440,25 @@ fn done_next_freezes_source_and_stops_before_verification_work() {
     drop(conn);
     init_git_repo(dir.path());
 
+    let hostile_bin = dir.path().join("installed-old-global/bin");
+    fs::create_dir_all(&hostile_bin).unwrap();
+    let hostile_planr = hostile_bin.join("planr");
+    fs::write(
+        &hostile_planr,
+        "#!/bin/sh\necho 'hostile PATH planr was invoked' >&2\nexit 97\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    fs::set_permissions(&hostile_planr, fs::Permissions::from_mode(0o755)).unwrap();
+    let hostile_path = std::env::join_paths(std::iter::once(hostile_bin.clone()).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .unwrap();
+
     let output = planr()
         .current_dir(dir.path())
         .env("PLANR_WORKER_ID", "maker-verification-handoff")
+        .env("PATH", hostile_path)
         .args([
             "--db",
             db.to_str().unwrap(),
@@ -22470,14 +22486,39 @@ fn done_next_freezes_source_and_stops_before_verification_work() {
         done["next"]["work_packet"]["verification_item_id"],
         "item-verification-handoff"
     );
+    let packet = &done["next"]["work_packet"];
+    let identity = &packet["planr_executable"];
+    let executable = Path::new(identity["path"].as_str().unwrap());
+    assert!(executable.is_absolute());
+    assert_ne!(executable, hostile_planr);
+    let executable_bytes = fs::read(executable).unwrap();
     assert_eq!(
-        done["next"]["work_packet"]["commands"]["lease_verifier"],
-        "planr pick --plan plan-verification-handoff --work-type verification --json"
+        identity["sha256"],
+        format!("sha256:{:x}", Sha256::digest(&executable_bytes))
+    );
+    assert_eq!(identity["size_bytes"], executable_bytes.len() as u64);
+    assert_eq!(identity["path_lookup_allowed"], false);
+    assert_eq!(
+        packet["commands"]["lease_verifier"],
+        json!({
+            "schema_version": "planr.command.v1",
+            "executable": identity["path"],
+            "executable_sha256": identity["sha256"],
+            "path_lookup_allowed": false,
+            "argv": ["pick", "--plan", "plan-verification-handoff", "--work-type", "verification", "--json"]
+        })
     );
     assert_eq!(
-        done["next"]["work_packet"]["commands"]["readiness"],
-        "planr evidence readiness --scope plan --id plan-verification-handoff"
+        packet["commands"]["readiness"],
+        json!({
+            "schema_version": "planr.command.v1",
+            "executable": identity["path"],
+            "executable_sha256": identity["sha256"],
+            "path_lookup_allowed": false,
+            "argv": ["evidence", "readiness", "--scope", "plan", "--id", "plan-verification-handoff", "--json"]
+        })
     );
+    assert!(!packet["commands"].to_string().contains("planr pick"));
     assert_eq!(
         done["next"]["work_packet"]["source_freeze"]["feature_run"]["phase"],
         "source_frozen"
