@@ -148,6 +148,19 @@ impl App {
         {
             bail!("verified_continuation_state_mismatch");
         }
+        let maker = persisted
+            .run
+            .role_owners
+            .iter()
+            .find(|owner| owner.role == RunRole::Maker)
+            .ok_or_else(|| anyhow!("verified_continuation_missing_maker"))?;
+        if maker.worker_id != worker_id()
+            || batch.batch.maker_worker_id != maker.worker_id
+            || recovery_payload["maker_worker_id"].as_str() != Some(maker.worker_id.as_str())
+            || recovery_payload["maker_generation"].as_u64() != Some(maker.lease_generation)
+        {
+            bail!("verified_continuation_maker_lineage_mismatch");
+        }
         let project = self.default_project()?;
         let plan = self.get_plan(&request.plan_id)?;
         let remaining_work: i64 = self.conn.query_row(
@@ -160,13 +173,13 @@ impl App {
         if remaining_work != 0 {
             return Ok(None);
         }
-        let closed_verification: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM items WHERE project_id = ?1 AND plan_path = ?2
-             AND work_type = 'verification' AND status = 'closed'",
+        let (verification_items, closed_verification): (i64, i64) = self.conn.query_row(
+            "SELECT COUNT(*), SUM(CASE WHEN status = 'closed' THEN 1 ELSE 0 END)
+             FROM items WHERE project_id = ?1 AND plan_path = ?2 AND work_type = 'verification'",
             params![project.id, plan.path],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
-        if closed_verification == 0 {
+        if verification_items != 1 || closed_verification != 1 {
             bail!("verified_continuation_verification_not_closed");
         }
         let repository = ExecutionRunRepository::new(&self.conn);

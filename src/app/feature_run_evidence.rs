@@ -3545,6 +3545,49 @@ allow_overwrite = true
         (root, app, input)
     }
 
+    fn terminal_verified_continuation_app() -> (tempfile::TempDir, App, Value) {
+        let (root, app, recovery_input) = stranded_recovery_app();
+        app.recover_verification_settlement_value(recovery_input.clone())
+            .expect("restore verified continuation");
+        let repository = ExecutionRunRepository::new(&app.conn);
+        let run = repository
+            .active_feature_run_for_plan("project-a", "plan-a")
+            .unwrap()
+            .unwrap();
+        let batch_id = run.run.active_batch_id.as_deref().unwrap();
+        app.conn
+            .execute(
+                "INSERT INTO execution_run_outcomes(id, run_id, batch_id, item_id, ordinal, outcome_json)
+                 VALUES ('outcome-item-after-verification', ?1, ?2, 'item-after-verification', 1, '{}')",
+                params![run.run.id, batch_id],
+            )
+            .unwrap();
+        app.conn
+            .execute(
+                "UPDATE feature_runs SET outcomes_settled = outcomes_settled + 1,
+                    batch_outcome_count = batch_outcome_count + 1, revision = revision + 1
+                 WHERE id = ?1",
+                [&run.run.id],
+            )
+            .unwrap();
+        app.conn
+            .execute(
+                "UPDATE items SET status = 'closed', worker_id = NULL WHERE id = 'item-after-verification'",
+                [],
+            )
+            .unwrap();
+        let input = json!({
+            "schema": "planr.evidence.recover_verified_continuation.v1",
+            "plan_id": "plan-a",
+            "run_id": recovery_input["run_id"],
+            "freeze_id": recovery_input["freeze_id"],
+            "receipt_id": recovery_input["receipt_id"],
+            "recovery_item_id": recovery_input["next_item_id"],
+            "final_item_id": "item-after-verification"
+        });
+        (root, app, input)
+    }
+
     fn historical_invalidation_reconciliation_app() -> (tempfile::TempDir, App, Value) {
         let (root, app, settlement_input) = stranded_recovery_app();
         app.recover_verification_settlement_value(settlement_input)
@@ -4899,45 +4942,7 @@ allow_overwrite = true
 
     #[test]
     fn exact_public_recovery_completes_a_legacy_stranded_continuation_once() {
-        let (_root, app, recovery_input) = stranded_recovery_app();
-        app.recover_verification_settlement_value(recovery_input.clone())
-            .expect("restore verified continuation");
-        let repository = ExecutionRunRepository::new(&app.conn);
-        let run = repository
-            .active_feature_run_for_plan("project-a", "plan-a")
-            .unwrap()
-            .unwrap();
-        let batch_id = run.run.active_batch_id.as_deref().unwrap();
-        app.conn
-            .execute(
-                "INSERT INTO execution_run_outcomes(id, run_id, batch_id, item_id, ordinal, outcome_json)
-                 VALUES ('outcome-item-after-verification', ?1, ?2, 'item-after-verification', 1, '{}')",
-                params![run.run.id, batch_id],
-            )
-            .unwrap();
-        app.conn
-            .execute(
-                "UPDATE feature_runs SET outcomes_settled = outcomes_settled + 1,
-                    batch_outcome_count = batch_outcome_count + 1, revision = revision + 1
-                 WHERE id = ?1",
-                [&run.run.id],
-            )
-            .unwrap();
-        app.conn
-            .execute(
-                "UPDATE items SET status = 'closed', worker_id = NULL WHERE id = 'item-after-verification'",
-                [],
-            )
-            .unwrap();
-        let input = json!({
-            "schema": "planr.evidence.recover_verified_continuation.v1",
-            "plan_id": "plan-a",
-            "run_id": recovery_input["run_id"],
-            "freeze_id": recovery_input["freeze_id"],
-            "receipt_id": recovery_input["receipt_id"],
-            "recovery_item_id": recovery_input["next_item_id"],
-            "final_item_id": "item-after-verification"
-        });
+        let (_root, app, input) = terminal_verified_continuation_app();
         let recovered = app
             .recover_verification_settlement_value(input.clone())
             .expect("public terminal recovery");
@@ -4959,6 +4964,203 @@ allow_overwrite = true
             )
             .unwrap();
         assert_eq!(completions, 1);
+    }
+
+    fn assert_verified_continuation_recovery_rolled_back(app: &App) {
+        let state: (String, String, i64) = app
+            .conn
+            .query_row(
+                "SELECT runs.phase, batches.status,
+                    (SELECT COUNT(*) FROM events WHERE event_type = 'verified_continuation_completed')
+                 FROM feature_runs runs JOIN execution_batches batches
+                   ON batches.id = runs.active_batch_id WHERE runs.plan_id = 'plan-a'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(state, ("implementation".into(), "active".into(), 0));
+    }
+
+    #[test]
+    fn verified_continuation_public_recovery_fails_closed_for_exact_lineage_and_proof_gaps() {
+        for case in [
+            "stale_source",
+            "missing_freeze",
+            "wrong_freeze",
+            "missing_receipt",
+            "wrong_receipt",
+            "receipt_source",
+            "recovery_lineage",
+            "missing_verification",
+            "open_verification",
+            "active_adapter",
+            "remaining_work",
+            "waived_coverage",
+            "missing_coverage",
+            "wrong_maker",
+            "wrong_run",
+            "wrong_plan",
+        ] {
+            let (root, app, mut input) = terminal_verified_continuation_app();
+            match case {
+                "stale_source" => std::fs::write(root.path().join("stale.txt"), "stale").unwrap(),
+                "missing_freeze" => {
+                    app.conn.execute("UPDATE feature_run_source_freezes SET status = 'invalidated', invalidated_at = datetime('now') WHERE id = ?1", [input["freeze_id"].as_str().unwrap()]).unwrap();
+                }
+                "wrong_freeze" => input["freeze_id"] = json!("freeze-wrong"),
+                "missing_receipt" => {
+                    app.conn
+                        .execute_batch("DROP TRIGGER evidence_receipts_no_delete")
+                        .unwrap();
+                    app.conn
+                        .execute("DELETE FROM evidence_receipts WHERE id = 'erec-settle'", [])
+                        .unwrap();
+                }
+                "wrong_receipt" => input["receipt_id"] = json!("erec-wrong"),
+                "receipt_source" => {
+                    app.conn
+                        .execute_batch("DROP TRIGGER evidence_receipts_no_update")
+                        .ok();
+                    let binding: String = app.conn.query_row(
+                        "SELECT trusted_binding_json FROM evidence_receipts WHERE id = 'erec-settle'",
+                        [], |row| row.get(0)).unwrap();
+                    let mut binding: Value = serde_json::from_str(&binding).unwrap();
+                    binding["source"]["revision"] = json!("wrong-revision");
+                    app.conn.execute("UPDATE evidence_receipts SET trusted_binding_json = ?1 WHERE id = 'erec-settle'", [binding.to_string()]).unwrap();
+                }
+                "recovery_lineage" => input["recovery_item_id"] = json!("other-item"),
+                "missing_verification" => {
+                    app.conn.execute("UPDATE items SET work_type = 'docs' WHERE id = 'item-settle-verification'", []).unwrap();
+                }
+                "open_verification" => {
+                    app.conn.execute("UPDATE items SET status = 'ready' WHERE id = 'item-settle-verification'", []).unwrap();
+                }
+                "active_adapter" => {
+                    app.conn
+                        .execute_batch("DROP TRIGGER evidence_attempts_no_update")
+                        .unwrap();
+                    app.conn.execute("UPDATE evidence_attempts SET completed_at = NULL WHERE id = 'eatt-settle'", []).unwrap();
+                }
+                "remaining_work" => {
+                    app.conn.execute("INSERT INTO items(id, project_id, title, description, status, work_type, plan_path, created_at, updated_at) VALUES ('remaining-public', 'project-a', 'remaining', 'remaining', 'ready', 'code', 'plan-a.md', datetime('now'), datetime('now'))", []).unwrap();
+                }
+                "waived_coverage" => {
+                    app.conn.execute("UPDATE coverage_verdicts SET waiver_digest_set = '[\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"]' WHERE scope_kind = 'plan' AND scope_id = 'plan-a'", []).unwrap();
+                }
+                "missing_coverage" => {
+                    app.conn.execute("UPDATE coverage_verdicts SET scope_id = 'other-plan' WHERE scope_kind = 'plan' AND scope_id = 'plan-a'", []).unwrap();
+                }
+                "wrong_maker" => {
+                    app.conn.execute("UPDATE feature_run_role_leases SET worker_id = 'wrong-maker' WHERE run_id = ?1 AND role = 'maker' AND released_at IS NULL", [input["run_id"].as_str().unwrap()]).unwrap();
+                }
+                "wrong_run" => input["run_id"] = json!("run-wrong"),
+                "wrong_plan" => input["plan_id"] = json!("plan-wrong"),
+                _ => unreachable!(),
+            }
+            app.recover_verification_settlement_value(input)
+                .expect_err(case);
+            assert_verified_continuation_recovery_rolled_back(&app);
+        }
+    }
+
+    #[test]
+    fn concurrent_verified_continuation_public_recovery_converges_once() {
+        let (root, app, input) = terminal_verified_continuation_app();
+        let database_path = app.db_path.clone();
+        drop(app);
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let mut threads = Vec::new();
+        for _ in 0..2 {
+            let database_path = database_path.clone();
+            let repository_root = root.path().to_path_buf();
+            let input = input.clone();
+            let barrier = barrier.clone();
+            threads.push(std::thread::spawn(move || {
+                let conn = Connection::open(&database_path).unwrap();
+                conn.busy_timeout(std::time::Duration::from_secs(5))
+                    .unwrap();
+                let app = App::new(conn, repository_root, database_path, true, false);
+                barrier.wait();
+                app.recover_verification_settlement_value(input).unwrap()["created"]
+                    .as_bool()
+                    .unwrap()
+            }));
+        }
+        let mut created = threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .collect::<Vec<_>>();
+        created.sort();
+        assert_eq!(created, vec![false, true]);
+        let conn = Connection::open(database_path).unwrap();
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM events WHERE event_type = 'verified_continuation_completed'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn verified_continuation_public_recovery_rolls_back_late_failure() {
+        let (_root, app, input) = terminal_verified_continuation_app();
+        app.conn
+            .execute_batch(
+                "CREATE TRIGGER reject_verified_continuation_event BEFORE INSERT ON events
+             WHEN NEW.event_type = 'verified_continuation_completed'
+             BEGIN SELECT RAISE(ABORT, 'forced verified continuation event failure'); END;",
+            )
+            .unwrap();
+        let error = app
+            .recover_verification_settlement_value(input)
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("forced verified continuation event failure")
+        );
+        assert_verified_continuation_recovery_rolled_back(&app);
+    }
+
+    #[test]
+    fn verified_continuation_recovery_cli_mcp_and_http_share_typed_result() {
+        let (_cli_root, cli_app, cli_input) = terminal_verified_continuation_app();
+        let cli_object = cli_app
+            .recover_verification_settlement_value(cli_input)
+            .unwrap();
+        let cli = crate::app::evidence::evidence_success_envelope(
+            "evidence.recover_settlement",
+            cli_object,
+        );
+        let (_mcp_root, mcp_app, mcp_input) = terminal_verified_continuation_app();
+        let mcp = mcp_app
+            .mcp_evidence_tool_call(
+                "planr_evidence_recover_settlement",
+                json!({"input": mcp_input}),
+            )
+            .unwrap();
+        let mcp: Value = serde_json::from_str(mcp["content"][0]["text"].as_str().unwrap()).unwrap();
+        let (_http_root, http_app, http_input) = terminal_verified_continuation_app();
+        let (status, body) = http_app
+            .http_evidence_route(
+                "POST",
+                "/v1/evidence/recover-settlement",
+                "",
+                &json!({"input": http_input}),
+            )
+            .unwrap();
+        let http: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(status, "200 OK");
+        for envelope in [&cli, &mcp, &http] {
+            assert_eq!(
+                envelope["object"]["schema"],
+                "planr.evidence.recover_verified_continuation.result.v1"
+            );
+            assert_eq!(envelope["object"]["created"], true);
+        }
     }
 
     #[test]
