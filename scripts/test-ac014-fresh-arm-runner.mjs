@@ -56,10 +56,18 @@ const planrCandidateTree = execFileSync("git", ["rev-parse", "HEAD^{tree}"], { c
 const callsPath = path.join(root, "calls.jsonl");
 const stubPath = path.join(root, "planr-stub.mjs");
 writeExecutable(stubPath, stubPlanr({ outsidePath: false }));
+execFileSync("chmod", ["555", stubPath]);
 const codexStubPath = path.join(root, "codex-stub.mjs");
 writeExecutable(codexStubPath, stubCodexSession({ rootTokens: 5977800, childTokens: 96, rootTools: 90, childTools: 3 }));
 const oracleStubPath = path.join(root, "oracle-stub.mjs");
-writeExecutable(oracleStubPath, "#!/usr/bin/env node\nprocess.exit(0);\n");
+writeExecutable(oracleStubPath, `#!/usr/bin/env node
+if (process.env.PLANR_AC014_CANDIDATE_BIN !== ${JSON.stringify(realpathSync(stubPath))}
+  || process.env.PLANR_BIN !== ${JSON.stringify(realpathSync(stubPath))}
+  || process.env.PLANR_AC014_CANDIDATE_SHA256 !== ${JSON.stringify(sha256File(stubPath))}
+  || process.env.PLANR_AC014_ORACLE_PLAN_ID !== "pln-dogfood"
+  || process.env.PLANR_AC014_EVIDENCE_SOURCE_REVISION !== ${JSON.stringify(candidateSha)}) process.exit(9);
+process.exit(0);
+`);
 
 const fixedContract = {
   candidate_sha: candidateSha,
@@ -72,6 +80,7 @@ const fixedContract = {
   surface: "identical",
   cli_version: "0.147.0",
   oracle_id: "sparziele-exact-product-flow-v1",
+  oracle_plan_id: "pln-dogfood",
   oracle_sha256: sha256File(oracleStubPath),
 };
 
@@ -87,6 +96,7 @@ const controlHandoff = {
     root: planrCandidate,
     source_revision: planrCandidateSha,
     source_tree: planrCandidateTree,
+    binary_path: realpathSync(stubPath),
     binary_sha256: sha256File(stubPath),
     accepted_fix_review_gate_id: "i-review-verifier-phase-fix",
   },
@@ -111,7 +121,13 @@ assert.deepEqual(result.control_handoff, controlHandoff);
 assert.equal(statSync(path.join(fresh, "README.md")).isFile(), true);
 assert.equal(result.observed_contract.candidate_sha, candidateSha);
 assert.equal(result.observed_contract.candidate_binary_sha256, fixedContract.candidate_binary_sha256);
-assert.deepEqual(result.observed_contract.planr_candidate, controlHandoff.planr_candidate);
+assert.deepEqual(result.observed_contract.planr_candidate, {
+  ...controlHandoff.planr_candidate,
+  root: realpathSync(controlHandoff.planr_candidate.root),
+  binary_path: realpathSync(controlHandoff.planr_candidate.binary_path),
+  binary_size: statSync(controlHandoff.planr_candidate.binary_path).size,
+  binary_mode: 0o555,
+});
 assert.equal(result.observed_contract.prompt_digest, fixedContract.prompt_digest);
 assert.equal(result.observed_contract.spec_digest, fixedContract.spec_digest);
 assert.equal(result.observed_contract.model, "gpt-5.6-sol");
@@ -604,17 +620,57 @@ const cycle = await run(config({
 assert.equal(cycle.status, 1);
 assert.match(JSON.parse(readFileSync(path.join(root, "cycle-result.json"), "utf8")).error, /cyclic Codex session lineage/);
 
+const missingCandidateHandoff = structuredClone(controlHandoff);
+delete missingCandidateHandoff.planr_candidate;
+const missingCandidate = await run(config({
+  fresh_root: path.join(root, "fresh-missing-candidate"),
+  control_handoff: missingCandidateHandoff,
+  oracle_command: [oracleStubPath],
+}), path.join(root, "missing-candidate-result.json"), path.join(root, "calls-missing-candidate.jsonl"), codexCommand(codexStubPath));
+assert.equal(missingCandidate.status, 1);
+assert.match(JSON.parse(readFileSync(path.join(root, "missing-candidate-result.json"), "utf8")).error, /planr_candidate must be an object/);
+
+const writableStubPath = path.join(root, "planr-writable-stub.mjs");
+writeExecutable(writableStubPath, stubPlanr({ outsidePath: false }));
+const writableCandidate = await run(config({
+  fresh_root: path.join(root, "fresh-writable-candidate"),
+  planr_bin: writableStubPath,
+  fixed_contract: { ...fixedContract, candidate_binary_sha256: sha256File(writableStubPath) },
+  control_handoff: { ...controlHandoff, planr_candidate: { ...controlHandoff.planr_candidate, binary_path: writableStubPath, binary_sha256: sha256File(writableStubPath) } },
+  oracle_command: [oracleStubPath],
+}), path.join(root, "writable-candidate-result.json"), path.join(root, "calls-writable-candidate.jsonl"), codexCommand(codexStubPath));
+assert.equal(writableCandidate.status, 1);
+assert.match(JSON.parse(readFileSync(path.join(root, "writable-candidate-result.json"), "utf8")).error, /must be immutable/);
+
+const mismatchedCandidatePath = await run(config({
+  fresh_root: path.join(root, "fresh-mismatched-candidate-path"),
+  control_handoff: { ...controlHandoff, planr_candidate: { ...controlHandoff.planr_candidate, binary_path: oracleStubPath } },
+  oracle_command: [oracleStubPath],
+}), path.join(root, "mismatched-candidate-path-result.json"), path.join(root, "calls-mismatched-candidate-path.jsonl"), codexCommand(codexStubPath));
+assert.equal(mismatchedCandidatePath.status, 1);
+assert.match(JSON.parse(readFileSync(path.join(root, "mismatched-candidate-path-result.json"), "utf8")).error, /exact admitted candidate binary path/);
+
+const reservedOracleEnv = await run(config({
+  fresh_root: path.join(root, "fresh-reserved-oracle-env"),
+  oracle_env: { PLANR_BIN: oracleStubPath },
+  oracle_command: [oracleStubPath],
+}), path.join(root, "reserved-oracle-env-result.json"), path.join(root, "calls-reserved-oracle-env.jsonl"), codexCommand(codexStubPath));
+assert.equal(reservedOracleEnv.status, 1);
+assert.match(JSON.parse(readFileSync(path.join(root, "reserved-oracle-env-result.json"), "utf8")).error, /may not override immutable candidate binding/);
+
 const outsideStubPath = path.join(root, "planr-outside-stub.mjs");
 writeExecutable(outsideStubPath, stubPlanr({ outsidePath: true }));
+execFileSync("chmod", ["555", outsideStubPath]);
 const outsideContract = { ...fixedContract, candidate_binary_sha256: sha256File(outsideStubPath) };
 const outside = await run(config({
   fresh_root: path.join(root, "fresh-outside"),
-  planr_bin: outsideStubPath,
+    planr_bin: outsideStubPath,
   fixed_contract: outsideContract,
   control_handoff: {
     ...controlHandoff,
     planr_candidate: {
       ...controlHandoff.planr_candidate,
+      binary_path: realpathSync(outsideStubPath),
       binary_sha256: sha256File(outsideStubPath),
     },
   },
@@ -639,6 +695,7 @@ function config(overrides) {
     codex_home: codexHome,
     codex_surface: "identical",
     oracle_id: "sparziele-exact-product-flow-v1",
+    oracle_plan_id: "pln-dogfood",
     fixed_contract: fixedContract,
     control_handoff: controlHandoff,
     ceilings: fixedCeilings,

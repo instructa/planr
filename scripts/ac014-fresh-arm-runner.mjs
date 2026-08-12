@@ -123,6 +123,7 @@ async function runFreshArm(config, commands, options = {}) {
   const planrBin = path.resolve(config.planr_bin ?? process.env.PLANR_BIN ?? "target/debug/planr");
   assertExecutable(planrBin);
   const planrCandidateIdentity = validatePlanrCandidateIdentity(controlHandoff?.planr_candidate, planrBin);
+  validateOracleContract(config, planrCandidateIdentity);
   const preCodexContract = {
     ...observeStaticContract(config, freshCanonical, planrBin),
     planr_candidate: planrCandidateIdentity,
@@ -213,7 +214,16 @@ async function runFreshArm(config, commands, options = {}) {
   }
   let oracleRun;
   try {
-    oracleRun = await runMonitoredCommand(config, freshCanonical, codexHome, commands, "oracle", config.oracle_command, armMonitor);
+    oracleRun = await runMonitoredCommand(
+      config,
+      freshCanonical,
+      codexHome,
+      commands,
+      "oracle",
+      config.oracle_command,
+      armMonitor,
+      planrCandidateIdentity,
+    );
   } catch (error) {
     const payload = artifactPayload(preview, applied, validation, evidenceMigration, observedContract, codex, sessions, ceilingVerdict, null, armMonitor);
     writeImmutableArtifacts(config, freshCanonical, payload, "external_invalid", "oracle_failed", armMonitor);
@@ -243,6 +253,7 @@ async function runFreshArm(config, commands, options = {}) {
     command: oracleRun.command,
     status: oracleRun.exit_code === 0 ? "passed" : "failed",
     exit_code: oracleRun.exit_code,
+    planr_candidate: validatePlanrCandidateIdentity(controlHandoff.planr_candidate, planrBin),
   };
   if (oracle.status !== "passed") {
     const payload = {
@@ -436,7 +447,7 @@ function elapsedArmSeconds(monitor) {
   return Math.round(((Date.now() - monitor.startedWall) / 1000) * 1000) / 1000;
 }
 
-async function runMonitoredCommand(config, freshRoot, codexHome, commands, phase, commandValue, armMonitor) {
+async function runMonitoredCommand(config, freshRoot, codexHome, commands, phase, commandValue, armMonitor, planrCandidate = null) {
   const command = requiredCommand(commandValue, `${phase}_command`).map((part, index) =>
     index === 0 ? path.resolve(part) : String(part)
   );
@@ -445,7 +456,15 @@ async function runMonitoredCommand(config, freshRoot, codexHome, commands, phase
   const artifactCommand = phase === "codex" ? redactCodexCommand(command) : command;
   const startedTick = performance.now();
   const phaseEnv = phase === "oracle"
-    ? { ...process.env, ...(config.oracle_env ?? {}) }
+    ? {
+        ...process.env,
+        ...(config.oracle_env ?? {}),
+        PLANR_BIN: planrCandidate.binary_path,
+        PLANR_AC014_CANDIDATE_BIN: planrCandidate.binary_path,
+        PLANR_AC014_CANDIDATE_SHA256: planrCandidate.binary_sha256,
+        PLANR_AC014_ORACLE_PLAN_ID: config.oracle_plan_id,
+        PLANR_AC014_EVIDENCE_SOURCE_REVISION: config.fixed_contract.candidate_sha,
+      }
     : codexSpawnEnv(config, codexHome);
   const child = spawn(command[0], command.slice(1), {
     cwd: freshRoot,
@@ -1191,6 +1210,7 @@ function observeStaticContract(config, freshRoot, planrBin) {
     prompt_digest: sha256File(resolveFreshPath(requiredString(config.prompt_path, "prompt_path"), freshRoot, "prompt_path", true)),
     spec_digest: sha256File(resolveFreshPath(requiredString(config.spec_path, "spec_path"), freshRoot, "spec_path", true)),
     oracle_id: config.oracle_id ?? null,
+    oracle_plan_id: config.oracle_plan_id ?? null,
     oracle_sha256: sha256File(path.resolve(oracleCommand[0])),
   };
   for (const [key, value] of Object.entries(observed)) {
@@ -1454,27 +1474,37 @@ function validateControlHandoff(value) {
   if (value.review_required !== true) {
     throw admission("AC-014 control_handoff must require accepted review");
   }
-  if (value.planr_candidate !== undefined) {
-    const candidate = value.planr_candidate;
-    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
-      throw admission("control_handoff.planr_candidate must be an object");
-    }
-    for (const field of ["root", "source_revision", "source_tree", "binary_sha256", "accepted_fix_review_gate_id"]) {
-      requiredString(candidate[field], `control_handoff.planr_candidate.${field}`);
-    }
-    if (!/^[0-9a-f]{40}$/.test(candidate.source_revision) || !/^[0-9a-f]{40}$/.test(candidate.source_tree)) {
-      throw admission("control_handoff.planr_candidate source revision and tree must be exact git identities");
-    }
-    if (!/^sha256:[0-9a-f]{64}$/.test(candidate.binary_sha256)) {
-      throw admission("control_handoff.planr_candidate.binary_sha256 must be an exact sha256 digest");
-    }
+  const candidate = value.planr_candidate;
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+    throw admission("control_handoff.planr_candidate must be an object");
+  }
+  for (const field of ["root", "source_revision", "source_tree", "binary_path", "binary_sha256", "accepted_fix_review_gate_id"]) {
+    requiredString(candidate[field], `control_handoff.planr_candidate.${field}`);
+  }
+  if (!/^[0-9a-f]{40}$/.test(candidate.source_revision) || !/^[0-9a-f]{40}$/.test(candidate.source_tree)) {
+    throw admission("control_handoff.planr_candidate source revision and tree must be exact git identities");
+  }
+  if (!/^sha256:[0-9a-f]{64}$/.test(candidate.binary_sha256)) {
+    throw admission("control_handoff.planr_candidate.binary_sha256 must be an exact sha256 digest");
   }
   return structuredClone(value);
 }
 
 function validatePlanrCandidateIdentity(candidate, planrBin) {
-  if (candidate === undefined) return null;
+  if (candidate === undefined) throw admission("AC-014 requires an immutable Planr candidate identity");
   const root = canonicalExistingDir(candidate.root, "control_handoff.planr_candidate.root");
+  const declaredBinary = path.resolve(candidate.binary_path);
+  const binaryLstat = lstatSync(declaredBinary);
+  if (!binaryLstat.isFile() || binaryLstat.isSymbolicLink()) {
+    throw admission("AC-014 Planr candidate binary must be a regular non-symlink file");
+  }
+  const binaryPath = realpathSync(declaredBinary);
+  if (binaryPath !== realpathSync(planrBin)) {
+    throw admission("AC-014 planr_bin must be the exact admitted candidate binary path");
+  }
+  if ((binaryLstat.mode & 0o222) !== 0) {
+    throw admission("AC-014 Planr candidate binary must be immutable (no write bits)");
+  }
   if (gitHead(root) !== candidate.source_revision) {
     throw admission("AC-014 Planr candidate source revision mismatch");
   }
@@ -1491,9 +1521,34 @@ function validatePlanrCandidateIdentity(candidate, planrBin) {
     root,
     source_revision: candidate.source_revision,
     source_tree: candidate.source_tree,
+    binary_path: binaryPath,
     binary_sha256: candidate.binary_sha256,
+    binary_size: binaryLstat.size,
+    binary_mode: binaryLstat.mode & 0o777,
     accepted_fix_review_gate_id: candidate.accepted_fix_review_gate_id,
   };
+}
+
+function validateOracleContract(config, candidate) {
+  requiredString(config.oracle_plan_id, "oracle_plan_id");
+  if (config.fixed_contract?.oracle_plan_id !== config.oracle_plan_id) {
+    throw admission("AC-014 fixed contract oracle_plan_id mismatch");
+  }
+  const reserved = new Set([
+    "PLANR_BIN",
+    "PLANR_AC014_CANDIDATE_BIN",
+    "PLANR_AC014_CANDIDATE_SHA256",
+    "PLANR_AC014_ORACLE_PLAN_ID",
+    "PLANR_AC014_EVIDENCE_SOURCE_REVISION",
+  ]);
+  for (const key of Object.keys(config.oracle_env ?? {})) {
+    if (reserved.has(key)) {
+      throw admission(`oracle_env may not override immutable candidate binding: ${key}`);
+    }
+  }
+  if (!candidate?.binary_path) {
+    throw admission("AC-014 oracle requires an admitted immutable Planr candidate binary");
+  }
 }
 
 function requiredCommand(value, label) {
