@@ -330,8 +330,18 @@ function requireRequest(request) {
 
 function runPlanr(binary, cwd, args) {
   const result = spawnSync(binary, args, { cwd, encoding: "utf8", env: { ...process.env, PLANR_WORKER_ID: "cumulative-recovery-maker" } });
-  if (result.status !== 0) fail(`Planr command failed: ${args.join(" ")}\n${result.stderr || result.stdout}`);
-  return JSON.parse(result.stdout);
+  let parsed;
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch {
+    fail(`Planr command did not return a structured envelope: ${args.join(" ")}\n${result.stderr || result.stdout}`);
+  }
+  const envelopeSucceeded = parsed.ok === true && parsed.exit?.code === 0;
+  const legacyDirectSucceeded = !("ok" in parsed) && result.status === 0;
+  if (!envelopeSucceeded && !legacyDirectSucceeded) {
+    fail(`Planr command failed: ${args.join(" ")}\n${result.stderr || result.stdout}`);
+  }
+  return parsed;
 }
 
 function records(value, key) {
