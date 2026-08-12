@@ -329,7 +329,12 @@ function requireRequest(request) {
 }
 
 function runPlanr(binary, cwd, args) {
-  const result = spawnSync(binary, args, { cwd, encoding: "utf8", env: { ...process.env, PLANR_WORKER_ID: "cumulative-recovery-maker" } });
+  const result = spawnSync(binary, args, {
+    cwd,
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+    env: { ...process.env, PLANR_WORKER_ID: "cumulative-recovery-maker" },
+  });
   let parsed;
   try {
     parsed = JSON.parse(result.stdout);
