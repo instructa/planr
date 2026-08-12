@@ -28,7 +28,6 @@ use anyhow::{Result, anyhow, bail};
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-
 #[derive(Clone, Debug)]
 pub(crate) struct OutcomeSettlement<'a> {
     pub(crate) item_id: &'a str,
@@ -36,7 +35,6 @@ pub(crate) struct OutcomeSettlement<'a> {
     pub(crate) materiality: &'a Value,
     pub(crate) escalation: Option<ReviewEscalation>,
 }
-
 impl App {
     fn capture_final_review_source_binding(
         &self,
@@ -83,7 +81,6 @@ impl App {
             receipt_lineage,
         })
     }
-
     pub(crate) fn execution_run(&self, command: RunCommand) -> Result<()> {
         match command {
             RunCommand::Batch(args) => match args.command {
@@ -145,7 +142,6 @@ impl App {
             }
         }
     }
-
     pub(crate) fn review_gate_projection_value(&self, gate: &ReviewGateRecord) -> Result<Value> {
         let mut state = self.canonical_execution_state_value(&gate.run_id, Some(&gate.id))?;
         let latest = state["review_attempts"]
@@ -163,7 +159,6 @@ impl App {
         state["accepted"] = json!(accepted);
         Ok(state)
     }
-
     pub(crate) fn final_product_review_projection_value(&self, plan_id: &str) -> Result<Value> {
         let plan = self.get_plan(plan_id)?;
         let repository = ExecutionRunRepository::new(&self.conn);
@@ -191,7 +186,6 @@ impl App {
             "current": entries.first().cloned(),
         }))
     }
-
     pub(crate) fn final_product_review_clause_value(&self, plan_id: &str) -> Result<Value> {
         let projection = self.final_product_review_projection_value(plan_id)?;
         let entries = projection["review_gates"]
@@ -213,7 +207,6 @@ impl App {
             },
         }))
     }
-
     fn feature_run_policy_snapshot(
         &self,
         run_id: &str,
@@ -250,7 +243,6 @@ impl App {
         };
         Ok((sha256_json_digest(&value)?, contract))
     }
-
     pub(crate) fn ensure_outcome_feature_run(
         &self,
         item_id: &str,
@@ -314,7 +306,6 @@ impl App {
         )?;
         Ok(Some(persisted))
     }
-
     pub(crate) fn restart_feature_run_value(
         &self,
         plan_id: &str,
@@ -355,7 +346,6 @@ impl App {
             "execution_state": execution_state,
         }))
     }
-
     pub(crate) fn outcome_work_packet(&self, item_id: &str) -> Result<Value> {
         let run = self.ensure_outcome_feature_run(item_id)?;
         let Some(run) = run else {
@@ -469,7 +459,7 @@ impl App {
             bail!("feature_run_batch_maker_mismatch:{}", persisted.run.id);
         }
         let ordinal = persisted.run.batch_outcome_count + 1;
-        let next_revision = repository.record_outcome(
+        repository.record_outcome(
             &RunOutcomeRecord {
                 id: format!("outcome-{}", input.item_id),
                 run_id: persisted.run.id.clone(),
@@ -529,6 +519,14 @@ impl App {
         } else if ordinal >= DEFAULT_BATCH_OUTCOME_CAP {
             transition = "batch_cap_reached";
         }
+        let (transition, settled_run_revision) = self
+            .complete_verified_continuation_after_outcome(
+                &persisted,
+                &batch_id,
+                input.item_id,
+                transition,
+                checkpoint_required,
+            )?;
         let implementation_key = format!("implementation:{}", input.item_id);
         if let Some(reservation) = self
             .load_active_budget_reservation(&persisted.run.id, &implementation_key)?
@@ -550,7 +548,7 @@ impl App {
             "kind": "outcome",
             "run_id": persisted.run.id,
             "batch_id": batch_id,
-            "run_revision": next_revision,
+            "run_revision": settled_run_revision,
             "batch_outcome_count": ordinal,
             "transition": transition,
             "review_gate": gate,

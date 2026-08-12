@@ -1,5 +1,8 @@
 use super::App;
-use super::repository::execution_run::{ExecutionRunRepository, ReviewGateKind, ReviewGateStatus};
+use super::repository::execution_run::{
+    ExecutionRunRepository, PersistedExecutionBatch, PersistedFeatureRun, ReviewGateKind,
+    ReviewGateStatus,
+};
 use crate::evidence::coverage::evaluate_plan_coverage;
 use crate::evidence::policy::capture_repository_snapshot;
 use crate::execution_run::{
@@ -20,6 +23,8 @@ const HISTORICAL_RECONCILIATION_SCHEMA: &str =
     "planr.evidence.reconcile_historical_invalidation.v1";
 const RISK_REVIEW_OBLIGATION_BACKFILL_SCHEMA: &str =
     "planr.evidence.backfill_risk_review_obligations.v1";
+const VERIFIED_CONTINUATION_RECOVERY_SCHEMA: &str =
+    "planr.evidence.recover_verified_continuation.v1";
 const SQLITE_UTC_TIMESTAMP_FORMAT: &str = "[year]-[month]-[day] [hour]:[minute]:[second]";
 
 fn parse_persisted_timestamp(value: &str) -> Result<OffsetDateTime> {
@@ -71,8 +76,208 @@ struct RiskReviewObligationBackfillInput {
     verification_item_id: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct VerifiedContinuationRecoveryInput {
+    schema: String,
+    plan_id: String,
+    run_id: String,
+    freeze_id: String,
+    receipt_id: String,
+    recovery_item_id: String,
+    final_item_id: String,
+}
+
 impl App {
+    pub(crate) fn complete_verified_continuation_after_outcome(
+        &self,
+        persisted: &PersistedFeatureRun,
+        batch_id: &str,
+        item_id: &str,
+        transition: &'static str,
+        checkpoint_required: bool,
+    ) -> Result<(&'static str, u64)> {
+        let next_revision = persisted.revision + 1;
+        if checkpoint_required {
+            return Ok((transition, next_revision));
+        }
+        let mut after_outcome = persisted.clone();
+        after_outcome.revision = next_revision;
+        after_outcome.run.outcomes_settled += 1;
+        after_outcome.run.batch_outcome_count += 1;
+        let batch = ExecutionRunRepository::new(&self.conn).batch(batch_id)?;
+        if self
+            .complete_verified_continuation(&after_outcome, &batch, item_id, None)?
+            .is_some()
+        {
+            return Ok(("verified_continuation_complete", next_revision + 1));
+        }
+        Ok((transition, next_revision))
+    }
+
+    pub(crate) fn complete_verified_continuation(
+        &self,
+        persisted: &PersistedFeatureRun,
+        batch: &PersistedExecutionBatch,
+        final_item_id: &str,
+        public_request: Option<&VerifiedContinuationRecoveryInput>,
+    ) -> Result<Option<Value>> {
+        let recovery_payload = self.existing_recovery_payload(&persisted.run.id)?;
+        let Some(recovery_payload) = recovery_payload else {
+            return Ok(None);
+        };
+        let request: VerificationSettlementRecoveryInput =
+            serde_json::from_value(recovery_payload["request"].clone())
+                .context("invalid persisted verification settlement recovery lineage")?;
+        if let Some(public_request) = public_request {
+            if public_request.plan_id != request.plan_id
+                || public_request.run_id != request.run_id
+                || public_request.freeze_id != request.freeze_id
+                || public_request.receipt_id != request.receipt_id
+                || public_request.recovery_item_id != request.next_item_id
+            {
+                bail!("verified_continuation_recovery_lineage_mismatch");
+            }
+        }
+        if request.plan_id != persisted.run.plan_id || request.run_id != persisted.run.id {
+            bail!("verified_continuation_lineage_run_mismatch");
+        }
+        if persisted.run.phase != FeatureRunPhase::Implementation
+            || batch.batch.run_id != persisted.run.id
+            || batch.batch.status != ExecutionBatchStatus::Active
+        {
+            bail!("verified_continuation_state_mismatch");
+        }
+        let project = self.default_project()?;
+        let plan = self.get_plan(&request.plan_id)?;
+        let remaining_work: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM items WHERE project_id = ?1 AND plan_path = ?2
+             AND id <> ?3 AND work_type IN ('code','verification')
+             AND status NOT IN ('closed','closed_partial','cancelled')",
+            params![project.id, plan.path, final_item_id],
+            |row| row.get(0),
+        )?;
+        if remaining_work != 0 {
+            return Ok(None);
+        }
+        let closed_verification: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM items WHERE project_id = ?1 AND plan_path = ?2
+             AND work_type = 'verification' AND status = 'closed'",
+            params![project.id, plan.path],
+            |row| row.get(0),
+        )?;
+        if closed_verification == 0 {
+            bail!("verified_continuation_verification_not_closed");
+        }
+        let repository = ExecutionRunRepository::new(&self.conn);
+        let freeze = repository
+            .active_source_freeze(&persisted.run.id)?
+            .ok_or_else(|| anyhow!("verified_continuation_missing_freeze"))?;
+        if freeze.id != request.freeze_id {
+            bail!("verified_continuation_freeze_mismatch");
+        }
+        let snapshot = capture_repository_snapshot(&self.root)
+            .context("checking verified continuation source")?;
+        if snapshot.source.revision != freeze.source_revision
+            || snapshot.source.tree_digest.as_str() != freeze.source_digest
+        {
+            bail!("verified_continuation_source_stale");
+        }
+        let (receipt_digest, trusted_binding): (String, String) = self.conn.query_row(
+            "SELECT receipts.receipt_digest, receipts.trusted_binding_json
+             FROM evidence_receipts receipts
+             JOIN proof_obligations obligations ON obligations.id = receipts.obligation_id
+             WHERE receipts.id = ?1 AND receipts.project_id = ?2
+               AND receipts.receipt_status = 'trusted' AND obligations.plan_id = ?3
+               AND obligations.binding = 1",
+            params![request.receipt_id, project.id, request.plan_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let trusted_binding: Value = serde_json::from_str(&trusted_binding)?;
+        if trusted_binding["source"]["revision"].as_str() != Some(freeze.source_revision.as_str())
+            || trusted_binding["source"]["tree_digest"].as_str()
+                != Some(freeze.source_digest.as_str())
+        {
+            bail!("verified_continuation_receipt_source_mismatch");
+        }
+        let (coverage_id, coverage_status, receipt_set, waiver_set): (
+            String,
+            String,
+            String,
+            String,
+        ) = self.conn.query_row(
+            "SELECT id, coverage_status, source_receipt_digest_set, waiver_digest_set
+             FROM coverage_verdicts WHERE project_id = ?1 AND scope_kind = 'plan' AND scope_id = ?2
+             ORDER BY computed_at DESC, id DESC LIMIT 1",
+            params![project.id, request.plan_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )?;
+        let receipt_set: Vec<String> = serde_json::from_str(&receipt_set)?;
+        let waiver_set: Vec<String> = serde_json::from_str(&waiver_set)?;
+        if coverage_status != "satisfied"
+            || !receipt_set.contains(&receipt_digest)
+            || !waiver_set.is_empty()
+        {
+            bail!("verified_continuation_coverage_mismatch");
+        }
+        let active_attempts: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM evidence_attempts attempts
+             JOIN proof_obligations obligations ON obligations.id = attempts.obligation_id
+             WHERE attempts.project_id = ?1 AND obligations.plan_id = ?2
+               AND attempts.completed_at IS NULL",
+            params![project.id, request.plan_id],
+            |row| row.get(0),
+        )?;
+        if active_attempts != 0 {
+            bail!("verified_continuation_active_adapter");
+        }
+        let mut ended = batch.batch.clone();
+        ended.status = ExecutionBatchStatus::Ended;
+        repository.save_batch(&ended, batch.revision)?;
+        let frozen = apply_phase_transition(
+            &persisted.run,
+            &PhaseTransition {
+                to: FeatureRunPhase::SourceFrozen,
+                cause: PhaseTransitionCause::ImplementationSettled,
+                reference: freeze.source_revision.clone(),
+                owner: None,
+            },
+        )
+        .map_err(|violation| anyhow!("verified_continuation_transition:{violation:?}"))?;
+        repository.save_feature_run(&frozen, persisted.revision)?;
+        self.record_event(
+            "verified_continuation_completed",
+            Some(final_item_id),
+            json!({
+                "plan_id": request.plan_id,
+                "run_id": request.run_id,
+                "freeze_id": request.freeze_id,
+                "receipt_id": request.receipt_id,
+                "receipt_digest": receipt_digest,
+                "coverage_id": coverage_id,
+                "verifier_worker_id": request.verifier_worker_id,
+                "verifier_generation": request.verifier_generation,
+                "recovery_item_id": request.next_item_id,
+                "final_item_id": final_item_id,
+                "batch_id": batch.batch.id,
+            }),
+        )?;
+        Ok(Some(json!({
+            "transition": "verified_continuation_complete",
+            "phase": "source_frozen",
+            "next_action": format!("planr plan final-review {}", request.plan_id),
+            "freeze_id": freeze.id,
+            "receipt_id": request.receipt_id,
+            "coverage_id": coverage_id,
+        })))
+    }
+
     pub(crate) fn recover_verification_settlement_value(&self, input: Value) -> Result<Value> {
+        if input["schema"].as_str() == Some(VERIFIED_CONTINUATION_RECOVERY_SCHEMA) {
+            let input: VerifiedContinuationRecoveryInput = serde_json::from_value(input)
+                .context("invalid verified continuation recovery input")?;
+            return self.recover_verified_continuation_value(&input);
+        }
         if input["schema"].as_str() == Some(HISTORICAL_RECONCILIATION_SCHEMA) {
             let input: HistoricalInvalidationReconciliationInput = serde_json::from_value(input)
                 .context("invalid historical invalidation reconciliation input")?;
@@ -101,6 +306,95 @@ impl App {
             Err(error) => {
                 let _ = self.conn.execute_batch(
                     "ROLLBACK TO recover_verification_settlement; RELEASE recover_verification_settlement; ROLLBACK",
+                );
+                Err(error)
+            }
+        }
+    }
+
+    fn recover_verified_continuation_value(
+        &self,
+        input: &VerifiedContinuationRecoveryInput,
+    ) -> Result<Value> {
+        self.conn
+            .execute_batch("BEGIN IMMEDIATE; SAVEPOINT recover_verified_continuation")?;
+        let result = (|| -> Result<Value> {
+            if input.schema != VERIFIED_CONTINUATION_RECOVERY_SCHEMA {
+                bail!("verified_continuation_recovery_schema_mismatch");
+            }
+            if let Some(payload) = self.conn.query_row(
+                "SELECT payload FROM events WHERE event_type = 'verified_continuation_completed'
+                 AND json_extract(payload, '$.run_id') = ?1 ORDER BY id DESC LIMIT 1",
+                [&input.run_id],
+                |row| row.get::<_, String>(0),
+            ).optional()? {
+                let payload: Value = serde_json::from_str(&payload)?;
+                if payload["plan_id"] != input.plan_id
+                    || payload["freeze_id"] != input.freeze_id
+                    || payload["receipt_id"] != input.receipt_id
+                    || payload["recovery_item_id"] != input.recovery_item_id
+                    || payload["final_item_id"] != input.final_item_id
+                {
+                    bail!("verified_continuation_recovery_request_mismatch");
+                }
+                return Ok(json!({
+                    "schema": "planr.evidence.recover_verified_continuation.result.v1",
+                    "created": false,
+                    "request": input,
+                    "execution_state": self.canonical_execution_state_value(&input.run_id, None)?,
+                }));
+            }
+            let project = self.default_project()?;
+            let plan = self.get_plan(&input.plan_id)?;
+            let repository = ExecutionRunRepository::new(&self.conn);
+            let persisted = repository.feature_run(&input.run_id)?;
+            if plan.project_id != project.id
+                || persisted.project_id != project.id
+                || persisted.run.plan_id != input.plan_id
+                || persisted.run.phase != FeatureRunPhase::Implementation
+            {
+                bail!("verified_continuation_recovery_run_mismatch");
+            }
+            let batch_id = persisted
+                .run
+                .active_batch_id
+                .clone()
+                .ok_or_else(|| anyhow!("verified_continuation_recovery_missing_batch"))?;
+            let batch = repository.batch(&batch_id)?;
+            let outcome_exists: bool = self.conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM execution_run_outcomes WHERE run_id = ?1 AND item_id = ?2)",
+                params![input.run_id, input.final_item_id], |row| row.get(0))?;
+            let final_item: (String, String, Option<String>) = self.conn.query_row(
+                "SELECT plan_path, status, worker_id FROM items WHERE id = ?1 AND project_id = ?2",
+                params![input.final_item_id, project.id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+            if !outcome_exists || final_item.0 != plan.path || final_item.1 != "closed" {
+                bail!("verified_continuation_recovery_final_outcome_mismatch");
+            }
+            self.complete_verified_continuation(
+                &persisted,
+                &batch,
+                &input.final_item_id,
+                Some(input),
+            )?
+            .ok_or_else(|| anyhow!("verified_continuation_recovery_not_terminal"))?;
+            Ok(json!({
+                "schema": "planr.evidence.recover_verified_continuation.result.v1",
+                "created": true,
+                "request": input,
+                "execution_state": self.canonical_execution_state_value(&input.run_id, None)?,
+            }))
+        })();
+        match result {
+            Ok(value) => {
+                self.conn
+                    .execute_batch("RELEASE recover_verified_continuation; COMMIT")?;
+                Ok(value)
+            }
+            Err(error) => {
+                let _ = self.conn.execute_batch(
+                    "ROLLBACK TO recover_verified_continuation; RELEASE recover_verified_continuation; ROLLBACK",
                 );
                 Err(error)
             }

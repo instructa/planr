@@ -399,8 +399,8 @@ pub fn mcp_tools() -> Vec<Value> {
         ),
         tool(
             "planr_evidence_recover_settlement",
-            "Recover exact verified maker continuation, backfill proven risk-review obligation lineage, or reconcile a proven superseded historical invalidation",
-            json!({"input": prop("object", "planr.evidence.recover_settlement.v1, planr.evidence.backfill_risk_review_obligations.v1, or planr.evidence.reconcile_historical_invalidation.v1 payload")}),
+            "Recover exact verified maker continuation, complete an exact stranded verified continuation, backfill proven risk-review obligation lineage, or reconcile a proven superseded historical invalidation",
+            json!({"input": prop("object", "planr.evidence.recover_settlement.v1, planr.evidence.recover_verified_continuation.v1, planr.evidence.backfill_risk_review_obligations.v1, or planr.evidence.reconcile_historical_invalidation.v1 payload")}),
             &["input"],
         ),
         tool(

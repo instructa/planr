@@ -4847,6 +4847,187 @@ allow_overwrite = true
     }
 
     #[test]
+    fn final_recovery_created_outcome_reuses_verified_lineage_and_returns_to_final_review() {
+        let (_root, app, input) = stranded_recovery_app();
+        app.recover_verification_settlement_value(input)
+            .expect("restore verified continuation");
+        let attempts_before: i64 = app
+            .conn
+            .query_row("SELECT COUNT(*) FROM evidence_attempts", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let non_material =
+            json!({"decision": {"material": false, "review": "none", "reasons": []}});
+        let settled = app
+            .settle_feature_run_outcome(OutcomeSettlement {
+                item_id: "item-after-verification",
+                summary: "finish verified continuation",
+                materiality: &non_material,
+                escalation: None,
+            })
+            .expect("terminal continuation settlement");
+        assert_eq!(settled["transition"], "verified_continuation_complete");
+        assert_eq!(
+            settled["execution_state"]["feature_run"]["phase"],
+            "source_frozen"
+        );
+        let (attempts_after, completions): (i64, i64) = app
+            .conn
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM evidence_attempts),
+                        (SELECT COUNT(*) FROM events WHERE event_type = 'verified_continuation_completed')",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(attempts_after, attempts_before);
+        assert_eq!(completions, 1);
+        app.conn
+            .execute(
+                "UPDATE items SET status = 'closed', worker_id = NULL WHERE id = 'item-after-verification'",
+                [],
+            )
+            .unwrap();
+        let run = ExecutionRunRepository::new(&app.conn)
+            .active_feature_run_for_plan("project-a", "plan-a")
+            .unwrap()
+            .unwrap();
+        assert_eq!(run.run.phase, FeatureRunPhase::SourceFrozen);
+        assert!(run.run.role_owners.is_empty());
+    }
+
+    #[test]
+    fn exact_public_recovery_completes_a_legacy_stranded_continuation_once() {
+        let (_root, app, recovery_input) = stranded_recovery_app();
+        app.recover_verification_settlement_value(recovery_input.clone())
+            .expect("restore verified continuation");
+        let repository = ExecutionRunRepository::new(&app.conn);
+        let run = repository
+            .active_feature_run_for_plan("project-a", "plan-a")
+            .unwrap()
+            .unwrap();
+        let batch_id = run.run.active_batch_id.as_deref().unwrap();
+        app.conn
+            .execute(
+                "INSERT INTO execution_run_outcomes(id, run_id, batch_id, item_id, ordinal, outcome_json)
+                 VALUES ('outcome-item-after-verification', ?1, ?2, 'item-after-verification', 1, '{}')",
+                params![run.run.id, batch_id],
+            )
+            .unwrap();
+        app.conn
+            .execute(
+                "UPDATE feature_runs SET outcomes_settled = outcomes_settled + 1,
+                    batch_outcome_count = batch_outcome_count + 1, revision = revision + 1
+                 WHERE id = ?1",
+                [&run.run.id],
+            )
+            .unwrap();
+        app.conn
+            .execute(
+                "UPDATE items SET status = 'closed', worker_id = NULL WHERE id = 'item-after-verification'",
+                [],
+            )
+            .unwrap();
+        let input = json!({
+            "schema": "planr.evidence.recover_verified_continuation.v1",
+            "plan_id": "plan-a",
+            "run_id": recovery_input["run_id"],
+            "freeze_id": recovery_input["freeze_id"],
+            "receipt_id": recovery_input["receipt_id"],
+            "recovery_item_id": recovery_input["next_item_id"],
+            "final_item_id": "item-after-verification"
+        });
+        let recovered = app
+            .recover_verification_settlement_value(input.clone())
+            .expect("public terminal recovery");
+        assert_eq!(recovered["created"], true);
+        assert_eq!(
+            recovered["execution_state"]["feature_run"]["phase"],
+            "source_frozen"
+        );
+        let repeated = app
+            .recover_verification_settlement_value(input)
+            .expect("public terminal recovery repeats safely");
+        assert_eq!(repeated["created"], false);
+        let completions: i64 = app
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE event_type = 'verified_continuation_completed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(completions, 1);
+    }
+
+    #[test]
+    fn verified_continuation_stays_open_for_remaining_code_and_fails_closed_for_waivers() {
+        let non_material =
+            json!({"decision": {"material": false, "review": "none", "reasons": []}});
+        let (_remaining_root, remaining_app, remaining_input) = stranded_recovery_app();
+        remaining_app
+            .recover_verification_settlement_value(remaining_input)
+            .unwrap();
+        remaining_app
+            .conn
+            .execute(
+                "INSERT INTO items(id, project_id, title, description, status, work_type, plan_path, created_at, updated_at)
+                 VALUES ('remaining-code', 'project-a', 'remaining', 'remaining', 'ready', 'code', 'plan-a.md', datetime('now'), datetime('now'))",
+                [],
+            )
+            .unwrap();
+        let settled = remaining_app
+            .settle_feature_run_outcome(OutcomeSettlement {
+                item_id: "item-after-verification",
+                summary: "not terminal",
+                materiality: &non_material,
+                escalation: None,
+            })
+            .unwrap();
+        assert_eq!(settled["transition"], "continue_batch");
+        assert_eq!(
+            settled["execution_state"]["feature_run"]["phase"],
+            "implementation"
+        );
+
+        let (_waived_root, waived_app, waived_input) = stranded_recovery_app();
+        waived_app
+            .recover_verification_settlement_value(waived_input)
+            .unwrap();
+        waived_app
+            .conn
+            .execute(
+                "UPDATE coverage_verdicts SET waiver_digest_set = '[\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"]'
+                 WHERE scope_kind = 'plan' AND scope_id = 'plan-a'",
+                [],
+            )
+            .unwrap();
+        let error = waived_app
+            .settle_feature_run_outcome(OutcomeSettlement {
+                item_id: "item-after-verification",
+                summary: "waived coverage is not exact proof",
+                materiality: &non_material,
+                escalation: None,
+            })
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("verified_continuation_coverage_mismatch")
+        );
+        let phase: String = waived_app
+            .conn
+            .query_row(
+                "SELECT phase FROM feature_runs WHERE plan_id = 'plan-a'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(phase, "implementation");
+    }
+
+    #[test]
     fn stranded_settlement_recovery_rejects_stale_identity_without_writes() {
         let (_root, app, mut input) = stranded_recovery_app();
         input["verifier_generation"] = json!(999);
