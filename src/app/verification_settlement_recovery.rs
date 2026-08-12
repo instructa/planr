@@ -190,9 +190,9 @@ impl App {
         if active_freeze.id != input.superseding_freeze_id || active_freeze.id == old_freeze_id {
             bail!("historical_invalidation_reconciliation_freeze_lineage_mismatch");
         }
-        let (old_status, old_created_at, active_created_at): (String, String, String) =
+        let (old_status, old_invalidated_at, active_created_at): (String, Option<String>, String) =
             self.conn.query_row(
-                "SELECT old.status, old.created_at, active.created_at
+                "SELECT old.status, old.invalidated_at, active.created_at
                  FROM feature_run_source_freezes old
                  JOIN feature_run_source_freezes active ON active.id = ?2
                  WHERE old.id = ?1 AND old.run_id = ?3 AND active.run_id = old.run_id",
@@ -200,10 +200,10 @@ impl App {
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )?;
         if old_status != "invalidated"
-            || active_created_at <= old_created_at
-            || active_created_at <= invalidation_created_at
+            || old_invalidated_at.as_deref() != Some(invalidation_created_at.as_str())
+            || active_created_at != invalidation_created_at
         {
-            bail!("historical_invalidation_reconciliation_freeze_not_later");
+            bail!("historical_invalidation_reconciliation_causal_boundary_mismatch");
         }
         let snapshot = capture_repository_snapshot(&self.root)
             .context("checking historical invalidation reconciliation source")?;

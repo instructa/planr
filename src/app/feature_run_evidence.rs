@@ -3558,6 +3558,13 @@ allow_overwrite = true
             .active_source_freeze(&run.run.id)
             .unwrap()
             .unwrap();
+        app.conn
+            .execute(
+                "UPDATE feature_run_source_freezes SET created_at = '2000-01-02 00:00:00'
+                 WHERE id = ?1",
+                [&active.id],
+            )
+            .unwrap();
         let (receipt_json, trusted_binding): (String, String) = app
             .conn
             .query_row(
@@ -3675,8 +3682,25 @@ allow_overwrite = true
     }
 
     #[test]
-    fn proven_historical_invalidation_reconciles_once_and_leaves_ordinary_work() {
+    fn exact_equal_timestamp_causal_refreeze_reconciles_once_and_leaves_ordinary_work() {
         let (_root, app, input) = historical_invalidation_reconciliation_app();
+        let causal_boundary: (String, String, String) = app
+            .conn
+            .query_row(
+                "SELECT old.invalidated_at, invalidation.created_at, active.created_at
+                 FROM feature_run_evidence_invalidations invalidation
+                 JOIN feature_run_source_freezes old ON old.id = invalidation.freeze_id
+                 JOIN feature_run_source_freezes active ON active.id = ?1
+                 WHERE invalidation.id = ?2",
+                params![
+                    input["superseding_freeze_id"].as_str().unwrap(),
+                    input["invalidation_id"].as_str().unwrap(),
+                ],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(causal_boundary.0, causal_boundary.1);
+        assert_eq!(causal_boundary.1, causal_boundary.2);
         let before = app
             .repair_work_packet_value("plan-a")
             .expect_err("historical invalidation reproduces false-open repair classification");
@@ -3688,7 +3712,7 @@ allow_overwrite = true
 
         let reconciled = app
             .recover_verification_settlement_value(input.clone())
-            .expect("later exact lineage reconciles historical invalidation");
+            .expect("equal-timestamp causal lineage reconciles historical invalidation");
         assert_eq!(reconciled["created"], true);
         assert_eq!(
             reconciled["schema"],
@@ -3717,6 +3741,10 @@ allow_overwrite = true
         for case in [
             "genuine_product_repair",
             "unresolved_finding",
+            "older_active_freeze",
+            "future_active_freeze",
+            "mismatched_invalidation_boundary",
+            "unrelated_superseding_freeze",
             "stale_source",
             "review_source_mismatch",
             "missing_receipt",
@@ -3742,6 +3770,50 @@ allow_overwrite = true
                             [],
                         )
                         .unwrap();
+                }
+                "older_active_freeze" => {
+                    app.conn
+                        .execute(
+                            "UPDATE feature_run_source_freezes
+                             SET created_at = '2000-01-01 00:00:00'
+                             WHERE id = ?1",
+                            [input["superseding_freeze_id"].as_str().unwrap()],
+                        )
+                        .unwrap();
+                }
+                "future_active_freeze" => {
+                    app.conn
+                        .execute(
+                            "UPDATE feature_run_source_freezes
+                             SET created_at = '2000-01-03 00:00:00'
+                             WHERE id = ?1",
+                            [input["superseding_freeze_id"].as_str().unwrap()],
+                        )
+                        .unwrap();
+                }
+                "mismatched_invalidation_boundary" => {
+                    app.conn
+                        .execute(
+                            "UPDATE feature_run_source_freezes
+                             SET invalidated_at = '2000-01-03 00:00:00'
+                             WHERE id = 'freeze-historical'",
+                            [],
+                        )
+                        .unwrap();
+                }
+                "unrelated_superseding_freeze" => {
+                    app.conn
+                        .execute(
+                            "INSERT INTO feature_run_source_freezes(
+                               id, run_id, source_revision, source_digest, status, created_at,
+                               invalidated_at
+                             ) SELECT 'freeze-unrelated', run_id, source_revision, source_digest,
+                               'invalidated', created_at, created_at
+                               FROM feature_run_source_freezes WHERE id = ?1",
+                            [input["superseding_freeze_id"].as_str().unwrap()],
+                        )
+                        .unwrap();
+                    input["superseding_freeze_id"] = json!("freeze-unrelated");
                 }
                 "stale_source" => std::fs::write(app.root.join("stale.txt"), "stale").unwrap(),
                 "review_source_mismatch" => {
