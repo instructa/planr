@@ -3681,6 +3681,39 @@ allow_overwrite = true
         (root, app, input)
     }
 
+    fn risk_checkpoint_historical_invalidation_reconciliation_app()
+    -> (tempfile::TempDir, App, Value) {
+        let (root, app, input) = historical_invalidation_reconciliation_app();
+        app.conn
+            .execute(
+                "UPDATE review_gates SET kind = 'risk_checkpoint',
+                   accepted_at = '2000-01-03 00:00:00' WHERE id = 'gate-lineage'",
+                [],
+            )
+            .unwrap();
+        app.conn
+            .execute(
+                "UPDATE evidence_receipts SET created_at = '2000-01-04 00:00:00'
+                 WHERE id = 'erec-settle'",
+                [],
+            )
+            .unwrap();
+        app.conn
+            .execute(
+                "UPDATE final_review_source_bindings SET receipt_lineage_json = ?1,
+                   created_at = '2000-01-02 00:00:00'
+                 WHERE gate_id = 'gate-lineage'",
+                [json!({
+                    "kind": "product_repair",
+                    "repair_id": "invalidation-historical",
+                    "selective_obligation_ids": ["pob-settle"]
+                })
+                .to_string()],
+            )
+            .unwrap();
+        (root, app, input)
+    }
+
     #[test]
     fn exact_equal_timestamp_causal_refreeze_reconciles_once_and_leaves_ordinary_work() {
         let (_root, app, input) = historical_invalidation_reconciliation_app();
@@ -3734,6 +3767,201 @@ allow_overwrite = true
             )
             .unwrap();
         assert_eq!(events, 1);
+    }
+
+    #[test]
+    fn pre_evidence_risk_checkpoint_reconciles_only_its_reviewed_obligation() {
+        let (_root, app, input) = risk_checkpoint_historical_invalidation_reconciliation_app();
+
+        let reconciled = app
+            .recover_verification_settlement_value(input.clone())
+            .expect("later trusted receipt proves the exact pre-Evidence reviewed obligation");
+        assert_eq!(reconciled["created"], true);
+
+        let repeated = app
+            .recover_verification_settlement_value(input)
+            .expect("risk checkpoint reconciliation remains idempotent");
+        assert_eq!(repeated["created"], false);
+    }
+
+    #[test]
+    fn repaired_risk_checkpoint_preserves_reviewed_obligation_through_supersession_lineage() {
+        let (_root, app, input) = risk_checkpoint_historical_invalidation_reconciliation_app();
+        app.conn
+            .execute(
+                "UPDATE final_review_source_bindings SET receipt_lineage_json = ?1
+                 WHERE gate_id = 'gate-lineage'",
+                [json!({
+                    "kind": "risk_review_finding_repair",
+                    "finding_ids": ["finding-historical"],
+                    "supersedes": {
+                        "kind": "product_repair",
+                        "repair_id": "invalidation-historical",
+                        "selective_obligation_ids": ["pob-settle"]
+                    }
+                })
+                .to_string()],
+            )
+            .unwrap();
+
+        let reconciled = app
+            .recover_verification_settlement_value(input)
+            .expect("risk finding repair keeps the pre-Evidence reviewed obligation lineage");
+        assert_eq!(reconciled["created"], true);
+    }
+
+    #[test]
+    fn final_review_still_requires_exact_covering_receipt_lineage() {
+        let (_root, app, input) = historical_invalidation_reconciliation_app();
+        app.conn
+            .execute(
+                "UPDATE final_review_source_bindings SET receipt_lineage_json = ?1
+                 WHERE gate_id = 'gate-lineage'",
+                [json!({
+                    "kind": "product_repair",
+                    "selective_obligation_ids": ["pob-settle"]
+                })
+                .to_string()],
+            )
+            .unwrap();
+
+        let error = app
+            .recover_verification_settlement_value(input)
+            .expect_err("pre-Evidence risk lineage cannot stand in for final receipt lineage");
+        assert!(
+            error
+                .to_string()
+                .contains("review_receipt_lineage_mismatch")
+        );
+    }
+
+    #[test]
+    fn risk_checkpoint_reconciliation_rejects_unproven_obligation_lineage() {
+        for case in [
+            "empty",
+            "unknown",
+            "receipt_from_another_obligation",
+            "superseded",
+            "post_evidence_lineage",
+            "post_evidence_binding",
+        ] {
+            let (_root, app, input) = risk_checkpoint_historical_invalidation_reconciliation_app();
+            match case {
+                "empty" => {
+                    app.conn
+                        .execute(
+                            "UPDATE final_review_source_bindings SET receipt_lineage_json = ?1
+                             WHERE gate_id = 'gate-lineage'",
+                            [json!({
+                                "kind": "product_repair",
+                                "selective_obligation_ids": []
+                            })
+                            .to_string()],
+                        )
+                        .unwrap();
+                }
+                "unknown" => {
+                    app.conn
+                        .execute(
+                            "UPDATE final_review_source_bindings SET receipt_lineage_json = ?1
+                             WHERE gate_id = 'gate-lineage'",
+                            [json!({
+                                "kind": "product_repair",
+                                "selective_obligation_ids": ["pob-unknown"]
+                            })
+                            .to_string()],
+                        )
+                        .unwrap();
+                }
+                "receipt_from_another_obligation" => {
+                    insert_test_obligation_successor(&app, "pob-other", None);
+                    app.conn
+                        .execute(
+                            "UPDATE evidence_receipts SET obligation_id = 'pob-other'
+                             WHERE id = 'erec-settle'",
+                            [],
+                        )
+                        .unwrap();
+                }
+                "superseded" => {
+                    insert_test_obligation_successor(
+                        &app,
+                        "pob-settle-successor",
+                        Some("pob-settle"),
+                    );
+                }
+                "post_evidence_lineage" => {
+                    let coverage = crate::evidence::coverage::evaluate_plan_coverage(
+                        &app.conn,
+                        "project-a",
+                        "plan-a",
+                        &OffsetDateTime::now_utc().format(&Rfc3339).unwrap(),
+                    )
+                    .unwrap();
+                    app.conn
+                        .execute(
+                            "UPDATE final_review_source_bindings SET receipt_lineage_json = ?1
+                             WHERE gate_id = 'gate-lineage'",
+                            [coverage.receipt_lineage.to_string()],
+                        )
+                        .unwrap();
+                }
+                "post_evidence_binding" => {
+                    app.conn
+                        .execute(
+                            "UPDATE final_review_source_bindings
+                             SET created_at = '2000-01-05 00:00:00'
+                             WHERE gate_id = 'gate-lineage'",
+                            [],
+                        )
+                        .unwrap();
+                }
+                _ => unreachable!(),
+            }
+
+            let error = app
+                .recover_verification_settlement_value(input)
+                .expect_err("risk obligation lineage must fail closed");
+            let expected = match case {
+                "empty" => "risk_review_obligations_empty",
+                "unknown" | "superseded" => "risk_reviewed_obligation_inactive",
+                "receipt_from_another_obligation" => "risk_receipt_obligation_mismatch",
+                "post_evidence_lineage" => "risk_review_lineage_ambiguous",
+                "post_evidence_binding" => "risk_review_not_pre_evidence",
+                _ => unreachable!(),
+            };
+            assert!(error.to_string().contains(expected), "case {case}: {error}");
+            let events: i64 = app
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM events
+                     WHERE event_type = 'historical_invalidation_reconciled'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(events, 0, "case {case}");
+        }
+    }
+
+    fn insert_test_obligation_successor(app: &App, id: &str, supersedes: Option<&str>) {
+        app.conn
+            .execute(
+                "INSERT INTO proof_obligations(
+                   id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
+                   binding, observation_requirements_json, fixture_policy_json,
+                   freshness_policy_json, assurance_policy_json, policy_digest, config_digest,
+                   source_digest, supersedes_obligation_id, created_at, retry_aggregation,
+                   obligation_shape
+                 ) SELECT ?1, project_id, plan_id, item_id, criterion_id,
+                   obligation_version + 1, title, binding, observation_requirements_json,
+                   fixture_policy_json, freshness_policy_json, assurance_policy_json,
+                   policy_digest, config_digest, source_digest, ?2, datetime('now'),
+                   retry_aggregation, obligation_shape
+                 FROM proof_obligations WHERE id = 'pob-settle'",
+                params![id, supersedes],
+            )
+            .unwrap();
     }
 
     #[test]

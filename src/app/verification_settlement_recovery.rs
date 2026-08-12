@@ -12,6 +12,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 const RECOVERY_SCHEMA: &str = "planr.evidence.recover_settlement.v1";
@@ -213,10 +214,15 @@ impl App {
             bail!("historical_invalidation_reconciliation_source_stale");
         }
 
-        let (gate_status, gate_run_id): (String, String) = self.conn.query_row(
-            "SELECT status, run_id FROM review_gates WHERE id = ?1",
+        let (gate_status, gate_run_id, gate_kind, gate_accepted_at): (
+            String,
+            String,
+            String,
+            Option<String>,
+        ) = self.conn.query_row(
+            "SELECT status, run_id, kind, accepted_at FROM review_gates WHERE id = ?1",
             [&input.review_gate_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )?;
         if gate_status != "accepted" || gate_run_id != input.run_id {
             bail!("historical_invalidation_reconciliation_review_not_accepted");
@@ -232,16 +238,27 @@ impl App {
         {
             bail!("historical_invalidation_reconciliation_review_source_mismatch");
         }
+        let review_binding_created_at: String = self.conn.query_row(
+            "SELECT created_at FROM final_review_source_bindings WHERE gate_id = ?1",
+            [&input.review_gate_id],
+            |row| row.get(0),
+        )?;
 
-        let (receipt_digest, trusted_binding): (String, String) = self.conn.query_row(
-            "SELECT receipts.receipt_digest, receipts.trusted_binding_json
+        let (receipt_digest, trusted_binding, receipt_obligation_id, receipt_created_at): (
+            String,
+            String,
+            String,
+            String,
+        ) = self.conn.query_row(
+            "SELECT receipts.receipt_digest, receipts.trusted_binding_json,
+                    receipts.obligation_id, receipts.created_at
              FROM evidence_receipts receipts
              JOIN proof_obligations obligations ON obligations.id = receipts.obligation_id
              WHERE receipts.id = ?1 AND receipts.project_id = ?2
                AND receipts.receipt_status = 'trusted' AND obligations.plan_id = ?3
                AND obligations.binding = 1",
             params![input.receipt_id, project.id, input.plan_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )?;
         let trusted_binding: Value = serde_json::from_str(&trusted_binding)?;
         if trusted_binding["source"]["revision"].as_str()
@@ -251,6 +268,48 @@ impl App {
         {
             bail!("historical_invalidation_reconciliation_receipt_source_mismatch");
         }
+        let risk_reviewed_obligation_ids = match gate_kind.as_str() {
+            "final_product" => None,
+            "risk_checkpoint" => {
+                let accepted_at = gate_accepted_at.as_deref().ok_or_else(|| {
+                    anyhow!("historical_invalidation_reconciliation_risk_review_acceptance_missing")
+                })?;
+                if accepted_at >= receipt_created_at.as_str()
+                    || review_binding_created_at >= receipt_created_at
+                {
+                    bail!("historical_invalidation_reconciliation_risk_review_not_pre_evidence");
+                }
+                let reviewed_obligation_ids =
+                    reviewed_risk_obligation_ids(&review_binding.receipt_lineage)?;
+                for obligation_id in &reviewed_obligation_ids {
+                    let active = self.conn.query_row(
+                        "SELECT EXISTS(
+                           SELECT 1 FROM proof_obligations obligations
+                           WHERE obligations.id = ?1 AND obligations.project_id = ?2
+                             AND obligations.plan_id = ?3 AND obligations.binding = 1
+                             AND NOT EXISTS(
+                               SELECT 1 FROM proof_obligations successors
+                               WHERE successors.supersedes_obligation_id = obligations.id
+                             )
+                         )",
+                        params![obligation_id, project.id, input.plan_id],
+                        |row| row.get::<_, bool>(0),
+                    )?;
+                    if !active {
+                        bail!(
+                            "historical_invalidation_reconciliation_risk_reviewed_obligation_inactive:{obligation_id}"
+                        );
+                    }
+                }
+                if !reviewed_obligation_ids.contains(&receipt_obligation_id) {
+                    bail!(
+                        "historical_invalidation_reconciliation_risk_receipt_obligation_mismatch"
+                    );
+                }
+                Some(reviewed_obligation_ids)
+            }
+            _ => bail!("historical_invalidation_reconciliation_review_gate_kind_unsupported"),
+        };
         let evaluated_at = OffsetDateTime::now_utc().format(&Rfc3339)?;
         let coverage =
             evaluate_plan_coverage(&self.conn, &project.id, &input.plan_id, &evaluated_at)
@@ -264,7 +323,9 @@ impl App {
         {
             bail!("historical_invalidation_reconciliation_coverage_mismatch");
         }
-        if review_binding.receipt_lineage != coverage.receipt_lineage {
+        if risk_reviewed_obligation_ids.is_none()
+            && review_binding.receipt_lineage != coverage.receipt_lineage
+        {
             bail!("historical_invalidation_reconciliation_review_receipt_lineage_mismatch");
         }
         let active_adapter: i64 = self.conn.query_row(
@@ -585,4 +646,47 @@ impl App {
             "execution_state": self.canonical_execution_state_value(run_id, None)?,
         }))
     }
+}
+
+fn reviewed_risk_obligation_ids(receipt_lineage: &Value) -> Result<BTreeSet<String>> {
+    fn collect(receipt_lineage: &Value, depth: usize) -> Result<BTreeSet<String>> {
+        if depth > 8 {
+            bail!("historical_invalidation_reconciliation_risk_review_lineage_too_deep");
+        }
+        let kind = receipt_lineage["kind"].as_str().ok_or_else(|| {
+            anyhow!("historical_invalidation_reconciliation_risk_review_lineage_ambiguous")
+        })?;
+        match kind {
+            "product_repair" => {
+                let values = receipt_lineage["selective_obligation_ids"]
+                    .as_array()
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "historical_invalidation_reconciliation_risk_review_obligations_missing"
+                        )
+                    })?;
+                let mut ids = BTreeSet::new();
+                for value in values {
+                    let id = value.as_str().filter(|id| !id.trim().is_empty()).ok_or_else(|| {
+                        anyhow!(
+                            "historical_invalidation_reconciliation_risk_review_obligations_invalid"
+                        )
+                    })?;
+                    if !ids.insert(id.to_string()) {
+                        bail!(
+                            "historical_invalidation_reconciliation_risk_review_obligations_duplicate"
+                        );
+                    }
+                }
+                if ids.is_empty() {
+                    bail!("historical_invalidation_reconciliation_risk_review_obligations_empty");
+                }
+                Ok(ids)
+            }
+            "risk_review_finding_repair" => collect(&receipt_lineage["supersedes"], depth + 1),
+            _ => bail!("historical_invalidation_reconciliation_risk_review_lineage_ambiguous"),
+        }
+    }
+
+    collect(receipt_lineage, 0)
 }
