@@ -62,6 +62,20 @@ process.env.PLANR_ORACLE_STUB_MODE = "unavailable";
 assert.throws(() => runExactProductOracle({ planrBin: binary, candidateSha256: digest, planId: "pln-dogfood", sourceRevision, cwd: root }), /readiness is not passed/);
 delete process.env.PLANR_ORACLE_STUB_MODE;
 
+for (const [mode, expected] of [
+  ["missing-result", /exactly 13 results/],
+  ["bundled-observations", /exactly one run-bound observation/],
+  ["duplicate-result", /duplicate or ambiguous sealed-run result|cross-run reuse/],
+  ["extra-result", /exactly 13 results/],
+  ["cross-run-receipt-reuse", /cross-run reuse of receipt id/],
+  ["wrong-result-target", /target does not match its sealed run/],
+  ["cross-run-observation", /observation does not match its sealed run requirement/],
+]) {
+  process.env.PLANR_ORACLE_STUB_MODE = mode;
+  assert.throws(() => runExactProductOracle({ planrBin: binary, candidateSha256: digest, planId: "pln-dogfood", sourceRevision, cwd: root }), expected);
+  delete process.env.PLANR_ORACLE_STUB_MODE;
+}
+
 console.log("AC-014 exact candidate/browser oracle contract passed");
 
 function sha256(file) {
@@ -79,11 +93,25 @@ const mode = process.env.PLANR_ORACLE_STUB_MODE;
 if (args[0] === "evidence" && args[1] === "readiness") {
   if (mode === "unavailable") { console.log(JSON.stringify({ object: { status: "failed", gaps: [{ reason: "missing_capability" }] } })); process.exit(0); }
   const selected = mode === "missing-browser" ? criteria.slice(0, -1) : criteria;
-  const runs = selected.map((criterion) => ({ input: { target: { kind: "browser", uri: "http://127.0.0.1:3000/#" + criterion } } }));
-  runs.push({ input: { target: { kind: "process", uri: "local://pnpm-build" } } });
+  const runs = selected.map((criterion, index) => ({ index, input: { obligation_id: "pob-" + criterion, capability_instance_id: "cap-browser", target: { kind: "browser", uri: "http://127.0.0.1:3000/#" + criterion } } }));
+  runs.push({ index: runs.length, input: { obligation_id: "pob-build", capability_instance_id: "cap-build", target: { kind: "process", uri: "local://pnpm-build" } } });
   console.log(JSON.stringify({ object: { status: "passed", run_index: { schema_version: "planr.evidence.run-index.v1", repository_path: ".planr/evidence/runs/sealed.json", run_index_digest: "sha256:" + "a".repeat(64), source: { dirty: false, revision: mode === "wrong-source" ? "2".repeat(40) : "1".repeat(40) }, runs } } }));
 } else if (args[0] === "evidence" && args[1] === "run") {
-  const results = requirements.map((requirement_id) => ({ verdict: "passed", receipt: { receipt_status: mode === "untrusted" ? "diagnostic" : "trusted", proof_gaps: [], source: { dirty: false, revision: "1".repeat(40) }, observations: [{ requirement_id, outcome: "passed" }] } }));
+  let results = requirements.map((requirement_id, index) => {
+    const browser = index < 12;
+    const obligation_id = browser ? "pob-" + criteria[index] : "pob-build";
+    const capability_instance_id = browser ? "cap-browser" : "cap-build";
+    const target = browser ? { kind: "browser", uri: "http://127.0.0.1:3000/#" + criteria[index] } : { kind: "process", uri: "local://pnpm-build" };
+    const attemptId = "attempt-" + index;
+    return { verdict: "passed", reused: false, attempt: { id: attemptId, obligation_id, capability_instance_id }, receipt: { id: "receipt-" + index, receipt_digest: "sha256:" + String(index).padStart(64, "0"), obligation_id, attempt_ids: [attemptId], capability: { instance_id: capability_instance_id }, target, receipt_status: mode === "untrusted" ? "diagnostic" : "trusted", proof_gaps: [], source: { dirty: false, revision: "1".repeat(40) }, observations: [{ requirement_id, outcome: "passed" }] } };
+  });
+  if (mode === "missing-result") results = results.slice(0, -1);
+  if (mode === "bundled-observations") results[0].receipt.observations.push({ requirement_id: requirements[1], outcome: "passed" });
+  if (mode === "duplicate-result") results[12] = structuredClone(results[0]);
+  if (mode === "extra-result") results.push(structuredClone(results[0]));
+  if (mode === "cross-run-receipt-reuse") { results[1].receipt.id = results[0].receipt.id; results[1].receipt.receipt_digest = results[0].receipt.receipt_digest; }
+  if (mode === "wrong-result-target") results[0].receipt.target = structuredClone(results[1].receipt.target);
+  if (mode === "cross-run-observation") results[0].receipt.observations[0].requirement_id = requirements[1];
   console.log(JSON.stringify({ object: { status: "passed", verdict: "passed", results } }));
 } else if (args[0] === "evidence" && args[1] === "coverage") {
   const validation_details = Object.fromEntries(["completion", "fixture", "freshness", "provenance", "schema", "target", "trust"].map((name) => [name, { status: mode === "stale" && name === "freshness" ? "failed" : "passed" }]));
