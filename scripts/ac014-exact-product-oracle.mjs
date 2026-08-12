@@ -77,6 +77,8 @@ function validateRunIndex(runIndex, root, expectedSource) {
     const target = run.input?.target;
     const obligationId = required(run.input?.obligation_id, "sealed run obligation_id");
     const capabilityInstanceId = required(run.input?.capability_instance_id, "sealed run capability_instance_id");
+    const sealedCapabilityInstanceId = required(run.capability?.instance_id, "sealed run capability.instance_id");
+    if (sealedCapabilityInstanceId !== capabilityInstanceId) throw new Error("AC-014 oracle sealed run capability metadata does not match its input");
     if (!Number.isInteger(run.index) || run.index < 0 || run.index >= REQUIRED_REQUIREMENTS.size || indexes.has(run.index)) {
       throw new Error("AC-014 oracle sealed run indexes must be distinct and contiguous");
     }
@@ -94,7 +96,7 @@ function validateRunIndex(runIndex, root, expectedSource) {
       requirementId = "obs-AC-012-build";
     }
     if (!requirementId) throw new Error("AC-014 oracle sealed run has an unexpected target");
-    sealedRuns.set(obligationId, { index: run.index, obligationId, capabilityInstanceId, requirementId, target: structuredClone(target) });
+    sealedRuns.set(obligationId, { index: run.index, obligationId, capabilityInstanceId: sealedCapabilityInstanceId, requirementId, target: structuredClone(target) });
   }
   for (const criterion of BROWSER_CRITERIA) if (!targets.has(criterion)) throw new Error(`AC-014 oracle run index is missing browser target ${criterion}`);
   if (!targets.has("BUILD-001")) throw new Error("AC-014 oracle run index is missing the production build target");
@@ -133,9 +135,13 @@ function validateExecution(object, expectedSource, sealedRuns) {
     }
     const attemptIds = receipt.attempt_ids ?? [];
     if (attemptIds.length !== 1 || attemptIds[0] !== result.attempt?.id) throw new Error("AC-014 browser Evidence receipt must bind exactly its result attempt");
+    const wrapperDigest = result.receipt_digest;
+    const embeddedDigest = receipt.receipt_digest;
+    if (!isSha256(wrapperDigest) || !isSha256(embeddedDigest)) throw new Error("AC-014 browser Evidence result and receipt must carry exact sha256 digests");
+    if (wrapperDigest !== embeddedDigest) throw new Error("AC-014 browser Evidence wrapper digest does not match its trusted receipt");
     for (const [value, seen, label] of [
       [receipt.id, seenReceiptIds, "receipt id"],
-      [receipt.receipt_digest, seenReceiptDigests, "receipt digest"],
+      [wrapperDigest, seenReceiptDigests, "bound receipt digest"],
       [result.attempt.id, seenAttemptIds, "attempt id"],
     ]) {
       if (typeof value !== "string" || value.length === 0 || seen.has(value)) throw new Error(`AC-014 browser Evidence has cross-run reuse of ${label}`);
@@ -150,6 +156,10 @@ function validateExecution(object, expectedSource, sealedRuns) {
 
 function sameTarget(left, right) {
   return left?.kind === right?.kind && left?.uri === right?.uri;
+}
+
+function isSha256(value) {
+  return typeof value === "string" && /^sha256:[0-9a-f]{64}$/.test(value);
 }
 
 function validateCoverage(object) {
