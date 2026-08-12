@@ -17,6 +17,8 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::Read;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, Serialize)]
@@ -110,6 +112,8 @@ pub(crate) struct CanonicalPlanrExecutableIdentity {
     pub(crate) path: PathBuf,
     pub(crate) sha256: String,
     pub(crate) size_bytes: u64,
+    pub(crate) file_identity: String,
+    pub(crate) mode: String,
     pub(crate) version: &'static str,
     pub(crate) path_lookup_allowed: bool,
 }
@@ -123,13 +127,7 @@ struct CanonicalPlanrCommand {
     argv: Vec<String>,
 }
 
-fn digest_file(path: &Path) -> Result<(String, u64)> {
-    let mut file = File::open(path).map_err(|error| {
-        anyhow::anyhow!(
-            "planr_executable_identity_unavailable:path={}:error={error}",
-            path.display()
-        )
-    })?;
+fn digest_open_file(file: &mut File) -> Result<(String, u64)> {
     let mut digest = Sha256::new();
     let mut size_bytes = 0_u64;
     let mut buffer = [0_u8; 64 * 1024];
@@ -145,27 +143,50 @@ fn digest_file(path: &Path) -> Result<(String, u64)> {
 }
 
 fn observe_planr_executable_identity(path: &Path) -> Result<CanonicalPlanrExecutableIdentity> {
-    let path = path.canonicalize().map_err(|error| {
+    observe_planr_executable_identity_with_hook(path, || Ok(()))
+}
+
+fn observe_planr_executable_identity_with_hook(
+    requested_path: &Path,
+    after_hash: impl FnOnce() -> Result<()>,
+) -> Result<CanonicalPlanrExecutableIdentity> {
+    let requested = std::fs::symlink_metadata(requested_path).map_err(|error| {
         anyhow::anyhow!(
             "planr_executable_identity_unavailable:path={}:error={error}",
-            path.display()
+            requested_path.display()
         )
     })?;
+    if requested.file_type().is_symlink() {
+        bail!(
+            "planr_executable_identity_symlink_forbidden:path={}",
+            requested_path.display()
+        );
+    }
+    let path = requested_path.canonicalize()?;
     if !path.is_absolute() {
         bail!(
             "planr_executable_identity_path_not_absolute:path={}",
             path.display()
         );
     }
-    let before = path.metadata()?;
+    let mut file = File::open(&path)?;
+    let before = file.metadata()?;
     if !before.is_file() {
         bail!(
             "planr_executable_identity_not_regular_file:path={}",
             path.display()
         );
     }
-    let (sha256, size_bytes) = digest_file(&path)?;
-    let after = path.metadata()?;
+    #[cfg(unix)]
+    if before.nlink() != 1 {
+        bail!(
+            "planr_executable_identity_hardlink_forbidden:path={}:links={}",
+            path.display(),
+            before.nlink()
+        );
+    }
+    let (sha256, size_bytes) = digest_open_file(&mut file)?;
+    let after = file.metadata()?;
     if before.len() != after.len()
         || size_bytes != after.len()
         || before.modified()? != after.modified()?
@@ -175,11 +196,72 @@ fn observe_planr_executable_identity(path: &Path) -> Result<CanonicalPlanrExecut
             path.display()
         );
     }
+    after_hash()?;
+    let resolved = path.canonicalize().map_err(|error| {
+        anyhow::anyhow!(
+            "planr_executable_identity_path_replaced:path={}:error={error}",
+            path.display()
+        )
+    })?;
+    if resolved != path || std::fs::symlink_metadata(&path)?.file_type().is_symlink() {
+        bail!(
+            "planr_executable_identity_path_replaced:path={}",
+            path.display()
+        );
+    }
+    let resolved_file = File::open(&path)?;
+    let resolved_metadata = resolved_file.metadata()?;
+    #[cfg(unix)]
+    if before.dev() != resolved_metadata.dev()
+        || before.ino() != resolved_metadata.ino()
+        || before.mode() != resolved_metadata.mode()
+        || before.nlink() != resolved_metadata.nlink()
+        || before.len() != resolved_metadata.len()
+        || before.modified()? != resolved_metadata.modified()?
+    {
+        bail!(
+            "planr_executable_identity_path_replaced:path={}",
+            path.display()
+        );
+    }
+    #[cfg(not(unix))]
+    {
+        let mut resolved_file = resolved_file;
+        let (resolved_sha256, resolved_size) = digest_open_file(&mut resolved_file)?;
+        if resolved_sha256 != sha256
+            || resolved_size != size_bytes
+            || before.len() != resolved_metadata.len()
+            || before.modified()? != resolved_metadata.modified()?
+            || before.permissions().readonly() != resolved_metadata.permissions().readonly()
+        {
+            bail!(
+                "planr_executable_identity_path_replaced:path={}",
+                path.display()
+            );
+        }
+    }
+    #[cfg(unix)]
+    let (file_identity, mode) = (
+        format!("unix:{}:{}", before.dev(), before.ino()),
+        format!("{:04o}", before.mode() & 0o7777),
+    );
+    #[cfg(not(unix))]
+    let (file_identity, mode) = (
+        format!("digest:{sha256}"),
+        if before.permissions().readonly() {
+            "readonly"
+        } else {
+            "writable"
+        }
+        .to_string(),
+    );
     Ok(CanonicalPlanrExecutableIdentity {
         schema_version: "planr.executable_identity.v1",
         path,
         sha256,
         size_bytes,
+        file_identity,
+        mode,
         version: env!("CARGO_PKG_VERSION"),
         path_lookup_allowed: false,
     })
@@ -1075,5 +1157,62 @@ mod tests {
                 .expect("transport projection");
             assert_eq!(serde_json::to_vec(projected).unwrap(), serialized);
         }
+    }
+
+    #[test]
+    fn executable_identity_fails_closed_on_atomic_same_size_restored_mtime_replacement() {
+        let dir = tempfile::tempdir().expect("temporary executable root");
+        let executable = dir.path().join("planr-reviewed");
+        let replacement = dir.path().join("planr-replacement");
+        std::fs::write(&executable, b"reviewed-planr-v1").unwrap();
+        std::fs::write(&replacement, b"installed-global!").unwrap();
+        let original_modified = executable.metadata().unwrap().modified().unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&replacement)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(original_modified))
+            .unwrap();
+
+        let error = observe_planr_executable_identity_with_hook(&executable, || {
+            std::fs::rename(&replacement, &executable)?;
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("planr_executable_identity_path_replaced")
+        );
+        assert_eq!(executable.metadata().unwrap().len(), 17);
+        assert_eq!(
+            executable.metadata().unwrap().modified().unwrap(),
+            original_modified
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn executable_identity_rejects_symlink_and_hardlink_aliases() {
+        let dir = tempfile::tempdir().expect("temporary executable root");
+        let executable = dir.path().join("planr-reviewed");
+        std::fs::write(&executable, b"reviewed-planr-v1").unwrap();
+        let symlink = dir.path().join("planr-symlink");
+        std::os::unix::fs::symlink(&executable, &symlink).unwrap();
+        assert!(
+            observe_planr_executable_identity(&symlink)
+                .unwrap_err()
+                .to_string()
+                .contains("planr_executable_identity_symlink_forbidden")
+        );
+
+        let hardlink = dir.path().join("planr-hardlink");
+        std::fs::hard_link(&executable, &hardlink).unwrap();
+        assert!(
+            observe_planr_executable_identity(&executable)
+                .unwrap_err()
+                .to_string()
+                .contains("planr_executable_identity_hardlink_forbidden")
+        );
     }
 }
