@@ -13,11 +13,23 @@ use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
-use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use time::{OffsetDateTime, PrimitiveDateTime, format_description::well_known::Rfc3339};
 
 const RECOVERY_SCHEMA: &str = "planr.evidence.recover_settlement.v1";
 const HISTORICAL_RECONCILIATION_SCHEMA: &str =
     "planr.evidence.reconcile_historical_invalidation.v1";
+const SQLITE_UTC_TIMESTAMP_FORMAT: &str = "[year]-[month]-[day] [hour]:[minute]:[second]";
+
+fn parse_persisted_timestamp(value: &str) -> Result<OffsetDateTime> {
+    if let Ok(timestamp) = OffsetDateTime::parse(value, &Rfc3339) {
+        return Ok(timestamp);
+    }
+    let format = time::format_description::parse(SQLITE_UTC_TIMESTAMP_FORMAT)
+        .context("invalid persisted timestamp format description")?;
+    let timestamp = PrimitiveDateTime::parse(value, &format)
+        .map_err(|_| anyhow!("invalid or ambiguous persisted timestamp"))?;
+    Ok(timestamp.assume_utc())
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -274,7 +286,22 @@ impl App {
                 let accepted_at = gate_accepted_at.as_deref().ok_or_else(|| {
                     anyhow!("historical_invalidation_reconciliation_risk_review_acceptance_missing")
                 })?;
-                if accepted_at >= receipt_created_at.as_str()
+                let accepted_at = parse_persisted_timestamp(accepted_at).map_err(|_| {
+                    anyhow!("historical_invalidation_reconciliation_risk_review_acceptance_invalid")
+                })?;
+                let review_binding_created_at =
+                    parse_persisted_timestamp(&review_binding_created_at).map_err(|_| {
+                        anyhow!(
+                            "historical_invalidation_reconciliation_risk_review_binding_timestamp_invalid"
+                        )
+                    })?;
+                let receipt_created_at =
+                    parse_persisted_timestamp(&receipt_created_at).map_err(|_| {
+                        anyhow!(
+                            "historical_invalidation_reconciliation_risk_receipt_timestamp_invalid"
+                        )
+                    })?;
+                if accepted_at >= receipt_created_at
                     || review_binding_created_at >= receipt_created_at
                 {
                     bail!("historical_invalidation_reconciliation_risk_review_not_pre_evidence");

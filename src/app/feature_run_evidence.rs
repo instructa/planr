@@ -3785,6 +3785,37 @@ allow_overwrite = true
     }
 
     #[test]
+    fn pre_evidence_risk_checkpoint_normalizes_timezone_and_fraction_boundaries() {
+        let (_root, app, input) = risk_checkpoint_historical_invalidation_reconciliation_app();
+        app.conn
+            .execute(
+                "UPDATE review_gates SET accepted_at = '2000-01-04T10:59:59.999999999+01:00'
+                 WHERE id = 'gate-lineage'",
+                [],
+            )
+            .unwrap();
+        app.conn
+            .execute(
+                "UPDATE final_review_source_bindings SET created_at = '2000-01-04 09:59:59'
+                 WHERE gate_id = 'gate-lineage'",
+                [],
+            )
+            .unwrap();
+        app.conn
+            .execute(
+                "UPDATE evidence_receipts SET created_at = '2000-01-04T10:00:00Z'
+                 WHERE id = 'erec-settle'",
+                [],
+            )
+            .unwrap();
+
+        let reconciled = app
+            .recover_verification_settlement_value(input)
+            .expect("offset and fractional timestamps normalize to instants before comparison");
+        assert_eq!(reconciled["created"], true);
+    }
+
+    #[test]
     fn repaired_risk_checkpoint_preserves_reviewed_obligation_through_supersession_lineage() {
         let (_root, app, input) = risk_checkpoint_historical_invalidation_reconciliation_app();
         app.conn
@@ -3844,6 +3875,13 @@ allow_overwrite = true
             "superseded",
             "post_evidence_lineage",
             "post_evidence_binding",
+            "same_day_post_evidence_acceptance_mixed_format",
+            "same_day_post_evidence_binding_mixed_format",
+            "equal_instant_timezone_boundary",
+            "fractional_post_evidence_boundary",
+            "invalid_acceptance_timestamp",
+            "invalid_binding_timestamp",
+            "invalid_receipt_timestamp",
         ] {
             let (_root, app, input) = risk_checkpoint_historical_invalidation_reconciliation_app();
             match case {
@@ -3916,6 +3954,112 @@ allow_overwrite = true
                         )
                         .unwrap();
                 }
+                "same_day_post_evidence_acceptance_mixed_format" => {
+                    app.conn
+                        .execute(
+                            "UPDATE review_gates SET accepted_at = '2000-01-04 11:00:00'
+                             WHERE id = 'gate-lineage'",
+                            [],
+                        )
+                        .unwrap();
+                    app.conn
+                        .execute(
+                            "UPDATE evidence_receipts SET created_at = '2000-01-04T10:00:00Z'
+                             WHERE id = 'erec-settle'",
+                            [],
+                        )
+                        .unwrap();
+                }
+                "same_day_post_evidence_binding_mixed_format" => {
+                    app.conn
+                        .execute(
+                            "UPDATE review_gates SET accepted_at = '2000-01-04 09:00:00'
+                             WHERE id = 'gate-lineage'",
+                            [],
+                        )
+                        .unwrap();
+                    app.conn
+                        .execute(
+                            "UPDATE final_review_source_bindings SET created_at = '2000-01-04 11:00:00'
+                             WHERE gate_id = 'gate-lineage'",
+                            [],
+                        )
+                        .unwrap();
+                    app.conn
+                        .execute(
+                            "UPDATE evidence_receipts SET created_at = '2000-01-04T10:00:00Z'
+                             WHERE id = 'erec-settle'",
+                            [],
+                        )
+                        .unwrap();
+                }
+                "equal_instant_timezone_boundary" => {
+                    app.conn
+                        .execute(
+                            "UPDATE review_gates SET accepted_at = '2000-01-04T11:00:00+01:00'
+                             WHERE id = 'gate-lineage'",
+                            [],
+                        )
+                        .unwrap();
+                    app.conn
+                        .execute(
+                            "UPDATE evidence_receipts SET created_at = '2000-01-04T10:00:00Z'
+                             WHERE id = 'erec-settle'",
+                            [],
+                        )
+                        .unwrap();
+                }
+                "fractional_post_evidence_boundary" => {
+                    app.conn
+                        .execute(
+                            "UPDATE review_gates SET accepted_at = '2000-01-04T09:59:59.999999999Z'
+                             WHERE id = 'gate-lineage'",
+                            [],
+                        )
+                        .unwrap();
+                    app.conn
+                        .execute(
+                            "UPDATE final_review_source_bindings
+                             SET created_at = '2000-01-04T10:00:00.000000001Z'
+                             WHERE gate_id = 'gate-lineage'",
+                            [],
+                        )
+                        .unwrap();
+                    app.conn
+                        .execute(
+                            "UPDATE evidence_receipts SET created_at = '2000-01-04T10:00:00Z'
+                             WHERE id = 'erec-settle'",
+                            [],
+                        )
+                        .unwrap();
+                }
+                "invalid_acceptance_timestamp" => {
+                    app.conn
+                        .execute(
+                            "UPDATE review_gates SET accepted_at = 'not-a-timestamp'
+                             WHERE id = 'gate-lineage'",
+                            [],
+                        )
+                        .unwrap();
+                }
+                "invalid_binding_timestamp" => {
+                    app.conn
+                        .execute(
+                            "UPDATE final_review_source_bindings SET created_at = '2000-01-04'
+                             WHERE gate_id = 'gate-lineage'",
+                            [],
+                        )
+                        .unwrap();
+                }
+                "invalid_receipt_timestamp" => {
+                    app.conn
+                        .execute(
+                            "UPDATE evidence_receipts SET created_at = '2000-01-04 10:00:00 UTC'
+                             WHERE id = 'erec-settle'",
+                            [],
+                        )
+                        .unwrap();
+                }
                 _ => unreachable!(),
             }
 
@@ -3927,7 +4071,14 @@ allow_overwrite = true
                 "unknown" | "superseded" => "risk_reviewed_obligation_inactive",
                 "receipt_from_another_obligation" => "risk_receipt_obligation_mismatch",
                 "post_evidence_lineage" => "risk_review_lineage_ambiguous",
-                "post_evidence_binding" => "risk_review_not_pre_evidence",
+                "post_evidence_binding"
+                | "same_day_post_evidence_acceptance_mixed_format"
+                | "same_day_post_evidence_binding_mixed_format"
+                | "equal_instant_timezone_boundary"
+                | "fractional_post_evidence_boundary" => "risk_review_not_pre_evidence",
+                "invalid_acceptance_timestamp" => "risk_review_acceptance_invalid",
+                "invalid_binding_timestamp" => "risk_review_binding_timestamp_invalid",
+                "invalid_receipt_timestamp" => "risk_receipt_timestamp_invalid",
                 _ => unreachable!(),
             };
             assert!(error.to_string().contains(expected), "case {case}: {error}");
