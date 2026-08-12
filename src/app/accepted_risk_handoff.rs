@@ -17,6 +17,33 @@ use rusqlite::params;
 use serde_json::{Value, json};
 
 impl App {
+    fn active_risk_review_obligation_ids(
+        &self,
+        plan_id: &str,
+        verification_item_id: &str,
+    ) -> Result<Vec<String>> {
+        let obligation_ids = self
+            .conn
+            .prepare(
+                "SELECT obligations.id FROM proof_obligations obligations
+                 WHERE obligations.plan_id = ?1 AND obligations.item_id = ?2
+                   AND obligations.binding = 1
+                   AND NOT EXISTS(
+                     SELECT 1 FROM proof_obligations successors
+                     WHERE successors.supersedes_obligation_id = obligations.id
+                   )
+                 ORDER BY obligations.id",
+            )?
+            .query_map(params![plan_id, verification_item_id], |row| {
+                row.get::<_, String>(0)
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        if obligation_ids.is_empty() {
+            bail!("risk_review_active_obligations_missing:{verification_item_id}");
+        }
+        Ok(obligation_ids)
+    }
+
     pub(crate) fn refresh_risk_review_binding_after_finding_repair(
         &self,
         repository: &ExecutionRunRepository<'_>,
@@ -221,6 +248,18 @@ impl App {
         if create_freeze {
             repository.freeze_source(&freeze)?;
         }
+        let active_obligation_ids =
+            self.active_risk_review_obligation_ids(&persisted.run.plan_id, &verification_item_id)?;
+        repository.seal_accepted_risk_review_source_binding(&ReviewSourceBindingRecord {
+            gate_id: gate.id.clone(),
+            freeze_id: freeze.id.clone(),
+            source_revision: freeze.source_revision.clone(),
+            source_digest: freeze.source_digest.clone(),
+            receipt_lineage: json!({
+                "kind": "risk_review_acceptance",
+                "active_obligation_ids": active_obligation_ids,
+            }),
+        })?;
         let released = self.conn.execute(
             "UPDATE items SET status = 'ready', worker_id = NULL, pick_token = NULL,
                     picked_at = NULL, last_heartbeat_at = NULL, updated_at = datetime('now')

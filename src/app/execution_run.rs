@@ -1492,6 +1492,47 @@ mod tests {
     fn bind_risk_gate_to_active_freeze(app: &App, gate_id: &str) -> SourceFreezeRecord {
         let repository = ExecutionRunRepository::new(&app.conn);
         let gate = repository.review_gate(gate_id).expect("risk gate");
+        let verification_item_id: String = app
+            .conn
+            .query_row(
+                "SELECT id FROM items WHERE plan_path = 'plan-a.md'
+                   AND work_type = 'verification' ORDER BY created_at, id LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("verification item");
+        app.conn
+            .execute(
+                "INSERT OR IGNORE INTO proof_obligations(
+                   id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
+                   binding, observation_requirements_json, fixture_policy_json,
+                   freshness_policy_json, assurance_policy_json, policy_digest, config_digest,
+                   source_digest, created_at, retry_aggregation, obligation_shape
+                 ) VALUES ('pob-risk-legacy', 'project-a', 'plan-a', ?1, 'crit-risk', 1,
+                   'legacy risk obligation', 1, '[]', '{}', '{}', '{}',
+                   'sha256:0000000000000000000000000000000000000000000000000000000000000000',
+                   'sha256:0000000000000000000000000000000000000000000000000000000000000000',
+                   NULL, datetime('now'), 'latest_applicable_pass', 'semantic_v1')",
+                [&verification_item_id],
+            )
+            .expect("legacy risk obligation");
+        app.conn
+            .execute(
+                "INSERT OR IGNORE INTO proof_obligations(
+                   id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
+                   binding, observation_requirements_json, fixture_policy_json,
+                   freshness_policy_json, assurance_policy_json, policy_digest, config_digest,
+                   source_digest, supersedes_obligation_id, created_at, retry_aggregation,
+                   obligation_shape
+                 ) VALUES ('pob-risk-active', 'project-a', 'plan-a', ?1, 'crit-risk', 2,
+                   'active risk obligation', 1, '[]', '{}', '{}', '{}',
+                   'sha256:0000000000000000000000000000000000000000000000000000000000000000',
+                   'sha256:0000000000000000000000000000000000000000000000000000000000000000',
+                   NULL, 'pob-risk-legacy', datetime('now'), 'latest_applicable_pass',
+                   'semantic_v1')",
+                [&verification_item_id],
+            )
+            .expect("active risk obligation");
         let snapshot = capture_repository_snapshot(&app.root).expect("source snapshot");
         let freeze = SourceFreezeRecord {
             id: short_id("freeze"),
@@ -1513,7 +1554,10 @@ mod tests {
                 freeze_id: freeze.id.clone(),
                 source_revision: freeze.source_revision.clone(),
                 source_digest: freeze.source_digest.clone(),
-                receipt_lineage: json!({"kind": "product_repair"}),
+                receipt_lineage: json!({
+                    "kind": "product_repair",
+                    "selective_obligation_ids": ["pob-risk-legacy"]
+                }),
             })
             .expect("review source binding");
         freeze
@@ -1565,6 +1609,17 @@ mod tests {
         assert_eq!(
             accepted["execution_state"]["execution_batch"]["status"],
             "ended"
+        );
+        let sealed = ExecutionRunRepository::new(&app.conn)
+            .review_source_binding(gate_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            sealed.receipt_lineage,
+            json!({
+                "kind": "risk_review_acceptance",
+                "active_obligation_ids": ["pob-risk-active"]
+            })
         );
         let freeze_id = handoff["work_packet"]["source_freeze"]["id"]
             .as_str()

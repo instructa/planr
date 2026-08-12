@@ -1,5 +1,5 @@
 use super::App;
-use super::repository::execution_run::{ExecutionRunRepository, ReviewGateStatus};
+use super::repository::execution_run::{ExecutionRunRepository, ReviewGateKind, ReviewGateStatus};
 use crate::evidence::coverage::evaluate_plan_coverage;
 use crate::evidence::policy::capture_repository_snapshot;
 use crate::execution_run::{
@@ -18,6 +18,8 @@ use time::{OffsetDateTime, PrimitiveDateTime, format_description::well_known::Rf
 const RECOVERY_SCHEMA: &str = "planr.evidence.recover_settlement.v1";
 const HISTORICAL_RECONCILIATION_SCHEMA: &str =
     "planr.evidence.reconcile_historical_invalidation.v1";
+const RISK_REVIEW_OBLIGATION_BACKFILL_SCHEMA: &str =
+    "planr.evidence.backfill_risk_review_obligations.v1";
 const SQLITE_UTC_TIMESTAMP_FORMAT: &str = "[year]-[month]-[day] [hour]:[minute]:[second]";
 
 fn parse_persisted_timestamp(value: &str) -> Result<OffsetDateTime> {
@@ -57,12 +59,29 @@ struct HistoricalInvalidationReconciliationInput {
     next_item_id: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RiskReviewObligationBackfillInput {
+    schema: String,
+    plan_id: String,
+    run_id: String,
+    review_gate_id: String,
+    freeze_id: String,
+    receipt_id: String,
+    verification_item_id: String,
+}
+
 impl App {
     pub(crate) fn recover_verification_settlement_value(&self, input: Value) -> Result<Value> {
         if input["schema"].as_str() == Some(HISTORICAL_RECONCILIATION_SCHEMA) {
             let input: HistoricalInvalidationReconciliationInput = serde_json::from_value(input)
                 .context("invalid historical invalidation reconciliation input")?;
             return self.reconcile_historical_invalidation_value(&input);
+        }
+        if input["schema"].as_str() == Some(RISK_REVIEW_OBLIGATION_BACKFILL_SCHEMA) {
+            let input: RiskReviewObligationBackfillInput = serde_json::from_value(input)
+                .context("invalid risk review obligation backfill input")?;
+            return self.backfill_risk_review_obligations_value(&input);
         }
         let input: VerificationSettlementRecoveryInput = serde_json::from_value(input)
             .context("invalid verification settlement recovery input")?;
@@ -86,6 +105,235 @@ impl App {
                 Err(error)
             }
         }
+    }
+
+    fn backfill_risk_review_obligations_value(
+        &self,
+        input: &RiskReviewObligationBackfillInput,
+    ) -> Result<Value> {
+        self.conn
+            .execute_batch("BEGIN IMMEDIATE; SAVEPOINT backfill_risk_review_obligations")?;
+        let result = self.backfill_risk_review_obligations_locked(input);
+        match result {
+            Ok(value) => {
+                self.conn
+                    .execute_batch("RELEASE backfill_risk_review_obligations; COMMIT")?;
+                Ok(value)
+            }
+            Err(error) => {
+                let _ = self.conn.execute_batch(
+                    "ROLLBACK TO backfill_risk_review_obligations; RELEASE backfill_risk_review_obligations; ROLLBACK",
+                );
+                Err(error)
+            }
+        }
+    }
+
+    fn backfill_risk_review_obligations_locked(
+        &self,
+        input: &RiskReviewObligationBackfillInput,
+    ) -> Result<Value> {
+        if let Some(payload) = self
+            .conn
+            .query_row(
+                "SELECT payload FROM events
+             WHERE event_type = 'risk_review_obligations_backfilled'
+               AND json_extract(payload, '$.request.run_id') = ?1
+               AND json_extract(payload, '$.request.review_gate_id') = ?2
+             ORDER BY id DESC LIMIT 1",
+                params![input.run_id, input.review_gate_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+        {
+            let payload: Value = serde_json::from_str(&payload)?;
+            let recorded: RiskReviewObligationBackfillInput =
+                serde_json::from_value(payload["request"].clone())
+                    .context("invalid persisted risk review obligation backfill event")?;
+            if recorded != *input {
+                bail!("risk_review_obligation_backfill_request_mismatch");
+            }
+            return Ok(json!({
+                "schema": "planr.evidence.backfill_risk_review_obligations.result.v1",
+                "created": false,
+                "request": input,
+                "active_obligation_ids": payload["active_obligation_ids"],
+            }));
+        }
+
+        let project = self.default_project()?;
+        let plan = self.get_plan(&input.plan_id)?;
+        if plan.project_id != project.id {
+            bail!("risk_review_obligation_backfill_plan_project_mismatch");
+        }
+        let repository = ExecutionRunRepository::new(&self.conn);
+        let persisted = repository.feature_run(&input.run_id)?;
+        if persisted.project_id != project.id || persisted.run.plan_id != input.plan_id {
+            bail!("risk_review_obligation_backfill_run_mismatch");
+        }
+        let gate = repository.review_gate(&input.review_gate_id)?;
+        if gate.run_id != input.run_id
+            || gate.kind != ReviewGateKind::RiskCheckpoint
+            || gate.status != ReviewGateStatus::Accepted
+        {
+            bail!("risk_review_obligation_backfill_gate_not_accepted_risk");
+        }
+        let binding = repository
+            .review_source_binding(&gate.id)?
+            .ok_or_else(|| anyhow!("risk_review_obligation_backfill_binding_missing"))?;
+        let freeze = repository
+            .active_source_freeze(&input.run_id)?
+            .ok_or_else(|| anyhow!("risk_review_obligation_backfill_active_freeze_missing"))?;
+        if input.freeze_id != freeze.id
+            || binding.freeze_id != freeze.id
+            || binding.source_revision != freeze.source_revision
+            || binding.source_digest != freeze.source_digest
+            || gate.source_revision.as_deref() != Some(freeze.source_revision.as_str())
+        {
+            bail!("risk_review_obligation_backfill_source_binding_mismatch");
+        }
+        let snapshot = capture_repository_snapshot(&self.root)
+            .context("checking risk review obligation backfill source")?;
+        if snapshot.source.revision != freeze.source_revision
+            || snapshot.source.tree_digest.as_str() != freeze.source_digest
+        {
+            bail!("risk_review_obligation_backfill_source_stale");
+        }
+
+        let (attempt_verdict, attempt_source_revision): (String, String) = self.conn.query_row(
+            "SELECT verdict, source_revision FROM review_attempts
+             WHERE gate_id = ?1 AND attempt_number = ?2",
+            params![gate.id, gate.latest_attempt],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        if attempt_verdict != "accepted" || attempt_source_revision != freeze.source_revision {
+            bail!("risk_review_obligation_backfill_attempt_source_mismatch");
+        }
+
+        let (item_plan_path, item_work_type): (String, String) = self.conn.query_row(
+            "SELECT plan_path, work_type FROM items WHERE id = ?1 AND project_id = ?2",
+            params![input.verification_item_id, project.id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        if item_plan_path != plan.path || item_work_type != "verification" {
+            bail!("risk_review_obligation_backfill_verification_item_mismatch");
+        }
+        let active_obligation_ids = self
+            .conn
+            .prepare(
+                "SELECT obligations.id FROM proof_obligations obligations
+             WHERE obligations.project_id = ?1 AND obligations.plan_id = ?2
+               AND obligations.item_id = ?3 AND obligations.binding = 1
+               AND NOT EXISTS(
+                 SELECT 1 FROM proof_obligations successors
+                 WHERE successors.supersedes_obligation_id = obligations.id
+               )
+             ORDER BY obligations.id",
+            )?
+            .query_map(
+                params![project.id, input.plan_id, input.verification_item_id],
+                |row| row.get::<_, String>(0),
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        if active_obligation_ids.len() != 1 {
+            bail!("risk_review_obligation_backfill_active_obligations_ambiguous");
+        }
+        let active_obligation_id = &active_obligation_ids[0];
+        let legacy_ids = reviewed_risk_obligation_ids(&binding.receipt_lineage)?;
+        if legacy_ids.len() != 1 || legacy_ids.contains(active_obligation_id) {
+            bail!("risk_review_obligation_backfill_legacy_lineage_ambiguous");
+        }
+        let legacy_id = legacy_ids.iter().next().expect("one legacy obligation");
+        let supersession_proven: bool = self.conn.query_row(
+            "WITH RECURSIVE lineage(id, supersedes_obligation_id) AS (
+               SELECT id, supersedes_obligation_id FROM proof_obligations WHERE id = ?1
+               UNION ALL
+               SELECT obligations.id, obligations.supersedes_obligation_id
+               FROM proof_obligations obligations
+               JOIN lineage ON obligations.id = lineage.supersedes_obligation_id
+             )
+             SELECT EXISTS(SELECT 1 FROM lineage WHERE id = ?2)",
+            params![active_obligation_id, legacy_id],
+            |row| row.get(0),
+        )?;
+        if !supersession_proven {
+            bail!("risk_review_obligation_backfill_supersession_mismatch");
+        }
+
+        let (receipt_digest, trusted_binding, receipt_created_at): (String, String, String) =
+            self.conn.query_row(
+                "SELECT receipt_digest, trusted_binding_json, created_at
+                 FROM evidence_receipts
+                 WHERE id = ?1 AND project_id = ?2 AND obligation_id = ?3
+                   AND receipt_status = 'trusted'",
+                params![input.receipt_id, project.id, active_obligation_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+        let trusted_binding: Value = serde_json::from_str(&trusted_binding)?;
+        if trusted_binding["source"]["revision"].as_str() != Some(freeze.source_revision.as_str())
+            || trusted_binding["source"]["tree_digest"].as_str()
+                != Some(freeze.source_digest.as_str())
+        {
+            bail!("risk_review_obligation_backfill_receipt_source_mismatch");
+        }
+        let accepted_at: Option<String> = self.conn.query_row(
+            "SELECT accepted_at FROM review_gates WHERE id = ?1",
+            [&gate.id],
+            |row| row.get(0),
+        )?;
+        let accepted_at = accepted_at
+            .ok_or_else(|| anyhow!("risk_review_obligation_backfill_acceptance_missing"))?;
+        let accepted_at = parse_persisted_timestamp(&accepted_at)
+            .map_err(|_| anyhow!("risk_review_obligation_backfill_acceptance_invalid"))?;
+        let receipt_created_at = parse_persisted_timestamp(&receipt_created_at)
+            .map_err(|_| anyhow!("risk_review_obligation_backfill_receipt_timestamp_invalid"))?;
+        if accepted_at >= receipt_created_at {
+            bail!("risk_review_obligation_backfill_acceptance_not_pre_receipt");
+        }
+        let evaluated_at = OffsetDateTime::now_utc().format(&Rfc3339)?;
+        let coverage =
+            evaluate_plan_coverage(&self.conn, &project.id, &input.plan_id, &evaluated_at)
+                .map_err(|error| anyhow!("{error}"))?;
+        if coverage.status.as_str() != "satisfied"
+            || !coverage.waiver_digests.is_empty()
+            || !coverage
+                .receipt_digests
+                .iter()
+                .any(|digest| digest == &receipt_digest)
+        {
+            bail!("risk_review_obligation_backfill_coverage_mismatch");
+        }
+
+        let replacement = json!({
+            "kind": "risk_review_acceptance",
+            "active_obligation_ids": active_obligation_ids,
+        });
+        let previous = serde_json::to_string(&binding.receipt_lineage)?;
+        let updated = self.conn.execute(
+            "UPDATE final_review_source_bindings SET receipt_lineage_json = ?1
+             WHERE gate_id = ?2 AND receipt_lineage_json = ?3",
+            params![serde_json::to_string(&replacement)?, gate.id, previous],
+        )?;
+        if updated != 1 {
+            bail!("risk_review_obligation_backfill_binding_conflict");
+        }
+        self.record_event(
+            "risk_review_obligations_backfilled",
+            Some(&input.verification_item_id),
+            json!({
+                "request": input,
+                "legacy_obligation_id": legacy_id,
+                "active_obligation_ids": active_obligation_ids,
+                "receipt_digest": receipt_digest,
+                "coverage_id": coverage.id,
+            }),
+        )?;
+        Ok(json!({
+            "schema": "planr.evidence.backfill_risk_review_obligations.result.v1",
+            "created": true,
+            "request": input,
+            "active_obligation_ids": active_obligation_ids,
+        }))
     }
 
     fn reconcile_historical_invalidation_value(
@@ -704,6 +952,38 @@ fn reviewed_risk_obligation_ids(receipt_lineage: &Value) -> Result<BTreeSet<Stri
                             "historical_invalidation_reconciliation_risk_review_obligations_duplicate"
                         );
                     }
+                }
+                if ids.is_empty() {
+                    bail!("historical_invalidation_reconciliation_risk_review_obligations_empty");
+                }
+                Ok(ids)
+            }
+            "risk_review_acceptance" => {
+                let values = receipt_lineage["active_obligation_ids"]
+                    .as_array()
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "historical_invalidation_reconciliation_risk_review_obligations_missing"
+                        )
+                    })?;
+                let ids = values
+                    .iter()
+                    .map(|value| {
+                        value
+                            .as_str()
+                            .filter(|id| !id.trim().is_empty())
+                            .map(str::to_string)
+                            .ok_or_else(|| {
+                                anyhow!(
+                                    "historical_invalidation_reconciliation_risk_review_obligations_invalid"
+                                )
+                            })
+                    })
+                    .collect::<Result<BTreeSet<_>>>()?;
+                if ids.len() != values.len() {
+                    bail!(
+                        "historical_invalidation_reconciliation_risk_review_obligations_duplicate"
+                    );
                 }
                 if ids.is_empty() {
                     bail!("historical_invalidation_reconciliation_risk_review_obligations_empty");

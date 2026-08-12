@@ -3714,6 +3714,397 @@ allow_overwrite = true
         (root, app, input)
     }
 
+    fn risk_review_obligation_backfill_app() -> (tempfile::TempDir, App, Value, Value) {
+        let (root, app, historical_input) =
+            risk_checkpoint_historical_invalidation_reconciliation_app();
+        app.conn
+            .execute(
+                "INSERT INTO proof_obligations(
+                   id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
+                   binding, observation_requirements_json, fixture_policy_json,
+                   freshness_policy_json, assurance_policy_json, policy_digest, config_digest,
+                   source_digest, supersedes_obligation_id, created_at, retry_aggregation,
+                   obligation_shape
+                 ) SELECT 'pob-settle-active', project_id, plan_id,
+                   'item-settle-verification', criterion_id, obligation_version + 1, title,
+                   binding, observation_requirements_json, fixture_policy_json,
+                   freshness_policy_json, assurance_policy_json, policy_digest, config_digest,
+                   source_digest, 'pob-settle', datetime('now'), retry_aggregation,
+                   obligation_shape
+                 FROM proof_obligations WHERE id = 'pob-settle'",
+                [],
+            )
+            .unwrap();
+        let receipt_json: String = app
+            .conn
+            .query_row(
+                "SELECT receipt_json FROM evidence_receipts WHERE id = 'erec-settle'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let mut receipt: Value = serde_json::from_str(&receipt_json).unwrap();
+        receipt["obligation_id"] = json!("pob-settle-active");
+        let receipt_digest = crate::canonical_json::sha256_json_digest_without_top_level_field(
+            &receipt,
+            "receipt_digest",
+        )
+        .unwrap();
+        receipt["receipt_digest"] = json!(receipt_digest);
+        app.conn
+            .execute(
+                "UPDATE evidence_receipts SET obligation_id = 'pob-settle-active',
+                   receipt_digest = ?1, receipt_json = ?2 WHERE id = 'erec-settle'",
+                params![receipt_digest, receipt.to_string()],
+            )
+            .unwrap();
+        let backfill_input = json!({
+            "schema": "planr.evidence.backfill_risk_review_obligations.v1",
+            "plan_id": "plan-a",
+            "run_id": historical_input["run_id"],
+            "review_gate_id": "gate-lineage",
+            "freeze_id": historical_input["superseding_freeze_id"],
+            "receipt_id": "erec-settle",
+            "verification_item_id": "item-settle-verification",
+        });
+        (root, app, backfill_input, historical_input)
+    }
+
+    #[test]
+    fn legacy_risk_review_backfill_seals_active_obligation_once_then_reconciles() {
+        let (_root, app, backfill_input, historical_input) = risk_review_obligation_backfill_app();
+
+        let backfilled = app
+            .recover_verification_settlement_value(backfill_input.clone())
+            .expect("exact legacy binding backfills to the active obligation");
+        assert_eq!(backfilled["created"], true);
+        assert_eq!(
+            backfilled["schema"],
+            "planr.evidence.backfill_risk_review_obligations.result.v1"
+        );
+        assert_eq!(
+            backfilled["active_obligation_ids"],
+            json!(["pob-settle-active"])
+        );
+        let binding = ExecutionRunRepository::new(&app.conn)
+            .review_source_binding("gate-lineage")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            binding.receipt_lineage,
+            json!({
+                "kind": "risk_review_acceptance",
+                "active_obligation_ids": ["pob-settle-active"]
+            })
+        );
+        let repeated = app
+            .recover_verification_settlement_value(backfill_input)
+            .expect("backfill repeats without another write");
+        assert_eq!(repeated["created"], false);
+
+        let reconciled = app
+            .recover_verification_settlement_value(historical_input)
+            .expect("reviewed backfill feeds the existing historical reconciliation");
+        assert_eq!(reconciled["created"], true);
+    }
+
+    #[test]
+    fn legacy_risk_review_backfill_fails_closed_for_ambiguous_or_stale_state() {
+        for case in [
+            "wrong_attempt_source",
+            "post_receipt_acceptance",
+            "wrong_freeze",
+            "cross_plan_item",
+            "multiple_active",
+            "unrelated_supersession",
+            "missing_coverage",
+            "waived_coverage",
+        ] {
+            let (_root, app, mut input, _historical_input) = risk_review_obligation_backfill_app();
+            match case {
+                "wrong_attempt_source" => {
+                    app.conn
+                        .execute(
+                            "UPDATE review_attempts SET source_revision = 'wrong-source'
+                             WHERE id = 'attempt-lineage'",
+                            [],
+                        )
+                        .unwrap();
+                }
+                "post_receipt_acceptance" => {
+                    app.conn
+                        .execute(
+                            "UPDATE review_gates SET accepted_at = '2000-01-05 00:00:00'
+                             WHERE id = 'gate-lineage'",
+                            [],
+                        )
+                        .unwrap();
+                }
+                "wrong_freeze" => input["freeze_id"] = json!("freeze-wrong"),
+                "cross_plan_item" => {
+                    app.conn
+                        .execute(
+                            "INSERT INTO plans(id, project_id, stage, path, title, slug,
+                               parse_status, content_hash, created_at, updated_at)
+                             VALUES ('plan-b', 'project-a', 'build', 'plan-b.md', 'Plan B',
+                               'plan-b', 'ok', 'sha256:plan-b', datetime('now'), datetime('now'))",
+                            [],
+                        )
+                        .unwrap();
+                    app.conn
+                        .execute(
+                            "INSERT INTO items(id, project_id, title, description, status,
+                               work_type, plan_path, created_at, updated_at)
+                             VALUES ('item-plan-b-verification', 'project-a', 'verify b', 'verify b',
+                               'closed', 'verification', 'plan-b.md', datetime('now'), datetime('now'))",
+                            [],
+                        )
+                        .unwrap();
+                    input["verification_item_id"] = json!("item-plan-b-verification");
+                }
+                "multiple_active" => {
+                    app.conn
+                        .execute(
+                            "INSERT INTO proof_obligations(
+                               id, project_id, plan_id, item_id, criterion_id,
+                               obligation_version, title, binding, observation_requirements_json,
+                               fixture_policy_json, freshness_policy_json, assurance_policy_json,
+                               policy_digest, config_digest, source_digest,
+                               supersedes_obligation_id, created_at, retry_aggregation,
+                               obligation_shape
+                             ) SELECT 'pob-settle-other', project_id, plan_id,
+                               'item-settle-verification', criterion_id, 1, title, binding,
+                               observation_requirements_json, fixture_policy_json,
+                               freshness_policy_json, assurance_policy_json, policy_digest,
+                               config_digest, source_digest, NULL, datetime('now'),
+                               retry_aggregation, obligation_shape
+                             FROM proof_obligations WHERE id = 'pob-settle'",
+                            [],
+                        )
+                        .unwrap();
+                }
+                "unrelated_supersession" => {
+                    app.conn
+                        .execute(
+                            "UPDATE final_review_source_bindings SET receipt_lineage_json = ?1
+                             WHERE gate_id = 'gate-lineage'",
+                            [json!({
+                                "kind": "product_repair",
+                                "selective_obligation_ids": ["pob-unrelated"]
+                            })
+                            .to_string()],
+                        )
+                        .unwrap();
+                }
+                "missing_coverage" | "waived_coverage" => {
+                    let observations: String = app
+                        .conn
+                        .query_row(
+                            "SELECT observation_requirements_json FROM proof_obligations
+                             WHERE id = 'pob-settle-active'",
+                            [],
+                            |row| row.get(0),
+                        )
+                        .unwrap();
+                    let mut observations: Value = serde_json::from_str(&observations).unwrap();
+                    let mut extra = observations[0].clone();
+                    extra["id"] = json!("obs-risk-backfill-extra");
+                    observations.as_array_mut().unwrap().push(extra.clone());
+                    app.conn
+                        .execute_batch("DROP TRIGGER proof_obligations_no_update")
+                        .unwrap();
+                    app.conn
+                        .execute(
+                            "UPDATE proof_obligations SET observation_requirements_json = ?1
+                             WHERE id = 'pob-settle-active'",
+                            [observations.to_string()],
+                        )
+                        .unwrap();
+                    if case == "waived_coverage" {
+                        let source = capture_repository_snapshot(&app.root).unwrap().source;
+                        let waiver = json!({
+                            "id": "waiver-risk-backfill",
+                            "schema_version": crate::evidence::model::EVIDENCE_CONTRACT_V1,
+                            "scope": {"kind": "plan", "id": "plan-a"},
+                            "observation_ids": ["obs-risk-backfill-extra"],
+                            "source": source,
+                            "target": extra["target"],
+                            "reason": "risk backfill waiver must not authorize mutation",
+                            "created_by": "reviewer",
+                            "created_at": "2026-08-08T00:00:00Z",
+                            "expires_at": "2099-01-01T00:00:00Z",
+                            "approval_ref": "item-risk-backfill-waiver-approval",
+                            "audit_trail": [
+                                {"event": "created", "at": "2026-08-08T00:00:00Z"}
+                            ]
+                        });
+                        let waiver_digest =
+                            crate::canonical_json::sha256_json_digest(&waiver).unwrap();
+                        app.conn
+                            .execute(
+                                "INSERT INTO items(
+                                   id, project_id, title, description, status, work_type,
+                                   worker_id, plan_path, approval_status, approved_by, created_at,
+                                   updated_at, completed_at
+                                 ) VALUES ('item-risk-backfill-waiver-approval', 'project-a',
+                                   'waiver', 'waiver', 'closed', 'approval', 'reviewer',
+                                   'plan-a.md', 'approved', 'reviewer', datetime('now'),
+                                   datetime('now'), datetime('now'))",
+                                [],
+                            )
+                            .unwrap();
+                        app.conn
+                            .execute(
+                                "INSERT INTO evidence_waivers(
+                                   id, project_id, approval_item_id, obligation_id,
+                                   observation_id, scope_kind, scope_id, waiver_digest, reason,
+                                   expires_at, created_by, waiver_json, created_at
+                                 ) VALUES ('waiver-risk-backfill', 'project-a',
+                                   'item-risk-backfill-waiver-approval', 'pob-settle-active',
+                                   'obs-risk-backfill-extra', 'plan', 'plan-a', ?1,
+                                   'risk backfill waiver must not authorize mutation',
+                                   '2099-01-01T00:00:00Z', 'reviewer', ?2,
+                                   '2026-08-08T00:00:00Z')",
+                                params![waiver_digest, waiver.to_string()],
+                            )
+                            .unwrap();
+                    }
+                }
+                _ => unreachable!(),
+            }
+            let error = app
+                .recover_verification_settlement_value(input)
+                .expect_err("ambiguous legacy state must fail closed");
+            let expected = match case {
+                "wrong_attempt_source" => "attempt_source_mismatch",
+                "post_receipt_acceptance" => "acceptance_not_pre_receipt",
+                "wrong_freeze" => "source_binding_mismatch",
+                "cross_plan_item" => "verification_item_mismatch",
+                "multiple_active" => "active_obligations_ambiguous",
+                "unrelated_supersession" => "supersession_mismatch",
+                "missing_coverage" | "waived_coverage" => "coverage_mismatch",
+                _ => unreachable!(),
+            };
+            assert!(error.to_string().contains(expected), "case {case}: {error}");
+            let events: i64 = app
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM events
+                     WHERE event_type = 'risk_review_obligations_backfilled'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(events, 0, "case {case}");
+        }
+    }
+
+    #[test]
+    fn concurrent_legacy_risk_review_backfill_converges_once() {
+        let (root, app, input, _historical_input) = risk_review_obligation_backfill_app();
+        let database_path = app.db_path.clone();
+        drop(app);
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let mut handles = Vec::new();
+        for _ in 0..2 {
+            let database_path = database_path.clone();
+            let repository_root = root.path().to_path_buf();
+            let input = input.clone();
+            let barrier = barrier.clone();
+            handles.push(std::thread::spawn(move || {
+                let conn = Connection::open(&database_path).unwrap();
+                conn.busy_timeout(std::time::Duration::from_secs(5))
+                    .unwrap();
+                let app = App::new(conn, repository_root, database_path, true, false);
+                barrier.wait();
+                app.recover_verification_settlement_value(input).unwrap()["created"]
+                    .as_bool()
+                    .unwrap()
+            }));
+        }
+        let mut created = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect::<Vec<_>>();
+        created.sort();
+        assert_eq!(created, vec![false, true]);
+        let conn = Connection::open(database_path).unwrap();
+        let events: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM events
+                 WHERE event_type = 'risk_review_obligations_backfilled'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(events, 1);
+    }
+
+    #[test]
+    fn legacy_risk_review_backfill_rolls_back_late_failure() {
+        let (_root, app, input, _historical_input) = risk_review_obligation_backfill_app();
+        let before = ExecutionRunRepository::new(&app.conn)
+            .review_source_binding("gate-lineage")
+            .unwrap()
+            .unwrap();
+        app.conn
+            .execute_batch(
+                "CREATE TRIGGER reject_risk_review_backfill
+                 BEFORE INSERT ON events
+                 WHEN NEW.event_type = 'risk_review_obligations_backfilled'
+                 BEGIN SELECT RAISE(ABORT, 'forced risk review backfill failure'); END;",
+            )
+            .unwrap();
+        let error = app
+            .recover_verification_settlement_value(input)
+            .expect_err("late event failure rolls back binding update");
+        assert!(
+            error
+                .to_string()
+                .contains("forced risk review backfill failure")
+        );
+        let after = ExecutionRunRepository::new(&app.conn)
+            .review_source_binding("gate-lineage")
+            .unwrap()
+            .unwrap();
+        assert_eq!(after, before);
+    }
+
+    #[test]
+    fn legacy_risk_review_backfill_mcp_and_http_share_typed_result() {
+        let (_mcp_root, mcp_app, mcp_input, _) = risk_review_obligation_backfill_app();
+        let mcp = mcp_app
+            .mcp_evidence_tool_call(
+                "planr_evidence_recover_settlement",
+                json!({"input": mcp_input}),
+            )
+            .unwrap();
+        let mcp_envelope: Value =
+            serde_json::from_str(mcp["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            mcp_envelope["object"]["schema"],
+            "planr.evidence.backfill_risk_review_obligations.result.v1"
+        );
+        assert_eq!(mcp_envelope["object"]["created"], true);
+
+        let (_http_root, http_app, http_input, _) = risk_review_obligation_backfill_app();
+        let (status, body) = http_app
+            .http_evidence_route(
+                "POST",
+                "/v1/evidence/recover-settlement",
+                "",
+                &json!({"input": http_input}),
+            )
+            .unwrap();
+        let http_envelope: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(status, "200 OK");
+        assert_eq!(
+            http_envelope["object"]["schema"],
+            mcp_envelope["object"]["schema"]
+        );
+        assert_eq!(http_envelope["object"]["created"], true);
+    }
+
     #[test]
     fn exact_equal_timestamp_causal_refreeze_reconciles_once_and_leaves_ordinary_work() {
         let (_root, app, input) = historical_invalidation_reconciliation_app();

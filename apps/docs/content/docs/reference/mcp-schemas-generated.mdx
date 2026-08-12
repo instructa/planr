@@ -1406,14 +1406,14 @@ Check active Evidence obligations, payload schemas, registered capabilities, and
 
 ## `planr_evidence_recover_settlement`
 
-Recover exact verified maker continuation or reconcile a proven superseded historical invalidation
+Recover exact verified maker continuation, backfill proven risk-review obligation lineage, or reconcile a proven superseded historical invalidation
 
 ```json
 {
   "additionalProperties": false,
   "properties": {
     "input": {
-      "description": "planr.evidence.recover_settlement.v1 or planr.evidence.reconcile_historical_invalidation.v1 payload",
+      "description": "planr.evidence.recover_settlement.v1, planr.evidence.backfill_risk_review_obligations.v1, or planr.evidence.reconcile_historical_invalidation.v1 payload",
       "type": "object"
     }
   },
