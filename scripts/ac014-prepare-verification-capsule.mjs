@@ -264,7 +264,7 @@ function buildEvidenceConfiguration({ ids, sourceRevision, sourceTree, planrBina
   const schema = { schema_version: "evidence.contract.v1", type, schema_ref: schemaRef, json_schema: { type: "object", required, additionalProperties: false, properties } };
   const schemaDigest = shaJson(schema);
   const validator = terminalValidator(reportPath, exact);
-  const execution = { kind: "process", executable: process.execPath, args: ["-e", validator], working_directory: ".", timeout_ms: 5000, stdout_limit_bytes: 8192, stderr_limit_bytes: 4096, payload_schema: { type, schema_ref: schemaRef, schema_digest: schemaDigest } };
+  const execution = { kind: "process", executable: "node", args: ["-e", validator], working_directory: ".", timeout_ms: 5000, stdout_limit_bytes: 8192, stderr_limit_bytes: 4096, payload_schema: { type, schema_ref: schemaRef, schema_digest: schemaDigest } };
   const adapterDigest = shaJson({ schema_version: "planr.process_adapter.binding.v1", execution_contract: execution, file_arguments: [] });
   const manifest = {
     id: ids.manifest, schema_version: "evidence.contract.v1", version: `1.0.0-${sourceRevision.slice(0, 12)}`,
