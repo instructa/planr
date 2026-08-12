@@ -92,13 +92,22 @@ const controlHandoff = {
   obligation_id: "pob-canonical-arm",
   policy_digest: `sha256:${"a".repeat(64)}`,
   review_required: true,
+  accepted_fix_review_gate_id: "gate-current",
+  accepted_review_attempt_id: "attempt-current",
+  accepted_review_attempt_number: 13,
+  source_freeze: {
+    id: "freeze-c0ffee12",
+    source_revision: planrCandidateSha,
+    source_tree: planrCandidateTree,
+    source_digest: `sha256:${"b".repeat(64)}`,
+  },
   planr_candidate: {
     root: planrCandidate,
     source_revision: planrCandidateSha,
     source_tree: planrCandidateTree,
     binary_path: realpathSync(stubPath),
     binary_sha256: sha256File(stubPath),
-    accepted_fix_review_gate_id: "i-review-verifier-phase-fix",
+    accepted_fix_review_gate_id: "gate-current",
   },
 };
 
@@ -112,6 +121,26 @@ assert.equal(admitted.status, "passed");
 assert.equal(admitted.side_effects, "none");
 assert.equal(admitted.planr_candidate.binary_path, realpathSync(stubPath));
 assert.equal(existsSync(admissionFresh), false);
+
+const launchFalseFresh = path.join(root, "fresh-launch-false");
+const launchFalse = config({ fresh_root: launchFalseFresh, oracle_command: [oracleStubPath] });
+launchFalse.launch_authorization = { ...launchFalse.launch_authorization, launch_allowed: false };
+assert.throws(() => admitFreshArmForTest(launchFalse, { testCodexCommand: codexCommand(codexStubPath) }), /launch_allowed must be true/);
+assert.equal(existsSync(launchFalseFresh), false);
+
+for (const [name, mutate, pattern] of [
+  ["pending-after-seal", (live) => { live.trace.execution_state.review_gate.status = "pending"; }, /live ReviewGate is not the sealed accepted gate/],
+  ["stale-attempt", (live) => { live.trace.execution_state.review_attempts[0].id = "attempt-newer"; }, /latest accepted ReviewGate attempt changed after seal/],
+  ["invalidated-freeze", (live) => { live.trace.execution_state.review_source_binding.freeze_id = "freeze-newer"; }, /source freeze changed or was invalidated after seal/],
+  ["wrong-verifier-lease", (live) => { live.trace.execution_state.owner.lease_generation += 1; }, /verifier lease or verification item ownership changed after seal/],
+]) {
+  const rejectedFresh = path.join(root, `fresh-${name}`);
+  const input = config({ fresh_root: rejectedFresh, oracle_command: [oracleStubPath] });
+  const live = liveAuthorizationState(input);
+  mutate(live);
+  assert.throws(() => admitFreshArmForTest(input, { testCodexCommand: codexCommand(codexStubPath), liveAuthorizationState: live }), pattern);
+  assert.equal(existsSync(rejectedFresh), false);
+}
 
 const relativeFresh = path.join(root, "fresh-relative-planr");
 assert.throws(
@@ -563,7 +592,7 @@ const artifactOverwrite = await run(config({
   oracle_command: [oracleStubPath],
 }), path.join(root, "artifact-overwrite-result.json"), path.join(root, "calls-artifact-overwrite.jsonl"), codexCommand(codexStubPath));
 assert.equal(artifactOverwrite.status, 1);
-assert.equal(JSON.parse(readFileSync(path.join(root, "artifact-overwrite-result.json"), "utf8")).failure_class, "instrumentation");
+assert.equal(JSON.parse(readFileSync(path.join(root, "artifact-overwrite-result.json"), "utf8")).failure_class, "admission");
 assert.equal(readFileSync(path.join(artifactOverwriteFresh, ".planr", "artifacts", "ac014", "BENCHMARK_RESULT.json"), "utf8"), "{}\n");
 assertCompleteArtifactSet(path.join(root, ".planr-ac014-failures", "fresh-artifact-overwrite"));
 
@@ -715,6 +744,31 @@ assert.match(outsideResult.error, /path does not exist|escapes fresh root/);
 assertCompleteArtifactSet(path.join(root, "fresh-outside"));
 
 function config(overrides) {
+  const freshRoot = overrides.fresh_root;
+  const effectiveHandoff = overrides.control_handoff ?? controlHandoff;
+  const effectiveCodexHome = overrides.codex_home ?? codexHome;
+  const artifactDir = overrides.artifact_dir ?? ".planr/artifacts/ac014";
+  const launchAuthorization = overrides.launch_authorization ?? {
+    schema_version: "planr.ac014.launch_authorization.v1",
+    launch_allowed: true,
+    plan_id: effectiveHandoff.plan_id,
+    feature_run_id: "frun-ac014-test",
+    verification_item_id: effectiveHandoff.verification_item_id,
+    obligation_id: effectiveHandoff.obligation_id,
+    accepted_gate_id: effectiveHandoff.accepted_fix_review_gate_id,
+    accepted_review_attempt_id: effectiveHandoff.accepted_review_attempt_id,
+    accepted_review_attempt_number: effectiveHandoff.accepted_review_attempt_number,
+    source_freeze: effectiveHandoff.source_freeze,
+    verifier_lease: { worker_id: "test-verifier", generation: 7 },
+    candidate: effectiveHandoff.planr_candidate,
+    fresh_identity: {
+      fresh_root: path.resolve(freshRoot),
+      result_path: path.resolve(`${freshRoot}.result-output.json`),
+      terminal_report_path: path.resolve(`${freshRoot}.terminal-report.json`),
+      artifact_path: path.join(path.resolve(freshRoot), artifactDir),
+      codex_home: path.resolve(effectiveCodexHome),
+    },
+  };
   return {
     schema_version: "planr.ac014.fresh_arm_run.v1",
     baseline_root: baseline,
@@ -724,15 +778,36 @@ function config(overrides) {
     evidence_migration_input: ".planr/evidence-migration.json",
     prompt_path: "prompt.txt",
     spec_path: "spec.txt",
-    codex_home: codexHome,
+    codex_home: effectiveCodexHome,
     codex_surface: "identical",
     oracle_id: "sparziele-exact-product-flow-v1",
     oracle_plan_id: "pln-dogfood",
     fixed_contract: fixedContract,
-    control_handoff: controlHandoff,
+    control_handoff: effectiveHandoff,
+    launch_authorization: launchAuthorization,
+    result_output_path: launchAuthorization.fresh_identity.result_path,
+    terminal_report_path: launchAuthorization.fresh_identity.terminal_report_path,
     ceilings: fixedCeilings,
     monitor_poll_ms: 20,
     ...overrides,
+  };
+}
+
+function liveAuthorizationState(input) {
+  const authorization = input.launch_authorization;
+  return {
+    trace: {
+      item: { id: authorization.verification_item_id, status: "picked", worker_id: authorization.verifier_lease.worker_id },
+      execution_state: {
+        feature_run: { id: authorization.feature_run_id, phase: "verification" },
+        owner: { role: "verifier", worker_id: authorization.verifier_lease.worker_id, lease_generation: authorization.verifier_lease.generation },
+        review_gate: { id: authorization.accepted_gate_id, status: "accepted", latest_attempt: authorization.accepted_review_attempt_number },
+        review_attempts: [{ id: authorization.accepted_review_attempt_id, attempt_number: authorization.accepted_review_attempt_number, verdict: "accepted", source_revision: authorization.candidate.source_revision }],
+        review_source_binding: { gate_id: authorization.accepted_gate_id, freeze_id: authorization.source_freeze.id, source_revision: authorization.source_freeze.source_revision, source_digest: authorization.source_freeze.source_digest },
+      },
+      proof: { attempts: [], receipts: [] },
+    },
+    attempts: [], receipts: [], claims: [],
   };
 }
 

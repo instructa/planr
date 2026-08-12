@@ -19,6 +19,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { DatabaseSync } from "node:sqlite";
 
 const EXPECTED = Object.freeze({
   candidate_version: "1.10.0-alpha.4",
@@ -58,6 +59,9 @@ async function runCli(argv) {
     throw new Error("usage: node scripts/ac014-fresh-arm-runner.mjs --input <run.json> [--admit-only] [--result <result.json>]");
   }
   const input = readJson(inputPath);
+  if (!admitOnly && path.resolve(requiredString(resultPath, "--result")) !== path.resolve(requiredString(input.result_output_path, "result_output_path"))) {
+    throw new Error("--result must equal the sealed result_output_path");
+  }
   const result = admitOnly ? admitFreshArmEntry(input) : await runFreshArmEntry(input);
   const serialized = `${JSON.stringify(result, null, 2)}\n`;
   if (resultPath) {
@@ -70,11 +74,17 @@ async function runCli(argv) {
 }
 
 export async function runFreshArmForTest(input, options = {}) {
-  return runFreshArmEntry(input, { testCodexCommand: options.testCodexCommand ?? null });
+  return runFreshArmEntry(input, {
+    testCodexCommand: options.testCodexCommand ?? null,
+    liveAuthorizationState: options.liveAuthorizationState ?? syntheticLiveAuthorizationState(input),
+  });
 }
 
 export function admitFreshArmForTest(input, options = {}) {
-  return admissionSummary(admitFreshArm(input, { testCodexCommand: options.testCodexCommand ?? null }));
+  return admissionSummary(admitFreshArm(input, {
+    testCodexCommand: options.testCodexCommand ?? null,
+    liveAuthorizationState: options.liveAuthorizationState ?? syntheticLiveAuthorizationState(input),
+  }));
 }
 
 function admitFreshArmEntry(input) {
@@ -93,6 +103,7 @@ function admissionSummary(admitted) {
     baseline_root: admitted.baselineRoot,
     control_handoff: admitted.controlHandoff,
     planr_candidate: admitted.planrCandidateIdentity,
+    launch_authorization: admitted.launchAuthorization,
     observed_contract: admitted.staticContract,
     side_effects: "none",
   };
@@ -191,6 +202,9 @@ async function runFreshArm(config, commands, options = {}) {
     applied: summarizeJson(migrationApplied),
   };
 
+  const immediatelyCurrent = options.liveAuthorizationState
+    ?? collectLiveAuthorizationState(config, planrBin, planrCandidateIdentity.root);
+  validateLaunchAuthorization(config, controlHandoff, planrCandidateIdentity, immediatelyCurrent, { preparedFreshRoot: freshCanonical });
   const codexHome = isolatedCodexHome(config, baselineRoot, freshCanonical);
   const armMonitor = createArmMonitor(config);
   const codexCommand = codexLaunchCommand(config, freshCanonical, options);
@@ -338,6 +352,8 @@ function admitFreshArm(config, options = {}) {
   const planrBin = path.resolve(declaredPlanrBin);
   assertExecutable(planrBin);
   const planrCandidateIdentity = validatePlanrCandidateIdentity(controlHandoff?.planr_candidate, planrBin);
+  const liveAuthorizationState = options.liveAuthorizationState ?? collectLiveAuthorizationState(config, planrBin, planrCandidateIdentity.root);
+  const launchAuthorization = validateLaunchAuthorization(config, controlHandoff, planrCandidateIdentity, liveAuthorizationState);
   validateOracleContract(config, planrCandidateIdentity);
   requiredString(config.project_id, "project_id");
   resolveFreshPath(config.db_path ?? ".planr/planr.sqlite", baselineRoot, "db_path", true);
@@ -365,8 +381,157 @@ function admitFreshArm(config, options = {}) {
     controlHandoff,
     planrBin,
     planrCandidateIdentity,
+    launchAuthorization,
     staticContract,
   };
+}
+
+function collectLiveAuthorizationState(config, planrBin, candidateRoot) {
+  const authorization = config.launch_authorization;
+  const trace = runCandidatePlanr(planrBin, candidateRoot, [
+    "trace", "item", requiredString(authorization?.verification_item_id, "launch_authorization.verification_item_id"), "--json",
+  ]);
+  const obligationId = requiredString(authorization?.obligation_id, "launch_authorization.obligation_id");
+  const attempts = runCandidatePlanr(planrBin, candidateRoot, ["evidence", "attempts", "--obligation", obligationId, "--json"]);
+  const receipts = runCandidatePlanr(planrBin, candidateRoot, ["evidence", "receipts", "--obligation", obligationId, "--json"]);
+  const database = new DatabaseSync(path.join(candidateRoot, ".planr/planr.sqlite"), { readOnly: true });
+  let claims;
+  try {
+    claims = database.prepare("SELECT freeze_id, obligation_id, capability_instance_id FROM feature_run_one_shot_claims WHERE run_id = ? ORDER BY freeze_id").all(authorization.feature_run_id);
+  } finally {
+    database.close();
+  }
+  return { trace, attempts: records(attempts, "attempts"), receipts: records(receipts, "receipts"), claims };
+}
+
+function runCandidatePlanr(binary, cwd, args) {
+  const result = spawnSync(binary, args, { cwd, encoding: "utf8", maxBuffer: 16 * 1024 * 1024, env: { ...process.env } });
+  let parsed;
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch {
+    throw admission(`live Planr authorization query was not structured: ${args.join(" ")}`, { stderr: trim(result.stderr) });
+  }
+  if (result.status !== 0 || parsed.ok === false || parsed.exit?.code > 0) {
+    throw admission(`live Planr authorization query failed: ${args.join(" ")}`, { stderr: trim(result.stderr), response: parsed });
+  }
+  return parsed.object ?? parsed;
+}
+
+function validateLaunchAuthorization(config, controlHandoff, candidate, live, { preparedFreshRoot = null } = {}) {
+  const authorization = config.launch_authorization;
+  if (!authorization || authorization.schema_version !== "planr.ac014.launch_authorization.v1" || authorization.launch_allowed !== true) {
+    throw admission("AC-014 launch_allowed must be true in an immutable post-review seal");
+  }
+  for (const field of ["plan_id", "feature_run_id", "verification_item_id", "obligation_id", "accepted_gate_id", "accepted_review_attempt_id"]) {
+    requiredString(authorization[field], `launch_authorization.${field}`);
+  }
+  if (!Number.isInteger(authorization.accepted_review_attempt_number) || authorization.accepted_review_attempt_number < 1) {
+    throw admission("launch_authorization accepted attempt number must be positive");
+  }
+  if (authorization.plan_id !== controlHandoff.plan_id || authorization.verification_item_id !== controlHandoff.verification_item_id
+    || authorization.obligation_id !== controlHandoff.obligation_id || authorization.accepted_gate_id !== controlHandoff.accepted_fix_review_gate_id
+    || authorization.accepted_review_attempt_id !== controlHandoff.accepted_review_attempt_id
+    || authorization.accepted_review_attempt_number !== controlHandoff.accepted_review_attempt_number) {
+    throw admission("launch authorization and reviewed control handoff mismatch");
+  }
+  const freeze = authorization.source_freeze;
+  if (!freeze || !/^freeze-[0-9a-f]+$/.test(freeze.id ?? "") || !/^sha256:[0-9a-f]{64}$/.test(freeze.source_digest ?? "")
+    || freeze.source_revision !== candidate.source_revision || freeze.source_tree !== candidate.source_tree) {
+    throw admission("launch authorization source freeze identity mismatch");
+  }
+  if (controlHandoff.source_freeze?.id !== freeze.id || controlHandoff.source_freeze?.source_revision !== freeze.source_revision
+    || controlHandoff.source_freeze?.source_tree !== freeze.source_tree || controlHandoff.source_freeze?.source_digest !== freeze.source_digest) {
+    throw admission("launch authorization and control handoff source freeze mismatch");
+  }
+  const sealedCandidate = authorization.candidate;
+  if (!sealedCandidate || sealedCandidate.root !== candidate.root || sealedCandidate.source_revision !== candidate.source_revision
+    || sealedCandidate.source_tree !== candidate.source_tree || path.resolve(sealedCandidate.binary_path ?? "") !== candidate.binary_path
+    || sealedCandidate.binary_sha256 !== candidate.binary_sha256) {
+    throw admission("launch authorization candidate identity mismatch");
+  }
+  const lease = authorization.verifier_lease;
+  if (!lease || typeof lease.worker_id !== "string" || lease.worker_id.length === 0 || !Number.isInteger(lease.generation) || lease.generation < 1) {
+    throw admission("launch authorization verifier lease is invalid");
+  }
+  if (!Object.prototype.hasOwnProperty.call(config, "codex_home")) {
+    throw admission("AC-014 codex_home must declare an isolated persistent benchmark CODEX_HOME");
+  }
+  const identity = authorization.fresh_identity;
+  const expectedArtifact = path.join(path.resolve(config.fresh_root), config.artifact_dir ?? ".planr/artifacts/ac014");
+  const expectedPaths = {
+    fresh_root: path.resolve(config.fresh_root),
+    result_path: path.resolve(requiredString(config.result_output_path, "result_output_path")),
+    terminal_report_path: path.resolve(requiredString(config.terminal_report_path, "terminal_report_path")),
+    artifact_path: expectedArtifact,
+    codex_home: path.resolve(requiredString(config.codex_home, "codex_home")),
+  };
+  for (const [key, value] of Object.entries(expectedPaths)) {
+    if (identity?.[key] !== value) throw admission(`launch authorization fresh identity mismatch: ${key}`);
+  }
+
+  const trace = live?.trace;
+  const state = trace?.execution_state;
+  const gate = state?.review_gate;
+  const binding = state?.review_source_binding;
+  const accepted = (state?.review_attempts ?? []).find((entry) => entry.attempt_number === gate?.latest_attempt);
+  if (!gate || gate.id !== authorization.accepted_gate_id || gate.status !== "accepted") {
+    throw admission("live ReviewGate is not the sealed accepted gate");
+  }
+  if (!accepted || accepted.verdict !== "accepted" || accepted.id !== authorization.accepted_review_attempt_id
+    || accepted.attempt_number !== authorization.accepted_review_attempt_number || accepted.source_revision !== candidate.source_revision) {
+    throw admission("live latest accepted ReviewGate attempt changed after seal");
+  }
+  if (!binding || binding.gate_id !== gate.id || binding.freeze_id !== freeze.id || binding.source_revision !== freeze.source_revision
+    || binding.source_digest !== freeze.source_digest) {
+    throw admission("live source freeze changed or was invalidated after seal");
+  }
+  const owner = state?.owner;
+  if (state?.feature_run?.id !== authorization.feature_run_id || state.feature_run.phase !== "verification"
+    || owner?.role !== "verifier" || owner.worker_id !== lease.worker_id || owner.lease_generation !== lease.generation
+    || trace.item?.id !== authorization.verification_item_id || trace.item.worker_id !== lease.worker_id
+    || !["picked", "running"].includes(trace.item.status)) {
+    throw admission("live verifier lease or verification item ownership changed after seal");
+  }
+  if ((trace.proof?.attempts ?? []).length || (trace.proof?.receipts ?? []).length
+    || (live.attempts ?? []).length || (live.receipts ?? []).length || (live.claims ?? []).length) {
+    throw admission("one-shot claim, attempt, or receipt already exists");
+  }
+  for (const key of ["fresh_root", "result_path", "terminal_report_path", "artifact_path"]) {
+    if (key === "fresh_root" && preparedFreshRoot !== null) {
+      if (realpathSync(identity[key]) !== preparedFreshRoot) throw admission("prepared fresh root identity changed before Codex launch");
+      continue;
+    }
+    if (existsSync(identity[key])) throw admission(`sealed one-shot path is no longer unused: ${key}`);
+  }
+  const codexHome = canonicalExistingDir(identity.codex_home, "launch_authorization.fresh_identity.codex_home");
+  if (allFiles(codexHome).length !== 0) throw admission("sealed CODEX_HOME already contains session or artifact files");
+  return structuredClone(authorization);
+}
+
+function syntheticLiveAuthorizationState(config) {
+  const authorization = config?.launch_authorization;
+  const candidate = authorization?.candidate ?? config?.control_handoff?.planr_candidate;
+  const freeze = authorization?.source_freeze ?? config?.control_handoff?.source_freeze;
+  const lease = authorization?.verifier_lease ?? { worker_id: "test-verifier", generation: 1 };
+  return {
+    trace: {
+      item: { id: authorization?.verification_item_id, status: "picked", worker_id: lease.worker_id },
+      execution_state: {
+        feature_run: { id: authorization?.feature_run_id, phase: "verification" },
+        owner: { role: "verifier", worker_id: lease.worker_id, lease_generation: lease.generation },
+        review_gate: { id: authorization?.accepted_gate_id, status: "accepted", latest_attempt: authorization?.accepted_review_attempt_number },
+        review_attempts: [{ id: authorization?.accepted_review_attempt_id, attempt_number: authorization?.accepted_review_attempt_number, verdict: "accepted", source_revision: candidate?.source_revision }],
+        review_source_binding: { gate_id: authorization?.accepted_gate_id, freeze_id: freeze?.id, source_revision: freeze?.source_revision, source_digest: freeze?.source_digest },
+      },
+      proof: { attempts: [], receipts: [] },
+    },
+    attempts: [], receipts: [], claims: [],
+  };
+}
+
+function records(value, key) {
+  return value?.object?.[key] ?? value?.[key] ?? [];
 }
 
 function runEvidencePreparation(config, freshRoot, planrBin, commands) {
