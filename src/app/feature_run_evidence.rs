@@ -648,6 +648,76 @@ impl App {
         Ok((item_id.clone(), terminal.id))
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn claim_non_repeatable_one_shot_in_transaction(
+        &self,
+        conn: &rusqlite::Connection,
+        lease: &CanonicalFeatureRunEvidenceLease,
+        obligation_id: &str,
+        capability_instance_id: &str,
+        retry_of: Option<&str>,
+        attempt_index: u32,
+        max_attempts: u32,
+        repeatability: &str,
+    ) -> Result<()> {
+        if repeatability != "non_repeatable_one_shot" {
+            return Ok(());
+        }
+        if retry_of.is_some() || attempt_index != 0 || max_attempts != 1 {
+            bail!(
+                "non_repeatable_one_shot permits exactly one fresh initial attempt per FeatureRun source freeze"
+            );
+        }
+        if !conn.is_autocommit() {
+            bail!("non_repeatable_one_shot claim requires an autocommit boundary");
+        }
+        conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| -> Result<()> {
+            self.validate_feature_run_evidence_lease(conn, lease)?;
+            let existing = conn
+                .query_row(
+                    "SELECT obligation_id, capability_instance_id
+                     FROM feature_run_one_shot_claims
+                     WHERE freeze_id = ?1",
+                    [&lease.freeze_id],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .optional()?;
+            if let Some((claimed_obligation, claimed_capability)) = existing {
+                bail!(
+                    "non_repeatable_one_shot allowance already consumed for FeatureRun {} source freeze {} by obligation {} capability {}",
+                    lease.run_id,
+                    lease.freeze_id,
+                    claimed_obligation,
+                    claimed_capability,
+                );
+            }
+            conn.execute(
+                "INSERT INTO feature_run_one_shot_claims(
+                   freeze_id, run_id, obligation_id, capability_instance_id,
+                   verifier_worker_id, lease_generation, attempt_index, max_attempts
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, 1)",
+                params![
+                    lease.freeze_id,
+                    lease.run_id,
+                    obligation_id,
+                    capability_instance_id,
+                    lease.verifier_worker_id,
+                    lease.lease_generation,
+                ],
+            )?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => conn.execute_batch("COMMIT")?,
+            Err(error) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
     // Admission and reservation share one immediate transaction. Every bounded reservation stores
     // the exact numeric maxima selected from the persisted snapshot; no caller projection is ever
     // converted into an observation or metering claim.
@@ -2500,6 +2570,7 @@ mod tests {
         CapabilityBinding, PermissionState, RawResultRef, Sha256Digest, SourceBinding,
         TrustedProvenance, TrustedReceiptInput, VantagePoint, build_trusted_receipt,
     };
+    use crate::execution_run::FeatureRunTerminalReason;
     use crate::storage::ensure_schema;
     use rusqlite::{Connection, params};
     use serde_json::Map;
@@ -2631,11 +2702,16 @@ allow_overwrite = true
         write_evidence_policy(root, "repeatable", "printf '{\"status\":\"ready\"}'")
     }
 
-    fn write_one_shot_failure_evidence_policy(root: &Path) -> String {
-        write_evidence_policy(root, "non_repeatable_one_shot", "printf 'not-json'")
+    fn write_evidence_policy(root: &Path, repeatability: &str, shell_script: &str) -> String {
+        write_evidence_policy_with_probe(root, repeatability, shell_script, shell_script)
     }
 
-    fn write_evidence_policy(root: &Path, repeatability: &str, shell_script: &str) -> String {
+    fn write_evidence_policy_with_probe(
+        root: &Path,
+        repeatability: &str,
+        shell_script: &str,
+        probe_shell_script: &str,
+    ) -> String {
         let schema_path =
             root.join(".planr/evidence/schemas/com.example.ready.status.v1.schema.json");
         let manifest_path = root.join(".planr/evidence/adapters/ready.manifest.json");
@@ -2666,9 +2742,19 @@ allow_overwrite = true
             "stderr_limit_bytes": 4096,
             "payload_schema": payload_schema
         });
+        let probe_execution = json!({
+            "kind": "process",
+            "executable": "sh",
+            "args": ["-c", probe_shell_script],
+            "working_directory": ".",
+            "timeout_ms": 5000,
+            "stdout_limit_bytes": 4096,
+            "stderr_limit_bytes": 4096,
+            "payload_schema": payload_schema
+        });
         let adapter_digest = crate::canonical_json::sha256_json_digest(&json!({
             "schema_version": "planr.process_adapter.binding.v1",
-            "execution_contract": execution,
+            "execution_contract": probe_execution,
             "file_arguments": []
         }))
         .unwrap();
@@ -2690,7 +2776,7 @@ allow_overwrite = true
             "repeatability": repeatability,
             "independence": "repository-owned test adapter",
             "blind_spots": [],
-            "availability_probe": {"kind": "process", "execution": execution}
+            "availability_probe": {"kind": "process", "execution": probe_execution}
         });
         std::fs::write(
             &manifest_path,
@@ -2767,7 +2853,7 @@ allow_overwrite = true
         policy_digest
     }
 
-    fn add_product_failure_evidence_adapter(root: &Path) -> String {
+    fn add_product_failure_evidence_adapter(root: &Path, repeatability: &str) -> String {
         let policy_path = root.join(".planr/evidence.yaml");
         let schema_path =
             root.join(".planr/evidence/schemas/com.example.product.status.v1.schema.json");
@@ -2828,7 +2914,7 @@ allow_overwrite = true
             "permissions": {"network": "none", "filesystem": "read_workspace"},
             "costs": {},
             "determinism": "deterministic",
-            "repeatability": "repeatable",
+            "repeatability": repeatability,
             "independence": "repository-owned product-failure adapter",
             "blind_spots": [],
             "availability_probe": {"kind": "process", "execution": probe_execution}
@@ -2935,6 +3021,102 @@ allow_overwrite = true
                 .is_none()
         );
         (root, app, run.run.id, freeze_id)
+    }
+
+    fn one_shot_verification_fixture(
+        shell_script: &str,
+        database_path: Option<PathBuf>,
+    ) -> (tempfile::TempDir, App, String, Value) {
+        one_shot_verification_fixture_with_probe(shell_script, shell_script, database_path)
+    }
+
+    fn one_shot_verification_fixture_with_probe(
+        shell_script: &str,
+        probe_shell_script: &str,
+        database_path: Option<PathBuf>,
+    ) -> (tempfile::TempDir, App, String, Value) {
+        let root = tempfile::tempdir().unwrap();
+        write_budget_policy(root.path());
+        let policy_digest = write_evidence_policy_with_probe(
+            root.path(),
+            "non_repeatable_one_shot",
+            shell_script,
+            probe_shell_script,
+        );
+        initialize_git(root.path());
+        let app = if let Some(database_path) = database_path {
+            let conn = Connection::open(&database_path).unwrap();
+            conn.busy_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            ensure_schema(&conn).unwrap();
+            conn.execute(
+                "INSERT INTO projects(id, name, root_path, status, created_at, updated_at) VALUES ('project-a', 'Project', '.', 'active', datetime('now'), datetime('now'))",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO plans(id, project_id, stage, path, title, slug, parse_status, content_hash, created_at, updated_at) VALUES ('plan-a', 'project-a', 'build', 'plan-a.md', 'Plan', 'plan', 'ok', 'sha256:plan', datetime('now'), datetime('now'))",
+                [],
+            )
+            .unwrap();
+            App::new(conn, root.path().to_path_buf(), database_path, true, false)
+        } else {
+            test_app(root.path().to_path_buf())
+        };
+        add_outcome(&app, "item-one-shot");
+        add_verification_outcome(&app, "item-one-shot-verifier");
+        let run = app
+            .ensure_outcome_feature_run("item-one-shot")
+            .unwrap()
+            .unwrap();
+        app.conn
+            .execute(
+                "UPDATE feature_run_role_leases SET worker_id = 'maker-other' WHERE run_id = ?1 AND role = 'maker' AND released_at IS NULL",
+                [&run.run.id],
+            )
+            .unwrap();
+        app.conn
+            .execute(
+                "INSERT INTO proof_obligations(
+                  id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
+                  binding, observation_requirements_json, fixture_policy_json, freshness_policy_json,
+                  assurance_policy_json, retry_aggregation, policy_digest, config_digest,
+                  source_digest, supersedes_obligation_id, created_at, obligation_shape
+                ) VALUES (
+                  'pob-one-shot', 'project-a', 'plan-a', 'item-one-shot', 'criterion-one-shot', 1,
+                  'one-shot process', 1, ?1, '{}', '{}', '{}', 'all_applicable_pass', ?2, ?2, ?2, NULL,
+                  datetime('now'), 'semantic_v1'
+                )",
+                params![
+                    json!([{
+                        "id": "obs-one-shot",
+                        "type": "com.example.ready.status",
+                        "subject": "one-shot process",
+                        "expected": {"status": "ready"},
+                        "target": {"kind": "process", "uri": "local://ready"},
+                        "payload_schema": {"schema_ref": "com.example.ready.status@v1"}
+                    }])
+                    .to_string(),
+                    policy_digest,
+                ],
+            )
+            .unwrap();
+        assert!(
+            app.evidence_readiness_value(EvidenceCoverageScope::Plan, "plan-a")
+                .unwrap_err()
+                .to_string()
+                .contains("--work-type verification --json")
+        );
+        let packet = app
+            .verification_work_packet_value("plan-a", false)
+            .unwrap()
+            .unwrap();
+        (
+            root,
+            app,
+            run.run.id,
+            packet["work_packet"]["sealed_run_index"].clone(),
+        )
     }
 
     #[test]
@@ -3320,62 +3502,9 @@ allow_overwrite = true
     }
 
     #[test]
-    fn sealed_one_shot_failure_atomically_commits_evidence_and_terminal_settlement() {
-        let root = tempfile::tempdir().unwrap();
-        write_budget_policy(root.path());
-        let policy_digest = write_one_shot_failure_evidence_policy(root.path());
-        initialize_git(root.path());
-        let app = test_app(root.path().to_path_buf());
-        add_outcome(&app, "item-one-shot");
-        add_verification_outcome(&app, "item-one-shot-verifier");
-        let run = app
-            .ensure_outcome_feature_run("item-one-shot")
-            .unwrap()
-            .unwrap();
-        app.conn
-            .execute(
-                "UPDATE feature_run_role_leases SET worker_id = 'maker-other' WHERE run_id = ?1 AND role = 'maker' AND released_at IS NULL",
-                [&run.run.id],
-            )
-            .unwrap();
-        app.conn
-            .execute(
-                "INSERT INTO proof_obligations(
-                  id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
-                  binding, observation_requirements_json, fixture_policy_json, freshness_policy_json,
-                  assurance_policy_json, retry_aggregation, policy_digest, config_digest,
-                  source_digest, supersedes_obligation_id, created_at, obligation_shape
-                ) VALUES (
-                  'pob-one-shot', 'project-a', 'plan-a', 'item-one-shot', 'criterion-one-shot', 1,
-                  'one-shot process', 1, ?1, '{}', '{}', '{}', 'all_applicable_pass', ?2, ?2, ?2, NULL,
-                  datetime('now'), 'semantic_v1'
-                )",
-                params![
-                    json!([{
-                        "id": "obs-one-shot",
-                        "type": "com.example.ready.status",
-                        "subject": "one-shot process",
-                        "expected": {"status": "ready"},
-                        "target": {"kind": "process", "uri": "local://ready"},
-                        "payload_schema": {"schema_ref": "com.example.ready.status@v1"}
-                    }])
-                    .to_string(),
-                    policy_digest,
-                ],
-            )
-            .unwrap();
-        assert!(
-            app.evidence_readiness_value(EvidenceCoverageScope::Plan, "plan-a")
-                .unwrap_err()
-                .to_string()
-                .contains("--work-type verification --json")
-        );
-        let packet = app
-            .verification_work_packet_value("plan-a", false)
-            .unwrap()
-            .unwrap();
-        let run_index = packet["work_packet"]["sealed_run_index"].clone();
-
+    fn one_shot_claim_survives_late_settlement_rollback_and_blocks_relaunch() {
+        let (_root, app, run_id, run_index) =
+            one_shot_verification_fixture("printf 'not-json'", None);
         app.conn
             .execute_batch(
                 "CREATE TRIGGER reject_one_shot_settlement
@@ -3402,16 +3531,45 @@ allow_overwrite = true
         }
         assert_eq!(
             ExecutionRunRepository::new(&app.conn)
-                .feature_run(&run.run.id)
+                .feature_run(&run_id)
                 .unwrap()
                 .run
                 .phase,
             FeatureRunPhase::Verification
         );
+        assert_eq!(
+            app.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM feature_run_one_shot_claims",
+                    [],
+                    |row| row.get::<_, u64>(0),
+                )
+                .unwrap(),
+            1
+        );
 
         app.conn
             .execute_batch("DROP TRIGGER reject_one_shot_settlement")
             .unwrap();
+        let error = app.evidence_run_value(run_index).unwrap_err();
+        assert!(
+            error.to_string().contains("allowance already consumed"),
+            "{error}"
+        );
+        assert_eq!(
+            app.conn
+                .query_row("SELECT COUNT(*) FROM evidence_attempts", [], |row| {
+                    row.get::<_, u64>(0)
+                })
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn sealed_one_shot_nonpassing_receipt_atomically_settles_terminal_exhaustion() {
+        let (_root, app, run_id, run_index) =
+            one_shot_verification_fixture("printf 'not-json'", None);
         let result = app.evidence_run_value(run_index).unwrap();
         assert_eq!(result["verdict"], "failed");
         assert_eq!(
@@ -3427,10 +3585,144 @@ allow_overwrite = true
             1
         );
         let persisted = ExecutionRunRepository::new(&app.conn)
-            .feature_run(&run.run.id)
+            .feature_run(&run_id)
             .unwrap();
         assert_eq!(persisted.run.phase, FeatureRunPhase::Cancelled);
         assert!(persisted.run.role_owners.is_empty());
+    }
+
+    #[test]
+    fn passed_one_shot_rejects_second_fresh_initial_before_adapter_launch() {
+        let marker = tempfile::NamedTempFile::new().unwrap();
+        let shell_script = format!(
+            "printf launched >> '{}'; printf '{{\"status\":\"ready\"}}'",
+            marker.path().display()
+        );
+        let (_root, app, _run_id, run_index) =
+            one_shot_verification_fixture_with_probe(&shell_script, "printf ready", None);
+
+        let first = app.evidence_run_value(run_index.clone()).unwrap();
+        assert_eq!(first["verdict"], "passed");
+        let second = app.evidence_run_value(run_index).unwrap_err();
+        assert!(
+            second.to_string().contains("allowance already consumed"),
+            "{second}"
+        );
+        assert_eq!(std::fs::read_to_string(marker.path()).unwrap(), "launched");
+        assert_eq!(
+            app.conn
+                .query_row("SELECT COUNT(*) FROM evidence_attempts", [], |row| {
+                    row.get::<_, u64>(0)
+                })
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn product_failed_one_shot_is_terminal_without_repair_or_replay() {
+        let (_root, app, run_id, run_index) =
+            one_shot_verification_fixture_with_probe("exit 77", "printf ready", None);
+        let result = app.evidence_run_value(run_index).unwrap();
+
+        assert_eq!(result["verdict"], "failed");
+        assert_eq!(
+            result["terminal_exhaustion"]["execution_state"]["reason_code"],
+            "verification_attempts_exhausted"
+        );
+        assert_eq!(
+            result["results"][0]["receipt"]["proof_gaps"],
+            json!(["product_failed"])
+        );
+        assert!(result["results"][0]["product_finding"].is_null());
+        assert_eq!(
+            app.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM feature_run_evidence_invalidations",
+                    [],
+                    |row| row.get::<_, u64>(0),
+                )
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            ExecutionRunRepository::new(&app.conn)
+                .feature_run(&run_id)
+                .unwrap()
+                .run
+                .terminal_reason,
+            Some(FeatureRunTerminalReason::VerificationAttemptsExhausted)
+        );
+    }
+
+    #[test]
+    fn concurrent_one_shot_initials_claim_once_and_spawn_once() {
+        use std::sync::{Arc, Barrier};
+
+        let marker = tempfile::NamedTempFile::new().unwrap();
+        let database_dir = tempfile::tempdir().unwrap();
+        let database_path = database_dir.path().join("one-shot.sqlite");
+        let shell_script = format!(
+            "printf launched >> '{}'; sleep 0.2; printf '{{\"status\":\"ready\"}}'",
+            marker.path().display()
+        );
+        let (root, app, _run_id, run_index) = one_shot_verification_fixture_with_probe(
+            &shell_script,
+            "printf ready",
+            Some(database_path.clone()),
+        );
+        drop(app);
+
+        let barrier = Arc::new(Barrier::new(3));
+        let mut threads = Vec::new();
+        for _ in 0..2 {
+            let barrier = Arc::clone(&barrier);
+            let database_path = database_path.clone();
+            let repository_root = root.path().to_path_buf();
+            let run_index = run_index.clone();
+            threads.push(std::thread::spawn(move || {
+                let conn = crate::storage::open_db(&database_path).unwrap();
+                let app = App::new(conn, repository_root, database_path, true, false);
+                barrier.wait();
+                app.evidence_run_value(run_index)
+            }));
+        }
+        barrier.wait();
+        let results = threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            results.iter().filter(|result| result.is_ok()).count(),
+            1,
+            "{results:?}"
+        );
+        let rejected = results
+            .iter()
+            .find_map(|result| result.as_ref().err())
+            .expect("one concurrent contender must be rejected");
+        assert!(
+            rejected.to_string().contains("allowance already consumed"),
+            "{rejected}"
+        );
+        assert_eq!(std::fs::read_to_string(marker.path()).unwrap(), "launched");
+        let conn = Connection::open(database_path).unwrap();
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM feature_run_one_shot_claims",
+                [],
+                |row| row.get::<_, u64>(0),
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM evidence_attempts", [], |row| {
+                row.get::<_, u64>(0)
+            })
+            .unwrap(),
+            1
+        );
     }
 
     #[test]
@@ -3438,7 +3730,7 @@ allow_overwrite = true
         let root = tempfile::tempdir().unwrap();
         write_budget_policy(root.path());
         write_ready_evidence_policy(root.path());
-        let policy_digest = add_product_failure_evidence_adapter(root.path());
+        let policy_digest = add_product_failure_evidence_adapter(root.path(), "repeatable");
         initialize_git(root.path());
         let app = test_app(root.path().to_path_buf());
         for item_id in ["item-batch-a", "item-batch-b"] {

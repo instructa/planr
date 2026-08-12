@@ -215,6 +215,52 @@ CREATE TABLE IF NOT EXISTS feature_run_source_freezes(
 CREATE UNIQUE INDEX IF NOT EXISTS idx_feature_run_source_freezes_active
   ON feature_run_source_freezes(run_id) WHERE status = 'active';
 
+CREATE TABLE IF NOT EXISTS feature_run_one_shot_claims(
+  freeze_id TEXT PRIMARY KEY REFERENCES feature_run_source_freezes(id) ON DELETE RESTRICT,
+  run_id TEXT NOT NULL REFERENCES feature_runs(id) ON DELETE RESTRICT,
+  obligation_id TEXT NOT NULL REFERENCES proof_obligations(id) ON DELETE RESTRICT,
+  capability_instance_id TEXT NOT NULL REFERENCES verification_capability_instances(id) ON DELETE RESTRICT,
+  verifier_worker_id TEXT NOT NULL CHECK(length(trim(verifier_worker_id)) > 0),
+  lease_generation INTEGER NOT NULL CHECK(lease_generation >= 1),
+  attempt_index INTEGER NOT NULL CHECK(attempt_index = 0),
+  max_attempts INTEGER NOT NULL CHECK(max_attempts = 1),
+  claimed_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(run_id, freeze_id)
+);
+
+CREATE TRIGGER IF NOT EXISTS feature_run_one_shot_claims_integrity
+BEFORE INSERT ON feature_run_one_shot_claims
+WHEN NOT EXISTS (
+  SELECT 1
+  FROM feature_run_source_freezes AS freeze
+  JOIN feature_runs AS run ON run.id = freeze.run_id
+  JOIN feature_run_role_leases AS lease ON lease.run_id = run.id
+  WHERE freeze.id = NEW.freeze_id
+    AND freeze.run_id = NEW.run_id
+    AND freeze.status = 'active'
+    AND run.status = 'active'
+    AND run.phase = 'verification'
+    AND lease.role = 'verifier'
+    AND lease.worker_id = NEW.verifier_worker_id
+    AND lease.lease_generation = NEW.lease_generation
+    AND lease.released_at IS NULL
+)
+BEGIN
+  SELECT RAISE(ABORT, 'invalid non-repeatable one-shot FeatureRun claim');
+END;
+
+CREATE TRIGGER IF NOT EXISTS feature_run_one_shot_claims_no_update
+BEFORE UPDATE ON feature_run_one_shot_claims
+BEGIN
+  SELECT RAISE(ABORT, 'non-repeatable one-shot FeatureRun claims are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS feature_run_one_shot_claims_no_delete
+BEFORE DELETE ON feature_run_one_shot_claims
+BEGIN
+  SELECT RAISE(ABORT, 'non-repeatable one-shot FeatureRun claims are durable');
+END;
+
 CREATE TABLE IF NOT EXISTS feature_run_evidence_invalidations(
   id TEXT PRIMARY KEY,
   run_id TEXT NOT NULL REFERENCES feature_runs(id) ON DELETE CASCADE,

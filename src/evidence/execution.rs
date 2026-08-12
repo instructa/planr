@@ -178,13 +178,14 @@ pub(crate) fn run_configured_process_adapter(
     conn: &Connection,
     input: ConfiguredProcessRunInput<'_>,
 ) -> Result<ConfiguredProcessRunOutput> {
-    run_configured_process_adapter_guarded(conn, input, &|_| Ok(()), &|_, _, _| Ok(()))
+    run_configured_process_adapter_guarded(conn, input, &|_| Ok(()), &|_| Ok(()), &|_, _, _| Ok(()))
 }
 
 pub(crate) fn run_configured_process_adapter_guarded(
     conn: &Connection,
     input: ConfiguredProcessRunInput<'_>,
     feature_run_guard: &dyn Fn(&Connection) -> Result<()>,
+    before_adapter_launch: &dyn Fn(&Connection) -> Result<()>,
     trusted_evidence_settlement: &dyn Fn(&Connection, &EvidenceAttempt, &Value) -> Result<()>,
 ) -> Result<ConfiguredProcessRunOutput> {
     ensure_autocommit_storage_boundary(conn)?;
@@ -269,6 +270,7 @@ pub(crate) fn run_configured_process_adapter_guarded(
         "environment": input.environment,
         "fixture_disclosure": input.fixture_disclosure,
     }))?;
+    before_adapter_launch(conn)?;
     let started_at = timestamp();
     let output = match &resolved {
         ResolvedProcessRunResolution::Runnable(resolved) => {

@@ -1399,7 +1399,8 @@ impl App {
                             || gap.get("reason").and_then(Value::as_str) == Some("product_failed")
                     })
                 });
-            if product_failed {
+            let terminally_exhausted = !result["terminal_exhaustion"].is_null();
+            if product_failed && !terminally_exhausted {
                 let lease = result["feature_run_lease"].as_object().ok_or_else(|| {
                     anyhow!("sealed product finding is missing its FeatureRun lease")
                 })?;
@@ -1410,7 +1411,6 @@ impl App {
                     obligation_id,
                 ));
             }
-            let terminally_exhausted = !result["terminal_exhaustion"].is_null();
             results.push(result);
             if terminally_exhausted {
                 break;
@@ -1783,21 +1783,31 @@ impl App {
             };
             self.validate_feature_run_evidence_lease(conn, lease)
         };
+        let one_shot_capability_instance_id = instance.id.as_str().to_string();
+        let one_shot_retry_of = retry_of.as_ref().map(|id| id.as_str().to_string());
+        let claim_one_shot = |conn: &rusqlite::Connection| -> Result<()> {
+            let Some(lease) = lease.as_ref() else {
+                return Ok(());
+            };
+            self.claim_non_repeatable_one_shot_in_transaction(
+                conn,
+                lease,
+                obligation_id.as_str(),
+                &one_shot_capability_instance_id,
+                one_shot_retry_of.as_deref(),
+                attempt_index,
+                max_attempts,
+                &manifest.repeatability,
+            )
+        };
         let terminal_settlement = RefCell::new(None);
         let settle_trusted_evidence = |conn: &rusqlite::Connection,
                                        attempt: &EvidenceAttempt,
-                                       receipt: &Value| {
+                                       _receipt: &Value| {
             let verdict = evidence_run_verdict(attempt.status, &attempt.exit, &attempt.raw_result);
-            let product_failed = receipt["proof_gaps"].as_array().is_some_and(|gaps| {
-                gaps.iter().any(|gap| {
-                    gap.as_str() == Some("product_failed")
-                        || gap.get("reason").and_then(Value::as_str) == Some("product_failed")
-                })
-            });
             if settle_terminal_exhaustion_atomically
                 && should_settle_terminal_exhaustion(
                     &verdict,
-                    product_failed,
                     lease.is_some(),
                     &manifest.repeatability,
                     attempt_index,
@@ -1838,6 +1848,7 @@ impl App {
                 cancellation: &cancellation,
             },
             &guard,
+            &claim_one_shot,
             &settle_trusted_evidence,
         );
         let output = output?;
@@ -1866,20 +1877,21 @@ impl App {
                         || gap.get("reason").and_then(Value::as_str) == Some("product_failed")
                 })
             });
-        let product_finding = if product_failed && route_product_finding {
-            lease
-                .as_ref()
-                .map(|lease| {
-                    self.route_evidence_product_finding_value(
-                        &lease.run_id,
-                        &lease.freeze_id,
-                        obligation_id.as_str(),
-                    )
-                })
-                .transpose()?
-        } else {
-            None
-        };
+        let product_finding =
+            if product_failed && route_product_finding && terminal_settlement.borrow().is_none() {
+                lease
+                    .as_ref()
+                    .map(|lease| {
+                        self.route_evidence_product_finding_value(
+                            &lease.run_id,
+                            &lease.freeze_id,
+                            obligation_id.as_str(),
+                        )
+                    })
+                    .transpose()?
+            } else {
+                None
+            };
         let terminal_exhaustion = terminal_settlement
             .into_inner()
             .map(|(item_id, run_id)| {
@@ -3404,14 +3416,12 @@ fn evidence_run_verdict(status: AttemptStatus, exit: &Value, raw_result: &Value)
 
 fn should_settle_terminal_exhaustion(
     verdict: &str,
-    product_failed: bool,
     has_feature_run_lease: bool,
     repeatability: &str,
     attempt_index: u32,
     max_attempts: u32,
 ) -> bool {
     verdict != "passed"
-        && !product_failed
         && has_feature_run_lease
         && repeatability == "non_repeatable_one_shot"
         && max_attempts > 0
@@ -4817,7 +4827,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_exhaustion_requires_one_shot_final_non_product_attempt_with_lease() {
+    fn terminal_exhaustion_requires_one_shot_final_non_passing_attempt_with_lease() {
         assert_eq!(
             admitted_max_attempts("non_repeatable_one_shot", None).unwrap(),
             1
@@ -4831,18 +4841,16 @@ mod tests {
         assert_eq!(admitted_max_attempts("repeatable", None).unwrap(), 3);
         assert!(should_settle_terminal_exhaustion(
             "failed",
-            false,
             true,
             "non_repeatable_one_shot",
             0,
             1,
         ));
         for candidate in [
-            ("passed", false, true, "non_repeatable_one_shot", 0, 1),
-            ("failed", true, true, "non_repeatable_one_shot", 0, 1),
-            ("failed", false, false, "non_repeatable_one_shot", 0, 1),
-            ("failed", false, true, "repeatable", 0, 1),
-            ("failed", false, true, "non_repeatable_one_shot", 0, 2),
+            ("passed", true, "non_repeatable_one_shot", 0, 1),
+            ("failed", false, "non_repeatable_one_shot", 0, 1),
+            ("failed", true, "repeatable", 0, 1),
+            ("failed", true, "non_repeatable_one_shot", 0, 2),
         ] {
             assert!(!should_settle_terminal_exhaustion(
                 candidate.0,
@@ -4850,7 +4858,6 @@ mod tests {
                 candidate.2,
                 candidate.3,
                 candidate.4,
-                candidate.5,
             ));
         }
     }
