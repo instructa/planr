@@ -5,6 +5,8 @@ description: Prepare a long-running Planr goal as a checked plan, linked map, du
 
 # Planr Goal
 
+Read and apply the canonical [Evidence ownership guard](../planr/SKILL.md#evidence-ownership-guard) before goal preparation.
+
 Prep only. Compile intent into durable Planr state, then stop. During goal prep, do not implement, refactor, verify, or touch product code. Allowed work is reading Planr state, clarifying material ambiguity, creating/refining/checking plans, building/linking the map, storing the contract, and printing the loop handoff.
 
 Evaluation subcommands run only when the user explicitly requests them, the selected item's acceptance criteria require them, or the maintainer release workflow invokes them. Never invoke them as routine or opportunistic goal, loop, or task-graph work.

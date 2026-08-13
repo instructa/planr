@@ -5,6 +5,8 @@ description: Coordinate Planr plans, map dependencies, leases, evidence, approva
 
 # Planr Task Graph
 
+Read and apply the canonical [Evidence ownership guard](../planr/SKILL.md#evidence-ownership-guard) before product graph preparation or making.
+
 Use Planr as the canonical local coordinator. Markdown plans own scope and narrative; the map is the source of truth for live items, links, picks, approvals, logs, reviews, and closure.
 
 Evaluation subcommands run only when the user explicitly requests them, the selected item's acceptance criteria require them, or the maintainer release workflow invokes them. Never invoke them as routine or opportunistic goal, loop, or task-graph work.

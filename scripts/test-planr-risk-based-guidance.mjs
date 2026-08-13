@@ -41,11 +41,16 @@ function assertCanonicalOutcomeSettlement(name, contents) {
 }
 
 const goal = read("planr-goal");
+const router = read("planr");
 const loop = read("planr-loop");
 const work = read("planr-work");
 const review = read("planr-review");
 const web = read("planr-verify-web");
 const taskGraph = read("planr-task-graph");
+const evidenceGuard = router;
+const evidenceGuardLink = /Evidence ownership guard\]\((?:#evidence-ownership-guard|\.\.\/planr\/SKILL\.md#evidence-ownership-guard)\)/u;
+const productEntrySkills = [["planr", router], ["planr-goal", goal], ["planr-plan", read("planr-plan")], ["planr-loop", loop], ["planr-work", work], ["planr-task-graph", taskGraph]];
+const evidenceGuardPolicyText = "record the exact Planr capability gap or hold—including its gap code, capability, and next action—and stop";
 const roleAssets = [
   ["claude-reviewer", readRel("plugins/planr/agents/planr-reviewer.md")],
   ["cursor-reviewer", readRel("plugins/planr/skills/planr-loop/agents/planr-reviewer.md")],
@@ -121,6 +126,13 @@ function installedHostAssets() {
 
 assert.match(goal, /small coherent change is one implementation item plus one signal-bearing independent review/u);
 assert.match(goal, /versioned verification policy and source-bound receipt runner/u);
+assert.match(evidenceGuard, /record the exact Planr capability gap or hold—including its gap code, capability, and next action—and stop/u);
+assert.match(evidenceGuard, /Never author an Evidence policy, schema, capability manifest, adapter, migration, or run index to bypass that hold unless verification infrastructure is explicitly the requested product/u);
+for (const [name, contents] of productEntrySkills) {
+  assert.match(contents, evidenceGuardLink, `${name} must consume the canonical Evidence ownership guard`);
+  if (name !== "planr") assert.doesNotMatch(contents, /record the exact Planr capability gap or hold—including its gap code/u, `${name} must not duplicate the canonical Evidence ownership policy`);
+}
+assert.equal(shippedSkillAssets.map(([, contents]) => contents).reduce((count, contents) => count + contents.split(evidenceGuardPolicyText).length - 1, 0), 1, "Evidence ownership policy text must exist only in its canonical shared resource");
 assert.match(loop, /cheap, missing, failing, or explicitly high-risk evidence/u);
 assert.match(loop, /maker never leases its own ReviewGate/u);
 assert.match(loop, /Keep one active write item/u);

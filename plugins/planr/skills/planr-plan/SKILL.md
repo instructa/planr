@@ -5,6 +5,8 @@ description: Create or refine Planr product plans and build plans before impleme
 
 # Planr Plan
 
+Read and apply the canonical [Evidence ownership guard](../planr/SKILL.md#evidence-ownership-guard) before product planning.
+
 Use this when scope, ownership, acceptance criteria, or verification must be defined before implementation.
 
 ## Workflow

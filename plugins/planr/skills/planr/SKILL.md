@@ -9,6 +9,12 @@ You are the dispatcher. Do not improvise workflow prompts; route to one Planr sk
 
 ## Read State First
 
+Apply the canonical [Evidence ownership guard](#evidence-ownership-guard) before any product-preparation or product-making route.
+
+## Evidence Ownership Guard
+
+Before goal preparation or product implementation that requires binding Evidence, inspect the repository's existing Evidence policy and capability. If either is absent, record the exact Planr capability gap or hold—including its gap code, capability, and next action—and stop. Never author an Evidence policy, schema, capability manifest, adapter, migration, or run index to bypass that hold unless verification infrastructure is explicitly the requested product; its owner must repair the contract before product work resumes.
+
 Routing is decided by live state, not by guessing:
 
 ```bash

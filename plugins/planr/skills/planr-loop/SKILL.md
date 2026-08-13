@@ -5,6 +5,8 @@ description: Drive one Planr feature or scope autonomously to audit-backed compl
 
 # Planr Loop
 
+Read and apply the canonical [Evidence ownership guard](../planr/SKILL.md#evidence-ownership-guard) before product preparation or making.
+
 This is the iteration protocol, not the re-prompting driver. Run one goal with a checkable stop condition and an iteration budget (default 10). Refuse multi-goal loops.
 
 Evaluation subcommands run only when the user explicitly requests them, the selected item's acceptance criteria require them, or the maintainer release workflow invokes them. Never invoke them as routine or opportunistic goal, loop, or task-graph work.

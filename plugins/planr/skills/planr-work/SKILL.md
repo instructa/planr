@@ -5,6 +5,8 @@ description: Execute one Planr outcome item to evidence-backed settlement in its
 
 # Planr Work
 
+Read and apply the canonical [Evidence ownership guard](../planr/SKILL.md#evidence-ownership-guard) before product implementation.
+
 Use this for one picked item at a time.
 
 ## Workflow
