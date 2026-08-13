@@ -16,13 +16,9 @@
     "AC-010",
     "AC-011",
     "AC-012",
-    "AC-013",
-    "AC-014"
+    "AC-013"
   ],
   "binding_obligation_prefix": "pob-outcome-batching-",
   "supersedes_binding_suffix": "b98b7446a14d",
-  "gap_supersedes_binding_suffixes": {
-    "AC-014": "b98b7446a14d"
-  },
   "local_artifact_root": ".planr/artifacts/outcome-batching/v1"
 }

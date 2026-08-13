@@ -76,15 +76,6 @@ const reportWithoutDigest = {
     commands,
     evidence,
   }])),
-  dogfood: {
-    status: 'not_started',
-    benchmark_fixture: 'tests/fixtures/outcome-batching/v1/ac014-benchmark-input.json',
-    benchmark_schema: 'planr.outcome_batching.ac014_benchmark_input.v1',
-    spec_digest: 'sha256:cde84864a4708343de26d291585812a66de896a54495502d3c89b0b1a403c64f',
-    oracle: 'sparziele-exact-product-flow-v1',
-    oracle_digest: 'sha256:cc273b9f43f13e4a3cfae111a064836291431162e77551c169b5ffdf40d97ae0',
-    ceilings: { wall_seconds: 998.015, tokens: 5977896, tool_call_envelopes: 93 },
-  },
 };
 const report = { ...reportWithoutDigest, report_digest: sha256Json(reportWithoutDigest) };
 
@@ -122,7 +113,7 @@ const specs = Object.entries(criteria).map(([ac, [criterionText]]) => {
     runtimeId: `runtime-feature-run-${acKey}`,
     target: { kind: 'process', uri: `local://feature-run/${acKey}` },
     independence: `validates ${ac} against the exact current-source deterministic pre-review report`,
-    blindSpot: 'This pre-review capability covers deterministic product contracts only; AC-016 dogfood and final independent review remain separate gates.',
+    blindSpot: 'This pre-review capability covers deterministic product contracts only; final independent review remains a separate gate.',
   });
   return { ac, criterionText, ...spec };
 });
@@ -187,5 +178,4 @@ console.log(JSON.stringify({
   report_digest: report.report_digest,
   migration: migrationPath,
   obligations: obligations.length,
-  dogfood: 'not_started',
 }, null, 2));
