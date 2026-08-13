@@ -9,15 +9,18 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { routeSelection } from "./ci-router.mjs";
 import { classifyChanges } from "./verification-policy.mjs";
+import { changelogPredecessor, parseReleaseVersion } from "./release-contract.mjs";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const prepareSource = fs.readFileSync(path.join(repo, "scripts/prepare-release-candidate.sh"), "utf8");
 const releaseSource = fs.readFileSync(path.join(repo, "scripts/release.sh"), "utf8");
 const promotionSource = fs.readFileSync(path.join(repo, "scripts/verify-release-promotion.mjs"), "utf8");
+const releaseContractSource = fs.readFileSync(path.join(repo, "scripts/release-contract.mjs"), "utf8");
 const ciRouterSource = fs.readFileSync(path.join(repo, "scripts/ci-router.mjs"), "utf8");
 const verificationPolicySource = fs.readFileSync(path.join(repo, "scripts/verification-policy.mjs"), "utf8");
 const changelogLinksSource = fs.readFileSync(path.join(repo, "scripts/verify-changelog-release-links.sh"), "utf8");
 const repositoryVersion = JSON.parse(fs.readFileSync(path.join(repo, "package.json"), "utf8")).version;
+const repositoryChangelog = fs.readFileSync(path.join(repo, "CHANGELOG.md"), "utf8");
 const version = "9.9.9";
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "planr-release-contract-"));
 
@@ -34,6 +37,7 @@ function fixture(name, prepared, changelogPrepared = prepared) {
   const initial = prepared ? version : "1.7.2";
   write(path.join(root, "scripts/prepare-release-candidate.sh"), prepareSource, 0o755);
   write(path.join(root, "scripts/release.sh"), releaseSource, 0o755);
+  write(path.join(root, "scripts/release-contract.mjs"), releaseContractSource, 0o755);
   write(path.join(root, "scripts/verify-changelog-release-links.sh"), changelogLinksSource, 0o755);
   write(path.join(root, "scripts/security-local.sh"), "#!/bin/sh\nset -eu\nprintf 'security-local\\n' >> \"$COMMAND_LOG\"\n", 0o755);
   write(path.join(root, "scripts/verify-release-eval-receipt.mjs"), "");
@@ -76,7 +80,20 @@ function fixture(name, prepared, changelogPrepared = prepared) {
 set -eu
 case "$1 \${2:-}" in
   "rev-parse --abbrev-ref") echo main ;;
+  "rev-parse --verify")
+    if [ "\${MISSING_LOCAL_TAG:-0}" = 1 ]; then
+      exit 1
+    elif [ "\${3:-}" = "refs/tags/v1.7.2" ]; then
+      printf '%s\n' "\${LOCAL_TAG_SHA:-1111111111111111111111111111111111111111}"
+    else
+      exit 1
+    fi
+    ;;
   "rev-parse v${version}") exit 1 ;;
+  "ls-remote --exit-code")
+    if [ "\${MISSING_ORIGIN_TAG:-0}" = 1 ]; then exit 2; fi
+    printf '%s\t%s\n' "\${ORIGIN_TAG_SHA:-1111111111111111111111111111111111111111}" "\${5:-}"
+    ;;
   "status --porcelain") ;;
   "diff --quiet")
     printf 'git %s\\n' "$*" >> "$COMMAND_LOG"
@@ -113,15 +130,20 @@ case "$*" in
     ;;
 esac
 `, 0o755);
-  for (const command of ["node", "npm"]) {
-    write(path.join(bin, command), `#!/bin/sh\nset -eu\nprintf '${command} %s\\n' "$*" >> "$COMMAND_LOG"\n`, 0o755);
-  }
+  write(path.join(bin, "node"), `#!/bin/sh
+set -eu
+case "\${1:-}" in
+  scripts/release-contract.mjs) exec "$REAL_NODE" "$@" ;;
+  *) printf 'node %s\n' "$*" >> "$COMMAND_LOG" ;;
+esac
+`, 0o755);
+  write(path.join(bin, "npm"), "#!/bin/sh\nset -eu\nprintf 'npm %s\\n' \"$*\" >> \"$COMMAND_LOG\"\n", 0o755);
   return { root, bin, log };
 }
 
-function run(name, script, prepared, env = {}) {
+function run(name, script, prepared, env = {}, requestedVersion = version) {
   const test = fixture(name, prepared, script === "release.sh");
-  const args = script === "release.sh" ? [version, "contract test"] : [version];
+  const args = script === "release.sh" ? [requestedVersion, "contract test"] : [requestedVersion];
   const result = spawnSync("sh", [`scripts/${script}`, ...args], {
     cwd: test.root,
     encoding: "utf8",
@@ -130,6 +152,7 @@ function run(name, script, prepared, env = {}) {
       ...env,
       PATH: `${test.bin}:${process.env.PATH}`,
       COMMAND_LOG: test.log,
+      REAL_NODE: process.execPath,
       PLANR_RELEASE_EVAL_RECEIPT: path.join(test.root, "receipt.json"),
       PLANR_RELEASE_EVAL_SUITE: path.join(test.root, "suite.json"),
       PLANR_RELEASE_EVAL_DB: path.join(test.root, "eval.sqlite"),
@@ -151,6 +174,21 @@ assert.doesNotMatch(
   "candidate preparation must run before the target changelog section is authored",
 );
 assert.match(releaseSource, /verify-changelog-release-links\.sh/u, "publication must verify changelog comparison links");
+assert.match(releaseSource, /release-contract\.mjs verify-predecessor/u, "publication must authenticate the predecessor tag");
+
+for (const candidate of ["0.0.0", "1.2.3", "1.2.3-alpha.0", "1.2.3-beta.7", "1.2.3-rc.12"]) {
+  assert.equal(parseReleaseVersion(candidate).version, candidate);
+}
+const invalidVersions = [
+  "01.2.3", "1.02.3", "1.2.03",
+  "1.2.3-alpha.01", "1.2.3-beta.00", "1.2.3-rc.00",
+];
+for (const candidate of invalidVersions) {
+  assert.throws(() => parseReleaseVersion(candidate), /canonical/u, `${candidate} must not be canonical`);
+}
+assert.equal(changelogPredecessor(repositoryChangelog, repositoryVersion), "1.10.0-alpha.2");
+assert.doesNotMatch(repositoryChangelog, /^## \[1\.10\.0-alpha\.3\]/mu, "unpublished alpha.3 must not appear in the release chain");
+assert.match(repositoryChangelog, /Add the canonical FeatureRun state machine/u, "alpha.4 must fold the alpha.3 payload");
 
 const repositoryChangelogLinks = spawnSync(
   "sh",
@@ -162,6 +200,7 @@ assert.equal(repositoryChangelogLinks.status, 0, repositoryChangelogLinks.stderr
 function changelogLinkCheck(name, content) {
   const root = path.join(tmp, name);
   write(path.join(root, "scripts/verify-changelog-release-links.sh"), changelogLinksSource, 0o755);
+  write(path.join(root, "scripts/release-contract.mjs"), releaseContractSource, 0o755);
   write(path.join(root, "CHANGELOG.md"), content);
   return spawnSync("sh", ["scripts/verify-changelog-release-links.sh", version], {
     cwd: root,
@@ -225,6 +264,17 @@ assert.ok(!lockDrift.calls.some((call) => call.startsWith("cargo ")), "lockfile 
 const referenceDrift = run("prepare-reference-drift", "prepare-release-candidate.sh", false, { FAIL_REFERENCE_CHECK: "1" });
 assert.equal(referenceDrift.result.status, 42, "reference drift must preserve checker failure");
 
+for (const candidate of invalidVersions) {
+  const invalidPrepare = run(`prepare-invalid-${candidate}`, "prepare-release-candidate.sh", false, {}, candidate);
+  assert.equal(invalidPrepare.result.status, 1, `candidate preparation must reject ${candidate}`);
+  assert.match(invalidPrepare.result.stderr, /canonical/u);
+
+  const invalidRelease = run(`release-invalid-${candidate}`, "release.sh", true, {}, candidate);
+  assert.equal(invalidRelease.result.status, 1, `publication must reject ${candidate}`);
+  assert.match(invalidRelease.result.stderr, /canonical/u);
+  assert.ok(!invalidRelease.calls.some((call) => call.startsWith("node scripts/verify-release-promotion.mjs") || call.startsWith("git tag")));
+}
+
 const unprepared = run("release-unprepared", "release.sh", false);
 assert.equal(unprepared.result.status, 1, "publication must reject an unprepared version");
 assert.match(unprepared.result.stderr, /not prepared candidate/u);
@@ -247,11 +297,22 @@ for (const repeatedGate of ["pnpm install", "cargo build", "cargo test", "npm pa
   assert.ok(!released.calls.some((call) => call.startsWith(repeatedGate)), `publication must not replay ${repeatedGate}`);
 }
 
+for (const [name, env] of [
+  ["release-predecessor-local-missing", { MISSING_LOCAL_TAG: "1" }],
+  ["release-predecessor-mismatch", { ORIGIN_TAG_SHA: "2".repeat(40) }],
+  ["release-predecessor-missing", { MISSING_ORIGIN_TAG: "1" }],
+]) {
+  const rejected = run(name, "release.sh", true, env);
+  assert.equal(rejected.result.status, 1, `${name} must block publication`);
+  assert.ok(!rejected.calls.some((call) => call.startsWith("node scripts/verify-release-promotion.mjs") || call.startsWith("git tag")));
+}
+
 const promotionRoot = path.join(tmp, "promotion-verifier");
 const promotionBin = path.join(promotionRoot, "bin");
 const sourceSha = "a".repeat(40);
 const baseSha = "d".repeat(40);
 write(path.join(promotionRoot, "scripts/verify-release-promotion.mjs"), promotionSource);
+write(path.join(promotionRoot, "scripts/release-contract.mjs"), releaseContractSource);
 write(path.join(promotionRoot, "scripts/ci-router.mjs"), ciRouterSource);
 write(path.join(promotionRoot, "scripts/verification-policy.mjs"), verificationPolicySource);
 write(path.join(promotionBin, "git"), `#!/bin/sh
@@ -369,6 +430,15 @@ assert.equal(prereleasePromotion.status, 0, prereleasePromotion.stderr);
 assert.equal(JSON.parse(prereleasePromotion.stdout).release_channel, "alpha");
 assert.equal(JSON.parse(prereleasePromotion.stdout).evaluation, "not_required_before_prerelease");
 
+for (const candidate of invalidVersions) {
+  const rejected = verifyPromotion({
+    requestedVersion: candidate,
+    env: { DIFF_PATHS: "plugins/planr/skills/planr-loop/SKILL.md" },
+  });
+  assert.notEqual(rejected.status, 0, `promotion verifier must reject ${candidate}`);
+  assert.match(rejected.stderr, /canonical/u, `${candidate} must fail before stable evaluation classification`);
+}
+
 function rejectBoundMutation(name, mutate, errorPattern, message) {
   const candidate = mutate(structuredClone(ciReceipt));
   const file = `${name}.json`;
@@ -446,7 +516,7 @@ console.log(JSON.stringify({
   publication_owner: "scripts/release.sh",
   reviewed_source_mutation_during_publication: false,
   candidate_git_mutation: false,
-  fail_closed_cases: ["lockfile drift", "reference drift", "stale changelog comparison", "missing changelog comparison", "unprepared version"],
+  fail_closed_cases: ["lockfile drift", "reference drift", "stale changelog comparison", "missing changelog comparison", "unprepared version", "noncanonical SemVer", "missing or mismatched predecessor tag"],
   exact_sha_promotion: true,
   repeated_publication_gates: 0,
   stable_external_evaluation: true,

@@ -28,6 +28,7 @@ const releaseScriptFiles = [
   "build-release.sh",
   "build-linux-release.sh",
   "prepare-release-candidate.sh",
+  "release-contract.mjs",
   "release.sh",
   "verify-linux-release-artifact.sh",
   "verify-public-lifecycle.sh",

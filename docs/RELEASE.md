@@ -25,7 +25,9 @@ full candidate verification and independent review on that exact commit.
 `scripts/release.sh` is the only supported publication path. It runs on clean
 `main`, requires every version and generated reference to already match the
 requested version, verifies an independently green CI run and human approval
-for the exact `HEAD` SHA, and only then creates and pushes the annotated tag.
+for the exact `HEAD` SHA, and verifies that the changelog predecessor's local
+tag object exactly matches the tag ref returned by `origin`. Only then does it
+create and push the annotated tag.
 It does not replay the Rust, docs, or packaging suites already proven by that
 CI run. Security, secret, dependency, and workflow scanners are deliberate
 local maintainer preflight commands rather than automatic pull-request or push
@@ -95,7 +97,7 @@ The two scripts enforce, in order:
 3. frozen workspace synchronization cannot change `pnpm-lock.yaml`;
 4. the candidate build synchronizes `Cargo.lock`, then regenerates and strictly checks both references without Git mutation;
 5. candidate source, changelog, contracts, and generated files are committed and independently reviewed before publication approval;
-6. publication requires clean `main`, the exact prepared versions/references, a committed changelog section, and no existing tag;
+6. publication requires clean `main`, the exact prepared versions/references, a committed changelog section, an exact local predecessor tag matching `origin`, and no existing target tag;
 7. publication validates the exact-SHA CI and approval receipts; a stable release whose evaluated subject or policy changed also validates the sanitized eval receipt and recomputed comparison;
 8. publication creates and pushes only the annotated `vx.y.z` tag for that reviewed commit.
 
@@ -123,7 +125,9 @@ The changelog section requirement applies verbatim (`## [1.2.0-alpha.1]`). What 
 - npm publishes under the **`alpha` dist-tag** instead of `latest`: plain `npm install -g planr` keeps resolving stable, testers opt in with `npm install -g planr@alpha`.
 - The **Homebrew tap never moves** on pre-release tags.
 
-Only `-alpha.N`, `-beta.N`, and `-rc.N` suffixes are accepted; everything else the script rejects.
+Only canonical SemVer core numbers and `-alpha.N`, `-beta.N`, or `-rc.N`
+suffixes are accepted. Numeric identifiers have no leading zero unless the
+identifier is exactly `0`.
 
 Pre-release publication deliberately does not require a model-evaluation
 receipt before publication. It still requires a clean exact commit on `main`,

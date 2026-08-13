@@ -6,7 +6,7 @@ set -eu
 cd "$(dirname "$0")/.."
 
 version="${1:-}"
-if ! echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?$'; then
+if ! node scripts/release-contract.mjs validate-version "$version"; then
   echo "usage: scripts/prepare-release-candidate.sh <x.y.z[-alpha.N|-beta.N|-rc.N]>" >&2
   exit 1
 fi

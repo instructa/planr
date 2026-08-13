@@ -21,6 +21,7 @@ const linuxVerifyScript = path.join(fixtureScripts, "verify-linux-release-artifa
 const publicLifecycleScript = path.join(fixtureScripts, "verify-public-lifecycle.sh");
 const buildReleaseScript = path.join(fixtureScripts, "build-release.sh");
 const prepareReleaseScript = path.join(fixtureScripts, "prepare-release-candidate.sh");
+const releaseContractScript = path.join(fixtureScripts, "release-contract.mjs");
 const releaseScript = path.join(fixtureScripts, "release.sh");
 const localSecurityScript = path.join(fixtureScripts, "security-local.sh");
 
@@ -40,6 +41,7 @@ try {
   await cp(path.join(repoRoot, "scripts", "verify-public-lifecycle.sh"), publicLifecycleScript);
   await cp(path.join(repoRoot, "scripts", "build-release.sh"), buildReleaseScript);
   await cp(path.join(repoRoot, "scripts", "prepare-release-candidate.sh"), prepareReleaseScript);
+  await cp(path.join(repoRoot, "scripts", "release-contract.mjs"), releaseContractScript);
   await cp(path.join(repoRoot, "scripts", "release.sh"), releaseScript);
   await cp(path.join(repoRoot, "scripts", "security-local.sh"), localSecurityScript);
   await cp(path.join(repoRoot, "package.json"), fixturePackageJson);
@@ -48,7 +50,7 @@ try {
   const baseline = runVerifier();
   assert.equal(baseline.status, 0, `baseline workflow fixture must pass:\n${baseline.stderr}`);
 
-  const fixtureFiles = [releaseWorkflow, ciWorkflow, linuxReceiptsWorkflow, linuxBuildScript, linuxBuilderDockerfile, linuxVerifyScript, publicLifecycleScript, buildReleaseScript, prepareReleaseScript, releaseScript, localSecurityScript, fixturePackageJson];
+  const fixtureFiles = [releaseWorkflow, ciWorkflow, linuxReceiptsWorkflow, linuxBuildScript, linuxBuilderDockerfile, linuxVerifyScript, publicLifecycleScript, buildReleaseScript, prepareReleaseScript, releaseContractScript, releaseScript, localSecurityScript, fixturePackageJson];
   const baselineSources = new Map(
     await Promise.all(fixtureFiles.map(async (file) => [file, await readFile(file, "utf8")])),
   );

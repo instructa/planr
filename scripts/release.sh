@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 
 version="${1:-}"
 summary="${2:-}"
-if ! echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?$'; then
+if ! node scripts/release-contract.mjs validate-version "$version"; then
   echo "usage: scripts/release.sh <x.y.z[-alpha.N|-beta.N|-rc.N]> \"one-line release summary\"" >&2
   exit 1
 fi
@@ -26,6 +26,7 @@ if [ -n "$(git status --porcelain)" ]; then
   exit 1
 fi
 scripts/verify-changelog-release-links.sh "$version"
+node scripts/release-contract.mjs verify-predecessor "$version"
 if git rev-parse "v$version" >/dev/null 2>&1; then
   echo "tag v$version already exists" >&2
   exit 1

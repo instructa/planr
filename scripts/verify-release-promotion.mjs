@@ -9,6 +9,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { routeSelection } from "./ci-router.mjs";
 import { classifyChanges, parseGitNameStatus, POLICY_DIGEST, POLICY_VERSION } from "./verification-policy.mjs";
+import { parseReleaseVersion } from "./release-contract.mjs";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const EVALUATED_SUBJECT_PATHS = [
@@ -24,7 +25,6 @@ const EVALUATION_POLICY_PATHS = [
   "scripts/verify-release-eval-receipt.mjs",
   "scripts/verify-release-promotion.mjs",
 ];
-const RELEASE_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+(?:-(alpha|beta|rc)\.[0-9]+)?$/u;
 
 function option(name, { required = false } = {}) {
   const index = process.argv.indexOf(name);
@@ -53,9 +53,7 @@ function exactKeys(value, keys, label) {
 }
 
 const version = option("--version", { required: true });
-const versionMatch = RELEASE_VERSION.exec(version);
-assert.ok(versionMatch, "release version is invalid");
-const releaseChannel = versionMatch[1] ?? "stable";
+const releaseChannel = parseReleaseVersion(version).channel;
 const ciReceipt = jsonFile(option("--ci-receipt", { required: true }), "CI promotion receipt");
 const approval = jsonFile(option("--approval", { required: true }), "release approval");
 const head = run("git", ["rev-parse", "--verify", "HEAD^{commit}"]);

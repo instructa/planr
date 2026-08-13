@@ -10,37 +10,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- Add durable FeatureRun execution state for bounded outcome batches, materiality-based ReviewGates, source freezes, fresh verifier handoffs, and one final independent product review.
-- Add shared Evidence-ownership guidance that stops product makers at a capability gap instead of letting them author verification policy, schemas, adapters, migrations, or run indexes.
-
-### Changed
-
-- Keep benchmark orchestration outside Planr Core so the product owns provider-neutral planning, execution, Evidence, and review contracts while the external suite owns comparative scoring.
-- Allow reviewed prereleases to be published from exact clean `main` after authenticated CI promotion and exact-SHA human approval, then dogfood the globally installed prerelease; stable promotion still requires current evaluation when its subject or policy changed.
-
-### Fixed
-
-- Recover interrupted verification settlement without duplicating ownership, receipts, or review paths, and preserve causal source binding through finding repair and refreeze.
-- Align CLI, MCP, HTTP, generated references, and shipped skills on the code -> freeze -> fresh verifier -> final review transition.
-
-### Migration Notes
-
-- Existing alpha.3 project state remains readable through the current FeatureRun and Evidence contracts; no benchmark runtime is shipped from Planr Core.
-- Candidate preparation remains versioned source only. Alpha.4 publication requires the exact clean `main` SHA, authenticated green CI promotion, committed release contracts, and explicit human approval. Evaluate and dogfood the exact installed prerelease after publication before any later promotion decision.
-
-## [1.10.0-alpha.3] - 2026-08-05
-
-### Added
-
 - Add the canonical FeatureRun state machine with outcome batching, materiality-gated assurance, durable ReviewGate attempts and findings, phase budgets, source freezes, and one independent final product review.
 - Add typed verification work packets that bind one fresh verifier identity to the frozen source and expose exactly one sealed `readiness.run_index.repository_path` for Evidence execution.
 - Add real developer and agent examples for normal outcomes, protected-risk checkpoints, verification handoffs, finding repair, refreeze, budget holds, and missing capabilities.
+- Add durable FeatureRun execution state for bounded outcome batches, materiality-based ReviewGates, source freezes, fresh verifier handoffs, and one final independent product review.
+- Add shared Evidence-ownership guidance that stops product makers at a capability gap instead of letting them author verification policy, schemas, adapters, migrations, or run indexes.
 
 ### Changed
 
 - Keep compatible outcomes with the same maker instead of creating one agent session and review boundary per mechanical task.
 - Replace recursive review and fix map items with bounded findings on the original durable ReviewGate and selective re-review of the finding, fix diff, and invalidated evidence.
 - Hard-cut public Evidence contracts to semantic proof obligations. Runtime environment, target, source, policy, and configuration bindings are now recorded only by Planr-owned execution state and trusted receipts.
+- Keep benchmark orchestration outside Planr Core so the product owns provider-neutral planning, execution, Evidence, and review contracts while the external suite owns comparative scoring.
+- Allow reviewed prereleases to be published from exact clean `main` after authenticated CI promotion and exact-SHA human approval, then dogfood the globally installed prerelease; stable promotion still requires current evaluation when its subject or policy changed.
 
 ### Fixed
 
@@ -48,6 +30,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Reject final product review creation before the FeatureRun reaches verification, preventing an unleaseable pending gate in `source_frozen`.
 - Atomically invalidate the active source freeze when a final review reports a product finding, allowing the responsible maker to repair, refreeze, reverify, and reuse the same gate for independent re-review.
 - Remove ambiguous repository-index, rebind, and fallback instructions that allowed agents to substitute declarative inputs for the canonical sealed Evidence run.
+- Recover interrupted verification settlement without duplicating ownership, receipts, or review paths, and preserve causal source binding through finding repair and refreeze.
+- Align CLI, MCP, HTTP, generated references, and shipped skills on the code -> freeze -> fresh verifier -> final review transition.
+
+### Migration Notes
+
+- Existing project state from earlier published alphas remains readable through the current FeatureRun and Evidence contracts; no benchmark runtime is shipped from Planr Core.
+- Candidate preparation remains versioned source only. Alpha.4 publication requires the exact clean `main` SHA, authenticated green CI promotion, committed release contracts, and explicit human approval. Evaluate and dogfood the exact installed prerelease after publication before any later promotion decision.
 
 ## [1.10.0-alpha.2] - 2026-07-31
 
@@ -636,8 +625,7 @@ Initial Planr product release.
 - Skill workflow documentation for Codex, Claude Code, Cursor, and MCP-only clients.
 
 [Unreleased]: https://github.com/instructa/planr/compare/v1.10.0-alpha.4...HEAD
-[1.10.0-alpha.4]: https://github.com/instructa/planr/compare/v1.10.0-alpha.3...v1.10.0-alpha.4
-[1.10.0-alpha.3]: https://github.com/instructa/planr/compare/v1.10.0-alpha.2...v1.10.0-alpha.3
+[1.10.0-alpha.4]: https://github.com/instructa/planr/compare/v1.10.0-alpha.2...v1.10.0-alpha.4
 [1.10.0-alpha.2]: https://github.com/instructa/planr/compare/v1.10.0-alpha.1...v1.10.0-alpha.2
 [1.10.0-alpha.1]: https://github.com/instructa/planr/compare/v1.9.0...v1.10.0-alpha.1
 [1.9.0]: https://github.com/instructa/planr/compare/v1.8.0...v1.9.0
