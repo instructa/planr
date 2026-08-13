@@ -13,8 +13,8 @@ use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 #[cfg(unix)]
-use std::os::unix::fs::{PermissionsExt, symlink};
-use std::path::Path;
+use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
 use std::sync::mpsc;
 use std::thread;
@@ -24,22 +24,80 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 fn planr() -> Command {
     let mut cmd = Command::cargo_bin("planr").expect("planr binary");
+    scrub_planr_test_environment(&mut cmd);
+    cmd
+}
+
+fn planr_from_binary(binary: &Path) -> Command {
+    let mut cmd = Command::new(binary);
+    scrub_planr_test_environment(&mut cmd);
+    cmd
+}
+
+const PLANR_TEST_ENV_VARS: [&str; 8] = [
+    "CODEX_SANDBOX",
+    "CODEX_SESSION_ID",
+    "CLAUDECODE",
+    "CURSOR_AGENT",
+    "CURSOR_INVOKED_AS",
+    "PLANR_MCP_CLIENT",
+    "PI_CODING_AGENT",
+    "PLANR_PROFILE",
+];
+
+fn scrub_planr_test_environment(cmd: &mut Command) {
     // Tests may run inside a real host session (Cursor terminal, Codex
     // sandbox); scrub the host-identifying vars observed_client() reads
     // so detection is opt-in per test and results are deterministic.
-    for var in [
-        "CODEX_SANDBOX",
-        "CODEX_SESSION_ID",
-        "CLAUDECODE",
-        "CURSOR_AGENT",
-        "CURSOR_INVOKED_AS",
-        "PLANR_MCP_CLIENT",
-        "PI_CODING_AGENT",
-        "PLANR_PROFILE",
-    ] {
+    for var in PLANR_TEST_ENV_VARS {
+        cmd.env_remove(var);
+    }
+}
+
+fn std_planr_from_binary(binary: &Path) -> StdCommand {
+    let mut cmd = StdCommand::new(binary);
+    for var in PLANR_TEST_ENV_VARS {
         cmd.env_remove(var);
     }
     cmd
+}
+
+fn private_planr_binary(root: &Path) -> PathBuf {
+    let source = assert_cmd::cargo::cargo_bin("planr");
+    private_planr_binary_from(root, &source)
+}
+
+fn private_planr_binary_from(root: &Path, source: &Path) -> PathBuf {
+    let destination = root.join(".planr/test-bin/planr");
+    fs::create_dir_all(destination.parent().unwrap()).unwrap();
+    fs::copy(source, &destination).unwrap();
+    #[cfg(unix)]
+    fs::set_permissions(&destination, fs::Permissions::from_mode(0o555)).unwrap();
+    #[cfg(not(unix))]
+    {
+        let mut permissions = fs::metadata(&destination).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&destination, permissions).unwrap();
+    }
+    assert_eq!(fs::read(&destination).unwrap(), fs::read(source).unwrap());
+    #[cfg(unix)]
+    assert_eq!(fs::metadata(&destination).unwrap().nlink(), 1);
+    destination
+}
+
+#[cfg(unix)]
+#[test]
+fn private_planr_binary_copy_is_single_link_when_cargo_source_has_two_links() {
+    let dir = tempdir().unwrap();
+    let source = dir.path().join("cargo-planr");
+    let second_link = dir.path().join("cargo-planr-hardlink");
+    fs::copy(assert_cmd::cargo::cargo_bin("planr"), &source).unwrap();
+    fs::hard_link(&source, &second_link).unwrap();
+    assert_eq!(fs::metadata(&source).unwrap().nlink(), 2);
+
+    let private = private_planr_binary_from(dir.path(), &source);
+    assert_eq!(fs::metadata(private).unwrap().nlink(), 1);
+    assert_eq!(fs::metadata(source).unwrap().nlink(), 2);
 }
 
 fn free_port() -> u16 {
@@ -437,6 +495,18 @@ fn mcp_tool_response_with_env(
     arguments: Value,
     env: &[(&str, &str)],
 ) -> Value {
+    mcp_tool_response_with_env_and_binary(dir, db, id, name, arguments, env, None)
+}
+
+fn mcp_tool_response_with_env_and_binary(
+    dir: &Path,
+    db: &Path,
+    id: u64,
+    name: &str,
+    arguments: Value,
+    env: &[(&str, &str)],
+    binary: Option<&Path>,
+) -> Value {
     let input = format!(
         "{}\n",
         json!({
@@ -446,7 +516,7 @@ fn mcp_tool_response_with_env(
             "params": {"name": name, "arguments": arguments}
         })
     );
-    let mut command = planr();
+    let mut command = binary.map_or_else(planr, planr_from_binary);
     command.current_dir(dir);
     command.args(["--db", db.to_str().unwrap(), "mcp"]);
     for (key, value) in env {
@@ -14808,6 +14878,7 @@ fn canonical_verification_task_builds_a_sealed_verifier_packet_without_retagging
             .stdout,
     );
     init_git_repo(dir.path());
+    let source_freeze_planr = private_planr_binary(dir.path());
     let mut obligation = evidence_obligation(
         "pob-canonical-verifier-packet",
         policy["object"]["digest"].as_str().unwrap(),
@@ -14875,7 +14946,7 @@ fn canonical_verification_task_builds_a_sealed_verifier_packet_without_retagging
     assert_eq!(picked["item"]["id"], implementation_id);
 
     let done = single_json_document(
-        &planr()
+        &planr_from_binary(&source_freeze_planr)
             .current_dir(dir.path())
             .env("PLANR_WORKER_ID", "canonical-maker")
             .args([
@@ -15098,15 +15169,14 @@ fn canonical_verification_task_builds_a_sealed_verifier_packet_without_retagging
             "passed".to_string(),
         ]
     };
-    let bin = assert_cmd::cargo::cargo_bin("planr");
-    let settle_a = StdCommand::new(&bin)
+    let settle_a = std_planr_from_binary(&source_freeze_planr)
         .current_dir(dir.path())
         .env("PLANR_WORKER_ID", "canonical-maker")
         .args(settle_args())
         .stdout(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    let settle_b = StdCommand::new(&bin)
+    let settle_b = std_planr_from_binary(&source_freeze_planr)
         .current_dir(dir.path())
         .env("PLANR_WORKER_ID", "canonical-maker")
         .args(settle_args())
@@ -22197,9 +22267,10 @@ fn capped_cli_batch_roll_preserves_same_maker_and_fourth_outcome_continues_clean
     .unwrap();
     drop(conn);
     init_git_repo(dir.path());
+    let source_freeze_planr = private_planr_binary(dir.path());
 
     let settle = |ordinal: u32, next: bool| -> Value {
-        let mut command = planr();
+        let mut command = planr_from_binary(&source_freeze_planr);
         command
             .current_dir(dir.path())
             .env("PLANR_WORKER_ID", "maker-roll-e2e")
@@ -22462,6 +22533,7 @@ fn done_next_freezes_source_without_authored_verification_item() {
         &obligation,
     );
     init_git_repo(dir.path());
+    let source_freeze_planr = private_planr_binary(dir.path());
 
     let hostile_bin = dir.path().join("installed-old-global/bin");
     fs::create_dir_all(&hostile_bin).unwrap();
@@ -22478,7 +22550,7 @@ fn done_next_freezes_source_without_authored_verification_item() {
     ))
     .unwrap();
 
-    let output = planr()
+    let output = planr_from_binary(&source_freeze_planr)
         .current_dir(dir.path())
         .env("PLANR_WORKER_ID", "maker-verification-handoff")
         .env("PATH", hostile_path)
@@ -22677,8 +22749,9 @@ fn done_next_routes_legacy_nonbinding_freeze_to_independent_final_review() {
     .unwrap();
     drop(conn);
     init_git_repo(dir.path());
+    let source_freeze_planr = private_planr_binary(dir.path());
 
-    let output = planr()
+    let output = planr_from_binary(&source_freeze_planr)
         .current_dir(dir.path())
         .env("PLANR_WORKER_ID", "maker-legacy-final")
         .args([
@@ -22724,7 +22797,7 @@ fn done_next_routes_legacy_nonbinding_freeze_to_independent_final_review() {
     )
     .unwrap();
 
-    let opened = planr()
+    let opened = planr_from_binary(&source_freeze_planr)
         .current_dir(dir.path())
         .env("PLANR_WORKER_ID", "maker-legacy-final")
         .args([
@@ -22957,8 +23030,9 @@ fn canonical_handoff_identity_is_real_and_path_independent_across_cli_mcp_http()
     let cli_root = tempdir().unwrap();
     let cli_db = cli_root.path().join(".planr/planr.sqlite");
     let (plan_id, cli_gate) = seed_transport_risk_handoff(cli_root.path(), &cli_db);
+    let cli_planr = private_planr_binary(cli_root.path());
     let cli = single_json_document(
-        &planr()
+        &planr_from_binary(&cli_planr)
             .current_dir(cli_root.path())
             .env("PLANR_WORKER_ID", "reviewer-transport")
             .env("PATH", &hostile_path)
@@ -22984,7 +23058,8 @@ fn canonical_handoff_identity_is_real_and_path_independent_across_cli_mcp_http()
     let mcp_root = tempdir().unwrap();
     let mcp_db = mcp_root.path().join(".planr/planr.sqlite");
     let (_, mcp_gate) = seed_transport_risk_handoff(mcp_root.path(), &mcp_db);
-    let mcp = mcp_tool_response_with_env(
+    let mcp_planr = private_planr_binary(mcp_root.path());
+    let mcp = mcp_tool_response_with_env_and_binary(
         mcp_root.path(),
         &mcp_db,
         1,
@@ -22994,15 +23069,16 @@ fn canonical_handoff_identity_is_real_and_path_independent_across_cli_mcp_http()
             ("PLANR_WORKER_ID", "reviewer-transport"),
             ("PATH", hostile_path.to_str().unwrap()),
         ],
+        Some(&mcp_planr),
     );
     assert_typed_handoff_transport(&mcp_text_value(&mcp), &plan_id);
 
     let http_root = tempdir().unwrap();
     let http_db = http_root.path().join(".planr/planr.sqlite");
     let (_, http_gate) = seed_transport_risk_handoff(http_root.path(), &http_db);
+    let http_planr = private_planr_binary(http_root.path());
     let port = free_port();
-    let binary = assert_cmd::cargo::cargo_bin("planr");
-    let mut server = StdCommand::new(binary)
+    let mut server = std_planr_from_binary(&http_planr)
         .current_dir(http_root.path())
         .env("PLANR_WORKER_ID", "reviewer-transport")
         .env("PATH", &hostile_path)
