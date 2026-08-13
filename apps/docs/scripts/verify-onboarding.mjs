@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { access, chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -10,7 +11,7 @@ const docsRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repositoryRoot = path.dirname(path.dirname(docsRoot));
 const verifierPath = fileURLToPath(import.meta.url);
 const configuredPlanrBin = process.env.PLANR_BIN;
-const planrBin = configuredPlanrBin
+const sourcePlanrBin = configuredPlanrBin
   ? path.resolve(process.cwd(), configuredPlanrBin)
   : path.join(repositoryRoot, 'target', 'debug', 'planr');
 const repositoryPackage = JSON.parse(await readFile(path.join(repositoryRoot, 'package.json'), 'utf8'));
@@ -19,12 +20,12 @@ const cargoVersion = cargoManifest.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
 
 assert.ok(cargoVersion, 'Could not read the Planr package version from Cargo.toml');
 assert.equal(repositoryPackage.version, cargoVersion, 'package.json and Cargo.toml must declare the same Planr version');
-assert.ok(path.isAbsolute(planrBin), 'Onboarding replay must execute an absolute Planr binary path, never an ambient `planr` from PATH');
+assert.ok(path.isAbsolute(sourcePlanrBin), 'Onboarding replay must execute an absolute Planr binary path, never an ambient `planr` from PATH');
 await access(
-  planrBin,
+  sourcePlanrBin,
   constants.X_OK,
 ).catch(() => {
-  throw new Error(`Configured Planr binary is not executable at ${planrBin}. Run \`cargo build --bin planr\` or set PLANR_BIN to an explicit matching repository build; ambient PATH lookup is intentionally disabled.`);
+  throw new Error(`Configured Planr binary is not executable at ${sourcePlanrBin}. Run \`cargo build --bin planr\` or set PLANR_BIN to an explicit matching repository build; ambient PATH lookup is intentionally disabled.`);
 });
 
 const binaryGuardAssertions = [];
@@ -69,7 +70,17 @@ if (process.env.PLANR_SKIP_BINARY_GUARD_FIXTURES !== '1') {
   }
 }
 
-const workspace = await mkdtemp(path.join(tmpdir(), 'planr-docs-onboarding-'));
+const onboardingRoot = await mkdtemp(path.join(tmpdir(), 'planr-docs-onboarding-'));
+const workspace = path.join(onboardingRoot, 'project');
+const planrBin = path.join(onboardingRoot, 'bin', 'planr');
+await mkdir(path.dirname(planrBin), { recursive: true });
+await mkdir(workspace);
+await copyFile(sourcePlanrBin, planrBin, constants.COPYFILE_EXCL);
+await chmod(planrBin, 0o555);
+const sourceDigest = createHash('sha256').update(await readFile(sourcePlanrBin)).digest('hex');
+const privateDigest = createHash('sha256').update(await readFile(planrBin)).digest('hex');
+assert.equal(privateDigest, sourceDigest, 'Private onboarding binary must exactly match the configured repository build');
+assert.equal((await stat(planrBin)).nlink, 1, 'Private onboarding binary must have exactly one filesystem link');
 const report = {
   workspace,
   planrBinary: planrBin,
@@ -77,6 +88,7 @@ const report = {
   commands: [],
   assertions: [
     'replay binary path is absolute and cannot resolve an ambient planr from PATH',
+    'replay uses a byte-identical read-only private binary with exactly one filesystem link',
     ...binaryGuardAssertions,
   ],
 };
@@ -224,5 +236,5 @@ try {
 
   console.log(JSON.stringify({ ok: true, ...report }, null, 2));
 } finally {
-  await rm(workspace, { recursive: true, force: true });
+  await rm(onboardingRoot, { recursive: true, force: true });
 }

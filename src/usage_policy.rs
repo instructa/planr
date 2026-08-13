@@ -3157,7 +3157,7 @@ mod tests {
         );
         assert_eq!(
             phase_spend_limit(u64::MAX, reserves, BudgetPhase::Implementation),
-            (u64::MAX / 5) * 3 + ((u64::MAX % 5) * 3) / 5
+            (u64::MAX / 5) * 3
         );
     }
 
