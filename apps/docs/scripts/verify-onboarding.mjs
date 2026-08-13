@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { access, chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { access, chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -65,6 +65,25 @@ if (process.env.PLANR_SKIP_BINARY_GUARD_FIXTURES !== '1') {
       'stale binary failure must identify the repository-version mismatch',
     );
     binaryGuardAssertions.push('stale explicit binary fails with an actionable repository-version mismatch');
+
+    const setupFailureParent = path.join(fixtureRoot, 'setup-failure');
+    await mkdir(setupFailureParent);
+    const setupFailure = spawnSync(process.execPath, [verifierPath], {
+      cwd: repositoryRoot,
+      encoding: 'utf8',
+      env: {
+        ...fixtureEnvironment,
+        PLANR_BIN: '/bin',
+        TMPDIR: setupFailureParent,
+      },
+    });
+    assert.notEqual(setupFailure.status, 0, 'a configured directory must fail private binary copy');
+    assert.deepEqual(
+      await readdir(setupFailureParent),
+      [],
+      'early private binary setup failure must remove its exact captured onboarding root',
+    );
+    binaryGuardAssertions.push('early private binary setup failure removes its exact captured fixture root');
   } finally {
     await rm(fixtureRoot, { recursive: true, force: true });
   }
@@ -73,14 +92,6 @@ if (process.env.PLANR_SKIP_BINARY_GUARD_FIXTURES !== '1') {
 const onboardingRoot = await mkdtemp(path.join(tmpdir(), 'planr-docs-onboarding-'));
 const workspace = path.join(onboardingRoot, 'project');
 const planrBin = path.join(onboardingRoot, 'bin', 'planr');
-await mkdir(path.dirname(planrBin), { recursive: true });
-await mkdir(workspace);
-await copyFile(sourcePlanrBin, planrBin, constants.COPYFILE_EXCL);
-await chmod(planrBin, 0o555);
-const sourceDigest = createHash('sha256').update(await readFile(sourcePlanrBin)).digest('hex');
-const privateDigest = createHash('sha256').update(await readFile(planrBin)).digest('hex');
-assert.equal(privateDigest, sourceDigest, 'Private onboarding binary must exactly match the configured repository build');
-assert.equal((await stat(planrBin)).nlink, 1, 'Private onboarding binary must have exactly one filesystem link');
 const report = {
   workspace,
   planrBinary: planrBin,
@@ -140,6 +151,15 @@ function check(condition, message) {
 }
 
 try {
+  await mkdir(path.dirname(planrBin), { recursive: true });
+  await mkdir(workspace);
+  await copyFile(sourcePlanrBin, planrBin, constants.COPYFILE_EXCL);
+  await chmod(planrBin, 0o555);
+  const sourceDigest = createHash('sha256').update(await readFile(sourcePlanrBin)).digest('hex');
+  const privateDigest = createHash('sha256').update(await readFile(planrBin)).digest('hex');
+  assert.equal(privateDigest, sourceDigest, 'Private onboarding binary must exactly match the configured repository build');
+  assert.equal((await stat(planrBin)).nlink, 1, 'Private onboarding binary must have exactly one filesystem link');
+
   initializeRepository();
   const version = run(['--version'], { json: false });
   assert.equal(
