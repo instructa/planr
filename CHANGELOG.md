@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.10.0-alpha.5] - 2026-08-14
+
+### Fixed
+
+- Route explicit autonomous delivery requests to the Planr loop even when the repository has no plan or map yet, instead of stopping after a prep-only planning handoff.
+
 ## [1.10.0-alpha.4] - 2026-08-13
 
 ### Added
@@ -624,7 +630,8 @@ Initial Planr product release.
 - Tag-driven release pipeline with multi-target builds (darwin/linux, arm64/x86_64) and Homebrew tap automation.
 - Skill workflow documentation for Codex, Claude Code, Cursor, and MCP-only clients.
 
-[Unreleased]: https://github.com/instructa/planr/compare/v1.10.0-alpha.4...HEAD
+[Unreleased]: https://github.com/instructa/planr/compare/v1.10.0-alpha.5...HEAD
+[1.10.0-alpha.5]: https://github.com/instructa/planr/compare/v1.10.0-alpha.4...v1.10.0-alpha.5
 [1.10.0-alpha.4]: https://github.com/instructa/planr/compare/v1.10.0-alpha.2...v1.10.0-alpha.4
 [1.10.0-alpha.2]: https://github.com/instructa/planr/compare/v1.10.0-alpha.1...v1.10.0-alpha.2
 [1.10.0-alpha.1]: https://github.com/instructa/planr/compare/v1.9.0...v1.10.0-alpha.1
