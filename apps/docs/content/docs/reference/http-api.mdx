@@ -34,6 +34,7 @@ Start the server with `planr serve --port 7526`. It binds only `127.0.0.1`; ther
 | POST | `/v1/items/{id}/log`, `/v1/items/{id}/close`, `/v1/items/{id}/reviews` |
 | GET | `/v1/plans/{id}/audit`, `/v1/plans/{id}/final-product-review` |
 | POST | `/v1/plans/{id}/final-product-review` |
+| POST | `/v1/plans/{id}/run/restart`, `/v1/plans/{id}/run/resolve-budget-hold` |
 | POST | `/v1/items/{id}/approval/request`, `/v1/items/{id}/approval/approve`, `/v1/items/{id}/approval/deny` |
 | GET | `/v1/approvals?open=true` |
 | GET, POST | `/v1/items/{id}/review-evidence` |
@@ -41,6 +42,7 @@ Start the server with `planr serve --port 7526`. It binds only `127.0.0.1`; ther
 | GET, POST | `/v1/evidence/obligations` |
 | GET | `/v1/evidence/obligations/{id}` |
 | POST | `/v1/evidence/readiness` |
+| POST | `/v1/evidence/recover-settlement` |
 | GET | `/v1/evidence/capabilities` |
 | GET | `/v1/evidence/capabilities/{id}` |
 | POST | `/v1/evidence/run` |

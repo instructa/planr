@@ -37,6 +37,8 @@ const HTTP_ROUTE_MANIFEST = [
   ['GET starts_with:/v1/plans/&ends_with:/audit', '/v1/plans/{id}/audit'],
   ['GET starts_with:/v1/plans/&ends_with:/final-product-review', '/v1/plans/{id}/final-product-review'],
   ['POST starts_with:/v1/plans/&ends_with:/final-product-review', '/v1/plans/{id}/final-product-review'],
+  ['POST starts_with:/v1/plans/&ends_with:/run/restart', '/v1/plans/{id}/run/restart'],
+  ['POST starts_with:/v1/plans/&ends_with:/run/resolve-budget-hold', '/v1/plans/{id}/run/resolve-budget-hold'],
   ['GET ends_with:/items', '/v1/projects/{project_id}/items'], ['POST ends_with:/items', '/v1/projects/{project_id}/items'],
   ['GET ends_with:/unlocks', '/v1/items/{id}/unlocks'], ['GET ends_with:/preview-close', '/v1/items/{id}/preview-close'],
   ['POST exact:/v1/recover/sweep', '/v1/recover/sweep'], ['POST exact:/v1/policy/admit', '/v1/policy/admit'],
@@ -44,6 +46,7 @@ const HTTP_ROUTE_MANIFEST = [
   ['GET exact:/v1/evidence/obligations', '/v1/evidence/obligations'],
   ['POST exact:/v1/evidence/obligations', '/v1/evidence/obligations'],
   ['POST exact:/v1/evidence/readiness', '/v1/evidence/readiness'],
+  ['POST exact:/v1/evidence/recover-settlement', '/v1/evidence/recover-settlement'],
   ['POST exact:/v1/evidence/migrate', '/v1/evidence/migrate'],
   ['GET exact:/v1/evidence/classifications', '/v1/evidence/classifications'],
   ['GET starts_with:/v1/evidence/obligations/', '/v1/evidence/obligations/{id}'],
@@ -173,7 +176,18 @@ try {
     ...extractEvidenceRouteSignatures(httpEvidenceSource),
   ].sort();
   const manifestedHttpRoutes = HTTP_ROUTE_MANIFEST.map(([signature]) => signature).sort();
-  assert.deepEqual(extractedHttpRoutes, manifestedHttpRoutes, 'HTTP router and checked public route manifest drifted');
+  assert.equal(new Set(extractedHttpRoutes).size, extractedHttpRoutes.length, 'HTTP router contains duplicate route signatures');
+  assert.equal(new Set(manifestedHttpRoutes).size, manifestedHttpRoutes.length, 'HTTP route manifest contains duplicate signatures');
+  assert.deepEqual(
+    extractedHttpRoutes.filter((signature) => !manifestedHttpRoutes.includes(signature)),
+    [],
+    'HTTP router contains routes missing from the checked public manifest',
+  );
+  assert.deepEqual(
+    manifestedHttpRoutes.filter((signature) => !extractedHttpRoutes.includes(signature)),
+    [],
+    'HTTP route manifest contains routes missing from the authoritative router',
+  );
   assertions.push(`HTTP route manifest exactly matches all ${manifestedHttpRoutes.length} authoritative router arms`);
   for (const [signature, route] of HTTP_ROUTE_MANIFEST) check(httpPage.includes(route), `HTTP reference covers ${signature} as ${route}`);
   check(!httpPage.includes('`/v1/evidence`'), 'HTTP reference does not advertise unsupported root /v1/evidence route');
