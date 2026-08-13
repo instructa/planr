@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { verifyGeneratedMcpInventory } from './generated-mcp-inventory.mjs';
 
 const docsRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repositoryRoot = path.dirname(path.dirname(docsRoot));
@@ -142,15 +143,12 @@ try {
   const resources = responses[2].result.resources;
   const prompts = responses[3].result.prompts;
   const mcpPage = await readFile(path.join(docsRoot, 'content', 'docs', 'reference', 'mcp.mdx'), 'utf8');
+  const generatedMcpPage = await readFile(path.join(docsRoot, 'content', 'docs', 'reference', 'mcp-schemas-generated.mdx'), 'utf8');
   const configurationPage = await readFile(path.join(docsRoot, 'content', 'docs', 'reference', 'configuration-and-storage.mdx'), 'utf8');
 
-  for (const tool of tools) {
-    const line = mcpPage.split('\n').find((candidate) => candidate.includes(`\`${tool.name}\``));
-    check(Boolean(line), `MCP reference covers tool ${tool.name}`);
-    for (const required of tool.inputSchema.required ?? []) {
-      check(line.includes(`\`${required}\``), `MCP reference records required field ${tool.name}.${required}`);
-    }
-  }
+  verifyGeneratedMcpInventory(tools, generatedMcpPage);
+  assertions.push(`generated MCP schema inventory covers all ${tools.length} runtime tools and required fields`);
+  check(mcpPage.includes('/docs/reference/mcp-schemas-generated'), 'MCP conceptual guide links the generated schema inventory');
 
   for (const link of [
     'https://switchloom.ai',
