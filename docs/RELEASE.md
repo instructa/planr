@@ -49,8 +49,9 @@ contains only `approval_id`, `source_sha`, `version`, `decision: "approved"`,
 queries the recorded GitHub Actions run and rejects a stale SHA, non-main or
 non-push run, failed conclusion, repository mismatch, or non-approved decision.
 
-External evaluation is conditional. When the evaluated workflow subject or its
-explicit evaluation policy changed since the previous release tag, also set:
+External evaluation is a stable-release gate. When the evaluated workflow
+subject or its explicit evaluation policy changed since the previous release
+tag, a stable release also requires:
 
 ```bash
 export PLANR_RELEASE_EVAL_SUITE="$HOME/projects/planr-evals/suites/planr-lean-skills-dogfood.suite.json"
@@ -95,7 +96,7 @@ The two scripts enforce, in order:
 4. the candidate build synchronizes `Cargo.lock`, then regenerates and strictly checks both references without Git mutation;
 5. candidate source, changelog, contracts, and generated files are committed and independently reviewed before publication approval;
 6. publication requires clean `main`, the exact prepared versions/references, a committed changelog section, and no existing tag;
-7. publication validates the exact-SHA CI and approval receipts; when the evaluated subject or policy changed, the reviewed candidate binary also validates the sanitized eval receipt and recomputed comparison;
+7. publication validates the exact-SHA CI and approval receipts; a stable release whose evaluated subject or policy changed also validates the sanitized eval receipt and recomputed comparison;
 8. publication creates and pushes only the annotated `vx.y.z` tag for that reviewed commit.
 
 Two independent gates back the script:
@@ -123,6 +124,15 @@ The changelog section requirement applies verbatim (`## [1.2.0-alpha.1]`). What 
 - The **Homebrew tap never moves** on pre-release tags.
 
 Only `-alpha.N`, `-beta.N`, and `-rc.N` suffixes are accepted; everything else the script rejects.
+
+Pre-release publication deliberately does not require a model-evaluation
+receipt before publication. It still requires a clean exact commit on `main`,
+the authenticated green CI promotion receipt, human approval bound to that SHA
+and version, synchronized manifests and generated references, and the committed
+changelog/release contracts. After publication, install that exact prerelease
+and dogfood the installed artifact. That dogfood evidence informs and gates the
+next promotion decision; it is never fabricated from the pre-publication source
+tree. Stable publication keeps the conditional evaluation gate described above.
 
 ## Automated Release Pipeline
 

@@ -6,27 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-## [1.10.0-alpha.4] - 2026-08-08
+## [1.10.0-alpha.4] - 2026-08-13
 
 ### Added
 
-- Add a repository-owned AC-014 fresh-arm runner and deterministic proof fixtures for fresh-root relocation, path-bound Evidence regeneration, session resolution, monitor ceilings, and immutable benchmark result recording.
-- Add the alpha.4 AC-014 experiment contract with unchanged model, effort, product spec, oracle, browser surface, and ceilings, plus explicit Fix13/Fix14 non-reuse history.
+- Add durable FeatureRun execution state for bounded outcome batches, materiality-based ReviewGates, source freezes, fresh verifier handoffs, and one final independent product review.
+- Add shared Evidence-ownership guidance that stops product makers at a capability gap instead of letting them author verification policy, schemas, adapters, migrations, or run indexes.
 
 ### Changed
 
-- Stop compatible maker batching at a typed source-frozen verification handoff instead of leasing verification-classified map work to the implementation maker.
-- Bind verification work packets to the ready verification item, active source freeze, distinct verifier lease, and sealed run input so exact-source Evidence coverage owns verification settlement.
+- Keep benchmark orchestration outside Planr Core so the product owns provider-neutral planning, execution, Evidence, and review contracts while the external suite owns comparative scoring.
+- Allow reviewed prereleases to be published from exact clean `main` after authenticated CI promotion and exact-SHA human approval, then dogfood the globally installed prerelease; stable promotion still requires current evaluation when its subject or policy changed.
 
 ### Fixed
 
-- Reject stale-source coverage, same-worker verification, missing verification item leases, and duplicate final product review paths without creating covering receipts.
-- Align CLI rendering, MCP-facing DTOs, and shipped Planr skills with the code -> freeze -> fresh verifier -> final review transition.
+- Recover interrupted verification settlement without duplicating ownership, receipts, or review paths, and preserve causal source binding through finding repair and refreeze.
+- Align CLI, MCP, HTTP, generated references, and shipped skills on the code -> freeze -> fresh verifier -> final review transition.
 
 ### Migration Notes
 
-- Existing alpha.3 benchmark records remain immutable. Do not resume or reuse Fix13/Fix14 attempts; append any later result as a new immutable AC-014 result with raw session ids, transcript hashes, wall time, tokens, tool-call envelopes, oracle status, and stop reason.
-- Candidate preparation is versioned source only. Publication still requires the exact alpha.4 source to pass the canonical verification policy, the fresh AC-014 arm, release evaluation, independent final product review, and explicit release approval.
+- Existing alpha.3 project state remains readable through the current FeatureRun and Evidence contracts; no benchmark runtime is shipped from Planr Core.
+- Candidate preparation remains versioned source only. Alpha.4 publication requires the exact clean `main` SHA, authenticated green CI promotion, committed release contracts, and explicit human approval. Evaluate and dogfood the exact installed prerelease after publication before any later promotion decision.
 
 ## [1.10.0-alpha.3] - 2026-08-05
 

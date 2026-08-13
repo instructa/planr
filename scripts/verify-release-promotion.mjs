@@ -24,6 +24,7 @@ const EVALUATION_POLICY_PATHS = [
   "scripts/verify-release-eval-receipt.mjs",
   "scripts/verify-release-promotion.mjs",
 ];
+const RELEASE_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+(?:-(alpha|beta|rc)\.[0-9]+)?$/u;
 
 function option(name, { required = false } = {}) {
   const index = process.argv.indexOf(name);
@@ -52,6 +53,9 @@ function exactKeys(value, keys, label) {
 }
 
 const version = option("--version", { required: true });
+const versionMatch = RELEASE_VERSION.exec(version);
+assert.ok(versionMatch, "release version is invalid");
+const releaseChannel = versionMatch[1] ?? "stable";
 const ciReceipt = jsonFile(option("--ci-receipt", { required: true }), "CI promotion receipt");
 const approval = jsonFile(option("--approval", { required: true }), "release approval");
 const head = run("git", ["rev-parse", "--verify", "HEAD^{commit}"]);
@@ -141,7 +145,7 @@ const changed = baseTag
   : [...EVALUATED_SUBJECT_PATHS, ...EVALUATION_POLICY_PATHS];
 const evalTriggerPaths = changed.filter((candidate) =>
   EVALUATED_SUBJECT_PATHS.includes(candidate) || EVALUATION_POLICY_PATHS.includes(candidate));
-const evaluationRequired = evalTriggerPaths.length > 0;
+const evaluationRequired = releaseChannel === "stable" && evalTriggerPaths.length > 0;
 
 if (evaluationRequired) {
   const evalReceipt = option("--eval-receipt", { required: true });
@@ -162,6 +166,9 @@ console.log(JSON.stringify({
   source_sha: head,
   ci_run_id: ciReceipt.run_id,
   approval_id: approval.approval_id,
-  evaluation: evaluationRequired ? "verified" : "not_required",
+  release_channel: releaseChannel,
+  evaluation: evaluationRequired
+    ? "verified"
+    : releaseChannel === "stable" ? "not_required" : "not_required_before_prerelease",
   evaluation_trigger_paths: evalTriggerPaths,
 }));

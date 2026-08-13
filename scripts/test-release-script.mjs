@@ -322,12 +322,18 @@ const approval = {
 };
 write(path.join(promotionRoot, "ci.json"), `${JSON.stringify(ciReceipt)}\n`);
 write(path.join(promotionRoot, "approval.json"), `${JSON.stringify(approval)}\n`);
-function verifyPromotion({ receipt = "ci.json", authenticReceipt = "ci.json", env = {} } = {}) {
+function verifyPromotion({
+  receipt = "ci.json",
+  authenticReceipt = "ci.json",
+  approvalFile = "approval.json",
+  requestedVersion = version,
+  env = {},
+} = {}) {
   return spawnSync(process.execPath, [
     "scripts/verify-release-promotion.mjs",
-    "--version", version,
+    "--version", requestedVersion,
     "--ci-receipt", receipt,
-    "--approval", "approval.json",
+    "--approval", approvalFile,
   ], {
     cwd: promotionRoot,
     encoding: "utf8",
@@ -348,6 +354,20 @@ const failedCi = verifyPromotion({ env: { GH_CONCLUSION: "failure" } });
 assert.notEqual(failedCi.status, 0, "authoritative failed CI must block promotion");
 const evalRequired = verifyPromotion({ env: { DIFF_PATHS: "plugins/planr/skills/planr-loop/SKILL.md" } });
 assert.notEqual(evalRequired.status, 0, "evaluated-subject changes must require external eval evidence");
+const prereleaseVersion = `${version}-alpha.1`;
+write(path.join(promotionRoot, "prerelease-approval.json"), `${JSON.stringify({
+  ...approval,
+  approval_id: "approval-prerelease-123",
+  version: prereleaseVersion,
+})}\n`);
+const prereleasePromotion = verifyPromotion({
+  approvalFile: "prerelease-approval.json",
+  requestedVersion: prereleaseVersion,
+  env: { DIFF_PATHS: "plugins/planr/skills/planr-loop/SKILL.md" },
+});
+assert.equal(prereleasePromotion.status, 0, prereleasePromotion.stderr);
+assert.equal(JSON.parse(prereleasePromotion.stdout).release_channel, "alpha");
+assert.equal(JSON.parse(prereleasePromotion.stdout).evaluation, "not_required_before_prerelease");
 
 function rejectBoundMutation(name, mutate, errorPattern, message) {
   const candidate = mutate(structuredClone(ciReceipt));
@@ -429,6 +449,7 @@ console.log(JSON.stringify({
   fail_closed_cases: ["lockfile drift", "reference drift", "stale changelog comparison", "missing changelog comparison", "unprepared version"],
   exact_sha_promotion: true,
   repeated_publication_gates: 0,
-  conditional_external_evaluation: true,
+  stable_external_evaluation: true,
+  prerelease_prepublication_evaluation: false,
   rejected_receipt_binding_regressions: 7,
 }, null, 2));
