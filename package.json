@@ -1,6 +1,6 @@
 {
   "name": "planr",
-  "version": "1.10.0-alpha.4",
+  "version": "1.10.0-alpha.5",
   "description": "Local-first planning and execution coordination for coding agents.",
   "license": "MIT",
   "repository": {
