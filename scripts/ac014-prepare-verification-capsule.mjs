@@ -193,8 +193,8 @@ export function sealLaunchCapsule(draftPath, injected = {}) {
 }
 
 function buildEvidenceConfiguration({ ids, paths, sourceRevision, sourceTree, reportPath, request }) {
-  const type = `${ids.namespace}.v1`;
-  const schemaRef = `schema://${type}`;
+  const type = ids.type;
+  const schemaRef = ids.schemaRef;
   const target = { kind: "process", uri: `local://planr2/ac014/${FIXED.plan_id}/${sourceRevision.slice(0, 12)}` };
   const exact = { status: "passed", plan_id: FIXED.plan_id, verification_item_id: FIXED.verification_item_id, accepted_gate_id: FIXED.gate_id, baseline_sha: FIXED.baseline_revision, planr_candidate_source_revision: sourceRevision, planr_candidate_source_tree: sourceTree, planr_candidate_binary_sha256: request.planr_binary_sha256, oracle_plan_id: FIXED.oracle_plan_id, runner_invocations: 1, codex_exec_invocations: 1, evidence_adapter_runs: 1, retry: false, resume: false, cleanup_status: "passed" };
   const properties = Object.fromEntries(Object.entries(exact).map(([key, value]) => [key, { const: value }]));
@@ -217,7 +217,7 @@ function buildEvidenceConfiguration({ ids, paths, sourceRevision, sourceTree, re
   policy.policy_digest = shaJson(policy);
   const observation = { id: ids.requirement, type, subject: "One terminal result bound to the post-review seal, exact candidate, and current verifier lease", expected: exact, target, payload_schema: { schema_ref: schemaRef } };
   const migration = { schema_version: "planr.evidence.migration.v1", plan_id: FIXED.plan_id, obligations: [{ id: ids.obligation, schema_version: "evidence.contract.v1", criterion_id: "AC014-CUMULATIVE-ONE-TERMINAL-ARM", plan_id: FIXED.plan_id, item_id: FIXED.verification_item_id, title: `Post-review sealed Planr 2.0 one-shot AC-014 terminal arm (${sourceRevision.slice(0, 12)})`, binding: true, observations: [observation], fixture_policy: policy.fixture_policy, freshness_policy: policy.freshness_policy, assurance_policy: {}, supersedes: request.superseded_obligation_id }] };
-  const configuredRunIndex = { schema_version: "planr.ac014.evidence_run_configuration.v2", plan_id: FIXED.plan_id, obligation_id: ids.obligation, manifest_id: ids.manifest, target, review_required: true, post_review_seal_path: paths.seal };
+  const configuredRunIndex = { schema_version: "planr.ac014.evidence_run_configuration.v2", plan_id: FIXED.plan_id, obligation_id: ids.obligation, manifest_id: ids.manifest, observation_type: type, schema_ref: schemaRef, schema_path: ids.schemaPath, target, review_required: true, post_review_seal_path: paths.seal };
   return { policy, schema, manifest, migration, configuredRunIndex, schemaPath: ids.schemaPath, manifestPath: ids.manifestPath, migrationPath: `.planr/evidence/obligations/${ids.obligation}.migration.json`, configuredRunIndexPath: `.planr/evidence/obligations/${ids.obligation}.run-index.json` };
 }
 
@@ -277,7 +277,8 @@ function runtimePaths(short) {
 
 function identities(short) {
   const namespace = `com.planr.planr2.ac014.terminal_arm.${short}`;
-  return { namespace, policy: `epolicy-planr2-ac014-${short}-v2`, preset: `preset-verifier-planr2-ac014-${short}-v2`, observation: `obs-verifier-planr2-ac014-${short}-v2`, requirement: `obs-planr2-ac014-${short}-v2`, obligation: `pob-planr2-ac014-${short}-v2`, manifest: `verifier-planr2-ac014-${short}-v2`, runtime: `runtime-planr2-ac014-${short}-v2`, manifestPath: `.planr/evidence/adapters/verifier-planr2-ac014-${short}-v2.manifest.json`, schemaPath: `.planr/evidence/schemas/${namespace}.v2.schema.json` };
+  const type = `${namespace}.v2`;
+  return { namespace, type, schemaRef: `schema://${type}`, policy: `epolicy-planr2-ac014-${short}-v2`, preset: `preset-verifier-planr2-ac014-${short}-v2`, observation: `obs-verifier-planr2-ac014-${short}-v2`, requirement: `obs-planr2-ac014-${short}-v2`, obligation: `pob-planr2-ac014-${short}-v2`, manifest: `verifier-planr2-ac014-${short}-v2`, runtime: `runtime-planr2-ac014-${short}-v2`, manifestPath: `.planr/evidence/adapters/verifier-planr2-ac014-${short}-v2.manifest.json`, schemaPath: `.planr/evidence/schemas/${type}.schema.json` };
 }
 
 function findAvailableCapability(value, manifestId) {

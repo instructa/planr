@@ -115,6 +115,7 @@ function sealDependencies(value) {
   assert.equal(existsSync(value.request.result_path), false);
   assert.equal(existsSync(value.request.codex_home), false);
   assert.equal(statSync(value.draftPath).mode & 0o222, 0);
+  assertGeneratedSchemaIdentity(value);
 }
 
 {
@@ -189,6 +190,31 @@ process.stdout.write("AC-014 two-stage capsule preparation tests passed\n");
 function sealWithoutPaths(seal) {
   const { handoff_path: _handoff, runner_input_path: _runner, run_input_path: _run, ...authorization } = seal;
   return authorization;
+}
+
+function assertGeneratedSchemaIdentity(value) {
+  const short = value.revision.slice(0, 12);
+  const type = `com.planr.planr2.ac014.terminal_arm.${short}.v2`;
+  const schemaRef = `schema://${type}`;
+  const schemaPath = `.planr/evidence/schemas/${type}.schema.json`;
+  const policy = JSON.parse(readFileSync(path.join(value.root, ".planr/evidence.yaml"), "utf8"));
+  const schema = JSON.parse(readFileSync(path.join(value.root, schemaPath), "utf8"));
+  const manifest = JSON.parse(readFileSync(path.join(value.root, `.planr/evidence/adapters/verifier-planr2-ac014-${short}-v2.manifest.json`), "utf8"));
+  const migration = JSON.parse(readFileSync(path.join(value.root, `.planr/evidence/obligations/pob-planr2-ac014-${short}-v2.migration.json`), "utf8"));
+  const runIndex = JSON.parse(readFileSync(path.join(value.root, `.planr/evidence/obligations/pob-planr2-ac014-${short}-v2.run-index.json`), "utf8"));
+  const registration = policy.observation_schema_registrations[0];
+  const adapter = policy.adapter_registrations[0];
+  const observation = migration.obligations[0].observations[0];
+  assert.deepEqual({ type: schema.type, schema_ref: schema.schema_ref }, { type, schema_ref: schemaRef });
+  assert.deepEqual({ type: registration.type, schema_ref: registration.schema_ref }, { type, schema_ref: schemaRef });
+  assert.deepEqual(policy.named_presets[0].observations[0].type, type);
+  assert.deepEqual(adapter.observation_types, [type]);
+  assert.deepEqual(adapter.payload_schemas[0], { type, schema_ref: schemaRef, schema_digest: registration.schema_digest });
+  assert.deepEqual(manifest.supported_observations[0], adapter.payload_schemas[0]);
+  assert.deepEqual(observation.type, type);
+  assert.deepEqual(observation.payload_schema, { schema_ref: schemaRef });
+  assert.deepEqual({ observation_type: runIndex.observation_type, schema_ref: runIndex.schema_ref, schema_path: runIndex.schema_path }, { observation_type: type, schema_ref: schemaRef, schema_path: schemaPath });
+  assert.equal(existsSync(path.join(value.root, `.planr/evidence/schemas/com.planr.planr2.ac014.terminal_arm.${short}.v1.schema.json`)), false);
 }
 
 function git(root, revision) {
