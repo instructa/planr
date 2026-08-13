@@ -38,8 +38,8 @@ Evaluate top to bottom; pick the first row that matches both intent and state:
 
 | Intent | State condition | Route |
 | --- | --- | --- |
-| "set up a goal", "prepare a /goal run", broad long-running goal not yet planned | no plan or contract for that scope | `planr-goal` (prep only, prints the loop starter) |
 | "build until done", "loop", "finish this feature autonomously" | any | `planr-loop` |
+| "set up a goal", "prepare a /goal run", or another explicitly prep-only goal request | no plan or contract for that scope | `planr-goal` (prep only, prints the loop starter) |
 | status, "what's left", "what's blocked" | any | `planr-status` |
 | summary of completed scope | any | `planr-summary` |
 | new idea, PRD, scope, architecture | no plan, or plan needs refinement | `planr-plan` |
@@ -53,6 +53,7 @@ Evaluate top to bottom; pick the first row that matches both intent and state:
 ## Rules
 
 - Route to exactly one skill per dispatch. If the request spans stages (idea -> running feature), route to `planr-loop` and let the loop sequence the stages.
+- Explicit delivery language such as "implement", "work autonomously until complete", or "finish this" outranks missing plan or map state and routes to `planr-loop`. Never turn a delivery request into a prep-only handoff.
 - Never skip a stage: no map items without a checked build plan, no FeatureRun completion without its required ReviewGates, and no review verdict without evidence.
 - When delegating to a subagent, prompt it with a skill reference plus item id (for example: `Use $planr-work on item <id>`), never with a hand-written workflow prompt.
 - The maker never reviews its own work. Reviews run through `planr-review` in a separate agent or subagent whenever the host supports it.

@@ -126,6 +126,11 @@ function installedHostAssets() {
 
 assert.match(goal, /small coherent change is one implementation item plus one signal-bearing independent review/u);
 assert.match(goal, /versioned verification policy and source-bound receipt runner/u);
+const autonomousLoopRoute = router.indexOf('| "build until done", "loop", "finish this feature autonomously"');
+const prepOnlyGoalRoute = router.indexOf('| "set up a goal", "prepare a /goal run", or another explicitly prep-only goal request');
+assert.ok(autonomousLoopRoute !== -1 && prepOnlyGoalRoute !== -1 && autonomousLoopRoute < prepOnlyGoalRoute, "autonomous delivery must route before prep-only goal work");
+assert.match(router, /Explicit delivery language such as "implement", "work autonomously until complete", or "finish this" outranks missing plan or map state and routes to `planr-loop`/u);
+assert.doesNotMatch(router, /broad long-running goal not yet planned/u);
 assert.match(evidenceGuard, /record the exact Planr capability gap or hold—including its gap code, capability, and next action—and stop/u);
 assert.match(evidenceGuard, /Never author an Evidence policy, schema, capability manifest, adapter, migration, or run index to bypass that hold unless verification infrastructure is explicitly the requested product/u);
 for (const [name, contents] of productEntrySkills) {
