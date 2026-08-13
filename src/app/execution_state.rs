@@ -549,7 +549,7 @@ impl App {
                 anyhow::anyhow!("verification_handoff_execution_state_missing:{plan_id}")
             })?;
         let lease_verifier = canonical_planr_command(
-            &planr_executable,
+            planr_executable,
             vec![
                 "pick".to_string(),
                 "--plan".to_string(),
@@ -560,7 +560,7 @@ impl App {
             ],
         );
         let readiness = canonical_planr_command(
-            &planr_executable,
+            planr_executable,
             vec![
                 "evidence".to_string(),
                 "readiness".to_string(),
@@ -633,7 +633,7 @@ impl App {
                 anyhow::anyhow!("final_review_handoff_execution_state_missing:{plan_id}")
             })?;
         let open_final_review = canonical_planr_command(
-            &planr_executable,
+            planr_executable,
             vec![
                 "plan".to_string(),
                 "final-review".to_string(),

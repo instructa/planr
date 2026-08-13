@@ -81,6 +81,34 @@ const report = {
   ],
 };
 
+function initializeRepository() {
+  const gitEnvironment = {
+    ...process.env,
+    GIT_AUTHOR_NAME: 'Planr Onboarding Fixture',
+    GIT_AUTHOR_EMAIL: 'onboarding@example.invalid',
+    GIT_AUTHOR_DATE: '2000-01-01T00:00:00Z',
+    GIT_COMMITTER_NAME: 'Planr Onboarding Fixture',
+    GIT_COMMITTER_EMAIL: 'onboarding@example.invalid',
+    GIT_COMMITTER_DATE: '2000-01-01T00:00:00Z',
+  };
+  for (const args of [
+    ['init', '--quiet', '--initial-branch=main'],
+    [
+      '-c', 'commit.gpgSign=false',
+      '-c', 'core.hooksPath=/dev/null',
+      'commit', '--quiet', '--allow-empty', '--message', 'Initialize onboarding fixture',
+    ],
+  ]) {
+    const result = spawnSync('git', args, {
+      cwd: workspace,
+      encoding: 'utf8',
+      env: gitEnvironment,
+    });
+    assert.equal(result.status, 0, `git ${args.join(' ')}\n${result.stderr || result.stdout}`);
+  }
+  report.assertions.push('temporary onboarding project starts from a deterministic local Git commit');
+}
+
 function run(args, { worker, json = true } = {}) {
   const command = `planr ${args.join(' ')}`;
   const result = spawnSync(planrBin, args, {
@@ -100,6 +128,7 @@ function check(condition, message) {
 }
 
 try {
+  initializeRepository();
   const version = run(['--version'], { json: false });
   assert.equal(
     version.trim(),

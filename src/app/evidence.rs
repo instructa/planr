@@ -1818,11 +1818,13 @@ impl App {
                 let settlement = self.settle_exhausted_verification_attempt_in_transaction(
                     conn,
                     lease,
-                    obligation_id.as_str(),
-                    attempt.id.as_str(),
-                    attempt_index,
-                    max_attempts,
-                    &manifest.repeatability,
+                    super::feature_run_evidence::VerificationAttemptExhaustion {
+                        obligation_id: obligation_id.as_str(),
+                        attempt_id: attempt.id.as_str(),
+                        attempt_index,
+                        max_attempts,
+                        repeatability: &manifest.repeatability,
+                    },
                 )?;
                 *terminal_settlement.borrow_mut() = Some(settlement);
             }

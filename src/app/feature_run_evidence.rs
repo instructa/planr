@@ -72,6 +72,14 @@ pub(crate) struct CanonicalFeatureRunEvidenceLease {
     pub(crate) source_digest: String,
 }
 
+pub(crate) struct VerificationAttemptExhaustion<'a> {
+    pub(crate) obligation_id: &'a str,
+    pub(crate) attempt_id: &'a str,
+    pub(crate) attempt_index: u32,
+    pub(crate) max_attempts: u32,
+    pub(crate) repeatability: &'a str,
+}
+
 pub(crate) type FeatureRunBudgetReservation = BudgetReservationRecord;
 
 fn add_selective_replay_metadata(
@@ -556,12 +564,15 @@ impl App {
         &self,
         conn: &rusqlite::Connection,
         lease: &CanonicalFeatureRunEvidenceLease,
-        obligation_id: &str,
-        attempt_id: &str,
-        attempt_index: u32,
-        max_attempts: u32,
-        repeatability: &str,
+        exhaustion: VerificationAttemptExhaustion<'_>,
     ) -> Result<(String, String)> {
+        let VerificationAttemptExhaustion {
+            obligation_id,
+            attempt_id,
+            attempt_index,
+            max_attempts,
+            repeatability,
+        } = exhaustion;
         if conn.is_autocommit() {
             bail!("verification_exhaustion_requires_active_transaction");
         }
@@ -3222,11 +3233,13 @@ allow_overwrite = true
             .settle_exhausted_verification_attempt_in_transaction(
                 &app.conn,
                 &lease,
-                "pob-phase-ready",
-                "attempt-repeatable",
-                0,
-                1,
-                "repeatable",
+                VerificationAttemptExhaustion {
+                    obligation_id: "pob-phase-ready",
+                    attempt_id: "attempt-repeatable",
+                    attempt_index: 0,
+                    max_attempts: 1,
+                    repeatability: "repeatable",
+                },
             )
             .unwrap_err();
         app.conn.execute_batch("ROLLBACK").unwrap();
@@ -3245,11 +3258,13 @@ allow_overwrite = true
             .settle_exhausted_verification_attempt_in_transaction(
                 &app.conn,
                 &lease,
-                "pob-phase-ready",
-                "attempt-final",
-                0,
-                1,
-                "non_repeatable_one_shot",
+                VerificationAttemptExhaustion {
+                    obligation_id: "pob-phase-ready",
+                    attempt_id: "attempt-final",
+                    attempt_index: 0,
+                    max_attempts: 1,
+                    repeatability: "non_repeatable_one_shot",
+                },
             )
             .unwrap();
         app.conn.execute_batch("COMMIT").unwrap();
