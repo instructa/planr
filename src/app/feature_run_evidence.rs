@@ -3085,16 +3085,6 @@ allow_overwrite = true
         };
         add_outcome(&app, "item-one-shot");
         add_verification_outcome(&app, "item-one-shot-verifier");
-        let run = app
-            .ensure_outcome_feature_run("item-one-shot")
-            .unwrap()
-            .unwrap();
-        app.conn
-            .execute(
-                "UPDATE feature_run_role_leases SET worker_id = 'maker-other' WHERE run_id = ?1 AND role = 'maker' AND released_at IS NULL",
-                [&run.run.id],
-            )
-            .unwrap();
         app.conn
             .execute(
                 "INSERT INTO proof_obligations(
@@ -3119,6 +3109,16 @@ allow_overwrite = true
                     .to_string(),
                     policy_digest,
                 ],
+            )
+            .unwrap();
+        let run = app
+            .ensure_outcome_feature_run("item-one-shot")
+            .unwrap()
+            .unwrap();
+        app.conn
+            .execute(
+                "UPDATE feature_run_role_leases SET worker_id = 'maker-other' WHERE run_id = ?1 AND role = 'maker' AND released_at IS NULL",
+                [&run.run.id],
             )
             .unwrap();
         assert!(
@@ -3432,16 +3432,6 @@ allow_overwrite = true
         initialize_git(root.path());
         let app = test_app(root.path().to_path_buf());
         add_outcome(&app, "item-happy-path");
-        let run = app
-            .ensure_outcome_feature_run("item-happy-path")
-            .unwrap()
-            .unwrap();
-        app.conn
-            .execute(
-                "UPDATE feature_run_role_leases SET worker_id = 'maker-other' WHERE run_id = ?1 AND role = 'maker' AND released_at IS NULL",
-                [&run.run.id],
-            )
-            .unwrap();
         app.conn
             .execute(
                 "INSERT INTO proof_obligations(
@@ -3466,6 +3456,16 @@ allow_overwrite = true
                     .to_string(),
                     policy_digest,
                 ],
+            )
+            .unwrap();
+        let run = app
+            .ensure_outcome_feature_run("item-happy-path")
+            .unwrap()
+            .unwrap();
+        app.conn
+            .execute(
+                "UPDATE feature_run_role_leases SET worker_id = 'maker-other' WHERE run_id = ?1 AND role = 'maker' AND released_at IS NULL",
+                [&run.run.id],
             )
             .unwrap();
 
@@ -3761,21 +3761,6 @@ allow_overwrite = true
             add_outcome(&app, item_id);
         }
         add_verification_outcome(&app, "item-verifier");
-        let run = app
-            .ensure_outcome_feature_run("item-batch-a")
-            .unwrap()
-            .unwrap();
-        let non_material =
-            json!({"decision": {"material": false, "review": "none", "reasons": []}});
-        for item_id in ["item-batch-a", "item-batch-b"] {
-            app.settle_feature_run_outcome(OutcomeSettlement {
-                item_id,
-                summary: "compatible batched maker outcome",
-                materiality: &non_material,
-                escalation: None,
-            })
-            .unwrap();
-        }
         for (obligation_id, criterion_id) in [
             ("pob-a-product-failure", "criterion-a-product-failure"),
             ("pob-b-ready", "criterion-b-ready"),
@@ -3816,6 +3801,21 @@ allow_overwrite = true
                     ],
                 )
                 .unwrap();
+        }
+        let run = app
+            .ensure_outcome_feature_run("item-batch-a")
+            .unwrap()
+            .unwrap();
+        let non_material =
+            json!({"decision": {"material": false, "review": "none", "reasons": []}});
+        for item_id in ["item-batch-a", "item-batch-b"] {
+            app.settle_feature_run_outcome(OutcomeSettlement {
+                item_id,
+                summary: "compatible batched maker outcome",
+                materiality: &non_material,
+                escalation: None,
+            })
+            .unwrap();
         }
         app.conn
             .execute(
@@ -3911,7 +3911,6 @@ allow_overwrite = true
     }
 
     fn seed_receipt_bound_settlement(app: &App, policy_digest: &str) -> String {
-        seed_settlement_obligation(app, policy_digest);
         seed_receipt_for_existing_settlement_obligation(app, policy_digest)
     }
 
@@ -4121,6 +4120,7 @@ allow_overwrite = true
         let app = App::new(conn, root.path().to_path_buf(), database_path, true, false);
         add_outcome(&app, "item-settle-maker");
         add_verification_item(&app, "item-settle-verification");
+        seed_settlement_obligation(&app, &policy_digest);
         let run = app
             .ensure_outcome_feature_run("item-settle-maker")
             .unwrap()
@@ -6535,8 +6535,7 @@ allow_overwrite = true
 
     #[test]
     fn settlement_does_not_close_without_satisfied_leased_coverage() {
-        let (_root, app, policy_digest) = settlement_app();
-        seed_settlement_obligation(&app, &policy_digest);
+        let (_root, app, _policy_digest) = settlement_app();
         app.verification_work_packet_value("plan-a", false).unwrap();
         let missing = app
             .evidence_coverage_value(crate::cli::EvidenceCoverageScope::Plan, "plan-a")
@@ -6580,7 +6579,6 @@ allow_overwrite = true
     #[test]
     fn stale_source_and_close_conflict_do_not_persist_verification_settlement() {
         let (root, app, policy_digest) = settlement_app();
-        seed_settlement_obligation(&app, &policy_digest);
         seed_receipt_for_existing_settlement_obligation(&app, &policy_digest);
         std::fs::write(root.path().join("after-freeze.txt"), "stale\n").unwrap();
         let stale = app
@@ -6663,8 +6661,7 @@ allow_overwrite = true
 
     #[test]
     fn waived_only_plan_coverage_does_not_close_verification_item() {
-        let (_root, app, policy_digest) = settlement_app();
-        seed_settlement_obligation(&app, &policy_digest);
+        let (_root, app, _policy_digest) = settlement_app();
         app.verification_work_packet_value("plan-a", false)
             .unwrap()
             .unwrap();

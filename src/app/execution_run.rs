@@ -1258,8 +1258,11 @@ mod tests {
         App::new(conn, root.to_path_buf(), db.to_path_buf(), true, false)
     }
 
-    fn test_app() -> App {
-        test_app_at(PathBuf::from("."))
+    fn test_app() -> (tempfile::TempDir, App) {
+        let root = tempfile::tempdir().expect("test root");
+        initialize_test_git(root.path());
+        let app = test_app_at(root.path().to_path_buf());
+        (root, app)
     }
 
     fn add_outcome(app: &App, id: &str) {
@@ -1976,7 +1979,7 @@ mod tests {
 
     #[test]
     fn restart_application_is_atomic_idempotent_and_rejects_a_healthy_run() {
-        let app = test_app();
+        let (_root, app) = test_app();
         seed_incompatible_feature_run(&app, "run-incompatible-app");
         let first = app
             .restart_feature_run_value("plan-a", FeatureRunRestartReason::IncompatibleBudget)
@@ -2012,7 +2015,7 @@ mod tests {
             1
         );
 
-        let healthy = test_app();
+        let (_healthy_root, healthy) = test_app();
         add_outcome(&healthy, "item-healthy");
         healthy
             .outcome_work_packet("item-healthy")
@@ -2028,7 +2031,7 @@ mod tests {
 
     #[test]
     fn capped_batch_rolls_to_fourth_outcome_with_same_maker_and_no_review_artifacts() {
-        let app = test_app();
+        let (_root, app) = test_app();
         add_outcome(&app, "item-a");
         add_outcome(&app, "item-b");
         add_outcome(&app, "item-c");
@@ -2121,7 +2124,7 @@ mod tests {
 
     #[test]
     fn same_maker_roll_fails_closed_for_state_owner_gate_and_double_roll() {
-        let app = test_app();
+        let (_root, app) = test_app();
         for id in ["guard-a", "guard-b", "guard-c"] {
             add_outcome(&app, id);
         }
@@ -2204,7 +2207,7 @@ mod tests {
 
     #[test]
     fn mcp_and_http_completion_inputs_share_canonical_settlement_and_structured_escalation() {
-        let app = test_app();
+        let (_root, app) = test_app();
         add_outcome(&app, "item-mcp");
         add_outcome(&app, "item-http");
         add_outcome(&app, "item-escalated");
@@ -2285,7 +2288,7 @@ mod tests {
 
     #[test]
     fn protected_checkpoint_preserves_maker_batch_and_count_across_rereview() {
-        let app = test_app();
+        let (_root, app) = test_app();
         add_outcome(&app, "item-risk");
         let settlement = app
             .settle_feature_run_outcome(OutcomeSettlement {
@@ -2397,7 +2400,7 @@ mod tests {
 
     #[test]
     fn review_override_requires_structured_reference_and_explanation() {
-        let app = test_app();
+        let (_root, app) = test_app();
         add_outcome(&app, "item-escalation");
         let rejected = app.settle_feature_run_outcome(OutcomeSettlement {
             item_id: "item-escalation",
@@ -2441,7 +2444,7 @@ mod tests {
 
     #[test]
     fn nonbinding_feature_has_one_current_independent_final_product_gate() {
-        let app = test_app();
+        let (_root, app) = test_app();
         add_outcome(&app, "item-final");
         add_ready_verification(&app, "item-legacy-verification");
         let persisted = app
@@ -2714,7 +2717,7 @@ mod tests {
 
     #[test]
     fn product_finding_invalidates_only_affected_evidence_and_routes_last_maker() {
-        let app = test_app();
+        let (_root, app) = test_app();
         add_outcome(&app, "item-product-finding");
         app.conn
             .execute(
