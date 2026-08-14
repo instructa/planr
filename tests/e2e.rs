@@ -14861,7 +14861,7 @@ fn canonical_verification_task_builds_a_sealed_verifier_packet_without_retagging
     );
     fs::remove_file(
         dir.path()
-            .join("pob-canonical-verifier-packet.obligation.json"),
+            .join("pob-canonical-verifier-packet.migration.json"),
     )
     .unwrap();
 
@@ -15751,11 +15751,6 @@ fn codex_stop_hook_enforces_active_goal_with_bounded_canonical_gaps() {
             .stdout,
     );
     let item = map["created"][0]["id"].as_str().unwrap().to_string();
-    planr()
-        .current_dir(dir.path())
-        .args(["--db", &db_arg, "close", &item, "--summary", "item done"])
-        .assert()
-        .success();
     Connection::open(&db)
         .unwrap()
         .execute_batch(
@@ -15827,6 +15822,11 @@ VALUES ('pln-stop-other', 'p-stop-other', 'build', 'other.md', 'Other Stop Plan'
     obligation["item_id"] = Value::Null;
     obligation["criterion_id"] = json!("crit-stop-missing");
     add_evidence_obligation_value(dir.path(), &db, "pob-stop-missing", &obligation);
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "close", &item, "--summary", "item done"])
+        .assert()
+        .success();
 
     planr()
         .current_dir(dir.path())
@@ -16087,7 +16087,7 @@ fn codex_stop_hook_enforces_explicit_active_plan_until_final_review_or_archive()
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
     let db_arg = db.to_str().unwrap().to_string();
-    write_evidence_policy_fixture(dir.path());
+    fs::write(dir.path().join("README.md"), "# Stop Plan\n").unwrap();
     init_git_repo(dir.path());
     init_evidence_project(dir.path(), &db, "Stop Plan");
 
@@ -22154,7 +22154,7 @@ fn capped_cli_batch_roll_preserves_same_maker_and_fourth_outcome_continues_clean
     assert_eq!(sixth["next"]["item"], Value::Null);
     assert_eq!(
         sixth["next"]["reason"],
-        "final_review_handoff_source_frozen"
+        "nonbinding_final_review_handoff_source_frozen"
     );
     assert_eq!(sixth["next"]["work_packet"]["kind"], "final_review_handoff");
 

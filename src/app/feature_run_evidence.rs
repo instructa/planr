@@ -1907,12 +1907,6 @@ impl App {
                 let _ = self.conn.execute_batch(
                     "ROLLBACK TO verification_pick; RELEASE verification_pick; ROLLBACK",
                 );
-                if error
-                    .downcast_ref::<VerificationPickReadinessError>()
-                    .is_some()
-                {
-                    self.classify_feature_run_readiness_value(plan_id, true)?;
-                }
                 return Err(error);
             }
             self.conn
