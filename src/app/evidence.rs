@@ -511,7 +511,7 @@ impl App {
                 obligation.fixture_policy.to_string(),
                 obligation.freshness_policy.to_string(),
                 obligation.assurance_policy.to_string(),
-                obligation_retry_aggregation(&obligation)?,
+                obligation_retry_aggregation(obligation)?,
                 semantic_digest,
                 obligation.supersedes.as_ref().map(|id| id.as_str()),
             ],
