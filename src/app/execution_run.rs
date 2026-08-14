@@ -199,6 +199,14 @@ impl App {
         &self,
         item_id: &str,
     ) -> Result<Option<PersistedFeatureRun>> {
+        if let Some(hold) = self.binding_evidence_hold_for_item(item_id)? {
+            bail!(
+                "binding_evidence_obligations_missing:{item_id}; next action: {}",
+                hold["next_action"]
+                    .as_str()
+                    .unwrap_or("planr evidence migrate --input <migration-file> --apply")
+            );
+        }
         let item = self.get_item(item_id)?;
         let Some(plan_path) = item.plan_path.as_deref() else {
             return Ok(None);
@@ -1203,6 +1211,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
+    use super::super::proof::PlanEvidenceAuthority;
     use super::super::repository::execution_run::{
         ReviewSourceBindingRecord, SourceFreezeRecord, SourceFreezeStatus,
     };
@@ -1872,7 +1881,7 @@ mod tests {
     }
 
     #[test]
-    fn late_binding_between_legacy_preflight_and_refresh_fails_without_mutation() {
+    fn late_binding_between_nonbinding_preflight_and_refresh_fails_without_mutation() {
         let root = tempfile::tempdir().expect("root");
         let state = tempfile::tempdir().expect("state");
         initialize_test_git(root.path());
@@ -1887,9 +1896,10 @@ mod tests {
             .expect("frozen run");
         let run_id = frozen["feature_run"]["id"].as_str().unwrap();
         let original_freeze_id = frozen["source_freeze"]["id"].as_str().unwrap();
-        assert!(
-            !app.plan_has_active_binding_obligations("plan-a")
-                .expect("legacy preflight")
+        assert_eq!(
+            app.plan_evidence_authority("plan-a")
+                .expect("nonbinding preflight"),
+            PlanEvidenceAuthority::NonBinding
         );
 
         let migration = test_file_app(root.path(), &db, false);
@@ -1899,11 +1909,11 @@ mod tests {
             .expect("change source after freeze");
 
         let error = app
-            .refresh_legacy_final_review_source_freeze("plan-a", run_id)
+            .refresh_nonbinding_final_review_source_freeze("plan-a", run_id)
             .expect_err("late binding must fail closed");
         assert_eq!(
             error.to_string(),
-            "legacy_final_review_refresh_binding_activated:plan-a"
+            "nonbinding_final_review_refresh_evidence_authority_changed:plan-a"
         );
         let repository = ExecutionRunRepository::new(&app.conn);
         assert_eq!(
@@ -2430,7 +2440,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_nonbinding_feature_has_one_current_independent_final_product_gate() {
+    fn nonbinding_feature_has_one_current_independent_final_product_gate() {
         let app = test_app();
         add_outcome(&app, "item-final");
         add_ready_verification(&app, "item-legacy-verification");
@@ -2499,9 +2509,10 @@ mod tests {
                  );",
             )
             .expect("superseded-only binding history");
-        assert!(
-            !app.plan_has_active_binding_obligations("plan-a")
-                .expect("authoritative supersession")
+        assert_eq!(
+            app.plan_evidence_authority("plan-a")
+                .expect("authoritative supersession"),
+            PlanEvidenceAuthority::NonBinding
         );
         let first = app
             .ensure_final_product_review_gate_value("plan-a")

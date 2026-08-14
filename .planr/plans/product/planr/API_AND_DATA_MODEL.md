@@ -13,6 +13,10 @@ Eval Contract v1, including the additive v1.1 efficiency-evidence amendment, is 
 
 ## Planr 2.0 FeatureRun Budget Objects
 
+## PlanEvidenceAuthority
+
+`PlanEvidenceAuthority = nonbinding | binding_unsatisfied | binding_active` is a derived application value, not stored mutable state. `nonbinding` requires no binding repository policy and no binding plan obligations. `binding_unsatisfied` means policy requires binding Evidence but the plan has no materialized obligation. `binding_active` means authoritative binding obligation rows exist. Only `binding_active` can enter verification; only `nonbinding` can use the direct source-frozen final-review route.
+
 ### FeatureRunBudgetContract
 
 `schema = planr.feature_run_budget_contract.v2`; run id; persisted UTC run-start anchor and clock basis; explicit `bounded | unbounded` mode; optional complete wall-seconds/tool-call/token limits and five-phase allocations; per-dimension metering requirements; canonical SHA-256 digest. The contract is insert-only and is created in the same transaction as its FeatureRun. Bounded mode requires positive limits and an exact allocation of each dimension across maker, verification, review, repair, and release. Unbounded mode has neither limits nor phase reserves.

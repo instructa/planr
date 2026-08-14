@@ -1,0 +1,79 @@
+{
+  "schema_version": 3,
+  "kind": "proofloop-herdr-sol-luna/run-contract",
+  "task": {
+    "id": "alpha6-binding-evidence-lifecycle-hard-cut-harden",
+    "source": ".planr/plans/product/planr/TASKS.md",
+    "goal": "One lifecycle invariant proves that binding policy without obligations cannot lease or close implementation work.",
+    "hypothesis": "The canonical authority fails closed before item mutation, and explicit migration is the sole obligation writer."
+  },
+  "project_profile": ".proofloop/project-profile.json",
+  "phase": "harden",
+  "writer": "sol",
+  "allowed_paths": [
+    ".proofloop/**",
+    "tests/e2e.rs"
+  ],
+  "test_policy": {
+    "baseline_record": ".proofloop/evidence/alpha6-binding-evidence-harden/test-baseline.json",
+    "result_record": ".proofloop/evidence/alpha6-binding-evidence-harden/test-gate.json",
+    "ephemeral_directory": ".proofloop/evidence/alpha6-binding-evidence-harden/probes",
+    "admission_record": ".proofloop/evidence/alpha6-binding-evidence-harden/test-admission.json",
+    "permanent": {
+      "max_new_invariants": 1,
+      "max_changed_test_files": 1,
+      "max_added_test_lines": 100
+    },
+    "full_suite": {
+      "allowed": false,
+      "reason": null
+    }
+  },
+  "luna_mode": null,
+  "validation": {
+    "cwd": ".",
+    "command": "cargo test --test e2e binding_policy_without_obligations_holds_before_review -- --exact",
+    "timeout_seconds": 900,
+    "pass_criteria": [
+      "the single lifecycle invariant passes",
+      "the ready item remains unleased and unclosed",
+      "no FeatureRun starts before explicit Evidence migration"
+    ]
+  },
+  "evidence": {
+    "directory": ".proofloop/evidence/alpha6-binding-evidence-harden",
+    "required": [
+      "baseline",
+      "diff",
+      "validation-result",
+      "test-gate",
+      "handoff",
+      "pane-ownership"
+    ]
+  },
+  "budgets": {
+    "checkpoint_minutes": 15,
+    "hard_stop_minutes": 30,
+    "max_patch_batches": 1
+  },
+  "stop_conditions": [
+    "out-of-scope write",
+    "second writer or nested delegation",
+    "a second permanent invariant is proposed",
+    "full-suite execution"
+  ],
+  "manual_acceptance": {
+    "required": false,
+    "owner": "human",
+    "criteria": []
+  },
+  "cleanup": {
+    "ownership_record": ".proofloop/evidence/alpha6-binding-evidence-harden/pane-ownership.json",
+    "sentinel_process_record": ".proofloop/evidence/alpha6-binding-evidence-harden/sentinel-process.json",
+    "sentinel_state_record": ".proofloop/evidence/alpha6-binding-evidence-harden/sentinel-state.json",
+    "stop_recorded_sentinel_process": true,
+    "close_recorded_workflow_panes": true,
+    "leave_preexisting_panes_open": true,
+    "retire_sentinel_state": true
+  }
+}

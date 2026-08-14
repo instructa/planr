@@ -68,6 +68,13 @@ CLI, MCP, and HTTP restart adapters parse only the closed `incompatible-budget` 
 
 Compatible budget-hold resolution is a separate `app/feature_run_evidence` lifecycle. It resumes only the exact prior phase after one immediate transaction revalidates the persisted contract/snapshot, every active reservation and deadline, the canonical role owner, and lease generation. Incompatible contracts route to restart; capability holds, corrupt or exhausted state, missing reservations, expired deadlines, and ownership mismatch remain fail-closed. CLI, MCP, and HTTP are transport-only.
 
+## Binding Evidence Ownership
+
+- `app/evidence` owns repository-policy parsing and whether the policy requires binding Evidence.
+- `app/proof` is the sole owner of `PlanEvidenceAuthority`: `nonbinding`, `binding_unsatisfied`, or `binding_active`, derived from policy plus authoritative obligation rows.
+- FeatureRun handoff, verifier admission, audit, final-review admission, accepted-risk handoff, and stop activation consume that classification. They do not infer authority from an empty coverage list or verification logs.
+- Explicit Evidence migration remains the sole obligation writer. A missing obligation under binding policy becomes a durable capability hold, not a compatibility route.
+
 ## Backend Architecture
 
 V1 is a local backend packaged into the CLI binary:

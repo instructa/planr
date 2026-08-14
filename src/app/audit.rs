@@ -97,8 +97,7 @@ impl App {
             )
             .optional()?;
 
-        let evidence_clause =
-            plan_evidence_coverage_clause(self, plan_id, contract.is_some(), verification_logs)?;
+        let evidence_clause = plan_evidence_coverage_clause(self, plan_id, verification_logs)?;
         let proof = self.proof_status_for_plan(plan_id)?;
         let material_review_clause = self.required_material_reviews_clause(plan_id)?;
         let final_review_clause = self.final_product_review_clause_value(plan_id)?;

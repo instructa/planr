@@ -197,14 +197,6 @@ impl App {
                 },
             ),
             EvidenceCommand::Obligation(args) => match args.command {
-                EvidenceObligationCommand::Add(input) => {
-                    let value = read_json_file(&input.input)?;
-                    (
-                        "evidence.obligation.add",
-                        self.evidence_obligation_add_value(value),
-                        "evidence obligation added".to_string(),
-                    )
-                }
                 EvidenceObligationCommand::List(args) => (
                     "evidence.obligation.list",
                     self.evidence_obligations_value(
@@ -388,6 +380,17 @@ impl App {
             .map_err(|diagnostics| anyhow!("evidence policy invalid: {diagnostics}"))
     }
 
+    pub(crate) fn evidence_policy_requires_binding(&self) -> Result<bool> {
+        Ok(self
+            .evidence_policy_document()?
+            .map(|document| {
+                document.policy.defaults["binding"]
+                    .as_bool()
+                    .unwrap_or(true)
+            })
+            .unwrap_or(false))
+    }
+
     fn evidence_policy_doctor_value(&self) -> Value {
         match self.evidence_policy_value() {
             Ok(mut policy) => {
@@ -482,13 +485,12 @@ impl App {
         }))
     }
 
-    pub(crate) fn evidence_obligation_add_value(&self, value: Value) -> Result<Value> {
-        let obligation: ProofObligation = serde_json::from_value(value)?;
+    fn insert_migrated_evidence_obligation(&self, obligation: &ProofObligation) -> Result<Value> {
         let project = self.default_project()?;
         let obligation_id = obligation.id.clone();
-        let obligation_version = self.next_obligation_version(&project.id, &obligation)?;
+        let obligation_version = self.next_obligation_version(&project.id, obligation)?;
         let semantic_digest =
-            crate::canonical_json::sha256_json_digest(&serde_json::to_value(&obligation)?)?;
+            crate::canonical_json::sha256_json_digest(&serde_json::to_value(obligation)?)?;
         self.conn.execute(
             "INSERT INTO proof_obligations(
               id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
@@ -603,12 +605,12 @@ impl App {
         let mut parsed = Vec::new();
         let mut preview = Vec::new();
         let mut warnings = Vec::new();
-        let legacy_claims = self.verification_logs_for_plan(&plan_id)?;
-        if !legacy_claims.is_empty() {
+        let verification_claims = self.verification_logs_for_plan(&plan_id)?;
+        if !verification_claims.is_empty() {
             warnings.push(json!({
-                "code": "legacy_verification_claims",
-                "message": "legacy verification logs remain visible claim-only diagnostics and will not satisfy binding Evidence",
-                "count": legacy_claims.len(),
+                "code": "verification_claims_are_not_evidence",
+                "message": "verification logs remain visible claim-only diagnostics and do not satisfy binding Evidence",
+                "count": verification_claims.len(),
             }));
         }
         let mut seen_ids = BTreeSet::new();
@@ -749,8 +751,7 @@ impl App {
                             && entry["action"].as_str() == Some("create")
                     }) {
                         created.push(
-                            self.evidence_obligation_add_value(serde_json::to_value(&obligation)?)?
-                                ["obligation"]
+                            self.insert_migrated_evidence_obligation(&obligation)?["obligation"]
                                 .clone(),
                         );
                         if fail_after_creates == Some(created.len()) {
@@ -782,7 +783,7 @@ impl App {
             },
             "obligations": preview,
             "created": created,
-            "legacy_claims": legacy_claims,
+            "verification_claims": verification_claims,
             "warnings": warnings,
             "classifications": evidence_classifications_value(),
             "next_action": if apply {

@@ -145,6 +145,14 @@ impl App {
     /// (review_mode stays derivable) and the in_review transition can never
     /// be skipped silently. Same bookkeeping as a pick, scoped to one id.
     pub(crate) fn adopt_ready_item(&self, item_id: &str) -> Result<bool> {
+        if let Some(hold) = self.binding_evidence_hold_for_item(item_id)? {
+            bail!(
+                "binding_evidence_obligations_missing:{item_id}; next action: {}",
+                hold["next_action"]
+                    .as_str()
+                    .unwrap_or("planr evidence migrate --input <migration-file> --apply")
+            );
+        }
         let worker = worker_id();
         let token = short_id("pick");
         let adopted = self.conn.execute(

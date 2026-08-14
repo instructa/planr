@@ -148,6 +148,9 @@ impl App {
     /// dispatch path, this never creates a FeatureRun or admits budget. If a
     /// run already exists, expose its canonical persisted state as-is.
     fn peek_outcome_work_packet(&self, item_id: &str) -> Result<Value> {
+        if let Some(hold) = self.binding_evidence_hold_for_item(item_id)? {
+            return Ok(hold);
+        }
         let item = self.get_item(item_id)?;
         let Some(plan_path) = item.plan_path.as_deref() else {
             return Ok(json!({"kind": "outcome", "item_id": item_id}));

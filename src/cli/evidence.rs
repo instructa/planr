@@ -11,7 +11,7 @@ pub(crate) struct EvidenceArgs {
 pub(crate) enum EvidenceCommand {
     /// Parse and report the repository Evidence policy.
     Policy(EvidencePolicyArgs),
-    /// Add, list, or show proof obligations.
+    /// List or show proof obligations. Creation is owned by `evidence migrate`.
     Obligation(EvidenceObligationArgs),
     /// List or show registered verification capabilities.
     Capability(EvidenceCapabilityArgs),
@@ -53,7 +53,6 @@ pub(crate) struct EvidenceObligationArgs {
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum EvidenceObligationCommand {
-    Add(EvidenceInputArgs),
     List(EvidenceScopeFilterArgs),
     Show(EvidenceIdArgs),
 }

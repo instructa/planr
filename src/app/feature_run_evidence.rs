@@ -1907,6 +1907,12 @@ impl App {
                 let _ = self.conn.execute_batch(
                     "ROLLBACK TO verification_pick; RELEASE verification_pick; ROLLBACK",
                 );
+                if error
+                    .downcast_ref::<VerificationPickReadinessError>()
+                    .is_some()
+                {
+                    self.classify_feature_run_readiness_value(plan_id, true)?;
+                }
                 return Err(error);
             }
             self.conn
@@ -2034,7 +2040,7 @@ impl App {
         Ok(())
     }
 
-    pub(crate) fn refresh_legacy_final_review_source_freeze(
+    pub(crate) fn refresh_nonbinding_final_review_source_freeze(
         &self,
         plan_id: &str,
         run_id: &str,
@@ -2042,19 +2048,21 @@ impl App {
         let owns_transaction = self.conn.is_autocommit();
         if owns_transaction {
             self.conn.execute_batch(
-                "BEGIN IMMEDIATE; SAVEPOINT refresh_legacy_final_review_source_freeze",
+                "BEGIN IMMEDIATE; SAVEPOINT refresh_nonbinding_final_review_source_freeze",
             )?;
         }
         let result = (|| -> Result<Option<(EvidenceInvalidationRecord, SourceFreezeRecord)>> {
-            if self.plan_has_active_binding_obligations(plan_id)? {
-                bail!("legacy_final_review_refresh_binding_activated:{plan_id}");
+            if self.plan_evidence_authority(plan_id)?
+                != super::proof::PlanEvidenceAuthority::NonBinding
+            {
+                bail!("nonbinding_final_review_refresh_evidence_authority_changed:{plan_id}");
             }
             let snapshot = capture_repository_snapshot(&self.root)
-                .map_err(|error| anyhow!("capturing legacy final-review source: {error}"))?;
+                .map_err(|error| anyhow!("capturing nonbinding final-review source: {error}"))?;
             let repository = ExecutionRunRepository::new(&self.conn);
-            let active = repository
-                .active_source_freeze(run_id)?
-                .ok_or_else(|| anyhow!("legacy_final_review_source_freeze_missing:{plan_id}"))?;
+            let active = repository.active_source_freeze(run_id)?.ok_or_else(|| {
+                anyhow!("nonbinding_final_review_source_freeze_missing:{plan_id}")
+            })?;
             if active.source_revision == snapshot.source.revision
                 && active.source_digest == snapshot.source.tree_digest.as_str()
             {
@@ -2065,7 +2073,7 @@ impl App {
                 run_id: run_id.to_string(),
                 freeze_id: active.id,
                 finding_id: None,
-                reason: "legacy_final_review_source_changed".to_string(),
+                reason: "nonbinding_final_review_source_changed".to_string(),
                 affected_evidence_ids: Vec::new(),
             };
             let replacement = SourceFreezeRecord {
@@ -2082,7 +2090,7 @@ impl App {
             refreshed.source_revision = Some(replacement.source_revision.clone());
             repository.save_feature_run(&refreshed, persisted.revision)?;
             self.record_event(
-                "legacy_final_review_source_refrozen",
+                "nonbinding_final_review_source_refrozen",
                 None,
                 json!({
                     "plan_id": plan_id,
@@ -2099,13 +2107,14 @@ impl App {
         }
         match result {
             Ok(value) => {
-                self.conn
-                    .execute_batch("RELEASE refresh_legacy_final_review_source_freeze; COMMIT")?;
+                self.conn.execute_batch(
+                    "RELEASE refresh_nonbinding_final_review_source_freeze; COMMIT",
+                )?;
                 Ok(value.is_some())
             }
             Err(error) => {
                 let _ = self.conn.execute_batch(
-                    "ROLLBACK TO refresh_legacy_final_review_source_freeze; RELEASE refresh_legacy_final_review_source_freeze; ROLLBACK",
+                    "ROLLBACK TO refresh_nonbinding_final_review_source_freeze; RELEASE refresh_nonbinding_final_review_source_freeze; ROLLBACK",
                 );
                 Err(error)
             }

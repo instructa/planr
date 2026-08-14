@@ -1,32 +1,42 @@
 use super::App;
+use super::proof::PlanEvidenceAuthority;
 use anyhow::Result;
 use serde_json::{Value, json};
 
 pub(crate) fn plan_evidence_coverage_clause(
     app: &App,
     plan_id: &str,
-    contract_present: bool,
     verification_logs: Vec<Value>,
 ) -> Result<Value> {
     let coverages = app.evidence_plan_criterion_coverages_value(plan_id)?;
     if coverages.is_empty() {
-        // Pre-Evidence plans keep the frozen compatibility rule: a goal
-        // contract requires at least one verification claim, but the claim
-        // is explicitly diagnostic rather than Evidence authority.
-        return Ok(json!({
-            "clause": "verification_logged",
-            "pass": !contract_present || !verification_logs.is_empty(),
-            "required": contract_present,
-            "authority": "legacy_verification_log_compatibility",
-            "logs": verification_logs,
-            "log_authority": "claim_only",
-            "criteria": [],
-            "detail": if contract_present {
-                "no active binding Evidence criteria found; using frozen pre-Evidence compatibility"
-            } else {
-                "no active binding Evidence criteria found; verification claims are optional diagnostics"
+        return match app.plan_evidence_authority(plan_id)? {
+            PlanEvidenceAuthority::NonBinding => Ok(json!({
+                "clause": "verification_logged",
+                "pass": true,
+                "required": false,
+                "authority": "nonbinding",
+                "logs": verification_logs,
+                "log_authority": "claim_only",
+                "criteria": [],
+                "detail": "repository policy does not require binding Evidence; verification claims are optional diagnostics"
+            })),
+            PlanEvidenceAuthority::BindingUnsatisfied | PlanEvidenceAuthority::BindingActive => {
+                let proof = app.proof_status_for_plan(plan_id)?;
+                Ok(json!({
+                    "clause": "verification_logged",
+                    "pass": false,
+                    "required": true,
+                    "authority": "evidence_policy",
+                    "logs": verification_logs,
+                    "log_authority": "claim_only",
+                    "criteria": [],
+                    "actionable_now": proof["actionable_now"],
+                    "next_action": proof["next_action"],
+                    "detail": proof["completion_language"],
+                }))
             }
-        }));
+        };
     }
 
     let coverage = coverages
@@ -134,14 +144,6 @@ pub(crate) fn append_evidence_clause_human(human: &mut String, clause: &Value) {
 pub(crate) fn append_audit_proof_human(human: &mut String, proof: &Value) {
     if let Some(language) = proof["completion_language"].as_str() {
         human.push_str(&format!("\nproof: {language}"));
-    }
-    if proof["legacy_diagnostics"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .any(|diagnostic| diagnostic["authority"].as_str() == Some("claim_only"))
-    {
-        human.push_str("\nlegacy verification logs: claim_only");
     }
     if let Some(next_action) = proof["next_action"].as_str() {
         human.push_str(&format!("\nnext proof action: {next_action}"));

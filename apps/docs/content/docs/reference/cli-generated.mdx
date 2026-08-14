@@ -1682,7 +1682,7 @@ Usage: planr evidence [OPTIONS] <COMMAND>
 
 Commands:
   policy              Parse and report the repository Evidence policy
-  obligation          Add, list, or show proof obligations
+  obligation          List or show proof obligations. Creation is owned by `evidence migrate`
   capability          List or show registered verification capabilities
   run                 Run a registered process capability against a stored obligation
   import              Validate and persist an artifact import without creating trusted receipts
@@ -1722,12 +1722,11 @@ Options:
 #### `planr evidence obligation`
 
 ```text
-Add, list, or show proof obligations
+List or show proof obligations. Creation is owned by `evidence migrate`
 
 Usage: planr evidence obligation [OPTIONS] <COMMAND>
 
 Commands:
-  add
   list
   show
   help  Print this message or the help of the given subcommand(s)
@@ -1737,19 +1736,6 @@ Options:
       --json      Emit JSON output
       --no-color  Disable color in human output
   -h, --help      Print help
-```
-
-##### `planr evidence obligation add`
-
-```text
-Usage: planr evidence obligation add [OPTIONS] --input <INPUT>
-
-Options:
-      --db <DB>        Path to Planr SQLite database
-      --input <INPUT>
-      --json           Emit JSON output
-      --no-color       Disable color in human output
-  -h, --help           Print help
 ```
 
 ##### `planr evidence obligation list`

@@ -44,7 +44,6 @@ const HTTP_ROUTE_MANIFEST = [
   ['POST exact:/v1/recover/sweep', '/v1/recover/sweep'], ['POST exact:/v1/policy/admit', '/v1/policy/admit'],
   ['GET exact:/v1/evidence/policy', '/v1/evidence/policy'],
   ['GET exact:/v1/evidence/obligations', '/v1/evidence/obligations'],
-  ['POST exact:/v1/evidence/obligations', '/v1/evidence/obligations'],
   ['POST exact:/v1/evidence/readiness', '/v1/evidence/readiness'],
   ['POST exact:/v1/evidence/recover-settlement', '/v1/evidence/recover-settlement'],
   ['POST exact:/v1/evidence/migrate', '/v1/evidence/migrate'],
