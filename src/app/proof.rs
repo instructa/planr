@@ -4,15 +4,28 @@ use crate::evidence::coverage::{
     authoritative_obligation_ids_for_scope, canonical_evaluation_error_proof,
 };
 use anyhow::{Result, anyhow};
-use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlanEvidenceAuthority {
+    NonBinding,
+    BindingUnsatisfied,
+    BindingActive,
+}
+
 impl App {
-    pub(crate) fn plan_has_active_binding_obligations(&self, plan_id: &str) -> Result<bool> {
+    pub(crate) fn plan_evidence_authority(&self, plan_id: &str) -> Result<PlanEvidenceAuthority> {
         let project = self.default_project()?;
-        authoritative_obligation_ids_for_scope(&self.conn, &project.id, "plan", plan_id)
-            .map(|ids| !ids.is_empty())
-            .map_err(|error| anyhow!(error))
+        let obligation_ids =
+            authoritative_obligation_ids_for_scope(&self.conn, &project.id, "plan", plan_id)
+                .map_err(|error| anyhow!(error))?;
+        if !obligation_ids.is_empty() {
+            return Ok(PlanEvidenceAuthority::BindingActive);
+        }
+        if self.evidence_policy_requires_binding()? {
+            return Ok(PlanEvidenceAuthority::BindingUnsatisfied);
+        }
+        Ok(PlanEvidenceAuthority::NonBinding)
     }
 
     pub(crate) fn proof_status_for_item(&self, item_id: &str) -> Result<Value> {
@@ -30,7 +43,18 @@ impl App {
                 }
             };
         if binding_ids.is_empty() {
-            return self.legacy_proof_status_for_item(&item);
+            if let Some(plan_id) = item
+                .plan_path
+                .as_deref()
+                .map(|path| self.plan_id_for_path(path))
+                .transpose()?
+                .flatten()
+                && self.plan_evidence_authority(&plan_id)?
+                    == PlanEvidenceAuthority::BindingUnsatisfied
+            {
+                return Ok(binding_unsatisfied_item_proof_status(&item.id, &plan_id));
+            }
+            return Ok(nonbinding_proof_status("item", &item.id));
         }
         match self.evidence_item_criterion_coverages_value(&item.id) {
             Ok(coverages) => Ok(proof_status_from_coverages(
@@ -45,14 +69,29 @@ impl App {
     }
 
     pub(crate) fn proof_status_for_plan(&self, plan_id: &str) -> Result<Value> {
-        let coverages = self.evidence_plan_criterion_coverages_value(plan_id)?;
-        if coverages.is_empty() {
-            return self.legacy_proof_status_for_plan(plan_id);
+        match self.plan_evidence_authority(plan_id)? {
+            PlanEvidenceAuthority::NonBinding => {
+                return Ok(nonbinding_proof_status("plan", plan_id));
+            }
+            PlanEvidenceAuthority::BindingUnsatisfied => {
+                return Ok(binding_unsatisfied_proof_status(plan_id));
+            }
+            PlanEvidenceAuthority::BindingActive => {}
         }
-        Ok(proof_status_from_coverages(
-            json!({"kind": "plan", "id": plan_id}),
-            coverages,
-        ))
+        match self.evidence_plan_criterion_coverages_value(plan_id) {
+            Ok(coverages) if !coverages.is_empty() => Ok(proof_status_from_coverages(
+                json!({"kind": "plan", "id": plan_id}),
+                coverages,
+            )),
+            Ok(_) => Ok(canonical_evaluation_error_proof(
+                json!({"kind": "plan", "id": plan_id}),
+                anyhow!("binding Evidence obligations exist but produced no coverage"),
+            )),
+            Err(error) => Ok(canonical_evaluation_error_proof(
+                json!({"kind": "plan", "id": plan_id}),
+                error,
+            )),
+        }
     }
 
     pub(crate) fn proof_close_blocker(&self, item_id: &str) -> Result<Option<String>> {
@@ -68,101 +107,71 @@ impl App {
         }
         Ok(None)
     }
-}
 
-impl App {
-    fn legacy_proof_status_for_item(&self, item: &crate::model::Item) -> Result<Value> {
-        let plan_id = if let Some(plan_path) = &item.plan_path {
-            self.conn
-                .query_row(
-                    "SELECT id FROM plans WHERE project_id = ?1 AND path = ?2 AND archived = 0 ORDER BY created_at DESC LIMIT 1",
-                    params![item.project_id, plan_path],
-                    |row| row.get::<_, String>(0),
-                )
-                .optional()?
-        } else {
-            None
-        };
-        let logs = self.legacy_verification_logs_for_item(&item.project_id, &item.id)?;
-        Ok(legacy_proof_status(
-            "item",
-            &item.id,
-            plan_id.as_deref(),
-            logs,
-        ))
-    }
-
-    fn legacy_proof_status_for_plan(&self, plan_id: &str) -> Result<Value> {
-        let logs = self.verification_logs_for_plan(plan_id)?;
-        Ok(legacy_proof_status("plan", plan_id, Some(plan_id), logs))
-    }
-
-    fn legacy_verification_logs_for_item(
-        &self,
-        project_id: &str,
-        item_id: &str,
-    ) -> Result<Vec<Value>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, item_id, summary, created_at
-             FROM logs
-             WHERE project_id = ?1
-               AND item_id = ?2
-               AND kind = 'verification'
-             ORDER BY created_at, id",
-        )?;
-        let rows = stmt.query_map(params![project_id, item_id], |row| {
-            Ok(json!({
-                "id": row.get::<_, String>(0)?,
-                "item_id": row.get::<_, String>(1)?,
-                "summary": row.get::<_, String>(2)?,
-                "created_at": row.get::<_, String>(3)?,
-                "authority": "claim_only",
-            }))
-        })?;
-        crate::util::collect_rows(rows)
+    pub(crate) fn binding_evidence_hold_for_item(&self, item_id: &str) -> Result<Option<Value>> {
+        let proof = self.proof_status_for_item(item_id)?;
+        if proof["status"] != "binding_unsatisfied" {
+            return Ok(None);
+        }
+        Ok(Some(json!({
+            "kind": "hold",
+            "item_id": item_id,
+            "classification": "binding_evidence_obligations_missing",
+            "reason_code": "missing_obligation",
+            "proof": proof,
+            "next_action": proof["next_action"],
+        })))
     }
 }
 
-fn legacy_proof_status(
-    scope_kind: &str,
-    scope_id: &str,
-    plan_id: Option<&str>,
-    claim_only_logs: Vec<Value>,
-) -> Value {
-    let suggested_next_action = plan_id
-        .map(|id| {
-            format!(
-                "create planr.evidence.migration.v1 payload with plan_id {id}, then run planr evidence migrate --input <migration-file-for-plan-{id}> --apply"
-            )
-        })
-        .unwrap_or_else(|| {
-            format!(
-                "create binding Evidence obligations for {scope_kind} {scope_id} to replace claim-only verification logs"
-            )
-        });
+fn nonbinding_proof_status(scope_kind: &str, scope_id: &str) -> Value {
     json!({
         "scope": {"kind": scope_kind, "id": scope_id},
         "active_binding": false,
         "pass": true,
-        "status": "legacy_nonbinding",
-        "completion_language": "legacy/non-binding scope; verification logs are claim-only and closure is not proven by Evidence coverage",
+        "status": "nonbinding",
+        "completion_language": "repository policy does not require binding Evidence for this scope",
         "actionable_now": false,
         "actionable_gaps": [],
         "non_actionable_blockers": [],
-        "legacy_diagnostics": [{
-            "kind": "legacy_verification_claims",
-            "authority": "claim_only",
-            "message": "legacy verification logs remain visible diagnostics but do not satisfy binding Evidence coverage",
-            "logs": claim_only_logs,
-        }],
         "receipts": [],
         "attempts": [],
         "waivers": [],
         "criteria": [],
-        "legacy_claims": claim_only_logs,
-        "suggested_next_action": suggested_next_action,
-        "next_action": suggested_next_action,
+        "suggested_next_action": null,
+        "next_action": null,
     })
+}
+
+fn binding_unsatisfied_proof_status(plan_id: &str) -> Value {
+    let next_action = format!(
+        "create planr.evidence.migration.v1 payload with plan_id {plan_id}, then run planr evidence migrate --input <migration-file-for-plan-{plan_id}> --apply"
+    );
+    json!({
+        "scope": {"kind": "plan", "id": plan_id},
+        "active_binding": true,
+        "pass": false,
+        "status": "binding_unsatisfied",
+        "completion_language": "repository policy requires binding Evidence, but the plan has no materialized ProofObligation",
+        "actionable_now": true,
+        "actionable_gaps": [{
+            "code": "missing_obligation",
+            "scope": {"kind": "plan", "id": plan_id},
+        }],
+        "non_actionable_blockers": [],
+        "receipts": [],
+        "attempts": [],
+        "waivers": [],
+        "criteria": [],
+        "suggested_next_action": next_action,
+        "next_action": next_action,
+    })
+}
+
+fn binding_unsatisfied_item_proof_status(item_id: &str, plan_id: &str) -> Value {
+    let mut proof = binding_unsatisfied_proof_status(plan_id);
+    proof["scope"] = json!({"kind": "item", "id": item_id, "plan_id": plan_id});
+    proof
 }
 
 pub(crate) fn append_proof_status_human(human: &mut String, proof: &Value) {
@@ -174,14 +183,6 @@ pub(crate) fn append_proof_status_human(human: &mut String, proof: &Value) {
             "\n    proof {}: {language}",
             proof["status"].as_str().unwrap_or("unknown")
         ));
-    }
-    if proof["legacy_diagnostics"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .any(|diagnostic| diagnostic["authority"].as_str() == Some("claim_only"))
-    {
-        human.push_str("\n    legacy verification logs: claim_only");
     }
     if let Some(next_action) = proof["next_action"].as_str() {
         human.push_str(&format!("\n    next proof action: {next_action}"));

@@ -1268,7 +1268,7 @@ fn evidence_contract_forbids_public_trusted_provenance_construction_paths() {
         "`src/canonical_json.rs` is the future single production owner",
         "`src/execution.rs` is the future shared owner",
         "Planr logs remain narrative and supporting records",
-        "never automatically satisfies a binding observation",
+        "it never satisfies a binding observation",
     ] {
         assert!(
             contract.contains(required),

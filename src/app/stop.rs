@@ -108,6 +108,7 @@ impl App {
         match command {
             StopCommand::Activate(args) => {
                 let session_id = stop_session_identity(args.session)?;
+                self.ensure_stop_scope_evidence_ready(&args.plan)?;
                 self.record_active_stop_binding_for_plan(&args.plan, &session_id)?;
                 emit_stop_decision(json!({
                     "status": "activated",
@@ -125,6 +126,7 @@ impl App {
             }
             StopCommand::Resume(args) => {
                 let session_id = stop_session_identity(args.session)?;
+                self.ensure_stop_scope_evidence_ready(&args.plan)?;
                 self.clear_stop_state_for_session(&args.plan, &session_id)?;
                 self.record_active_stop_binding_for_plan(&args.plan, &session_id)?;
                 emit_stop_decision(json!({
@@ -134,6 +136,19 @@ impl App {
                 }))
             }
         }
+    }
+
+    fn ensure_stop_scope_evidence_ready(&self, plan_id: &str) -> Result<()> {
+        let proof = self.proof_status_for_plan(plan_id)?;
+        if proof["status"] == "binding_unsatisfied" {
+            anyhow::bail!(
+                "stop_activation_binding_evidence_obligations_missing:{plan_id}:{}",
+                proof["next_action"]
+                    .as_str()
+                    .unwrap_or("repair_evidence_obligations")
+            );
+        }
+        Ok(())
     }
 
     pub(crate) fn stop_decision(&self, envelope: &Value) -> Result<Value> {

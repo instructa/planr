@@ -2,6 +2,14 @@
 
 These tasks are implementation-ready work items for coding agents. They intentionally avoid storypoints and timelines.
 
+## Alpha 6 Binding Evidence Hard Cut
+
+### TASK-ALPHA6-EVIDENCE-001: Make Policy And Obligations One Fail-Closed Authority
+
+Replace obligation-row-only lifecycle branching with the canonical `PlanEvidenceAuthority`; reject binding-policy plans with no materialized obligations before implementation and final review; persist a capability hold when verifier readiness fails; remove claim-log and empty-lineage compatibility authority; retain explicit migration as the only obligation writer.
+
+Acceptance: `cargo check --lib` passes, followed by one focused lifecycle invariant in the separate hardening phase.
+
 ## V1.1 Differentiation
 
 These tasks implement `V1_1_DIFFERENTIATION_CONTRACT.md`. They are Planr-owned product work and must not introduce public references to local comparison products.

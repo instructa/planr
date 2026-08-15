@@ -46,7 +46,6 @@
     "planr_event_list",
     "planr_debug_bundle",
     "planr_evidence_policy",
-    "planr_evidence_obligation_add",
     "planr_evidence_obligation_list",
     "planr_evidence_obligation_show",
     "planr_evidence_migrate",

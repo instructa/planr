@@ -2034,7 +2034,7 @@ impl App {
         Ok(())
     }
 
-    pub(crate) fn refresh_legacy_final_review_source_freeze(
+    pub(crate) fn refresh_nonbinding_final_review_source_freeze(
         &self,
         plan_id: &str,
         run_id: &str,
@@ -2042,19 +2042,21 @@ impl App {
         let owns_transaction = self.conn.is_autocommit();
         if owns_transaction {
             self.conn.execute_batch(
-                "BEGIN IMMEDIATE; SAVEPOINT refresh_legacy_final_review_source_freeze",
+                "BEGIN IMMEDIATE; SAVEPOINT refresh_nonbinding_final_review_source_freeze",
             )?;
         }
         let result = (|| -> Result<Option<(EvidenceInvalidationRecord, SourceFreezeRecord)>> {
-            if self.plan_has_active_binding_obligations(plan_id)? {
-                bail!("legacy_final_review_refresh_binding_activated:{plan_id}");
+            if self.plan_evidence_authority(plan_id)?
+                != super::proof::PlanEvidenceAuthority::NonBinding
+            {
+                bail!("nonbinding_final_review_refresh_evidence_authority_changed:{plan_id}");
             }
             let snapshot = capture_repository_snapshot(&self.root)
-                .map_err(|error| anyhow!("capturing legacy final-review source: {error}"))?;
+                .map_err(|error| anyhow!("capturing nonbinding final-review source: {error}"))?;
             let repository = ExecutionRunRepository::new(&self.conn);
-            let active = repository
-                .active_source_freeze(run_id)?
-                .ok_or_else(|| anyhow!("legacy_final_review_source_freeze_missing:{plan_id}"))?;
+            let active = repository.active_source_freeze(run_id)?.ok_or_else(|| {
+                anyhow!("nonbinding_final_review_source_freeze_missing:{plan_id}")
+            })?;
             if active.source_revision == snapshot.source.revision
                 && active.source_digest == snapshot.source.tree_digest.as_str()
             {
@@ -2065,7 +2067,7 @@ impl App {
                 run_id: run_id.to_string(),
                 freeze_id: active.id,
                 finding_id: None,
-                reason: "legacy_final_review_source_changed".to_string(),
+                reason: "nonbinding_final_review_source_changed".to_string(),
                 affected_evidence_ids: Vec::new(),
             };
             let replacement = SourceFreezeRecord {
@@ -2082,7 +2084,7 @@ impl App {
             refreshed.source_revision = Some(replacement.source_revision.clone());
             repository.save_feature_run(&refreshed, persisted.revision)?;
             self.record_event(
-                "legacy_final_review_source_refrozen",
+                "nonbinding_final_review_source_refrozen",
                 None,
                 json!({
                     "plan_id": plan_id,
@@ -2099,13 +2101,14 @@ impl App {
         }
         match result {
             Ok(value) => {
-                self.conn
-                    .execute_batch("RELEASE refresh_legacy_final_review_source_freeze; COMMIT")?;
+                self.conn.execute_batch(
+                    "RELEASE refresh_nonbinding_final_review_source_freeze; COMMIT",
+                )?;
                 Ok(value.is_some())
             }
             Err(error) => {
                 let _ = self.conn.execute_batch(
-                    "ROLLBACK TO refresh_legacy_final_review_source_freeze; RELEASE refresh_legacy_final_review_source_freeze; ROLLBACK",
+                    "ROLLBACK TO refresh_nonbinding_final_review_source_freeze; RELEASE refresh_nonbinding_final_review_source_freeze; ROLLBACK",
                 );
                 Err(error)
             }
@@ -3076,16 +3079,6 @@ allow_overwrite = true
         };
         add_outcome(&app, "item-one-shot");
         add_verification_outcome(&app, "item-one-shot-verifier");
-        let run = app
-            .ensure_outcome_feature_run("item-one-shot")
-            .unwrap()
-            .unwrap();
-        app.conn
-            .execute(
-                "UPDATE feature_run_role_leases SET worker_id = 'maker-other' WHERE run_id = ?1 AND role = 'maker' AND released_at IS NULL",
-                [&run.run.id],
-            )
-            .unwrap();
         app.conn
             .execute(
                 "INSERT INTO proof_obligations(
@@ -3110,6 +3103,16 @@ allow_overwrite = true
                     .to_string(),
                     policy_digest,
                 ],
+            )
+            .unwrap();
+        let run = app
+            .ensure_outcome_feature_run("item-one-shot")
+            .unwrap()
+            .unwrap();
+        app.conn
+            .execute(
+                "UPDATE feature_run_role_leases SET worker_id = 'maker-other' WHERE run_id = ?1 AND role = 'maker' AND released_at IS NULL",
+                [&run.run.id],
             )
             .unwrap();
         assert!(
@@ -3423,16 +3426,6 @@ allow_overwrite = true
         initialize_git(root.path());
         let app = test_app(root.path().to_path_buf());
         add_outcome(&app, "item-happy-path");
-        let run = app
-            .ensure_outcome_feature_run("item-happy-path")
-            .unwrap()
-            .unwrap();
-        app.conn
-            .execute(
-                "UPDATE feature_run_role_leases SET worker_id = 'maker-other' WHERE run_id = ?1 AND role = 'maker' AND released_at IS NULL",
-                [&run.run.id],
-            )
-            .unwrap();
         app.conn
             .execute(
                 "INSERT INTO proof_obligations(
@@ -3457,6 +3450,16 @@ allow_overwrite = true
                     .to_string(),
                     policy_digest,
                 ],
+            )
+            .unwrap();
+        let run = app
+            .ensure_outcome_feature_run("item-happy-path")
+            .unwrap()
+            .unwrap();
+        app.conn
+            .execute(
+                "UPDATE feature_run_role_leases SET worker_id = 'maker-other' WHERE run_id = ?1 AND role = 'maker' AND released_at IS NULL",
+                [&run.run.id],
             )
             .unwrap();
 
@@ -3752,21 +3755,6 @@ allow_overwrite = true
             add_outcome(&app, item_id);
         }
         add_verification_outcome(&app, "item-verifier");
-        let run = app
-            .ensure_outcome_feature_run("item-batch-a")
-            .unwrap()
-            .unwrap();
-        let non_material =
-            json!({"decision": {"material": false, "review": "none", "reasons": []}});
-        for item_id in ["item-batch-a", "item-batch-b"] {
-            app.settle_feature_run_outcome(OutcomeSettlement {
-                item_id,
-                summary: "compatible batched maker outcome",
-                materiality: &non_material,
-                escalation: None,
-            })
-            .unwrap();
-        }
         for (obligation_id, criterion_id) in [
             ("pob-a-product-failure", "criterion-a-product-failure"),
             ("pob-b-ready", "criterion-b-ready"),
@@ -3807,6 +3795,21 @@ allow_overwrite = true
                     ],
                 )
                 .unwrap();
+        }
+        let run = app
+            .ensure_outcome_feature_run("item-batch-a")
+            .unwrap()
+            .unwrap();
+        let non_material =
+            json!({"decision": {"material": false, "review": "none", "reasons": []}});
+        for item_id in ["item-batch-a", "item-batch-b"] {
+            app.settle_feature_run_outcome(OutcomeSettlement {
+                item_id,
+                summary: "compatible batched maker outcome",
+                materiality: &non_material,
+                escalation: None,
+            })
+            .unwrap();
         }
         app.conn
             .execute(
@@ -3902,7 +3905,6 @@ allow_overwrite = true
     }
 
     fn seed_receipt_bound_settlement(app: &App, policy_digest: &str) -> String {
-        seed_settlement_obligation(app, policy_digest);
         seed_receipt_for_existing_settlement_obligation(app, policy_digest)
     }
 
@@ -4112,6 +4114,7 @@ allow_overwrite = true
         let app = App::new(conn, root.path().to_path_buf(), database_path, true, false);
         add_outcome(&app, "item-settle-maker");
         add_verification_item(&app, "item-settle-verification");
+        seed_settlement_obligation(&app, &policy_digest);
         let run = app
             .ensure_outcome_feature_run("item-settle-maker")
             .unwrap()
@@ -6526,8 +6529,7 @@ allow_overwrite = true
 
     #[test]
     fn settlement_does_not_close_without_satisfied_leased_coverage() {
-        let (_root, app, policy_digest) = settlement_app();
-        seed_settlement_obligation(&app, &policy_digest);
+        let (_root, app, _policy_digest) = settlement_app();
         app.verification_work_packet_value("plan-a", false).unwrap();
         let missing = app
             .evidence_coverage_value(crate::cli::EvidenceCoverageScope::Plan, "plan-a")
@@ -6571,7 +6573,6 @@ allow_overwrite = true
     #[test]
     fn stale_source_and_close_conflict_do_not_persist_verification_settlement() {
         let (root, app, policy_digest) = settlement_app();
-        seed_settlement_obligation(&app, &policy_digest);
         seed_receipt_for_existing_settlement_obligation(&app, &policy_digest);
         std::fs::write(root.path().join("after-freeze.txt"), "stale\n").unwrap();
         let stale = app
@@ -6654,8 +6655,7 @@ allow_overwrite = true
 
     #[test]
     fn waived_only_plan_coverage_does_not_close_verification_item() {
-        let (_root, app, policy_digest) = settlement_app();
-        seed_settlement_obligation(&app, &policy_digest);
+        let (_root, app, _policy_digest) = settlement_app();
         app.verification_work_packet_value("plan-a", false)
             .unwrap()
             .unwrap();

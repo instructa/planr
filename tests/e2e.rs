@@ -1891,26 +1891,7 @@ fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_m
         "sha256:7777777777777777777777777777777777777777777777777777777777777777",
     );
     obligation["fixture_policy"]["fixtures_allowed"] = json!(true);
-    let obligation_path = dir.path().join("host-obligation.json");
-    fs::write(
-        &obligation_path,
-        serde_json::to_vec_pretty(&obligation).unwrap(),
-    )
-    .unwrap();
-    planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "evidence",
-            "obligation",
-            "add",
-            "--input",
-            obligation_path.to_str().unwrap(),
-        ])
-        .assert()
-        .success();
+    add_evidence_obligation_value(dir.path(), &db, "pob-host-capture", &obligation);
 
     let self_authored_root = tempdir().unwrap();
     let self_authored_input =
@@ -2421,26 +2402,12 @@ fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_m
         "sha256:7777777777777777777777777777777777777777777777777777777777777777",
     );
     fault_obligation["fixture_policy"]["fixtures_allowed"] = json!(true);
-    let fault_obligation_path = dir.path().join("host-obligation-atomic-fault.json");
-    fs::write(
-        &fault_obligation_path,
-        serde_json::to_vec_pretty(&fault_obligation).unwrap(),
-    )
-    .unwrap();
-    planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "evidence",
-            "obligation",
-            "add",
-            "--input",
-            fault_obligation_path.to_str().unwrap(),
-        ])
-        .assert()
-        .success();
+    add_evidence_obligation_value(
+        dir.path(),
+        &db,
+        "pob-host-capture-atomic-fault",
+        &fault_obligation,
+    );
     let fault_path = dir.path().join("host-run-atomic-fault.json");
     fs::write(
         &fault_path,
@@ -2564,22 +2531,7 @@ fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_m
             "sha256:7777777777777777777777777777777777777777777777777777777777777777",
         );
         obligation["fixture_policy"]["fixtures_allowed"] = json!(true);
-        let path = dir.path().join(format!("{obligation_id}.json"));
-        fs::write(&path, serde_json::to_vec_pretty(&obligation).unwrap()).unwrap();
-        planr()
-            .current_dir(dir.path())
-            .args([
-                "--db",
-                db.to_str().unwrap(),
-                "--json",
-                "evidence",
-                "obligation",
-                "add",
-                "--input",
-                path.to_str().unwrap(),
-            ])
-            .assert()
-            .success();
+        add_evidence_obligation_value(dir.path(), &db, obligation_id, &obligation);
     }
     let run_path = dir.path().join("host-run.json");
     fs::write(
@@ -2776,26 +2728,7 @@ fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_m
         "sha256:7777777777777777777777777777777777777777777777777777777777777777",
     );
     cwd_obligation["fixture_policy"]["fixtures_allowed"] = json!(true);
-    let cwd_obligation_path = dir.path().join("host-obligation-cwd.json");
-    fs::write(
-        &cwd_obligation_path,
-        serde_json::to_vec_pretty(&cwd_obligation).unwrap(),
-    )
-    .unwrap();
-    planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "evidence",
-            "obligation",
-            "add",
-            "--input",
-            cwd_obligation_path.to_str().unwrap(),
-        ])
-        .assert()
-        .success();
+    add_evidence_obligation_value(dir.path(), &db, "pob-host-capture-cwd", &cwd_obligation);
     let cwd_run_path = dir.path().join("host-run-cwd.json");
     fs::write(
         &cwd_run_path,
@@ -2905,26 +2838,7 @@ fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_m
             "sha256:7777777777777777777777777777777777777777777777777777777777777777",
         );
         bad_obligation["fixture_policy"]["fixtures_allowed"] = json!(true);
-        let bad_obligation_path = dir.path().join(format!("{obligation_id}.json"));
-        fs::write(
-            &bad_obligation_path,
-            serde_json::to_vec_pretty(&bad_obligation).unwrap(),
-        )
-        .unwrap();
-        planr()
-            .current_dir(dir.path())
-            .args([
-                "--db",
-                db.to_str().unwrap(),
-                "--json",
-                "evidence",
-                "obligation",
-                "add",
-                "--input",
-                bad_obligation_path.to_str().unwrap(),
-            ])
-            .assert()
-            .success();
+        add_evidence_obligation_value(dir.path(), &db, obligation_id, &bad_obligation);
         let bad_run_path = dir.path().join(format!("{manifest_id}.json"));
         fs::write(
             &bad_run_path,
@@ -3254,8 +3168,13 @@ fn start_static_http_server() -> (u16, StaticHttpServer) {
 }
 
 fn add_evidence_obligation_value(dir: &Path, db: &Path, id: &str, obligation: &Value) -> Value {
-    let path = dir.join(format!("{id}.obligation.json"));
-    fs::write(&path, serde_json::to_vec_pretty(obligation).unwrap()).unwrap();
+    let migration = json!({
+        "schema_version": "planr.evidence.migration.v1",
+        "plan_id": obligation["plan_id"],
+        "obligations": [obligation],
+    });
+    let path = dir.join(format!("{id}.migration.json"));
+    fs::write(&path, serde_json::to_vec_pretty(&migration).unwrap()).unwrap();
     single_json_document(
         &planr()
             .current_dir(dir)
@@ -3264,10 +3183,10 @@ fn add_evidence_obligation_value(dir: &Path, db: &Path, id: &str, obligation: &V
                 db.to_str().unwrap(),
                 "--json",
                 "evidence",
-                "obligation",
-                "add",
+                "migrate",
                 "--input",
                 path.to_str().unwrap(),
+                "--apply",
             ])
             .assert()
             .success()
@@ -3776,22 +3695,7 @@ fn add_evidence_obligation_with_environment(
         json!(["target_change", "policy_change", "adapter_schema_change"]),
         "sha256:8888888888888888888888888888888888888888888888888888888888888888",
     );
-    let path = dir.join(format!("{id}.obligation.json"));
-    fs::write(&path, serde_json::to_vec_pretty(&obligation).unwrap()).unwrap();
-    planr()
-        .current_dir(dir)
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "evidence",
-            "obligation",
-            "add",
-            "--input",
-            path.to_str().unwrap(),
-        ])
-        .assert()
-        .success();
+    add_evidence_obligation_value(dir, db, id, &obligation);
 }
 
 fn capability_instance_environment(db: &Path, instance_id: &str) -> Value {
@@ -4973,34 +4877,10 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
         json!(["target_change", "policy_change", "adapter_schema_change"]),
         obligation_runtime_config_digest,
     );
-    let obligation_path = dir.path().join("proof-obligation.json");
-    fs::write(
-        &obligation_path,
-        serde_json::to_vec_pretty(&obligation).unwrap(),
-    )
-    .unwrap();
-
-    let cli_add_output = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "evidence",
-            "obligation",
-            "add",
-            "--input",
-            obligation_path.to_str().unwrap(),
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let cli_add = single_json_document(&cli_add_output);
-    assert_evidence_envelope(&cli_add, "evidence.obligation.add", true);
-    assert_eq!(cli_add["object"]["obligation"]["id"], "pob-public-run");
-    let project_id = cli_add["object"]["obligation"]["project_id"]
+    let cli_add = add_evidence_obligation_value(dir.path(), &db, "pob-public-run", &obligation);
+    assert_evidence_envelope(&cli_add, "evidence.migrate", true);
+    assert_eq!(cli_add["object"]["created"][0]["id"], "pob-public-run");
+    let project_id = cli_add["object"]["created"][0]["project_id"]
         .as_str()
         .unwrap()
         .to_string();
@@ -7031,26 +6911,7 @@ fn evidence_process_adapter_semantic_mismatch_does_not_satisfy_coverage() {
         json!(["target_change", "policy_change", "adapter_schema_change"]),
         "sha256:9999999999999999999999999999999999999999999999999999999999999999",
     );
-    let obligation_path = dir.path().join("semantic-mismatch-obligation.json");
-    fs::write(
-        &obligation_path,
-        serde_json::to_vec_pretty(&obligation).unwrap(),
-    )
-    .unwrap();
-    planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "evidence",
-            "obligation",
-            "add",
-            "--input",
-            obligation_path.to_str().unwrap(),
-        ])
-        .assert()
-        .success();
+    add_evidence_obligation_value(dir.path(), &db, "pob-semantic-mismatch", &obligation);
 
     let run_input = json!({
         "obligation_id": "pob-semantic-mismatch",
@@ -7213,26 +7074,7 @@ fn evidence_process_adapter_schema_invalid_stdout_is_verifier_failed() {
         json!(["target_change", "policy_change", "adapter_schema_change"]),
         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     );
-    let obligation_path = dir.path().join("schema-invalid-stdout-obligation.json");
-    fs::write(
-        &obligation_path,
-        serde_json::to_vec_pretty(&obligation).unwrap(),
-    )
-    .unwrap();
-    planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "evidence",
-            "obligation",
-            "add",
-            "--input",
-            obligation_path.to_str().unwrap(),
-        ])
-        .assert()
-        .success();
+    add_evidence_obligation_value(dir.path(), &db, "pob-schema-invalid-stdout", &obligation);
 
     let run_input = json!({
         "obligation_id": "pob-schema-invalid-stdout",
@@ -7423,10 +7265,18 @@ fn evidence_e2e_scenarios_cover_api_queue_stale_retry_unavailable_and_browser_ga
     let http_add = http_json(&http_request(
         port,
         "POST",
-        "/v1/evidence/obligations",
-        &api_obligation.to_string(),
+        "/v1/evidence/migrate",
+        &json!({
+            "input": {
+                "schema_version": "planr.evidence.migration.v1",
+                "plan_id": api_obligation["plan_id"],
+                "obligations": [api_obligation],
+            },
+            "apply": true,
+        })
+        .to_string(),
     ));
-    assert_evidence_envelope(&http_add, "evidence.obligation.add", true);
+    assert_evidence_envelope(&http_add, "evidence.migrate", true);
     let http_readback = http_json(&http_request(
         port,
         "GET",
@@ -7440,7 +7290,7 @@ fn evidence_e2e_scenarios_cover_api_queue_stale_retry_unavailable_and_browser_ga
     );
     assert_eq!(
         http_readback["object"]["obligation"],
-        http_add["object"]["obligation"]
+        http_add["object"]["created"][0]
     );
     let _ = server.kill();
     let _ = server.wait();
@@ -7528,31 +7378,9 @@ fn evidence_e2e_scenarios_cover_api_queue_stale_retry_unavailable_and_browser_ga
         ]),
         "sha256:2323232323232323232323232323232323232323232323232323232323232323",
     );
-    let queue_path = dir.path().join("queue-obligation.json");
-    fs::write(
-        &queue_path,
-        serde_json::to_vec_pretty(&queue_obligation).unwrap(),
-    )
-    .unwrap();
-    let queue_add = single_json_document(
-        &planr()
-            .current_dir(dir.path())
-            .args([
-                "--db",
-                db.to_str().unwrap(),
-                "--json",
-                "evidence",
-                "obligation",
-                "add",
-                "--input",
-                queue_path.to_str().unwrap(),
-            ])
-            .assert()
-            .success()
-            .get_output()
-            .stdout,
-    );
-    assert_evidence_envelope(&queue_add, "evidence.obligation.add", true);
+    let queue_add =
+        add_evidence_obligation_value(dir.path(), &db, "pob-queue-extension", &queue_obligation);
+    assert_evidence_envelope(&queue_add, "evidence.migrate", true);
     let queue_run = http_json(&http_request(
         port,
         "POST",
@@ -8015,7 +7843,7 @@ fn evidence_e2e_scenarios_cover_api_queue_stale_retry_unavailable_and_browser_ga
         "pob-browser-curl-legacy",
         &browser_obligation,
     );
-    assert_evidence_envelope(&browser_add, "evidence.obligation.add", true);
+    assert_evidence_envelope(&browser_add, "evidence.migrate", true);
     let browser_coverage = http_json(&http_request(
         port,
         "POST",
@@ -15033,7 +14861,7 @@ fn canonical_verification_task_builds_a_sealed_verifier_packet_without_retagging
     );
     fs::remove_file(
         dir.path()
-            .join("pob-canonical-verifier-packet.obligation.json"),
+            .join("pob-canonical-verifier-packet.migration.json"),
     )
     .unwrap();
 
@@ -15923,11 +15751,6 @@ fn codex_stop_hook_enforces_active_goal_with_bounded_canonical_gaps() {
             .stdout,
     );
     let item = map["created"][0]["id"].as_str().unwrap().to_string();
-    planr()
-        .current_dir(dir.path())
-        .args(["--db", &db_arg, "close", &item, "--summary", "item done"])
-        .assert()
-        .success();
     Connection::open(&db)
         .unwrap()
         .execute_batch(
@@ -15999,6 +15822,11 @@ VALUES ('pln-stop-other', 'p-stop-other', 'build', 'other.md', 'Other Stop Plan'
     obligation["item_id"] = Value::Null;
     obligation["criterion_id"] = json!("crit-stop-missing");
     add_evidence_obligation_value(dir.path(), &db, "pob-stop-missing", &obligation);
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "close", &item, "--summary", "item done"])
+        .assert()
+        .success();
 
     planr()
         .current_dir(dir.path())
@@ -16259,7 +16087,7 @@ fn codex_stop_hook_enforces_explicit_active_plan_until_final_review_or_archive()
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
     let db_arg = db.to_str().unwrap().to_string();
-    write_evidence_policy_fixture(dir.path());
+    fs::write(dir.path().join("README.md"), "# Stop Plan\n").unwrap();
     init_git_repo(dir.path());
     init_evidence_project(dir.path(), &db, "Stop Plan");
 
@@ -16613,36 +16441,41 @@ fn evidence_migration_explicitly_binds_pre_evidence_plans_without_rewriting_clai
         "--cmd",
         "printf legacy",
     ]);
-    let legacy_status = run(&["map", "status"]);
-    let ready_entry = legacy_status["ready"]
+    let unmigrated_status = run(&["map", "status"]);
+    let ready_entry = unmigrated_status["ready"]
         .as_array()
         .unwrap()
         .iter()
         .find(|entry| entry["item"]["id"] == item_id)
         .unwrap();
-    assert_eq!(ready_entry["proof"]["status"], "legacy_nonbinding");
-    assert_eq!(
-        ready_entry["proof"]["legacy_claims"][0]["authority"],
-        "claim_only"
-    );
+    assert_eq!(ready_entry["proof"]["status"], "binding_unsatisfied");
     assert!(
         ready_entry["proof"]["next_action"]
             .as_str()
             .unwrap()
             .contains(&plan_id)
     );
-    let legacy_status_human = run_human(&["map", "status"]);
-    assert!(
-        legacy_status_human.contains("legacy verification logs: claim_only"),
-        "{legacy_status_human}"
+    let held_pick = run(&["pick", "--plan", &plan_id, "--work-type", "code"]);
+    assert_eq!(held_pick["work_packet"]["kind"], "hold");
+    assert_eq!(
+        held_pick["work_packet"]["reason_code"],
+        "missing_obligation"
     );
-    assert!(
-        legacy_status_human.contains(&format!(
-            "planr evidence migrate --input <migration-file-for-plan-{plan_id}> --apply"
-        )),
-        "{legacy_status_human}"
-    );
-    run(&["close", &item_id, "--summary", "legacy item done"]);
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "close",
+            &item_id,
+            "--summary",
+            "unmigrated item done",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "binding_evidence_obligations_missing",
+        ));
     run(&[
         "context",
         "add",
@@ -16658,16 +16491,10 @@ fn evidence_migration_explicitly_binds_pre_evidence_plans_without_rewriting_clai
         .find(|clause| clause["clause"] == "verification_logged")
         .unwrap();
     assert_eq!(pre_audit["holds"], false, "{pre_audit}");
-    assert_eq!(
-        pre_clause["authority"],
-        "legacy_verification_log_compatibility"
-    );
+    assert_eq!(pre_clause["authority"], "evidence_policy");
+    assert_eq!(pre_clause["pass"], false);
     assert_eq!(pre_clause["log_authority"], "claim_only");
-    assert_eq!(pre_audit["proof"]["status"], "legacy_nonbinding");
-    assert_eq!(
-        pre_audit["proof"]["legacy_claims"][0]["authority"],
-        "claim_only"
-    );
+    assert_eq!(pre_audit["proof"]["status"], "binding_unsatisfied");
     assert!(
         pre_audit["proof"]["next_action"]
             .as_str()
@@ -16682,37 +16509,18 @@ fn evidence_migration_explicitly_binds_pre_evidence_plans_without_rewriting_clai
     );
     let pre_audit_human = run_human(&["plan", "audit", &plan_id]);
     assert!(
-        pre_audit_human.contains("legacy verification logs: claim_only"),
-        "{pre_audit_human}"
-    );
-    assert!(
         pre_audit_human.contains(&format!(
             "planr evidence migrate --input <migration-file-for-plan-{plan_id}> --apply"
         )),
         "{pre_audit_human}"
     );
-    let legacy_trace = run(&["trace", "item", &item_id]);
-    assert_eq!(legacy_trace["proof"]["status"], "legacy_nonbinding");
-    assert_eq!(
-        legacy_trace["proof"]["legacy_diagnostics"][0]["authority"],
-        "claim_only"
-    );
+    let item_trace = run(&["trace", "item", &item_id]);
+    assert_eq!(item_trace["proof"]["status"], "binding_unsatisfied");
     assert!(
-        legacy_trace["proof"]["next_action"]
+        item_trace["proof"]["next_action"]
             .as_str()
             .unwrap()
             .contains(&plan_id)
-    );
-    let legacy_trace_human = run_human(&["trace", "item", &item_id]);
-    assert!(
-        legacy_trace_human.contains("claim-only"),
-        "{legacy_trace_human}"
-    );
-    assert!(
-        legacy_trace_human.contains(&format!(
-            "planr evidence migrate --input <migration-file-for-plan-{plan_id}> --apply"
-        )),
-        "{legacy_trace_human}"
     );
 
     let policy = run(&["evidence", "policy"]);
@@ -16760,7 +16568,7 @@ fn evidence_migration_explicitly_binds_pre_evidence_plans_without_rewriting_clai
     assert_eq!(preview["object"]["summary"]["create"], 1);
     assert_eq!(
         preview["object"]["warnings"][0]["code"],
-        "legacy_verification_claims"
+        "verification_claims_are_not_evidence"
     );
     let mut missing_schema = migration.clone();
     missing_schema
@@ -16881,8 +16689,9 @@ fn evidence_migration_explicitly_binds_pre_evidence_plans_without_rewriting_clai
         "bad_request",
         "duplicate obligation id: pob-migration-binding",
     );
-    let still_legacy = run(&["plan", "audit", &plan_id]);
-    assert_eq!(still_legacy["holds"], false, "{still_legacy}");
+    let still_unmigrated = run(&["plan", "audit", &plan_id]);
+    assert_eq!(still_unmigrated["holds"], false, "{still_unmigrated}");
+    assert_eq!(still_unmigrated["proof"]["status"], "binding_unsatisfied");
 
     let port = free_port();
     let bin = assert_cmd::cargo::cargo_bin("planr");
@@ -22345,7 +22154,7 @@ fn capped_cli_batch_roll_preserves_same_maker_and_fourth_outcome_continues_clean
     assert_eq!(sixth["next"]["item"], Value::Null);
     assert_eq!(
         sixth["next"]["reason"],
-        "final_review_handoff_source_frozen"
+        "nonbinding_final_review_handoff_source_frozen"
     );
     assert_eq!(sixth["next"]["work_packet"]["kind"], "final_review_handoff");
 
@@ -22709,7 +22518,7 @@ fn done_next_freezes_source_without_authored_verification_item() {
 }
 
 #[test]
-fn done_next_routes_legacy_nonbinding_freeze_to_independent_final_review() {
+fn binding_policy_without_obligations_holds_before_review() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
     planr()
@@ -22719,164 +22528,125 @@ fn done_next_routes_legacy_nonbinding_freeze_to_independent_final_review() {
             db.to_str().unwrap(),
             "project",
             "init",
-            "Legacy Final Review Handoff",
+            "Binding Evidence Hold",
         ])
         .assert()
         .success();
-    let plan_path = dir.path().join("legacy-final-review.plan.md");
-    fs::write(&plan_path, "# Legacy Final Review\n").unwrap();
+    write_evidence_policy_fixture(dir.path());
+    let plan_path = dir.path().join("binding-evidence-hold.plan.md");
+    fs::write(&plan_path, "# Binding Evidence Hold\n").unwrap();
     let conn = Connection::open(&db).unwrap();
     let project_id: String = conn
         .query_row("SELECT id FROM projects LIMIT 1", [], |row| row.get(0))
         .unwrap();
     conn.execute(
         "INSERT INTO plans(id, project_id, stage, path, title, slug, parse_status, content_hash, created_at, updated_at)
-         VALUES ('plan-legacy-final-review', ?1, 'build', ?2, 'Legacy Final Review', 'legacy-final-review', 'ok', 'sha256:legacy-final-review', datetime('now'), datetime('now'))",
-        rusqlite::params![project_id, plan_path.to_string_lossy()],
-    )
-    .unwrap();
-    conn.execute(
-        "INSERT INTO items(id, project_id, title, description, status, work_type, worker_id, plan_path, created_at, updated_at)
-         VALUES ('item-legacy-final-code', ?1, 'Legacy final code', 'settle legacy implementation', 'picked', 'code', 'maker-legacy-final', ?2, datetime('now'), datetime('now'))",
+         VALUES ('plan-binding-evidence-hold', ?1, 'build', ?2, 'Binding Evidence Hold', 'binding-evidence-hold', 'ok', 'sha256:binding-evidence-hold', datetime('now'), datetime('now'))",
         rusqlite::params![project_id, plan_path.to_string_lossy()],
     )
     .unwrap();
     conn.execute(
         "INSERT INTO items(id, project_id, title, description, status, work_type, plan_path, created_at, updated_at)
-         VALUES ('item-legacy-authored-verification', ?1, 'Legacy authored verification', 'must not force Evidence admission', 'ready', 'verification', ?2, datetime('now'), datetime('now'))",
+         VALUES ('item-binding-evidence-code', ?1, 'Binding evidence code', 'settle implementation', 'ready', 'code', ?2, datetime('now'), datetime('now'))",
         rusqlite::params![project_id, plan_path.to_string_lossy()],
     )
     .unwrap();
     drop(conn);
-    init_git_repo(dir.path());
-    let source_freeze_planr = private_planr_binary(dir.path());
 
-    let output = planr_from_binary(&source_freeze_planr)
+    let output = planr()
         .current_dir(dir.path())
-        .env("PLANR_WORKER_ID", "maker-legacy-final")
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "done",
-            "item-legacy-final-code",
-            "--summary",
-            "legacy implementation settled",
-            "--cmd",
-            "true",
-            "--tests",
-            "true",
-            "--next",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let done: Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(done["next"]["reason"], "final_review_handoff_source_frozen");
-    let packet = &done["next"]["work_packet"];
-    assert_eq!(packet["kind"], "final_review_handoff");
-    assert_eq!(packet["proof"]["status"], "legacy_nonbinding");
-    assert_eq!(
-        packet["execution_state"]["next_action"],
-        "open_final_review"
-    );
-    assert_eq!(packet["planr_executable"]["path_lookup_allowed"], false);
-    assert_eq!(
-        packet["commands"]["open_final_review"]["argv"],
-        json!(["plan", "final-review", "plan-legacy-final-review", "--json"])
-    );
-    let original_freeze_id = packet["source_freeze"]["source_freeze"]["id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    fs::write(
-        &plan_path,
-        "# Legacy Final Review\n\nChanged before final review.\n",
-    )
-    .unwrap();
-
-    let opened = planr_from_binary(&source_freeze_planr)
-        .current_dir(dir.path())
-        .env("PLANR_WORKER_ID", "maker-legacy-final")
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "plan",
-            "final-review",
-            "plan-legacy-final-review",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let opened: Value = serde_json::from_slice(&opened).unwrap();
-    assert_eq!(opened["created"], true);
-    assert_eq!(
-        opened["execution_state"]["review_source_binding"]["receipt_lineage"],
-        json!([])
-    );
-    assert_ne!(
-        opened["execution_state"]["review_source_binding"]["freeze_id"],
-        original_freeze_id
-    );
-    let leased = planr()
-        .current_dir(dir.path())
-        .env("PLANR_WORKER_ID", "reviewer-legacy-final")
+        .env("PLANR_WORKER_ID", "maker-binding-evidence")
         .args([
             "--db",
             db.to_str().unwrap(),
             "--json",
             "pick",
             "--plan",
-            "plan-legacy-final-review",
+            "plan-binding-evidence-hold",
             "--work-type",
-            "review",
+            "code",
         ])
         .assert()
         .success()
         .get_output()
         .stdout
         .clone();
-    let leased: Value = serde_json::from_slice(&leased).unwrap();
+    let pick: Value = serde_json::from_slice(&output).unwrap();
+    let packet = &pick["work_packet"];
+    assert_eq!(packet["kind"], "hold");
+    assert_eq!(packet["proof"]["status"], "binding_unsatisfied");
     assert_eq!(
-        leased["work_packet"]["execution_state"]["phase"],
-        "final_review"
+        packet["proof"]["actionable_gaps"][0]["code"],
+        "missing_obligation"
     );
+
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "close",
+            "item-binding-evidence-code",
+            "--summary",
+            "must not close before migration",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "binding_evidence_obligations_missing",
+        ));
+
+    let audit = planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "plan",
+            "audit",
+            "plan-binding-evidence-hold",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let audit: Value = serde_json::from_slice(&audit).unwrap();
+    assert_eq!(audit["holds"], false);
+    assert_eq!(audit["proof"]["status"], "binding_unsatisfied");
+    let evidence_clause = audit["clauses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|clause| clause["clause"] == "verification_logged")
+        .unwrap();
+    assert_eq!(evidence_clause["authority"], "evidence_policy");
+    assert_eq!(evidence_clause["pass"], false);
+
     let conn = Connection::open(&db).unwrap();
     assert_eq!(
         conn.query_row(
-            "SELECT COUNT(*) FROM feature_run_role_leases WHERE role = 'verifier'",
+            "SELECT status FROM items WHERE id = 'item-binding-evidence-code'",
+            [],
+            |row| row.get::<_, String>(0)
+        )
+        .unwrap(),
+        "ready"
+    );
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM feature_runs", [], |row| row
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM review_gates WHERE kind = 'final_product'",
             [],
             |row| row.get::<_, i64>(0)
         )
         .unwrap(),
         0
-    );
-    assert_eq!(
-        item_status(&db, "item-legacy-authored-verification"),
-        "ready"
-    );
-    assert_eq!(
-        conn.query_row(
-            "SELECT COUNT(*) FROM feature_run_source_freezes WHERE status = 'invalidated'",
-            [],
-            |row| row.get::<_, i64>(0)
-        )
-        .unwrap(),
-        1
-    );
-    assert_eq!(
-        conn.query_row(
-            "SELECT COUNT(*) FROM feature_run_evidence_invalidations WHERE reason = 'legacy_final_review_source_changed'",
-            [],
-            |row| row.get::<_, i64>(0)
-        )
-        .unwrap(),
-        1
     );
 }
 
@@ -29020,73 +28790,54 @@ fn plan_audit_uses_evidence_coverage_for_binding_criteria_and_logs_are_claims_on
         "{browser_stop}"
     );
 
-    let (legacy_nonbinding_plan, legacy_nonbinding_item) =
-        create_settled_plan("Legacy nonbinding evidence audit");
-    let mut nonbinding_obligation = bind_obligation(
-        evidence_obligation_for(
-            "pob-audit-nonbinding",
-            &policy_digest,
-            "com.example.health.status",
-            "nonbinding diagnostic evidence",
-            json!({"status": "ok"}),
-            json!({"kind": "process", "uri": "local://health"}),
-            environment.clone(),
-            json!({"kind": "process", "id": "runtime-local"}),
-            json!([]),
-            "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-        ),
-        &legacy_nonbinding_plan,
-        "crit-audit-nonbinding",
-    );
-    nonbinding_obligation["binding"] = json!(false);
-    add_evidence_obligation_value(
-        dir.path(),
-        &db,
-        "pob-audit-nonbinding",
-        &nonbinding_obligation,
-    );
+    let (policy_missing_obligation_plan, policy_missing_obligation_item) =
+        create_settled_plan("Binding policy missing obligation audit");
     run(
         "maker",
         &[
             "log",
             "add",
             "--item",
-            &legacy_nonbinding_item,
+            &policy_missing_obligation_item,
             "--kind",
             "verification",
             "--summary",
-            "legacy diagnostic claim",
+            "diagnostic claim",
             "--cmd",
-            "printf legacy",
+            "printf diagnostic",
         ],
     );
-    let nonbinding_audit = run("prep", &["plan", "audit", &legacy_nonbinding_plan]);
-    let nonbinding_clause = clause(&nonbinding_audit, "verification_logged");
-    assert_eq!(nonbinding_audit["holds"], false, "{nonbinding_audit}");
-    assert_eq!(nonbinding_clause["pass"], true);
+    let missing_obligation_audit = run("prep", &["plan", "audit", &policy_missing_obligation_plan]);
+    let missing_obligation_clause = clause(&missing_obligation_audit, "verification_logged");
     assert_eq!(
-        clause(&nonbinding_audit, "final_product_review_complete")["pass"],
+        missing_obligation_audit["holds"], false,
+        "{missing_obligation_audit}"
+    );
+    assert_eq!(missing_obligation_clause["pass"], false);
+    assert_eq!(
+        clause(&missing_obligation_audit, "final_product_review_complete")["pass"],
         false
     );
+    assert_eq!(missing_obligation_clause["authority"], "evidence_policy");
+    assert_eq!(missing_obligation_clause["log_authority"], "claim_only");
     assert_eq!(
-        nonbinding_clause["authority"],
-        "legacy_verification_log_compatibility"
+        missing_obligation_audit["proof"]["status"],
+        "binding_unsatisfied"
     );
-    assert_eq!(nonbinding_clause["log_authority"], "claim_only");
-    assert!(nonbinding_clause["criteria"].as_array().unwrap().is_empty());
-    let nonbinding_human = run_human("prep", &["plan", "audit", &legacy_nonbinding_plan]);
+    let missing_obligation_human =
+        run_human("prep", &["plan", "audit", &policy_missing_obligation_plan]);
     assert!(
-        nonbinding_human.contains("claim-only untrusted verification log:"),
-        "{nonbinding_human}"
+        missing_obligation_human.contains("claim-only untrusted verification log:"),
+        "{missing_obligation_human}"
     );
     assert!(
-        nonbinding_human.contains("summary=legacy diagnostic claim"),
-        "{nonbinding_human}"
+        missing_obligation_human.contains("summary=diagnostic claim"),
+        "{missing_obligation_human}"
     );
     assert_eq!(
         run("prep", &["plan", "audit", &browser_plan])["holds"],
         false,
-        "nonbinding compatibility must not weaken a separate binding plan"
+        "a missing obligation on one plan must not weaken a separate binding plan"
     );
 
     let (api_plan, _) = create_settled_plan("API evidence audit");

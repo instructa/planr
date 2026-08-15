@@ -1,4 +1,5 @@
 use super::App;
+use super::proof::PlanEvidenceAuthority;
 use super::repository::execution_run::{
     BudgetReservationStatus, ExecutionRunRepository, FindingRecord, PersistedBudgetReservation,
     ReviewAttemptRecord, ReviewGateKind, ReviewGateRecord, ReviewGateStatus,
@@ -415,12 +416,11 @@ impl App {
                 reason_code,
             })
         });
-        let legacy_nonbinding_source_frozen =
-            if persisted.run.phase == FeatureRunPhase::SourceFrozen {
-                !self.plan_has_active_binding_obligations(&persisted.run.plan_id)?
-            } else {
-                false
-            };
+        let evidence_authority = if persisted.run.phase == FeatureRunPhase::SourceFrozen {
+            Some(self.plan_evidence_authority(&persisted.run.plan_id)?)
+        } else {
+            None
+        };
         let (reason_code, next_action) = if restart
             .as_ref()
             .is_some_and(|restart| restart.status == "required")
@@ -456,8 +456,18 @@ impl App {
                     ("implementation_in_progress", "settle_next_outcome")
                 }
                 FeatureRunPhase::RiskReview => ("risk_review_in_progress", "complete_review_gate"),
-                FeatureRunPhase::SourceFrozen if legacy_nonbinding_source_frozen => {
-                    ("legacy_nonbinding_source_frozen", "open_final_review")
+                FeatureRunPhase::SourceFrozen
+                    if evidence_authority == Some(PlanEvidenceAuthority::NonBinding) =>
+                {
+                    ("nonbinding_source_frozen", "open_final_review")
+                }
+                FeatureRunPhase::SourceFrozen
+                    if evidence_authority == Some(PlanEvidenceAuthority::BindingUnsatisfied) =>
+                {
+                    (
+                        "binding_evidence_obligations_missing",
+                        "repair_evidence_obligations",
+                    )
                 }
                 FeatureRunPhase::SourceFrozen => ("source_frozen", "lease_verification"),
                 FeatureRunPhase::Verification => {
@@ -613,18 +623,41 @@ impl App {
         source_freeze: Value,
         planr_executable: &CanonicalPlanrExecutableIdentity,
     ) -> Result<Value> {
-        if self.plan_has_active_binding_obligations(plan_id)? {
-            return self.canonical_verification_handoff_value_with_identity(
-                plan_id,
-                verification_item_id,
-                source_freeze,
-                planr_executable,
-            );
+        match self.plan_evidence_authority(plan_id)? {
+            PlanEvidenceAuthority::BindingActive => {
+                return self.canonical_verification_handoff_value_with_identity(
+                    plan_id,
+                    verification_item_id,
+                    source_freeze,
+                    planr_executable,
+                );
+            }
+            PlanEvidenceAuthority::BindingUnsatisfied => {
+                self.classify_feature_run_readiness_value(plan_id, true)?;
+                let proof = self.proof_status_for_plan(plan_id)?;
+                let execution_state = self
+                    .canonical_execution_state_for_plan_value(plan_id)?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("evidence_hold_execution_state_missing:{plan_id}")
+                    })?;
+                return Ok(json!({
+                    "item": null,
+                    "reason": "binding_evidence_obligations_missing",
+                    "work_packet": {
+                        "schema_version": "planr.evidence_hold.v1",
+                        "kind": "hold",
+                        "plan_id": plan_id,
+                        "execution_state": execution_state,
+                        "source_freeze": source_freeze,
+                        "proof": proof,
+                        "next_action": proof["next_action"],
+                    }
+                }));
+            }
+            PlanEvidenceAuthority::NonBinding => {}
         }
         let proof = self.proof_status_for_plan(plan_id)?;
-        if proof["status"] != "legacy_nonbinding"
-            || proof["active_binding"].as_bool() != Some(false)
-        {
+        if proof["status"] != "nonbinding" || proof["active_binding"].as_bool() != Some(false) {
             bail!("source_frozen_handoff_proof_authority_unknown:{plan_id}");
         }
         let execution_state = self
@@ -643,7 +676,7 @@ impl App {
         );
         Ok(json!({
             "item": null,
-            "reason": "final_review_handoff_source_frozen",
+            "reason": "nonbinding_final_review_handoff_source_frozen",
             "work_packet": {
                 "schema_version": "planr.final_review_handoff.v1",
                 "kind": "final_review_handoff",

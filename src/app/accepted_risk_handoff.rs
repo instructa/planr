@@ -1,5 +1,6 @@
 use super::App;
 use super::lease::PickFilter;
+use super::proof::PlanEvidenceAuthority;
 use super::repository::execution_run::{
     EvidenceInvalidationRecord, ExecutionRunRepository, PersistedFeatureRun, ReviewGateKind,
     ReviewGateRecord, ReviewGateStatus, ReviewSourceBindingRecord, SourceFreezeRecord,
@@ -260,7 +261,8 @@ impl App {
         if create_freeze {
             repository.freeze_source(&freeze)?;
         }
-        let active_binding = self.plan_has_active_binding_obligations(&persisted.run.plan_id)?;
+        let active_binding = self.plan_evidence_authority(&persisted.run.plan_id)?
+            == PlanEvidenceAuthority::BindingActive;
         let active_obligation_ids = if active_binding {
             self.active_risk_review_obligation_ids(
                 &persisted.run.plan_id,
@@ -305,10 +307,10 @@ impl App {
                 source_freeze,
             ),
         }?;
-        let event_kind = if handoff["work_packet"]["kind"] == "verification_handoff" {
-            "accepted_risk_verification_handoff"
-        } else {
-            "accepted_risk_final_review_handoff"
+        let event_kind = match handoff["work_packet"]["kind"].as_str() {
+            Some("verification_handoff") => "accepted_risk_verification_handoff",
+            Some("hold") => "accepted_risk_evidence_hold",
+            _ => "accepted_risk_final_review_handoff",
         };
         self.record_event(
             event_kind,

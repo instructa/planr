@@ -70,6 +70,7 @@ service-account*.json
 .codex/
 .claude/
 .claude.json
+.proofloop/evidence/
 .planr/*
 
 # Exception: Planr's own product plan package is the committed product spec.

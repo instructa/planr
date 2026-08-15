@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.10.0-alpha.6] - 2026-08-15
+
+### Changed
+
+- Make repository Evidence policy and materialized plan obligations one canonical authority for picking, execution, audit, review, and stop decisions.
+- Make explicit `planr.evidence.migration.v1` application the sole proof-obligation writer; obligation CLI, MCP, and HTTP surfaces are now read-only.
+- Remove the retired repository-local Evidence dogfood harness now that comparative benchmarks are owned by `planr-evals`.
+
+### Fixed
+
+- Hold binding-policy plans with no materialized obligation before leasing work or creating a FeatureRun, and reject adoption or closure until the explicit migration is applied.
+- Keep verification logs diagnostic-only so empty coverage or receipt lineage can never satisfy binding Evidence.
+
 ## [1.10.0-alpha.5] - 2026-08-14
 
 ### Fixed
@@ -630,7 +643,8 @@ Initial Planr product release.
 - Tag-driven release pipeline with multi-target builds (darwin/linux, arm64/x86_64) and Homebrew tap automation.
 - Skill workflow documentation for Codex, Claude Code, Cursor, and MCP-only clients.
 
-[Unreleased]: https://github.com/instructa/planr/compare/v1.10.0-alpha.5...HEAD
+[Unreleased]: https://github.com/instructa/planr/compare/v1.10.0-alpha.6...HEAD
+[1.10.0-alpha.6]: https://github.com/instructa/planr/compare/v1.10.0-alpha.5...v1.10.0-alpha.6
 [1.10.0-alpha.5]: https://github.com/instructa/planr/compare/v1.10.0-alpha.4...v1.10.0-alpha.5
 [1.10.0-alpha.4]: https://github.com/instructa/planr/compare/v1.10.0-alpha.2...v1.10.0-alpha.4
 [1.10.0-alpha.2]: https://github.com/instructa/planr/compare/v1.10.0-alpha.1...v1.10.0-alpha.2

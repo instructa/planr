@@ -1109,8 +1109,11 @@ impl App {
                     None if next["reason"] == "verification_handoff_source_frozen" => {
                         human.push_str("; source frozen for verification handoff")
                     }
-                    None if next["reason"] == "final_review_handoff_source_frozen" => {
+                    None if next["reason"] == "nonbinding_final_review_handoff_source_frozen" => {
                         human.push_str("; source frozen for independent final review")
+                    }
+                    None if next["reason"] == "binding_evidence_obligations_missing" => {
+                        human.push_str("; binding Evidence obligations must be materialized")
                     }
                     None => human.push_str("; no ready item"),
                 }

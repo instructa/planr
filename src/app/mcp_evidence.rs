@@ -12,12 +12,6 @@ impl App {
                 "evidence.policy",
                 self.evidence_policy_value(),
             )),
-            "planr_evidence_obligation_add" => Ok(mcp_evidence_json(
-                "evidence.obligation.add",
-                self.evidence_obligation_add_value(
-                    args.get("input").cloned().unwrap_or_else(|| args.clone()),
-                ),
-            )),
             "planr_evidence_obligation_list" => Ok(mcp_evidence_json(
                 "evidence.obligation.list",
                 self.evidence_obligations_value(

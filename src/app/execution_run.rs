@@ -199,6 +199,14 @@ impl App {
         &self,
         item_id: &str,
     ) -> Result<Option<PersistedFeatureRun>> {
+        if let Some(hold) = self.binding_evidence_hold_for_item(item_id)? {
+            bail!(
+                "binding_evidence_obligations_missing:{item_id}; next action: {}",
+                hold["next_action"]
+                    .as_str()
+                    .unwrap_or("planr evidence migrate --input <migration-file> --apply")
+            );
+        }
         let item = self.get_item(item_id)?;
         let Some(plan_path) = item.plan_path.as_deref() else {
             return Ok(None);
@@ -1203,6 +1211,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
+    use super::super::proof::PlanEvidenceAuthority;
     use super::super::repository::execution_run::{
         ReviewSourceBindingRecord, SourceFreezeRecord, SourceFreezeStatus,
     };
@@ -1249,8 +1258,11 @@ mod tests {
         App::new(conn, root.to_path_buf(), db.to_path_buf(), true, false)
     }
 
-    fn test_app() -> App {
-        test_app_at(PathBuf::from("."))
+    fn test_app() -> (tempfile::TempDir, App) {
+        let root = tempfile::tempdir().expect("test root");
+        initialize_test_git(root.path());
+        let app = test_app_at(root.path().to_path_buf());
+        (root, app)
     }
 
     fn add_outcome(app: &App, id: &str) {
@@ -1872,7 +1884,7 @@ mod tests {
     }
 
     #[test]
-    fn late_binding_between_legacy_preflight_and_refresh_fails_without_mutation() {
+    fn late_binding_between_nonbinding_preflight_and_refresh_fails_without_mutation() {
         let root = tempfile::tempdir().expect("root");
         let state = tempfile::tempdir().expect("state");
         initialize_test_git(root.path());
@@ -1887,9 +1899,10 @@ mod tests {
             .expect("frozen run");
         let run_id = frozen["feature_run"]["id"].as_str().unwrap();
         let original_freeze_id = frozen["source_freeze"]["id"].as_str().unwrap();
-        assert!(
-            !app.plan_has_active_binding_obligations("plan-a")
-                .expect("legacy preflight")
+        assert_eq!(
+            app.plan_evidence_authority("plan-a")
+                .expect("nonbinding preflight"),
+            PlanEvidenceAuthority::NonBinding
         );
 
         let migration = test_file_app(root.path(), &db, false);
@@ -1899,11 +1912,11 @@ mod tests {
             .expect("change source after freeze");
 
         let error = app
-            .refresh_legacy_final_review_source_freeze("plan-a", run_id)
+            .refresh_nonbinding_final_review_source_freeze("plan-a", run_id)
             .expect_err("late binding must fail closed");
         assert_eq!(
             error.to_string(),
-            "legacy_final_review_refresh_binding_activated:plan-a"
+            "nonbinding_final_review_refresh_evidence_authority_changed:plan-a"
         );
         let repository = ExecutionRunRepository::new(&app.conn);
         assert_eq!(
@@ -1966,7 +1979,7 @@ mod tests {
 
     #[test]
     fn restart_application_is_atomic_idempotent_and_rejects_a_healthy_run() {
-        let app = test_app();
+        let (_root, app) = test_app();
         seed_incompatible_feature_run(&app, "run-incompatible-app");
         let first = app
             .restart_feature_run_value("plan-a", FeatureRunRestartReason::IncompatibleBudget)
@@ -2002,7 +2015,7 @@ mod tests {
             1
         );
 
-        let healthy = test_app();
+        let (_healthy_root, healthy) = test_app();
         add_outcome(&healthy, "item-healthy");
         healthy
             .outcome_work_packet("item-healthy")
@@ -2018,7 +2031,7 @@ mod tests {
 
     #[test]
     fn capped_batch_rolls_to_fourth_outcome_with_same_maker_and_no_review_artifacts() {
-        let app = test_app();
+        let (_root, app) = test_app();
         add_outcome(&app, "item-a");
         add_outcome(&app, "item-b");
         add_outcome(&app, "item-c");
@@ -2111,7 +2124,7 @@ mod tests {
 
     #[test]
     fn same_maker_roll_fails_closed_for_state_owner_gate_and_double_roll() {
-        let app = test_app();
+        let (_root, app) = test_app();
         for id in ["guard-a", "guard-b", "guard-c"] {
             add_outcome(&app, id);
         }
@@ -2194,7 +2207,7 @@ mod tests {
 
     #[test]
     fn mcp_and_http_completion_inputs_share_canonical_settlement_and_structured_escalation() {
-        let app = test_app();
+        let (_root, app) = test_app();
         add_outcome(&app, "item-mcp");
         add_outcome(&app, "item-http");
         add_outcome(&app, "item-escalated");
@@ -2275,7 +2288,7 @@ mod tests {
 
     #[test]
     fn protected_checkpoint_preserves_maker_batch_and_count_across_rereview() {
-        let app = test_app();
+        let (_root, app) = test_app();
         add_outcome(&app, "item-risk");
         let settlement = app
             .settle_feature_run_outcome(OutcomeSettlement {
@@ -2387,7 +2400,7 @@ mod tests {
 
     #[test]
     fn review_override_requires_structured_reference_and_explanation() {
-        let app = test_app();
+        let (_root, app) = test_app();
         add_outcome(&app, "item-escalation");
         let rejected = app.settle_feature_run_outcome(OutcomeSettlement {
             item_id: "item-escalation",
@@ -2430,8 +2443,8 @@ mod tests {
     }
 
     #[test]
-    fn legacy_nonbinding_feature_has_one_current_independent_final_product_gate() {
-        let app = test_app();
+    fn nonbinding_feature_has_one_current_independent_final_product_gate() {
+        let (_root, app) = test_app();
         add_outcome(&app, "item-final");
         add_ready_verification(&app, "item-legacy-verification");
         let persisted = app
@@ -2499,9 +2512,10 @@ mod tests {
                  );",
             )
             .expect("superseded-only binding history");
-        assert!(
-            !app.plan_has_active_binding_obligations("plan-a")
-                .expect("authoritative supersession")
+        assert_eq!(
+            app.plan_evidence_authority("plan-a")
+                .expect("authoritative supersession"),
+            PlanEvidenceAuthority::NonBinding
         );
         let first = app
             .ensure_final_product_review_gate_value("plan-a")
@@ -2703,7 +2717,7 @@ mod tests {
 
     #[test]
     fn product_finding_invalidates_only_affected_evidence_and_routes_last_maker() {
-        let app = test_app();
+        let (_root, app) = test_app();
         add_outcome(&app, "item-product-finding");
         app.conn
             .execute(

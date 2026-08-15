@@ -23,10 +23,6 @@ impl App {
                     query_param(query, "criterion").as_deref(),
                 ),
             ),
-            ("POST", "/v1/evidence/obligations") => http_evidence_json(
-                "evidence.obligation.add",
-                self.evidence_obligation_add_value(body_json.clone()),
-            ),
             ("POST", "/v1/evidence/migrate") => http_evidence_json(
                 "evidence.migrate",
                 super::evidence::evidence_migration_request(body_json)

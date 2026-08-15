@@ -1,4 +1,5 @@
 use super::App;
+use super::proof::PlanEvidenceAuthority;
 use super::repository::execution_run::{
     ExecutionRunRepository, FindingStatus, ReviewGateKind, ReviewGateRecord, ReviewGateStatus,
     ReviewScopeKind, ReviewSourceBindingRecord,
@@ -30,20 +31,31 @@ impl App {
         {
             bail!("final_product_review_source_freeze_stale:{plan_id}");
         }
-        let receipt_lineage = if self.plan_has_active_binding_obligations(plan_id)? {
-            let project = self.default_project()?;
-            let evaluated_at = OffsetDateTime::now_utc().format(&Rfc3339)?;
-            let coverage = evaluate_plan_coverage(&self.conn, &project.id, plan_id, &evaluated_at)
-                .map_err(|error| anyhow!("{error}"))?;
-            if coverage.status.as_str() != "satisfied" {
+        let receipt_lineage = match self.plan_evidence_authority(plan_id)? {
+            PlanEvidenceAuthority::BindingActive => {
+                let project = self.default_project()?;
+                let evaluated_at = OffsetDateTime::now_utc().format(&Rfc3339)?;
+                let coverage =
+                    evaluate_plan_coverage(&self.conn, &project.id, plan_id, &evaluated_at)
+                        .map_err(|error| anyhow!("{error}"))?;
+                if coverage.status.as_str() != "satisfied" {
+                    bail!(
+                        "final_product_review_requires_satisfied_exact_source_coverage:{plan_id}:{}",
+                        coverage.status.as_str()
+                    );
+                }
+                coverage.receipt_lineage
+            }
+            PlanEvidenceAuthority::BindingUnsatisfied => {
+                let proof = self.proof_status_for_plan(plan_id)?;
                 bail!(
-                    "final_product_review_requires_satisfied_exact_source_coverage:{plan_id}:{}",
-                    coverage.status.as_str()
+                    "final_product_review_binding_evidence_obligations_missing:{plan_id}:{}",
+                    proof["next_action"]
+                        .as_str()
+                        .unwrap_or("repair_evidence_obligations")
                 );
             }
-            coverage.receipt_lineage
-        } else {
-            json!([])
+            PlanEvidenceAuthority::NonBinding => json!([]),
         };
         Ok(ReviewSourceBindingRecord {
             gate_id: gate_id.to_string(),
@@ -60,6 +72,16 @@ impl App {
         let run_id = self
             .canonical_execution_run_id_for_plan(plan_id)?
             .ok_or_else(|| anyhow!("feature_run_not_found_for_plan:{plan_id}"))?;
+        let evidence_authority = self.plan_evidence_authority(plan_id)?;
+        if evidence_authority == PlanEvidenceAuthority::BindingUnsatisfied {
+            let proof = self.proof_status_for_plan(plan_id)?;
+            bail!(
+                "final_product_review_binding_evidence_obligations_missing:{plan_id}:{}",
+                proof["next_action"]
+                    .as_str()
+                    .unwrap_or("repair_evidence_obligations")
+            );
+        }
         if let Some(mut gate) = repository
             .review_gates_for_run(&run_id, false)?
             .into_iter()
@@ -146,11 +168,11 @@ impl App {
             let verification_closed = verification_item
                 .as_ref()
                 .is_some_and(|(_, status)| status == "closed");
-            let active_binding = self.plan_has_active_binding_obligations(plan_id)?;
-            let legacy_nonbinding = !active_binding;
+            let active_binding = evidence_authority == PlanEvidenceAuthority::BindingActive;
+            let nonbinding = evidence_authority == PlanEvidenceAuthority::NonBinding;
             if run.run.phase != FeatureRunPhase::Verification
                 && !(run.run.phase == FeatureRunPhase::SourceFrozen
-                    && (verification_closed || legacy_nonbinding))
+                    && (verification_closed || nonbinding))
             {
                 bail!(
                     "final_product_review_requires_verification_phase:phase={}: run `planr pick --plan {} --work-type verification --json`",
@@ -158,8 +180,8 @@ impl App {
                     plan_id
                 );
             }
-            if legacy_nonbinding && run.run.phase == FeatureRunPhase::SourceFrozen {
-                self.refresh_legacy_final_review_source_freeze(plan_id, &run.run.id)?;
+            if nonbinding && run.run.phase == FeatureRunPhase::SourceFrozen {
+                self.refresh_nonbinding_final_review_source_freeze(plan_id, &run.run.id)?;
             }
             if active_binding
                 && let Some((item_id, status)) = verification_item

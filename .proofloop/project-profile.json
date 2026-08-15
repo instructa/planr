@@ -1,0 +1,123 @@
+{
+  "schema_version": 3,
+  "kind": "proofloop-herdr-sol-luna/project-profile",
+  "project": {
+    "name": "Planr",
+    "root": ".",
+    "task_source": ".planr/plans/product/planr/TASKS.md"
+  },
+  "roles": {
+    "sol": {
+      "owns": [
+        "intake",
+        "architecture",
+        "design-sensitive implementation",
+        "integration",
+        "final decision"
+      ],
+      "sole_writer": true
+    },
+    "luna": {
+      "enabled": false,
+      "read_only": true,
+      "allowed_modes": []
+    }
+  },
+  "sentinel_policy": {
+    "default_mode": "off",
+    "healthy_notifications": false,
+    "deduplicate_events": true,
+    "user_message_fallback": "critical-only",
+    "max_runtime_minutes": 45,
+    "exit_after_stop": true,
+    "record_process": true
+  },
+  "paths": {
+    "allowed": [
+      "AGENTS.md",
+      ".gitignore",
+      ".proofloop/**",
+      ".planr/plans/product/planr/**",
+      "docs/contracts/EVIDENCE_CONTRACT_V1.md",
+      "docs/fixtures/mcp-contract.json",
+      "apps/docs/content/docs/reference/**",
+      "apps/docs/scripts/verify-reference.mjs",
+      "scripts/evidence-dogfood-v1.mjs",
+      "src/app/**",
+      "src/cli/**",
+      "src/integrations/**",
+      "tests/e2e.rs"
+    ],
+    "forbidden": [
+      ".git/**",
+      ".env",
+      ".env.*",
+      "**/*.pem",
+      "**/*.key",
+      ".codex/**",
+      ".claude/**"
+    ]
+  },
+  "validation": {
+    "cwd": ".",
+    "command": "cargo test --test e2e binding_policy_without_obligations_holds_before_review -- --exact",
+    "full_suite_command": "cargo test --bins",
+    "timeout_seconds": 900
+  },
+  "testing": {
+    "strategy": "distill",
+    "tracked_test_globs": [
+      "tests/**",
+      "**/tests/**",
+      "*_test.*",
+      "**/*_test.*",
+      "*.test.*",
+      "**/*.test.*",
+      "*.spec.*",
+      "**/*.spec.*"
+    ],
+    "build": {
+      "permanent_test_edits": "deny",
+      "full_suite": "deny"
+    },
+    "harden": {
+      "permanent_test_edits": "admission-required",
+      "max_new_invariants": 1,
+      "max_changed_test_files": 1,
+      "max_added_test_lines": 100,
+      "full_suite": "ci-or-explicit"
+    }
+  },
+  "evidence": {
+    "directory": ".proofloop/evidence",
+    "required": [
+      "diff",
+      "validation-result",
+      "test-gate",
+      "handoff"
+    ]
+  },
+  "budgets": {
+    "checkpoint_minutes": 20,
+    "hard_stop_minutes": 45,
+    "max_patch_batches": 1
+  },
+  "stop_conditions": [
+    "out-of-scope write",
+    "second writer or nested delegation",
+    "hypothesis disproved or scope broadened",
+    "context compaction during design-sensitive work",
+    "checkpoint or hard-stop exceeded"
+  ],
+  "manual_acceptance": {
+    "required": false,
+    "owner": "human",
+    "criteria": []
+  },
+  "pane_policy": {
+    "reuse_suitable_existing": true,
+    "record_created": true,
+    "close_recorded_only": true,
+    "max_completed_workflow_panes": 0
+  }
+}

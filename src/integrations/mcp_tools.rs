@@ -302,12 +302,6 @@ pub fn mcp_tools() -> Vec<Value> {
             &[],
         ),
         tool(
-            "planr_evidence_obligation_add",
-            "Add a proof obligation through the canonical Evidence service",
-            json!({"input": prop("object", "ProofObligation JSON object")}),
-            &["input"],
-        ),
-        tool(
             "planr_evidence_obligation_list",
             "List proof obligations, optionally filtered by plan, item, or criterion",
             json!({"plan": prop("string", "Optional plan id"), "item": prop("string", "Optional item id"), "criterion": prop("string", "Optional criterion id")}),

@@ -67,6 +67,13 @@ Planr turns broad product ideas and coding work into a coherent flow: product pl
 - REQ-PROD-BUDGET-008: Planr owns provider-neutral policy and admission; host adapters only enforce supplied maxima/deadlines and report observations.
 - REQ-PROD-BUDGET-009: An active FeatureRun with a missing, invalid, or digest-mismatched v2 budget contract must return a typed hold before lease or dispatch. The explicit plan-scoped `incompatible-budget` restart policy-cancels that run atomically without synthesizing a contract; only a later ordinary pick may create a distinct run and its one immutable v2 contract.
 
+## Binding Evidence Authority
+
+- REQ-PROD-EVIDENCE-001: Repository Evidence policy and materialized plan obligations jointly determine one canonical authority: `nonbinding`, `binding_unsatisfied`, or `binding_active`.
+- REQ-PROD-EVIDENCE-002: Binding policy without a materialized plan obligation must fail closed before implementation activation and at every later lifecycle boundary. It must never reach final review through claim logs, empty coverage, or empty receipt lineage.
+- REQ-PROD-EVIDENCE-003: Only explicit `planr.evidence.migration.v1` application materializes obligations. Planr must not synthesize them during planning, picking, readiness, audit, or review.
+- REQ-PROD-EVIDENCE-004: A verification-readiness failure must persist a capability hold after the failed lease transaction rolls back.
+
 ## User Personas
 
 - Solo operator: runs Codex and Claude Code in one repo and wants clean handoffs.
