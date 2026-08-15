@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.10.0-alpha.7] - 2026-08-15
+
+### Changed
+
+- Make complete build-plan acceptance criteria the canonical source for binding Evidence completeness, with exactly one active proof obligation per criterion.
+- Keep typed active-obligation selection in the Evidence coverage layer while the plan audit remains the sole owner of completeness decisions.
+
+### Fixed
+
+- Reject work admission, audit completion, and closure when a complete criterion is missing, duplicated, stale, or mapped outside the explicit Evidence migration path.
+- Preserve criterion identity through migration, coverage, inspection, and final proof so diagnostic logs cannot substitute for trusted receipts.
+
 ## [1.10.0-alpha.6] - 2026-08-15
 
 ### Changed
@@ -643,7 +655,8 @@ Initial Planr product release.
 - Tag-driven release pipeline with multi-target builds (darwin/linux, arm64/x86_64) and Homebrew tap automation.
 - Skill workflow documentation for Codex, Claude Code, Cursor, and MCP-only clients.
 
-[Unreleased]: https://github.com/instructa/planr/compare/v1.10.0-alpha.6...HEAD
+[Unreleased]: https://github.com/instructa/planr/compare/v1.10.0-alpha.7...HEAD
+[1.10.0-alpha.7]: https://github.com/instructa/planr/compare/v1.10.0-alpha.6...v1.10.0-alpha.7
 [1.10.0-alpha.6]: https://github.com/instructa/planr/compare/v1.10.0-alpha.5...v1.10.0-alpha.6
 [1.10.0-alpha.5]: https://github.com/instructa/planr/compare/v1.10.0-alpha.4...v1.10.0-alpha.5
 [1.10.0-alpha.4]: https://github.com/instructa/planr/compare/v1.10.0-alpha.2...v1.10.0-alpha.4
