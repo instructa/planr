@@ -54,7 +54,6 @@ assert.deepEqual(verifyReceipt(receipt, { selection: docsSelection, repoRoot: ro
 
 const d076SelectionInput = classifyChanges([
   { status: "M", path: "scripts/ac014-fresh-arm-runner.mjs" },
-  { status: "M", path: "scripts/outcome-batching-proof-v1.mjs" },
   { status: "M", path: "scripts/test-ac014-fresh-arm-runner.mjs" },
   { status: "M", path: "tests/e2e.rs" },
   { status: "A", path: "tests/fixtures/ac014/failed-transcript-min/history.jsonl" },
@@ -71,7 +70,6 @@ assert.deepEqual(
   persistedD076Selection.changes.flatMap(({ paths }) => paths),
   [
     "scripts/ac014-fresh-arm-runner.mjs",
-    "scripts/outcome-batching-proof-v1.mjs",
     "scripts/test-ac014-fresh-arm-runner.mjs",
     "tests/e2e.rs",
     "tests/fixtures/ac014/failed-transcript-min/history.jsonl",
@@ -79,7 +77,7 @@ assert.deepEqual(
     "tests/fixtures/ac014/failed-transcript-min/sessions/2026/08/08/rollout-2026-08-08T12-22-48-019fe0e5-8cef-7210-aea7-40722b23874e.jsonl",
     "tests/fixtures/outcome-batching/v1/ac014-benchmark-input.json",
   ],
-  "the d076 persisted selection keeps all eight bound paths",
+  "the d076 persisted selection keeps all seven remaining bound paths",
 );
 assert.equal(persistedD076Selection.changedFilesDigest, d076SelectionInput.changedFilesDigest);
 assert.throws(

@@ -64,7 +64,6 @@
     "docs:verify-clean-install": "pnpm --filter @planr/docs verify:clean-install",
     "docs:evidence-examples:generate": "cargo build --bin planr && pnpm --filter @planr/docs evidence-examples:generate",
     "docs:evidence-examples:check": "cargo build --bin planr && pnpm --filter @planr/docs evidence-examples:check",
-    "verify:switchloom-cross-product": "node scripts/verify-switchloom-cross-product.mjs",
     "docs:reference:generate": "cargo build --bin planr && pnpm --filter @planr/docs reference:generate",
     "docs:verify-reference": "cargo build --bin planr && pnpm --filter @planr/docs reference:check && pnpm --filter @planr/docs verify:reference"
   },
