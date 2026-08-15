@@ -32,13 +32,13 @@ planr plan check <plan-id>
 planr map build --from <plan-id>
 ```
 
-Fill required plan sections directly. Replace the placeholder task with independently verifiable `TASK-00n` slices before `planr map build`. A small coherent change is one implementation item plus one signal-bearing independent review; do not split mechanical stages into separate implementation/review pairs. Larger scopes still use multiple slices where ownership, dependencies, or independently observable outcomes genuinely differ. Preserve real execution order with `blocks` links. When registry routes use `work_type`, annotate tasks before mapping or retag them afterward; this is prep work, not a user question.
+Fill required plan sections directly. Give every build plan a non-empty, unique frontmatter `criteria` list with only stable `id` and `title` fields; prose under `## Acceptance Criteria` remains narrative and never supplies identity. Replace the placeholder task with independently verifiable `TASK-00n` slices before `planr map build`. A small coherent change is one implementation item plus one signal-bearing independent review; do not split mechanical stages into separate implementation/review pairs. Larger scopes still use multiple slices where ownership, dependencies, or independently observable outcomes genuinely differ. Preserve real execution order with `blocks` links. When registry routes use `work_type`, annotate tasks before mapping or retag them afterward; this is prep work, not a user question.
 
 When the repository provides a versioned verification policy and source-bound receipt runner, make that policy the verification owner in the plan. Record the selected profile, exact receipt path/digest, source revision, and the command that validates the receipt. Do not enumerate broad suites independently in every task when the policy already selects them.
 
 ## Durable Contract
 
-For plans with binding Evidence, require the repository to define the observation obligations and capability policy before execution, then run readiness. Store one contract per plan:
+For plans with binding Evidence, require the repository owner to materialize obligations from the checked frontmatter criterion IDs through explicit `planr.evidence.migration.v1` migration before execution, then run readiness. Never write obligations directly or duplicate `app/proof` completeness rules in the goal contract. Store one contract per plan:
 
 ```bash
 planr evidence readiness --scope plan --id <plan-id>

@@ -71,9 +71,11 @@ Compatible budget-hold resolution is a separate `app/feature_run_evidence` lifec
 ## Binding Evidence Ownership
 
 - `app/evidence` owns repository-policy parsing and whether the policy requires binding Evidence.
-- `app/proof` is the sole owner of `PlanEvidenceAuthority`: `nonbinding`, `binding_unsatisfied`, or `binding_active`, derived from policy plus authoritative obligation rows.
+- `planpack` owns the checked build-plan criterion identity list; Markdown acceptance prose is not an identity source.
+- `evidence/coverage` owns authoritative active-obligation row selection and exposes typed rows; no application surface duplicates its binding/supersession query.
+- `app/proof` is the sole owner of `PlanEvidenceAuthority`: `nonbinding`, `binding_unsatisfied`, or `binding_active`, derived by joining policy, the checked declared criterion set, and authoritative active obligation rows.
 - FeatureRun handoff, verifier admission, audit, final-review admission, accepted-risk handoff, and stop activation consume that classification. They do not infer authority from an empty coverage list or verification logs.
-- Explicit Evidence migration remains the sole obligation writer. A missing obligation under binding policy becomes a durable capability hold, not a compatibility route.
+- Explicit Evidence migration remains the sole obligation writer and accepts only the exact declared criterion set. An incomplete or invalid binding set becomes a durable capability hold, not a compatibility route.
 
 ## Backend Architecture
 

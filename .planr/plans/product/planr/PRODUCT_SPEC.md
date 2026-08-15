@@ -69,8 +69,8 @@ Planr turns broad product ideas and coding work into a coherent flow: product pl
 
 ## Binding Evidence Authority
 
-- REQ-PROD-EVIDENCE-001: Repository Evidence policy and materialized plan obligations jointly determine one canonical authority: `nonbinding`, `binding_unsatisfied`, or `binding_active`.
-- REQ-PROD-EVIDENCE-002: Binding policy without a materialized plan obligation must fail closed before implementation activation and at every later lifecycle boundary. It must never reach final review through claim logs, empty coverage, or empty receipt lineage.
+- REQ-PROD-EVIDENCE-001: Typed build-plan frontmatter owns one non-empty, unique, closed criterion identity list; acceptance prose is narrative only. Repository Evidence policy, that declared list, and authoritative active plan obligations jointly determine one canonical authority: `nonbinding`, `binding_unsatisfied`, or `binding_active`.
+- REQ-PROD-EVIDENCE-002: A binding plan with zero, partial, duplicate, or undeclared criterion bindings must fail closed before implementation activation and at every later lifecycle boundary. It must never reach coverage settlement or final review through claim logs, partial rows, empty coverage, or empty receipt lineage.
 - REQ-PROD-EVIDENCE-003: Only explicit `planr.evidence.migration.v1` application materializes obligations. Planr must not synthesize them during planning, picking, readiness, audit, or review.
 - REQ-PROD-EVIDENCE-004: A verification-readiness failure must persist a capability hold after the failed lease transaction rolls back.
 
@@ -147,7 +147,7 @@ idea -> product plan -> build plan -> map -> pick -> log -> review/evidence -> r
 
 ### Build Plans
 
-- REQ-PROD-030: Build plans must support frontmatter, source, scope decision, ownership target, existing leverage, phases, verification, acceptance criteria, out-of-scope, and notes.
+- REQ-PROD-030: Build plans must support typed criterion frontmatter, source, scope decision, ownership target, existing leverage, phases, verification, narrative acceptance criteria, out-of-scope, and notes.
 - REQ-PROD-031: A build plan may be linked to one or more map items.
 - REQ-PROD-032: The project context pack must preserve product, ownership, flows, state SSOT, constraints, and quality checks.
 - REQ-PROD-033: Plan closure claims must be reconciled against map item state and log.

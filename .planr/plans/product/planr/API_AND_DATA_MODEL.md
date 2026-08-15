@@ -15,7 +15,7 @@ Eval Contract v1, including the additive v1.1 efficiency-evidence amendment, is 
 
 ## PlanEvidenceAuthority
 
-`PlanEvidenceAuthority = nonbinding | binding_unsatisfied | binding_active` is a derived application value, not stored mutable state. `nonbinding` requires no binding repository policy and no binding plan obligations. `binding_unsatisfied` means policy requires binding Evidence but the plan has no materialized obligation. `binding_active` means authoritative binding obligation rows exist. Only `binding_active` can enter verification; only `nonbinding` can use the direct source-frozen final-review route.
+`PlanEvidenceAuthority = nonbinding | binding_unsatisfied | binding_active` is a derived application value, not stored mutable state. Typed build-plan frontmatter owns the declared criterion IDs. `nonbinding` requires no binding repository policy and no binding plan obligations. `binding_unsatisfied` means a binding plan's authoritative active obligations do not exactly match its declared criterion set, including zero, partial, duplicate, or undeclared bindings. `binding_active` means the sets match exactly. Only `binding_active` can enter verification; only `nonbinding` can use the direct source-frozen final-review route.
 
 ### FeatureRunBudgetContract
 

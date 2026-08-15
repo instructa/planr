@@ -6,7 +6,8 @@ Evidence Contract v1 is Planr's local-first contract for proving acceptance crit
 
 ## Ownership
 
-- Product and build plans own authored acceptance criteria and the reviewed `ProofObligation` records bound to those criteria.
+- Typed build-plan frontmatter owns authored criterion identity as one non-empty, unique, closed list of `{id, title}` entries. Acceptance prose is narrative only.
+- Explicit Evidence migration owns materialization of reviewed `ProofObligation` records bound to those declared criteria.
 - The Evidence domain owns `ProofObligation`, `ObservationRequirement`, `VerificationCapabilityManifest`, `VerificationCapabilityInstance`, `EvidenceAttempt`, `UntrustedEvidenceProposal`, `EvidenceReceipt`, `CoverageVerdict`, `EvidencePolicy`, `ProofPreset`, and `EvidenceWaiver`.
 - Planr assigns trusted provenance only from Planr-observed execution, verified host events, accepted MCP attestation, validated artifact import, or explicit approval-backed user attestation.
 - Public JSON, agent-authored JSON, adapter stdout, logs, and artifacts may propose claims, but they cannot construct trusted provenance, execution identity, freshness, target binding, receipt digest, or closure authority.
@@ -20,8 +21,8 @@ Evidence Contract v1 is Planr's local-first contract for proving acceptance crit
 - Route Audit remains the owner of requested, resolved, and effective routing evidence. Evidence may consume a mapped provenance view, but it must not copy requested route declarations into effective execution proof.
 - Agent Profiles, model-routing capability classes, usage-policy capability classes, MCP protocol capabilities, and context tags are dispatch or protocol metadata. They are not verification capability instances and do not prove runtime availability.
 - Planr logs remain narrative and supporting records. A `kind = verification` log is a claim that can be referenced, but it never satisfies a binding observation.
-- A repository without a binding Evidence policy is explicitly non-binding. A repository whose policy requires binding Evidence but whose plan has no materialized `ProofObligation` is `binding_unsatisfied`: Planr returns a hold before leasing or creating a FeatureRun, persists a capability hold when an existing run reaches readiness, rejects closure, final review, and stop activation, and never substitutes logs or an empty receipt lineage.
-- Migration is the sole obligation-materialization path. It is explicit, plan-scoped, previewable, idempotent, and materializes ordinary immutable `ProofObligation` rows; it must not rewrite plans, logs, reviews, artifacts, or historical claims.
+- A repository without a binding Evidence policy and without binding plan obligations is explicitly non-binding. A binding plan is `binding_unsatisfied` unless its authoritative active obligations match the declared build-plan criterion set exactly: zero, partial, duplicate, or undeclared bindings all fail closed. Planr returns a hold before leasing or creating a FeatureRun, persists a capability hold when an existing run reaches readiness, rejects coverage settlement, closure, final review, and stop activation, and never substitutes logs or an empty receipt lineage.
+- Migration is the sole obligation-materialization path. It is explicit, plan-scoped, previewable, idempotent, and accepts only an exact declared criterion binding set before materializing ordinary immutable `ProofObligation` rows. It must not rewrite plans, logs, reviews, artifacts, or historical claims.
 - Planr artifacts remain files or references with digests. An artifact alone is not trusted evidence unless a trusted receipt binds it to the source revision, target, environment, execution identity, observation results, and policy.
 
 ## Versioning And Compatibility
@@ -61,6 +62,8 @@ Custom observation types must reference a versioned JSON Schema and a registrati
 ### ProofObligation
 
 A reviewed, binding or advisory contract for one acceptance criterion.
+
+For a binding build plan, `criterion_id` must name one criterion declared in that plan's checked frontmatter. The obligation does not create criterion identity.
 
 Required fields:
 
@@ -200,7 +203,7 @@ Coverage gap/failure reason codes:
 
 Operator aliases are rendered as aliases only and resolve to the canonical codes above: `capability_unavailable` -> `missing_capability`, `dependency_unavailable` -> `external_dependency_unavailable`, `policy_failed` -> `stale_policy`, `trust_failed` -> `untrusted_provenance`, and `stale_evidence` -> `stale_source`. Unknown aliases are classified as `verifier_failed` rather than `product_failed`.
 
-Explicit Evidence migration input uses `schema_version = "planr.evidence.migration.v1"`, a single `plan_id`, and an `obligations[]` array of full `ProofObligation` objects whose `plan_id` matches the migration plan and whose `binding` is `true`. Preview is non-mutating. Apply is atomic for the migration payload: any conflict or malformed obligation leaves the plan with no newly bound partial obligations. Reapplying an identical payload is `unchanged`.
+Explicit Evidence migration input uses `schema_version = "planr.evidence.migration.v1"`, a single `plan_id`, and an `obligations[]` array of full `ProofObligation` objects whose `plan_id` matches the migration plan and whose `binding` is `true`. The payload's criterion bindings must exactly match the checked build-plan frontmatter set. Preview is non-mutating. Apply is atomic for the migration payload: any conflict, malformed obligation, missing criterion, duplicate criterion, or undeclared criterion leaves the plan with no newly bound partial obligations. Reapplying an identical payload is `unchanged`.
 
 Process adapters may report a host boundary failure only with an exact single-field JSON line on stdout or stderr:
 

@@ -1,8 +1,8 @@
 use super::App;
 use crate::agents::{REGISTRY_RELATIVE_PATH, registry_path};
 use crate::planpack::{
-    BUILD_PLAN_REQUIRED_SECTIONS, PRODUCT_PLAN_REQUIRED_SECTIONS, parse_plan_metadata,
-    unfilled_required_sections,
+    BUILD_PLAN_REQUIRED_SECTIONS, PRODUCT_PLAN_REQUIRED_SECTIONS, build_plan_criteria,
+    parse_plan_metadata, unfilled_required_sections,
 };
 use crate::route_audit::RouteObservation;
 use crate::secrets::redact_secrets;
@@ -21,6 +21,7 @@ impl App {
         let plan = self.get_plan(plan_id)?;
         let path = std::path::PathBuf::from(&plan.path);
         let mut warnings = Vec::new();
+        let mut criteria = Value::Null;
         let warning = |file: &str, section: Option<&str>, message: String, fix: String| json!({"file": file, "section": section, "message": message, "fix": fix});
         if !path.exists() {
             warnings.push(warning(
@@ -50,6 +51,23 @@ impl App {
                     format!("frontmatter parse error: {detail}"),
                     format!("fix the YAML frontmatter in {frontmatter_file}, then re-run `planr plan check {plan_id}`"),
                 ));
+            } else if plan.stage == "build" {
+                match build_plan_criteria(&frontmatter) {
+                    Ok(checked) => criteria = json!(checked),
+                    Err(problems) => {
+                        for problem in problems {
+                            warnings.push(warning(
+                                &plan.path,
+                                Some("frontmatter.criteria"),
+                                problem,
+                                format!(
+                                    "define one unique `id` and non-empty `title` per criterion under frontmatter `criteria` in {}, then re-run `planr plan check {plan_id}`",
+                                    plan.path
+                                ),
+                            ));
+                        }
+                    }
+                }
             }
             let (section_file, required) = if path.is_dir() {
                 (path.join("PRODUCT_SPEC.md"), PRODUCT_PLAN_REQUIRED_SECTIONS)
@@ -101,7 +119,7 @@ impl App {
         }
         let plan = self.get_plan(plan_id)?;
         let ok = warnings.is_empty();
-        Ok(json!({"plan": plan, "ok": ok, "warnings": warnings}))
+        Ok(json!({"plan": plan, "ok": ok, "criteria": criteria, "warnings": warnings}))
     }
 
     pub(crate) fn debug_bundle(&self, item: Option<&str>) -> Result<Value> {

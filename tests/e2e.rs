@@ -17658,6 +17658,469 @@ fn evidence_migration_explicitly_binds_pre_evidence_plans_without_rewriting_clai
 }
 
 #[test]
+fn complete_binding_plan_criteria_contract_rejects_invalid_identity_sets() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    let db_arg = db.to_str().unwrap().to_string();
+    init_evidence_project(dir.path(), &db, "Complete Binding Plan Criteria");
+    let run = |args: &[&str]| -> Value {
+        single_json_document(
+            &planr()
+                .current_dir(dir.path())
+                .args(["--db", &db_arg, "--json"])
+                .args(args)
+                .assert()
+                .success()
+                .get_output()
+                .stdout,
+        )
+    };
+    let product = run(&["plan", "new", "Criteria Product"]);
+    let build = run(&[
+        "plan",
+        "split",
+        product["plan"]["id"].as_str().unwrap(),
+        "--slice",
+        "Closed Criteria",
+    ]);
+    let plan_id = build["plan"]["id"].as_str().unwrap();
+    let build_path = build["plan"]["path"].as_str().unwrap();
+    let scaffold = fs::read_to_string(build_path).unwrap();
+    let criteria_start = scaffold.find("criteria:\n").unwrap();
+    let body = "---\n\n# Closed Criteria\n\n## Scope Decision\n\nUse typed criteria.\n\n## Verification\n\nCheck the closed contract.\n\n## Acceptance Criteria\n\nNarrative only.\n\n## Steps\n\n### TASK-001: Verify criteria\n\nRun the focused check.\n";
+    let write_criteria = |yaml: &str| {
+        fs::write(
+            build_path,
+            format!("{}{yaml}{body}", &scaffold[..criteria_start]),
+        )
+        .unwrap();
+    };
+
+    for (yaml, expected) in [
+        ("", "must be a non-empty list"),
+        ("criteria: []\n", "must not be empty"),
+        (
+            "criteria:\n  - id: duplicate\n    title: First\n  - id: duplicate\n    title: Second\n",
+            "is duplicated",
+        ),
+        (
+            "criteria:\n  - id: criterion-unknown\n    title: Unknown field\n    legacy_key: forbidden\n",
+            "unknown field",
+        ),
+        (
+            "criteria:\n  - id: criterion-blank-title\n    title: '   '\n",
+            "title` must not be empty",
+        ),
+    ] {
+        write_criteria(yaml);
+        let checked = run(&["plan", "check", plan_id]);
+        assert_eq!(checked["ok"], false, "{checked}");
+        assert!(
+            checked["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|warning| warning["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains(expected))),
+            "expected {expected}: {checked}"
+        );
+    }
+
+    write_criteria("criteria:\n  - id: criterion-valid\n    title: Valid criterion\n");
+    let checked = run(&["plan", "check", plan_id]);
+    assert_eq!(checked["ok"], true, "{checked}");
+    assert_eq!(checked["criteria"][0]["id"], "criterion-valid");
+}
+
+#[test]
+fn complete_binding_authority_requires_the_exact_declared_criterion_set() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    let db_arg = db.to_str().unwrap().to_string();
+    write_evidence_policy_fixture(dir.path());
+    init_git_repo(dir.path());
+    init_evidence_project(dir.path(), &db, "Complete Binding Authority");
+    let run = |args: &[&str]| -> Value {
+        single_json_document(
+            &planr()
+                .current_dir(dir.path())
+                .args(["--db", &db_arg, "--json"])
+                .args(args)
+                .assert()
+                .success()
+                .get_output()
+                .stdout,
+        )
+    };
+    let run_failure = |args: &[&str]| -> Value {
+        single_json_document(
+            &planr()
+                .current_dir(dir.path())
+                .args(["--db", &db_arg, "--json"])
+                .args(args)
+                .assert()
+                .failure()
+                .get_output()
+                .stdout,
+        )
+    };
+
+    let product = run(&["plan", "new", "Authority Product"]);
+    let product_id = product["plan"]["id"].as_str().unwrap();
+    let build = run(&[
+        "plan",
+        "split",
+        product_id,
+        "--slice",
+        "Complete Binding Authority Matrix",
+    ]);
+    let plan_id = build["plan"]["id"].as_str().unwrap().to_string();
+    let build_path = build["plan"]["path"].as_str().unwrap();
+    let build_text = fs::read_to_string(build_path).unwrap();
+    let criteria_start = build_text.find("criteria:\n").unwrap();
+    let build_text = format!(
+        "{}criteria:\n  - id: criterion-authority-first\n    title: First authority criterion\n  - id: criterion-authority-second\n    title: Second authority criterion\n---\n\n# Complete Binding Authority Matrix\n\n## Scope Decision\n\nVerify exact criterion binding.\n\n## Ownership Target\n\nApplication proof owns completeness.\n\n## Existing Leverage\n\nUse the migration boundary.\n\n## Phase 1\n\n- [ ] Verify the first criterion.\n- [ ] Verify the second criterion.\n\n## Out Of Scope\n\nNo compatibility path.\n\n## Verification\n\nRun the focused no-model contract.\n\n## Acceptance Criteria\n\nBoth typed criteria bind exactly.\n",
+        &build_text[..criteria_start],
+    );
+    fs::write(build_path, build_text).unwrap();
+    let checked = run(&["plan", "check", &plan_id]);
+    assert!(checked["ok"].as_bool().unwrap_or(false), "{checked}");
+    let map = run(&["map", "build", "--from", &plan_id]);
+    let item_id = map["created"][0]["id"].as_str().unwrap().to_string();
+    let zero = run(&["trace", "item", &item_id]);
+    assert_eq!(zero["proof"]["status"], "binding_unsatisfied", "{zero}");
+    let zero_readiness =
+        run_failure(&["evidence", "readiness", "--scope", "plan", "--id", &plan_id]);
+    assert_eq!(
+        zero_readiness["object"]["status"], "blocked",
+        "{zero_readiness}"
+    );
+    assert_eq!(
+        zero_readiness["object"]["proof"]["status"], "binding_unsatisfied",
+        "{zero_readiness}"
+    );
+    let zero_coverage = run_failure(&["evidence", "coverage", "--scope", "plan", "--id", &plan_id]);
+    assert_eq!(
+        zero_coverage["object"]["authority"], "binding_unsatisfied",
+        "{zero_coverage}"
+    );
+
+    let policy = run(&["evidence", "policy"]);
+    let environment = capability_instance_environment(
+        &db,
+        policy["object"]["registry"]["probes"][0]["instance_id"]
+            .as_str()
+            .unwrap(),
+    );
+    let obligation = |id: &str, criterion_id: &str| {
+        let mut value = evidence_obligation_for(
+            id,
+            policy["object"]["digest"].as_str().unwrap(),
+            "com.example.health.status",
+            id,
+            json!({"status": "ok"}),
+            json!({"kind": "process", "uri": "local://health"}),
+            environment.clone(),
+            json!({"kind": "process", "id": "runtime-local"}),
+            json!([]),
+            "sha256:abababababababababababababababababababababababababababababababab",
+        );
+        value["plan_id"] = json!(plan_id);
+        value["item_id"] = Value::Null;
+        value["criterion_id"] = json!(criterion_id);
+        value
+    };
+    let migration = |obligations: Vec<Value>| {
+        json!({
+            "schema_version": "planr.evidence.migration.v1",
+            "plan_id": plan_id,
+            "obligations": obligations,
+        })
+    };
+    let write_migration = |name: &str, value: &Value| {
+        let path = dir.path().join(name);
+        fs::write(&path, serde_json::to_vec_pretty(value).unwrap()).unwrap();
+        path
+    };
+
+    let partial = migration(vec![obligation(
+        "pob-authority-partial",
+        "criterion-authority-first",
+    )]);
+    let partial_path = write_migration("partial.json", &partial);
+    let partial_result = run_failure(&[
+        "evidence",
+        "migrate",
+        "--input",
+        partial_path.to_str().unwrap(),
+        "--apply",
+    ]);
+    assert!(
+        partial_result["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("missing_obligation:criterion-authority-second"),
+        "{partial_result}"
+    );
+
+    let duplicate = migration(vec![
+        obligation("pob-authority-duplicate-a", "criterion-authority-first"),
+        obligation("pob-authority-duplicate-b", "criterion-authority-first"),
+    ]);
+    let duplicate_path = write_migration("duplicate.json", &duplicate);
+    let duplicate_result = run_failure(&[
+        "evidence",
+        "migrate",
+        "--input",
+        duplicate_path.to_str().unwrap(),
+        "--apply",
+    ]);
+    assert!(
+        duplicate_result["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("duplicate_criterion_binding:criterion-authority-first"),
+        "{duplicate_result}"
+    );
+
+    let foreign = migration(vec![
+        obligation("pob-authority-foreign-a", "criterion-authority-first"),
+        obligation("pob-authority-foreign-b", "criterion-authority-foreign"),
+    ]);
+    let foreign_path = write_migration("foreign.json", &foreign);
+    let foreign_result = run_failure(&[
+        "evidence",
+        "migrate",
+        "--input",
+        foreign_path.to_str().unwrap(),
+        "--apply",
+    ]);
+    assert!(
+        foreign_result["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("undeclared_criterion_binding:criterion-authority-foreign"),
+        "{foreign_result}"
+    );
+
+    let before_exact = run(&["evidence", "obligation", "list", "--plan", &plan_id]);
+    assert!(
+        before_exact["object"]["obligations"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "invalid migrations must be atomic: {before_exact}"
+    );
+
+    let exact = migration(vec![
+        obligation("pob-authority-first", "criterion-authority-first"),
+        obligation("pob-authority-second", "criterion-authority-second"),
+    ]);
+    let exact_path = write_migration("exact.json", &exact);
+    let applied = run(&[
+        "evidence",
+        "migrate",
+        "--input",
+        exact_path.to_str().unwrap(),
+        "--apply",
+    ]);
+    assert_eq!(applied["object"]["status"], "applied", "{applied}");
+    assert_eq!(
+        applied["object"]["created"].as_array().unwrap().len(),
+        2,
+        "{applied}"
+    );
+    let audit = run(&["plan", "audit", &plan_id]);
+    assert_eq!(audit["proof"]["active_binding"], true, "{audit}");
+    assert_eq!(audit["proof"]["status"], "not_proven", "{audit}");
+}
+
+#[test]
+fn complete_binding_lifecycle_fails_closed_for_partial_active_rows() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    let db_arg = db.to_str().unwrap().to_string();
+    write_evidence_policy_fixture(dir.path());
+    init_git_repo(dir.path());
+    init_evidence_project(dir.path(), &db, "Complete Binding Lifecycle");
+    let run = |args: &[&str]| -> Value {
+        single_json_document(
+            &planr()
+                .current_dir(dir.path())
+                .env("PLANR_WORKER_ID", "maker-complete-binding-lifecycle")
+                .args(["--db", &db_arg, "--json"])
+                .args(args)
+                .assert()
+                .success()
+                .get_output()
+                .stdout,
+        )
+    };
+    let run_failure = |args: &[&str]| -> Value {
+        single_json_document(
+            &planr()
+                .current_dir(dir.path())
+                .env("PLANR_WORKER_ID", "maker-complete-binding-lifecycle")
+                .args(["--db", &db_arg, "--json"])
+                .args(args)
+                .assert()
+                .failure()
+                .get_output()
+                .stdout,
+        )
+    };
+
+    let product = run(&["plan", "new", "Lifecycle Product"]);
+    let build = run(&[
+        "plan",
+        "split",
+        product["plan"]["id"].as_str().unwrap(),
+        "--slice",
+        "Lifecycle Boundaries",
+    ]);
+    let plan_id = build["plan"]["id"].as_str().unwrap().to_string();
+    let build_path = build["plan"]["path"].as_str().unwrap();
+    let scaffold = fs::read_to_string(build_path).unwrap();
+    let criteria_start = scaffold.find("criteria:\n").unwrap();
+    fs::write(
+        build_path,
+        format!(
+            "{}criteria:\n  - id: criterion-lifecycle-first\n    title: First lifecycle criterion\n  - id: criterion-lifecycle-second\n    title: Second lifecycle criterion\n---\n\n# Lifecycle Boundaries\n\n## Scope Decision\n\nFail closed.\n\n## Verification\n\nCheck lifecycle boundaries.\n\n## Acceptance Criteria\n\nComplete bindings only.\n\n## Steps\n\n### TASK-001: Verify lifecycle\n\nRun the focused check.\n",
+            &scaffold[..criteria_start]
+        ),
+    )
+    .unwrap();
+    assert_eq!(run(&["plan", "check", &plan_id])["ok"], true);
+    let map = run(&["map", "build", "--from", &plan_id]);
+    let item_id = map["created"][0]["id"].as_str().unwrap().to_string();
+
+    let policy = run(&["evidence", "policy"]);
+    let environment = capability_instance_environment(
+        &db,
+        policy["object"]["registry"]["probes"][0]["instance_id"]
+            .as_str()
+            .unwrap(),
+    );
+    let obligation = |id: &str, criterion_id: &str| {
+        let mut value = evidence_obligation_for(
+            id,
+            policy["object"]["digest"].as_str().unwrap(),
+            "com.example.health.status",
+            id,
+            json!({"status": "ok"}),
+            json!({"kind": "process", "uri": "local://health"}),
+            environment.clone(),
+            json!({"kind": "process", "id": "runtime-local"}),
+            json!([]),
+            "sha256:abababababababababababababababababababababababababababababababab",
+        );
+        value["plan_id"] = json!(plan_id);
+        value["item_id"] = Value::Null;
+        value["criterion_id"] = json!(criterion_id);
+        value
+    };
+    let migration = json!({
+        "schema_version": "planr.evidence.migration.v1",
+        "plan_id": plan_id,
+        "obligations": [
+            obligation("pob-lifecycle-first", "criterion-lifecycle-first"),
+            obligation("pob-lifecycle-second", "criterion-lifecycle-second"),
+        ],
+    });
+    let migration_path = dir.path().join("lifecycle-migration.json");
+    fs::write(
+        &migration_path,
+        serde_json::to_vec_pretty(&migration).unwrap(),
+    )
+    .unwrap();
+    let applied = run(&[
+        "evidence",
+        "migrate",
+        "--input",
+        migration_path.to_str().unwrap(),
+        "--apply",
+    ]);
+    assert_eq!(applied["object"]["created"].as_array().unwrap().len(), 2);
+    let picked = run(&["pick", "--plan", &plan_id, "--work-type", "code"]);
+    assert_eq!(picked["work_packet"]["item_id"], item_id, "{picked}");
+
+    Connection::open(&db)
+        .unwrap()
+        .execute_batch(
+            "INSERT INTO proof_obligations(
+               id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
+               binding, observation_requirements_json, fixture_policy_json, freshness_policy_json,
+               assurance_policy_json, policy_digest, config_digest, source_digest,
+               supersedes_obligation_id, created_at, retry_aggregation, obligation_shape
+             )
+             SELECT 'pob-lifecycle-second-advisory', project_id, plan_id, item_id, criterion_id, 2,
+                    'test-only corrupt advisory successor', 0, observation_requirements_json,
+                    fixture_policy_json, freshness_policy_json, assurance_policy_json,
+                    policy_digest, config_digest, source_digest, id, datetime('now'),
+                    retry_aggregation, obligation_shape
+             FROM proof_obligations WHERE id = 'pob-lifecycle-second';",
+        )
+        .unwrap();
+    let partial_trace = run(&["trace", "item", &item_id]);
+    assert_eq!(
+        partial_trace["proof"]["status"], "binding_unsatisfied",
+        "{partial_trace}"
+    );
+    assert!(
+        partial_trace["proof"]["actionable_gaps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|gap| gap["code"] == "missing_obligation"
+                && gap["scope"]["id"] == "criterion-lifecycle-second")
+    );
+    let partial_readiness =
+        run_failure(&["evidence", "readiness", "--scope", "plan", "--id", &plan_id]);
+    assert_eq!(
+        partial_readiness["object"]["status"], "blocked",
+        "{partial_readiness}"
+    );
+    let partial_coverage =
+        run_failure(&["evidence", "coverage", "--scope", "plan", "--id", &plan_id]);
+    assert_eq!(
+        partial_coverage["object"]["authority"], "binding_unsatisfied",
+        "{partial_coverage}"
+    );
+    let partial_review = run_failure(&["plan", "final-review", &plan_id]);
+    assert!(
+        partial_review["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("final_product_review_binding_evidence_obligations_missing"),
+        "{partial_review}"
+    );
+
+    Connection::open(&db)
+        .unwrap()
+        .execute_batch(
+            "INSERT INTO proof_obligations(
+               id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
+               binding, observation_requirements_json, fixture_policy_json, freshness_policy_json,
+               assurance_policy_json, policy_digest, config_digest, source_digest,
+               supersedes_obligation_id, created_at, retry_aggregation, obligation_shape
+             )
+             SELECT 'pob-lifecycle-second-restored', project_id, plan_id, item_id, criterion_id, 3,
+                    'test-only restored binding successor', 1, observation_requirements_json,
+                    fixture_policy_json, freshness_policy_json, assurance_policy_json,
+                    policy_digest, config_digest, source_digest, id, datetime('now'),
+                    retry_aggregation, obligation_shape
+             FROM proof_obligations WHERE id = 'pob-lifecycle-second-advisory';",
+        )
+        .unwrap();
+    let complete_trace = run(&["trace", "item", &item_id]);
+    assert_ne!(
+        complete_trace["proof"]["status"], "binding_unsatisfied",
+        "{complete_trace}"
+    );
+}
+
+#[test]
 fn codex_stop_hook_bounds_real_non_actionable_coverage_blockers() {
     struct StopBlockerCase {
         name: &'static str,

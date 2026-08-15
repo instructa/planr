@@ -1,10 +1,11 @@
 //! Markdown plan package parsing and templates.
 
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use slug::slugify;
-use std::{fs, path::Path};
+use std::{collections::HashSet, fs, path::Path};
 use time::OffsetDateTime;
 
 pub fn project_pack_files() -> Vec<(&'static str, String)> {
@@ -80,16 +81,98 @@ fn yaml_quote(value: &str) -> String {
 }
 
 pub fn build_plan_body(title: &str, source: &str, slice: &str) -> String {
+    let criterion_id = format!("criterion-{}", slugify(slice));
     format!(
-        "---\nname: {}\noverview: {}\ntodos:\n  - id: phase-1\n    content: {}\n    status: pending\nisProject: false\nstage: build\nsource_plan: {}\nslice: {}\n---\n\n# {}\n\n## Scope Decision\n\n## Ownership Target\n\n## Existing Leverage\n\n## Phase 1\n\n- [ ] Implement {}\n\n## Out Of Scope\n\n## Verification\n\n## Acceptance Criteria\n\n",
+        "---\nname: {}\noverview: {}\ntodos:\n  - id: phase-1\n    content: {}\n    status: pending\nisProject: false\nstage: build\nsource_plan: {}\nslice: {}\ncriteria:\n  - id: {}\n    title: {}\n---\n\n# {}\n\n## Scope Decision\n\n## Ownership Target\n\n## Existing Leverage\n\n## Phase 1\n\n- [ ] Implement {}\n\n## Out Of Scope\n\n## Verification\n\n## Acceptance Criteria\n\n",
         slugify(title),
         yaml_quote(&format!("Build plan for {title}.")),
         yaml_quote(&format!("Implement {slice}")),
         source,
         yaml_quote(slice),
+        criterion_id,
+        yaml_quote(slice),
         title,
         slice
     )
+}
+
+/// One authored acceptance criterion from build-plan frontmatter.
+///
+/// This is the canonical criterion identity contract. Markdown acceptance
+/// prose is narrative only, and downstream Evidence code must join obligations
+/// to this checked list instead of discovering criterion identities elsewhere.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BuildPlanCriterion {
+    pub id: String,
+    pub title: String,
+}
+
+/// Decode and validate the closed build-plan `criteria` contract.
+///
+/// The caller receives every problem in one pass so `plan check` can present
+/// an actionable repair list without accepting partial or duplicate identity
+/// sets. Values are validated, never normalized or inferred.
+pub fn build_plan_criteria(
+    frontmatter: &Value,
+) -> std::result::Result<Vec<BuildPlanCriterion>, Vec<String>> {
+    let Some(raw_criteria) = frontmatter.get("criteria") else {
+        return Err(vec![
+            "frontmatter `criteria` must be a non-empty list of `{id, title}` objects".to_string(),
+        ]);
+    };
+    let Some(raw_criteria) = raw_criteria.as_array() else {
+        return Err(vec![
+            "frontmatter `criteria` must be a non-empty list of `{id, title}` objects".to_string(),
+        ]);
+    };
+    if raw_criteria.is_empty() {
+        return Err(vec!["frontmatter `criteria` must not be empty".to_string()]);
+    }
+
+    let mut criteria = Vec::with_capacity(raw_criteria.len());
+    let mut seen_ids = HashSet::with_capacity(raw_criteria.len());
+    let mut problems = Vec::new();
+    for (index, value) in raw_criteria.iter().enumerate() {
+        let criterion = match serde_json::from_value::<BuildPlanCriterion>(value.clone()) {
+            Ok(criterion) => criterion,
+            Err(error) => {
+                problems.push(format!(
+                    "frontmatter `criteria[{index}]` must contain only string `id` and `title` fields: {error}"
+                ));
+                continue;
+            }
+        };
+        if !valid_criterion_id(&criterion.id) {
+            problems.push(format!(
+                "frontmatter `criteria[{index}].id` must match `[A-Za-z0-9][A-Za-z0-9._:-]*`"
+            ));
+        }
+        if criterion.title.trim().is_empty() {
+            problems.push(format!(
+                "frontmatter `criteria[{index}].title` must not be empty"
+            ));
+        }
+        if !seen_ids.insert(criterion.id.clone()) {
+            problems.push(format!(
+                "frontmatter criterion id `{}` is duplicated",
+                criterion.id
+            ));
+        }
+        criteria.push(criterion);
+    }
+
+    if problems.is_empty() {
+        Ok(criteria)
+    } else {
+        Err(problems)
+    }
+}
+
+fn valid_criterion_id(value: &str) -> bool {
+    let mut chars = value.chars();
+    matches!(chars.next(), Some(first) if first.is_ascii_alphanumeric())
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':'))
 }
 
 pub const BUILD_PLAN_REQUIRED_SECTIONS: &[&str] =

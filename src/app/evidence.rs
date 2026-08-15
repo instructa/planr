@@ -486,6 +486,8 @@ impl App {
     }
 
     fn insert_migrated_evidence_obligation(&self, obligation: &ProofObligation) -> Result<Value> {
+        // Sole production writer for ProofObligation rows. Callers must pass
+        // through the atomic, plan-scoped migration contract below.
         let project = self.default_project()?;
         let obligation_id = obligation.id.clone();
         let obligation_version = self.next_obligation_version(&project.id, obligation)?;
@@ -720,6 +722,17 @@ impl App {
             }));
             parsed.push(obligation);
         }
+        let candidate_bindings = parsed
+            .iter()
+            .map(|obligation| {
+                (
+                    obligation.id.as_str().to_string(),
+                    obligation.criterion_id.as_str().to_string(),
+                )
+            })
+            .collect::<Vec<_>>();
+        self.require_complete_plan_criterion_bindings(&plan_id, &candidate_bindings)
+            .map_err(|error| EvidenceCommandError::bad_request(error.to_string()))?;
         let conflicts = preview
             .iter()
             .filter(|entry| entry["action"].as_str() == Some("conflict"))
@@ -991,6 +1004,33 @@ impl App {
         scope: EvidenceCoverageScope,
         id: &str,
     ) -> Result<Value> {
+        if matches!(scope, EvidenceCoverageScope::Plan) {
+            match self.plan_evidence_authority(id)? {
+                super::proof::PlanEvidenceAuthority::BindingActive => {}
+                super::proof::PlanEvidenceAuthority::BindingUnsatisfied => {
+                    let proof = self.proof_status_for_plan(id)?;
+                    return Ok(json!({
+                        "status": "blocked",
+                        "scope": {"kind": "plan", "id": id},
+                        "active_obligation_ids": [],
+                        "observation_types": [],
+                        "registry": null,
+                        "feature_run_freeze": null,
+                        "feature_run_readiness": null,
+                        "run_index": null,
+                        "gaps": proof["actionable_gaps"],
+                        "proof": proof,
+                        "next_action": proof["next_action"],
+                    }));
+                }
+                super::proof::PlanEvidenceAuthority::NonBinding => {
+                    return Err(EvidenceCommandError::bad_request(
+                        "nonbinding plans do not enter Evidence readiness; freeze source and open final review",
+                    )
+                    .into());
+                }
+            }
+        }
         let feature_run_freeze = if matches!(scope, EvidenceCoverageScope::Plan) {
             self.freeze_feature_run_source_value(id)?
         } else {
@@ -2575,6 +2615,31 @@ impl App {
         scope: EvidenceCoverageScope,
         id: &str,
     ) -> Result<Value> {
+        if matches!(scope, EvidenceCoverageScope::Plan) {
+            match self.plan_evidence_authority(id)? {
+                super::proof::PlanEvidenceAuthority::BindingActive => {}
+                super::proof::PlanEvidenceAuthority::BindingUnsatisfied => {
+                    let proof = self.proof_status_for_plan(id)?;
+                    return Ok(json!({
+                        "coverage": null,
+                        "coverage_id": null,
+                        "status": "unsatisfied",
+                        "receipt_digests": [],
+                        "waiver_digests": [],
+                        "receipt_lineage": [],
+                        "verdict": "unsatisfied",
+                        "authority": "binding_unsatisfied",
+                        "proof": proof,
+                    }));
+                }
+                super::proof::PlanEvidenceAuthority::NonBinding => {
+                    return Err(EvidenceCommandError::bad_request(
+                        "nonbinding plans have no binding Evidence coverage; use the source-frozen final-review route",
+                    )
+                    .into());
+                }
+            }
+        }
         let project = self.default_project()?;
         let evaluated_at = timestamp()?;
         let coverage = match scope {

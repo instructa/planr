@@ -45,6 +45,7 @@ A product plan package must include:
 A build plan must include:
 
 - source plan;
+- a non-empty `criteria` frontmatter list whose entries contain only a stable `id` and `title`;
 - scope decision;
 - ownership target;
 - existing leverage;
@@ -52,6 +53,16 @@ A build plan must include:
 - out of scope;
 - verification;
 - acceptance criteria.
+
+Author criterion identity only in frontmatter, for example:
+
+```yaml
+criteria:
+  - id: criterion-api-health
+    title: API health is observable from the target service
+```
+
+Keep the `## Acceptance Criteria` section as readable narrative, never an identity source. Do not infer criterion IDs from prose or decide obligation completeness in this skill; `plan check`, explicit Evidence migration, and the canonical `app/proof` authority own those decisions.
 
 ## Route-Aware Tagging
 
@@ -72,4 +83,4 @@ Planning is complete only when `planr plan check <plan-id>` passes and the next 
 
 When the map is built, linked, and tagged, end by naming the execution handoff explicitly — the user should never have to guess the next prompt: `Use $planr-loop on plan <build-plan-id>. Stop condition: all items closed with evidence, reviews complete, canonical Evidence coverage holds.` (On hosts with a /goal primitive, `$planr-goal` wraps the same loop for long-running autonomous runs.)
 
-`plan check` rejects empty scaffolds: build plans must have content in `## Scope Decision`, `## Verification`, and `## Acceptance Criteria`; product plans must have content in `## Problem`, `## Requirements`, and `## Success Criteria` of `PRODUCT_SPEC.md`. Write those sections before checking — do not pad them to satisfy the gate.
+`plan check` rejects empty scaffolds: build plans need a valid unique `criteria` frontmatter list plus content in `## Scope Decision`, `## Verification`, and `## Acceptance Criteria`; product plans must have content in `## Problem`, `## Requirements`, and `## Success Criteria` of `PRODUCT_SPEC.md`. Write those sections before checking — do not pad them to satisfy the gate.

@@ -6,7 +6,7 @@ These tasks are implementation-ready work items for coding agents. They intentio
 
 ### TASK-ALPHA6-EVIDENCE-001: Make Policy And Obligations One Fail-Closed Authority
 
-Replace obligation-row-only lifecycle branching with the canonical `PlanEvidenceAuthority`; reject binding-policy plans with no materialized obligations before implementation and final review; persist a capability hold when verifier readiness fails; remove claim-log and empty-lineage compatibility authority; retain explicit migration as the only obligation writer.
+Keep typed build-plan frontmatter as criterion identity authority and `app/proof` as the sole completeness owner; reject zero, partial, duplicate, and undeclared binding sets before implementation, readiness, coverage settlement, and final review; persist a capability hold when verifier readiness fails; remove claim-log, partial-row, and empty-lineage compatibility authority; retain explicit migration as the only obligation writer.
 
 Acceptance: `cargo check --lib` passes, followed by one focused lifecycle invariant in the separate hardening phase.
 

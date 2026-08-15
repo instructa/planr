@@ -50,6 +50,18 @@ struct EvaluationScope {
     criterion_id: Option<String>,
 }
 
+/// One authoritative active obligation row selected by the Evidence coverage
+/// domain. Consumers may decide completeness from these typed facts, but must
+/// not duplicate the binding/supersession query that selects them.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct AuthoritativeObligationBindingRow {
+    pub id: String,
+    pub plan_id: String,
+    pub item_id: Option<String>,
+    pub criterion_id: String,
+    pub obligation_version: i64,
+}
+
 #[derive(Debug, Clone)]
 struct ObligationRow {
     id: String,
@@ -181,7 +193,26 @@ pub fn authoritative_obligation_ids_for_scope(
         "plan" => "WHERE project_id = ?1 AND plan_id = ?2",
         _ => return Err(EvidenceDomainError::InvalidTrustedBinding("coverage.scope")),
     };
-    load_authoritative_obligation_ids_for_scope(conn, project_id, where_clause, scope_id)
+    authoritative_obligation_bindings_for_scope(conn, project_id, where_clause, scope_id)
+        .map(|rows| rows.into_iter().map(|row| row.id).collect())
+}
+
+/// Load authoritative active obligation rows for a prevalidated scope clause.
+///
+/// The Evidence coverage domain owns active-row selection. The clause remains
+/// internal to callers in this module except for the closed public scope entry
+/// point above; application completeness consumes the plan-scoped typed rows.
+pub fn authoritative_plan_obligation_bindings(
+    conn: &Connection,
+    project_id: &str,
+    plan_id: &str,
+) -> Result<Vec<AuthoritativeObligationBindingRow>, EvidenceDomainError> {
+    authoritative_obligation_bindings_for_scope(
+        conn,
+        project_id,
+        "WHERE project_id = ?1 AND plan_id = ?2",
+        plan_id,
+    )
 }
 
 pub fn evaluate_criterion_coverage(
@@ -971,20 +1002,23 @@ fn load_obligations_for_scope(
     scope_id: &str,
 ) -> Result<Vec<ObligationRow>, EvidenceDomainError> {
     let ids =
-        load_authoritative_obligation_ids_for_scope(conn, project_id, where_clause, scope_id)?;
+        authoritative_obligation_bindings_for_scope(conn, project_id, where_clause, scope_id)?
+            .into_iter()
+            .map(|row| row.id)
+            .collect::<Vec<_>>();
     ids.iter()
         .map(|id| load_obligation(conn, project_id, id))
         .collect()
 }
 
-fn load_authoritative_obligation_ids_for_scope(
+fn authoritative_obligation_bindings_for_scope(
     conn: &Connection,
     project_id: &str,
     where_clause: &str,
     scope_id: &str,
-) -> Result<Vec<String>, EvidenceDomainError> {
+) -> Result<Vec<AuthoritativeObligationBindingRow>, EvidenceDomainError> {
     let sql = format!(
-        "SELECT id
+        "SELECT id, plan_id, item_id, criterion_id, obligation_version
          FROM proof_obligations
          {where_clause}
            AND binding = 1
@@ -1000,7 +1034,15 @@ fn load_authoritative_obligation_ids_for_scope(
         .prepare(&sql)
         .map_err(|err| EvidenceDomainError::Digest(err.to_string()))?;
     statement
-        .query_map(params![project_id, scope_id], |row| row.get::<_, String>(0))
+        .query_map(params![project_id, scope_id], |row| {
+            Ok(AuthoritativeObligationBindingRow {
+                id: row.get(0)?,
+                plan_id: row.get(1)?,
+                item_id: row.get(2)?,
+                criterion_id: row.get(3)?,
+                obligation_version: row.get(4)?,
+            })
+        })
         .map_err(|err| EvidenceDomainError::Digest(err.to_string()))?
         .map(|row| row.map_err(|err| EvidenceDomainError::Digest(err.to_string())))
         .collect::<Result<Vec<_>, _>>()

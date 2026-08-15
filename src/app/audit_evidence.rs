@@ -8,10 +8,9 @@ pub(crate) fn plan_evidence_coverage_clause(
     plan_id: &str,
     verification_logs: Vec<Value>,
 ) -> Result<Value> {
-    let coverages = app.evidence_plan_criterion_coverages_value(plan_id)?;
-    if coverages.is_empty() {
-        return match app.plan_evidence_authority(plan_id)? {
-            PlanEvidenceAuthority::NonBinding => Ok(json!({
+    match app.plan_evidence_authority(plan_id)? {
+        PlanEvidenceAuthority::NonBinding => {
+            return Ok(json!({
                 "clause": "verification_logged",
                 "pass": true,
                 "required": false,
@@ -20,23 +19,42 @@ pub(crate) fn plan_evidence_coverage_clause(
                 "log_authority": "claim_only",
                 "criteria": [],
                 "detail": "repository policy does not require binding Evidence; verification claims are optional diagnostics"
-            })),
-            PlanEvidenceAuthority::BindingUnsatisfied | PlanEvidenceAuthority::BindingActive => {
-                let proof = app.proof_status_for_plan(plan_id)?;
-                Ok(json!({
-                    "clause": "verification_logged",
-                    "pass": false,
-                    "required": true,
-                    "authority": "evidence_policy",
-                    "logs": verification_logs,
-                    "log_authority": "claim_only",
-                    "criteria": [],
-                    "actionable_now": proof["actionable_now"],
-                    "next_action": proof["next_action"],
-                    "detail": proof["completion_language"],
-                }))
-            }
-        };
+            }));
+        }
+        PlanEvidenceAuthority::BindingUnsatisfied => {
+            let proof = app.proof_status_for_plan(plan_id)?;
+            return Ok(json!({
+                "clause": "verification_logged",
+                "pass": false,
+                "required": true,
+                "authority": "evidence_policy",
+                "logs": verification_logs,
+                "log_authority": "claim_only",
+                "criteria": [],
+                "binding_gaps": proof["actionable_gaps"],
+                "actionable_now": proof["actionable_now"],
+                "next_action": proof["next_action"],
+                "detail": proof["completion_language"],
+            }));
+        }
+        PlanEvidenceAuthority::BindingActive => {}
+    }
+
+    let coverages = app.evidence_plan_criterion_coverages_value(plan_id)?;
+    if coverages.is_empty() {
+        let proof = app.proof_status_for_plan(plan_id)?;
+        return Ok(json!({
+            "clause": "verification_logged",
+            "pass": false,
+            "required": true,
+            "authority": "evidence_coverage",
+            "logs": verification_logs,
+            "log_authority": "claim_only",
+            "criteria": [],
+            "actionable_now": proof["actionable_now"],
+            "next_action": proof["next_action"],
+            "detail": proof["completion_language"],
+        }));
     }
 
     let coverage = coverages
