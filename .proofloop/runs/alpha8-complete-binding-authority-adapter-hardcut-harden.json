@@ -1,0 +1,84 @@
+{
+  "schema_version": 3,
+  "kind": "proofloop-herdr-sol-luna/run-contract",
+  "task": {
+    "id": "alpha8-complete-binding-authority-adapter-hardcut-harden",
+    "source": ".planr/plans/build/rust-owned-complete-binding-authority-verification-replace-the-active-complete-binding-javascript-adapter-with-one-rust-boundary-and-delete-the-duplicate-owner.plan.md",
+    "goal": "Repair the stale alpha6 lifecycle fixture to the canonical typed build-plan criteria shape and admit at most the existing single-owner inventory invariant into that lifecycle boundary.",
+    "hypothesis": "One typed fixture criterion reaches the canonical missing_obligation hold, and the existing deterministic single-owner inventory can merge into the lifecycle test so one exact focused command protects both the hold and the hard-cut ownership boundary."
+  },
+  "project_profile": ".proofloop/project-profile.json",
+  "phase": "harden",
+  "writer": "sol",
+  "allowed_paths": [
+    ".proofloop/**",
+    "tests/e2e.rs"
+  ],
+  "test_policy": {
+    "baseline_record": ".proofloop/evidence/alpha8-complete-binding-authority-adapter-hardcut-harden/test-baseline.json",
+    "result_record": ".proofloop/evidence/alpha8-complete-binding-authority-adapter-hardcut-harden/test-gate.json",
+    "ephemeral_directory": ".proofloop/evidence/alpha8-complete-binding-authority-adapter-hardcut-harden/probes",
+    "admission_record": ".proofloop/evidence/alpha8-complete-binding-authority-adapter-hardcut-harden/test-admission.json",
+    "permanent": {
+      "max_new_invariants": 1,
+      "max_changed_test_files": 1,
+      "max_added_test_lines": 100
+    },
+    "full_suite": {
+      "allowed": false,
+      "reason": null
+    }
+  },
+  "luna_mode": null,
+  "validation": {
+    "cwd": ".",
+    "command": "cargo test --test e2e binding_policy_without_obligations_holds_before_review -- --exact",
+    "timeout_seconds": 900,
+    "pass_criteria": [
+      "the one declared focused lifecycle test executes and passes",
+      "typed build-plan criteria reach missing_obligation before item mutation",
+      "the merged single-owner inventory assertions execute in the same test",
+      "no production file or second test file changes and no full suite runs"
+    ]
+  },
+  "evidence": {
+    "directory": ".proofloop/evidence/alpha8-complete-binding-authority-adapter-hardcut-harden",
+    "required": [
+      "baseline",
+      "diff",
+      "validation-result",
+      "test-gate",
+      "handoff",
+      "pane-ownership"
+    ]
+  },
+  "budgets": {
+    "checkpoint_minutes": 20,
+    "hard_stop_minutes": 45,
+    "max_patch_batches": 1
+  },
+  "stop_conditions": [
+    "out-of-scope write",
+    "second writer or nested delegation",
+    "hypothesis disproved or scope broadened",
+    "context compaction during design-sensitive work",
+    "checkpoint or hard-stop exceeded",
+    "a second permanent invariant is proposed",
+    "production or Planr runtime-state edit",
+    "full-suite execution"
+  ],
+  "manual_acceptance": {
+    "required": false,
+    "owner": "human",
+    "criteria": []
+  },
+  "cleanup": {
+    "ownership_record": ".proofloop/evidence/alpha8-complete-binding-authority-adapter-hardcut-harden/pane-ownership.json",
+    "sentinel_process_record": ".proofloop/evidence/alpha8-complete-binding-authority-adapter-hardcut-harden/sentinel-process.json",
+    "sentinel_state_record": ".proofloop/evidence/alpha8-complete-binding-authority-adapter-hardcut-harden/sentinel-state.json",
+    "stop_recorded_sentinel_process": true,
+    "close_recorded_workflow_panes": true,
+    "leave_preexisting_panes_open": true,
+    "retire_sentinel_state": true
+  }
+}

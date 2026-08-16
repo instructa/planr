@@ -1,0 +1,84 @@
+{
+  "schema_version": 3,
+  "kind": "proofloop-herdr-sol-luna/run-contract",
+  "task": {
+    "id": "alpha8-complete-binding-authority-adapter-hardcut-final-build",
+    "source": ".planr/plans/build/rust-owned-complete-binding-authority-verification-replace-the-active-complete-binding-javascript-adapter-with-one-rust-boundary-and-delete-the-duplicate-owner.plan.md",
+    "goal": "Validate and locally integrate the unchanged Complete-Binding-Authority adapter hard cut after the separate HARDEN repair, with one canonical Rust process adapter and no JavaScript or dual execution path.",
+    "hypothesis": "The settled HARDEN invariant now passes against the unchanged production hard cut, while a metadata-only BUILD baseline proves this run authors no production or tracked-test edits and static inspection confirms one canonical adapter owner."
+  },
+  "project_profile": ".proofloop/project-profile.json",
+  "phase": "build",
+  "writer": "sol",
+  "allowed_paths": [
+    ".proofloop/runs/alpha8-complete-binding-authority-adapter-hardcut-final-build.json",
+    ".proofloop/evidence/alpha8-complete-binding-authority-adapter-hardcut-final-build/**",
+    ".proofloop/evidence/alpha8-complete-binding-authority-adapter-hardcut-harden/pane-ownership.json"
+  ],
+  "test_policy": {
+    "baseline_record": ".proofloop/evidence/alpha8-complete-binding-authority-adapter-hardcut-final-build/test-baseline.json",
+    "result_record": ".proofloop/evidence/alpha8-complete-binding-authority-adapter-hardcut-final-build/test-gate.json",
+    "ephemeral_directory": ".proofloop/evidence/alpha8-complete-binding-authority-adapter-hardcut-final-build/probes",
+    "admission_record": ".proofloop/evidence/alpha8-complete-binding-authority-adapter-hardcut-final-build/test-admission.json",
+    "permanent": {
+      "max_new_invariants": 0,
+      "max_changed_test_files": 0,
+      "max_added_test_lines": 0
+    },
+    "full_suite": {
+      "allowed": false,
+      "reason": null
+    }
+  },
+  "luna_mode": null,
+  "validation": {
+    "cwd": ".",
+    "command": "cargo test --test e2e binding_policy_without_obligations_holds_before_review -- --exact",
+    "timeout_seconds": 900,
+    "pass_criteria": [
+      "the one declared focused lifecycle and single-owner invariant executes and passes",
+      "the binding policy remains fail-closed before review and the canonical Rust adapter remains the sole process owner",
+      "this BUILD run authors no production or tracked-test edits and runs no full suite"
+    ]
+  },
+  "evidence": {
+    "directory": ".proofloop/evidence/alpha8-complete-binding-authority-adapter-hardcut-final-build",
+    "required": [
+      "baseline",
+      "diff",
+      "validation-result",
+      "test-gate",
+      "handoff",
+      "pane-ownership"
+    ]
+  },
+  "budgets": {
+    "checkpoint_minutes": 20,
+    "hard_stop_minutes": 45,
+    "max_patch_batches": 1
+  },
+  "stop_conditions": [
+    "out-of-scope write",
+    "second writer or nested delegation",
+    "hypothesis disproved or scope broadened",
+    "context compaction during design-sensitive work",
+    "checkpoint or hard-stop exceeded",
+    "production or tracked-test edit",
+    "full-suite execution",
+    "literal focused validation executed more than once"
+  ],
+  "manual_acceptance": {
+    "required": false,
+    "owner": "human",
+    "criteria": []
+  },
+  "cleanup": {
+    "ownership_record": ".proofloop/evidence/alpha8-complete-binding-authority-adapter-hardcut-final-build/pane-ownership.json",
+    "sentinel_process_record": ".proofloop/evidence/alpha8-complete-binding-authority-adapter-hardcut-final-build/sentinel-process.json",
+    "sentinel_state_record": ".proofloop/evidence/alpha8-complete-binding-authority-adapter-hardcut-final-build/sentinel-state.json",
+    "stop_recorded_sentinel_process": true,
+    "close_recorded_workflow_panes": true,
+    "leave_preexisting_panes_open": true,
+    "retire_sentinel_state": true
+  }
+}

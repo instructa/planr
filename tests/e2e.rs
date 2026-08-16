@@ -17936,6 +17936,125 @@ fn complete_binding_authority_requires_the_exact_declared_criterion_set() {
     assert_eq!(audit["proof"]["status"], "not_proven", "{audit}");
 }
 
+fn complete_binding_single_owner_inventory_keeps_adapter_at_boundary() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let production_obligation_writers = complete_binding_production_rust_files(&root.join("src"))
+        .into_iter()
+        .filter_map(|file| {
+            let source = fs::read_to_string(&file).unwrap();
+            let production = source.split("#[cfg(test)]").next().unwrap_or_default();
+            production
+                .contains("INSERT INTO proof_obligations")
+                .then(|| {
+                    file.strip_prefix(root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .to_string()
+                })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        production_obligation_writers,
+        vec!["src/app/evidence.rs"],
+        "production ProofObligation writers drifted"
+    );
+
+    let migration = fs::read_to_string(root.join("src/app/evidence.rs")).unwrap();
+    assert!(
+        migration.contains("fn insert_migrated_evidence_obligation"),
+        "the sole production obligation writer must be the migration boundary"
+    );
+
+    let proof = fs::read_to_string(root.join("src/app/proof.rs")).unwrap();
+    assert!(
+        proof.contains("authoritative_plan_obligation_bindings"),
+        "app/proof must consume the typed Evidence authority loader"
+    );
+    assert!(
+        !proof.contains("proof_obligations") && !proof.contains("rusqlite::params"),
+        "app/proof must not query proof_obligations directly"
+    );
+
+    let coverage = fs::read_to_string(root.join("src/evidence/coverage.rs")).unwrap();
+    assert!(
+        coverage.contains("pub struct AuthoritativeObligationBindingRow")
+            && coverage.contains("pub fn authoritative_plan_obligation_bindings"),
+        "Evidence coverage must expose the authoritative-row loader"
+    );
+
+    for relative in [
+        "src/app/audit_evidence.rs",
+        "src/app/final_review_admission.rs",
+        "src/app/execution_state.rs",
+        "src/app/stop.rs",
+    ] {
+        let source = fs::read_to_string(root.join(relative)).unwrap();
+        assert!(
+            ![
+                "build_plan_criteria",
+                "parse_plan_metadata",
+                "proof_obligations"
+            ]
+            .iter()
+            .any(|needle| source.contains(needle)),
+            "{relative} must not recompute completeness"
+        );
+        assert!(
+            source.contains("plan_evidence_authority") || source.contains("proof_status_for_plan"),
+            "{relative} must consume app/proof authority"
+        );
+    }
+
+    let plan_skill =
+        fs::read_to_string(root.join("plugins/planr/skills/planr-plan/SKILL.md")).unwrap();
+    let goal_skill =
+        fs::read_to_string(root.join("plugins/planr/skills/planr-goal/SKILL.md")).unwrap();
+    assert!(
+        plan_skill.contains("readable narrative, never an identity source")
+            && plan_skill.contains("Do not infer criterion IDs from prose")
+            && goal_skill.contains("Never write obligations directly")
+            && goal_skill.contains("duplicate `app/proof` completeness rules"),
+        "Planr skills must delegate identity and completeness to canonical owners"
+    );
+
+    let manifest = fs::read_to_string(
+        root.join(".planr/evidence/adapters/verifier-complete-binding-authority-v1.manifest.json"),
+    )
+    .unwrap();
+    let policy = fs::read_to_string(root.join(".planr/evidence.yaml")).unwrap();
+    let obsolete_adapter = ["scripts/verify-complete-binding-authority", ".mjs"].concat();
+    for current_contract in [&manifest, &policy] {
+        assert!(current_contract.contains("\"executable\": \"rustup\""));
+        assert!(current_contract.contains("\"cargo\""));
+        assert!(current_contract.contains("\"planr-complete-binding-authority\""));
+        assert!(!current_contract.contains("\"executable\": \"node\""));
+        assert!(!current_contract.contains(&obsolete_adapter));
+    }
+    assert!(
+        !root.join(obsolete_adapter).exists(),
+        "obsolete JavaScript adapter must be deleted"
+    );
+}
+
+fn complete_binding_production_rust_files(root: &Path) -> Vec<PathBuf> {
+    let mut entries = fs::read_dir(root)
+        .unwrap()
+        .map(|entry| entry.unwrap())
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|entry| entry.file_name());
+
+    let mut files = Vec::new();
+    for entry in entries {
+        let path = entry.path();
+        if path.is_dir() {
+            files.extend(complete_binding_production_rust_files(&path));
+        } else if path.extension().and_then(|extension| extension.to_str()) == Some("rs") {
+            files.push(path);
+        }
+    }
+    files
+}
+
 #[test]
 fn complete_binding_lifecycle_fails_closed_for_partial_active_rows() {
     let dir = tempdir().unwrap();
@@ -22982,6 +23101,7 @@ fn done_next_freezes_source_without_authored_verification_item() {
 
 #[test]
 fn binding_policy_without_obligations_holds_before_review() {
+    complete_binding_single_owner_inventory_keeps_adapter_at_boundary();
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
     planr()
@@ -22997,7 +23117,11 @@ fn binding_policy_without_obligations_holds_before_review() {
         .success();
     write_evidence_policy_fixture(dir.path());
     let plan_path = dir.path().join("binding-evidence-hold.plan.md");
-    fs::write(&plan_path, "# Binding Evidence Hold\n").unwrap();
+    fs::write(
+        &plan_path,
+        "---\ncriteria:\n  - id: criterion-binding-evidence-hold\n    title: Binding evidence hold\n---\n\n# Binding Evidence Hold\n",
+    )
+    .unwrap();
     let conn = Connection::open(&db).unwrap();
     let project_id: String = conn
         .query_row("SELECT id FROM projects LIMIT 1", [], |row| row.get(0))

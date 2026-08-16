@@ -60,7 +60,7 @@
   },
   "validation": {
     "cwd": ".",
-    "command": "cargo test --test e2e binding_policy_without_obligations_holds_before_review -- --exact",
+    "command": "PLANR_EVIDENCE_TARGET_JSON='{\"uri\":\"local://planr/complete-binding-authority/pln-67656229/single-owner\"}' cargo run --quiet --bin planr-complete-binding-authority -- --adapter-source src/bin/planr-complete-binding-authority.rs",
     "full_suite_command": "cargo test --bins",
     "timeout_seconds": 900
   },

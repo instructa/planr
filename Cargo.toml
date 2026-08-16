@@ -15,6 +15,10 @@ rust-version = "1.85"
 name = "planr"
 path = "src/main.rs"
 
+[[bin]]
+name = "planr-complete-binding-authority"
+path = "src/bin/planr-complete-binding-authority.rs"
+
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
