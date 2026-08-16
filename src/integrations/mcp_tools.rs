@@ -98,12 +98,12 @@ pub fn mcp_tools() -> Vec<Value> {
         ),
         tool(
             "planr_run_restart",
-            "Retire one plan's active FeatureRun only when its immutable v2 budget contract is incompatible",
+            "Retire one plan's active FeatureRun only for a typed incompatible-budget or stale-source-freeze lifecycle reason",
             json!({
                 "plan": prop("string", "Plan id"),
                 "reason": {
                     "type": "string",
-                    "enum": ["incompatible-budget"],
+                    "enum": ["incompatible-budget", "stale-source-freeze"],
                     "description": "Typed restart reason"
                 }
             }),

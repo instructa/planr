@@ -2,6 +2,14 @@
 
 These tasks are implementation-ready work items for coding agents. They intentionally avoid storypoints and timelines.
 
+## Core FeatureRun Recovery
+
+### TASK-CORE-FREEZE-001: Add Typed Stale Source-Freeze Restart
+
+Keep the central FeatureRun lifecycle/application service as the single policy owner. Diagnose only an active stale source freeze with no verification item, terminally retire the unusable run without mutating its freeze, atomically route stranded code outcomes to ready, and expose the same typed restart through pick, CLI, and MCP. Successor run creation and current-source freezing stay on canonical pick/readiness paths. Add no database repair, fallback, compatibility path, nullable special-case wrapper, legacy handling, or adapter/UI owner.
+
+Acceptance: the focused existing central restart application test passes in BUILD; one public lifecycle invariant is admitted separately in HARDEN.
+
 ## Alpha 6 Binding Evidence Hard Cut
 
 ### TASK-ALPHA6-EVIDENCE-001: Make Policy And Obligations One Fail-Closed Authority

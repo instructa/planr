@@ -1,0 +1,100 @@
+{
+  "schema_version": 3,
+  "kind": "proofloop-herdr-sol-luna/run-contract",
+  "task": {
+    "id": "stale-source-freeze-featurerun-restart-build-continuation",
+    "source": ".planr/plans/build/stale-source-freeze-featurerun-restart-typed-stale-source-freeze-featurerun-restart.plan.md",
+    "goal": "Review the preserved stale-source-freeze restart patch findings-first, repair at most one real production defect, and accept it only if the exact existing focused lifecycle test executes and passes.",
+    "hypothesis": "The preserved atomic patch already places the typed restart policy in the central FeatureRun lifecycle owner, removes the public stale-freeze dead end without a compatibility path, and needs no production edit after review."
+  },
+  "project_profile": ".proofloop/project-profile.json",
+  "phase": "build",
+  "writer": "sol",
+  "allowed_paths": [
+    "src/execution_run.rs",
+    "src/app/execution_run.rs",
+    "src/app/repository/execution_run.rs",
+    "src/app/execution_state.rs",
+    "src/app/feature_run_evidence.rs",
+    "src/cli.rs",
+    "src/app/mcp.rs",
+    "src/integrations/mcp_tools.rs",
+    ".planr/plans/product/planr/PRODUCT_SPEC.md",
+    ".planr/plans/product/planr/TECH_ARCHITECTURE.md",
+    ".planr/plans/product/planr/API_AND_DATA_MODEL.md",
+    ".planr/plans/product/planr/TASKS.md",
+    ".planr/plans/product/stale-source-freeze-featurerun-restart/**",
+    ".planr/plans/build/stale-source-freeze-featurerun-restart-typed-stale-source-freeze-featurerun-restart.plan.md",
+    ".planr/evidence/migrations/pln-b3ba437d-stale-source-freeze-restart-v1.json",
+    ".proofloop/**"
+  ],
+  "test_policy": {
+    "baseline_record": ".proofloop/evidence/stale-source-freeze-featurerun-restart-build-continuation/test-baseline.json",
+    "result_record": ".proofloop/evidence/stale-source-freeze-featurerun-restart-build-continuation/test-gate.json",
+    "ephemeral_directory": ".proofloop/evidence/stale-source-freeze-featurerun-restart-build-continuation/probes",
+    "admission_record": ".proofloop/evidence/stale-source-freeze-featurerun-restart-build-continuation/test-admission.json",
+    "permanent": {
+      "max_new_invariants": 0,
+      "max_changed_test_files": 0,
+      "max_added_test_lines": 0
+    },
+    "full_suite": {
+      "allowed": false,
+      "reason": null
+    }
+  },
+  "luna_mode": null,
+  "validation": {
+    "cwd": ".",
+    "command": "cargo test --bin planr app::execution_run::tests::restart_application_is_atomic_idempotent_and_rejects_a_healthy_run -- --exact --test-threads=1",
+    "timeout_seconds": 900,
+    "pass_criteria": [
+      "the exact existing central FeatureRun restart application test executes once and passes",
+      "the binary target compiles with the closed stale-source-freeze restart reason across CLI and MCP consumers",
+      "no tracked test file changes and no full suite runs",
+      "the old source freeze is never mutated, rebound, deleted, or treated as current",
+      "no fallback, compatibility, nullable special-case wrapper, legacy path, direct database repair, or second lifecycle owner is introduced"
+    ]
+  },
+  "evidence": {
+    "directory": ".proofloop/evidence/stale-source-freeze-featurerun-restart-build-continuation",
+    "required": [
+      "baseline",
+      "diff",
+      "validation-result",
+      "test-gate",
+      "handoff",
+      "pane-ownership"
+    ]
+  },
+  "budgets": {
+    "checkpoint_minutes": 20,
+    "hard_stop_minutes": 45,
+    "max_patch_batches": 1
+  },
+  "stop_conditions": [
+    "out-of-scope write",
+    "second writer or nested delegation",
+    "hypothesis disproved or scope broadened",
+    "context compaction during design-sensitive work",
+    "checkpoint or hard-stop exceeded",
+    "tracked test edit",
+    "full-suite execution",
+    "literal focused validation executed more than once",
+    "second continuation production patch batch"
+  ],
+  "manual_acceptance": {
+    "required": false,
+    "owner": "human",
+    "criteria": []
+  },
+  "cleanup": {
+    "ownership_record": ".proofloop/evidence/stale-source-freeze-featurerun-restart-build-continuation/pane-ownership.json",
+    "sentinel_process_record": ".proofloop/evidence/stale-source-freeze-featurerun-restart-build-continuation/sentinel-process.json",
+    "sentinel_state_record": ".proofloop/evidence/stale-source-freeze-featurerun-restart-build-continuation/sentinel-state.json",
+    "stop_recorded_sentinel_process": true,
+    "close_recorded_workflow_panes": true,
+    "leave_preexisting_panes_open": true,
+    "retire_sentinel_state": true
+  }
+}

@@ -37,6 +37,9 @@
       "AGENTS.md",
       ".gitignore",
       ".proofloop/**",
+      ".planr/evidence/migrations/pln-b3ba437d-stale-source-freeze-restart-v1.json",
+      ".planr/plans/build/stale-source-freeze-featurerun-restart-typed-stale-source-freeze-featurerun-restart.plan.md",
+      ".planr/plans/product/stale-source-freeze-featurerun-restart/**",
       ".planr/plans/product/planr/**",
       "docs/contracts/EVIDENCE_CONTRACT_V1.md",
       "docs/fixtures/mcp-contract.json",
@@ -44,6 +47,8 @@
       "apps/docs/scripts/verify-reference.mjs",
       "scripts/evidence-dogfood-v1.mjs",
       "src/app/**",
+      "src/execution_run.rs",
+      "src/cli.rs",
       "src/cli/**",
       "src/integrations/**",
       "tests/e2e.rs"
@@ -60,7 +65,7 @@
   },
   "validation": {
     "cwd": ".",
-    "command": "PLANR_EVIDENCE_TARGET_JSON='{\"uri\":\"local://planr/complete-binding-authority/pln-67656229/single-owner\"}' cargo run --quiet --bin planr-complete-binding-authority -- --adapter-source src/bin/planr-complete-binding-authority.rs",
+    "command": "cargo test --bin planr app::execution_run::tests::restart_application_is_atomic_idempotent_and_rejects_a_healthy_run -- --exact --test-threads=1",
     "full_suite_command": "cargo test --bins",
     "timeout_seconds": 900
   },

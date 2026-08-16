@@ -1420,6 +1420,11 @@ impl App {
     pub(crate) fn repair_work_packet_value(&self, plan_id: &str) -> Result<Option<Value>> {
         let project = self.default_project()?;
         let repository = ExecutionRunRepository::new(&self.conn);
+        if let Some(run) = repository.active_feature_run_for_plan(&project.id, plan_id)?
+            && let Some(hold) = self.stale_source_freeze_restart_hold_for_run(&run)?
+        {
+            return Ok(Some(hold));
+        }
         if let Some(gate) = repository.repair_review_gate_for_plan(&project.id, plan_id)? {
             if gate.responsible_maker_id != worker_id() {
                 return Ok(None);
@@ -1814,6 +1819,9 @@ impl App {
         let Some(run) = repository.active_feature_run_for_plan(&project.id, plan_id)? else {
             return Ok(None);
         };
+        if let Some(hold) = self.stale_source_freeze_restart_hold_for_run(&run)? {
+            return Ok(Some(hold));
+        }
         let verification_item_id = self.ready_or_owned_verification_item_for_plan_path(
             Some(plan.path.as_str()),
             worker_id().as_str(),

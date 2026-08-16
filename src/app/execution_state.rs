@@ -7,7 +7,7 @@ use super::repository::execution_run::{
 use crate::execution_run::{
     ExecutionBatch, FeatureRun, FeatureRunBudgetContractCompatibility, FeatureRunHoldReason,
     FeatureRunPhase, FeatureRunRestartDisposition, FeatureRunRestartReason, FeatureRunStatus,
-    FeatureRunTerminalReason, RoleOwner, RunRole,
+    FeatureRunTerminalReason, RoleOwner, RunRole, StaleSourceFreezeRestartFacts,
 };
 use crate::usage_policy::{
     BudgetAmounts, BudgetProvenance, BudgetSnapshot, FeatureRunBudgetMode, FeatureRunBudgetPhase,
@@ -100,11 +100,29 @@ pub(crate) struct CanonicalExecutionStateDto {
 }
 
 #[derive(Clone, Debug, Serialize)]
-pub(crate) struct CanonicalFeatureRunRestartDto {
-    pub(crate) status: &'static str,
-    pub(crate) reason: FeatureRunRestartReason,
-    pub(crate) incompatibility: FeatureRunBudgetContractCompatibility,
-    pub(crate) disposition: Option<FeatureRunRestartDisposition>,
+#[serde(untagged)]
+pub(crate) enum CanonicalFeatureRunRestartDto {
+    IncompatibleBudget {
+        status: &'static str,
+        reason: FeatureRunRestartReason,
+        incompatibility: FeatureRunBudgetContractCompatibility,
+        disposition: Option<FeatureRunRestartDisposition>,
+    },
+    StaleSourceFreeze {
+        status: &'static str,
+        reason: FeatureRunRestartReason,
+        source_freeze: StaleSourceFreezeRestartFacts,
+        disposition: Option<FeatureRunRestartDisposition>,
+    },
+}
+
+impl CanonicalFeatureRunRestartDto {
+    fn status(&self) -> &'static str {
+        match self {
+            Self::IncompatibleBudget { status, .. }
+            | Self::StaleSourceFreeze { status, .. } => status,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -306,30 +324,57 @@ impl App {
         let repository = ExecutionRunRepository::new(&self.conn);
         let persisted = repository.feature_run(run_id)?;
         let compatibility = repository.budget_contract_compatibility(run_id)?;
+        let stale_source_freeze = if compatibility.is_incompatible() {
+            None
+        } else {
+            self.stale_source_freeze_restart_facts(&persisted)?
+        };
         let restart = if compatibility.is_incompatible()
             && matches!(
                 persisted.run.status,
                 FeatureRunStatus::Active | FeatureRunStatus::Held
             ) {
-            Some(CanonicalFeatureRunRestartDto {
+            Some(CanonicalFeatureRunRestartDto::IncompatibleBudget {
                 status: "required",
                 reason: FeatureRunRestartReason::IncompatibleBudget,
                 incompatibility: compatibility,
                 disposition: None,
             })
+        } else if let Some(source_freeze) = stale_source_freeze {
+            Some(CanonicalFeatureRunRestartDto::StaleSourceFreeze {
+                status: "required",
+                reason: FeatureRunRestartReason::StaleSourceFreeze,
+                source_freeze,
+                disposition: None,
+            })
         } else if persisted.run.status == FeatureRunStatus::Cancelled {
-            repository
-                .latest_incompatible_feature_run_restart(
+            if let Some(transition) = repository
+                .latest_stale_source_freeze_feature_run_restart(
                     &persisted.project_id,
                     &persisted.run.plan_id,
                 )?
                 .filter(|transition| transition.retired_run.id == persisted.run.id)
-                .map(|transition| CanonicalFeatureRunRestartDto {
+            {
+                Some(CanonicalFeatureRunRestartDto::StaleSourceFreeze {
                     status: "retired",
                     reason: transition.request.reason,
-                    incompatibility: transition.incompatibility,
+                    source_freeze: transition.facts,
                     disposition: Some(transition.disposition),
                 })
+            } else {
+                repository
+                    .latest_incompatible_feature_run_restart(
+                        &persisted.project_id,
+                        &persisted.run.plan_id,
+                    )?
+                    .filter(|transition| transition.retired_run.id == persisted.run.id)
+                    .map(|transition| CanonicalFeatureRunRestartDto::IncompatibleBudget {
+                        status: "retired",
+                        reason: transition.request.reason,
+                        incompatibility: transition.incompatibility,
+                        disposition: Some(transition.disposition),
+                    })
+            }
         } else {
             None
         };
@@ -423,23 +468,29 @@ impl App {
         };
         let (reason_code, next_action) = if restart
             .as_ref()
-            .is_some_and(|restart| restart.status == "required")
+            .is_some_and(|restart| restart.status() == "required")
         {
-            (
-                match compatibility {
-                    FeatureRunBudgetContractCompatibility::Missing => {
-                        "feature_run_budget_contract_missing"
-                    }
-                    FeatureRunBudgetContractCompatibility::Invalid => {
-                        "feature_run_budget_contract_invalid"
-                    }
-                    FeatureRunBudgetContractCompatibility::DigestMismatch => {
-                        "feature_run_budget_contract_digest_mismatch"
-                    }
-                    FeatureRunBudgetContractCompatibility::Compatible => unreachable!(),
-                },
-                "restart_incompatible_feature_run",
-            )
+            match restart.as_ref().expect("required restart") {
+                CanonicalFeatureRunRestartDto::IncompatibleBudget { .. } => (
+                    match compatibility {
+                        FeatureRunBudgetContractCompatibility::Missing => {
+                            "feature_run_budget_contract_missing"
+                        }
+                        FeatureRunBudgetContractCompatibility::Invalid => {
+                            "feature_run_budget_contract_invalid"
+                        }
+                        FeatureRunBudgetContractCompatibility::DigestMismatch => {
+                            "feature_run_budget_contract_digest_mismatch"
+                        }
+                        FeatureRunBudgetContractCompatibility::Compatible => unreachable!(),
+                    },
+                    "restart_incompatible_feature_run",
+                ),
+                CanonicalFeatureRunRestartDto::StaleSourceFreeze { .. } => (
+                    "source_freeze_stale",
+                    "restart_stale_source_freeze_feature_run",
+                ),
+            }
         } else if let Some(gate) = unmet_gate.as_ref() {
             (
                 gate.reason_code,

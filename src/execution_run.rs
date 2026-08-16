@@ -146,6 +146,7 @@ impl FeatureRunBudgetContractCompatibility {
 #[serde(rename_all = "kebab-case")]
 pub enum FeatureRunRestartReason {
     IncompatibleBudget,
+    StaleSourceFreeze,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -173,6 +174,29 @@ pub struct FeatureRunRestartTransition {
     pub disposition: FeatureRunRestartDisposition,
     pub previous_phase: FeatureRunPhase,
     pub ended_batch_id: Option<String>,
+    pub released_role_owners: Vec<RoleOwner>,
+    pub retired_run: FeatureRun,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StaleSourceFreezeRestartFacts {
+    pub freeze_id: String,
+    pub frozen_source_revision: String,
+    pub frozen_source_digest: String,
+    pub current_source_revision: String,
+    pub current_source_digest: String,
+    pub routed_outcome_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StaleSourceFreezeRestartTransition {
+    pub request: FeatureRunRestartRequest,
+    pub facts: StaleSourceFreezeRestartFacts,
+    pub disposition: FeatureRunRestartDisposition,
+    pub previous_phase: FeatureRunPhase,
+    pub batch_id: Option<String>,
     pub released_role_owners: Vec<RoleOwner>,
     pub retired_run: FeatureRun,
 }
@@ -267,7 +291,9 @@ pub enum RunContractViolation {
     ReplacementSourceMismatch,
     SameWorkerReplacement,
     RestartPlanMismatch,
+    RestartReasonMismatch,
     RestartBudgetContractCompatible,
+    RestartStaleSourceFreezeIneligible,
     RestartRunTerminal,
     BudgetHoldResolutionPlanMismatch,
     BudgetHoldResolutionNotBudgetHeld,
@@ -655,6 +681,9 @@ pub fn retire_incompatible_feature_run(
     compatibility: FeatureRunBudgetContractCompatibility,
 ) -> Result<FeatureRunRestartTransition, RunContractViolation> {
     validate_feature_run(run)?;
+    if request.reason != FeatureRunRestartReason::IncompatibleBudget {
+        return Err(RunContractViolation::RestartReasonMismatch);
+    }
     if request.plan_id.trim().is_empty() {
         return Err(RunContractViolation::EmptyIdentity);
     }
@@ -713,6 +742,73 @@ pub fn retire_incompatible_feature_run(
         disposition: FeatureRunRestartDisposition::Retired,
         previous_phase,
         ended_batch_id,
+        released_role_owners,
+        retired_run,
+    })
+}
+
+pub fn retire_stale_source_freeze_feature_run(
+    run: &FeatureRun,
+    request: &FeatureRunRestartRequest,
+    facts: &StaleSourceFreezeRestartFacts,
+) -> Result<StaleSourceFreezeRestartTransition, RunContractViolation> {
+    validate_feature_run(run)?;
+    if request.reason != FeatureRunRestartReason::StaleSourceFreeze {
+        return Err(RunContractViolation::RestartReasonMismatch);
+    }
+    if request.plan_id.trim().is_empty()
+        || facts.freeze_id.trim().is_empty()
+        || facts.frozen_source_revision.trim().is_empty()
+        || facts.frozen_source_digest.trim().is_empty()
+        || facts.current_source_revision.trim().is_empty()
+        || facts.current_source_digest.trim().is_empty()
+        || facts.routed_outcome_ids.is_empty()
+        || facts
+            .routed_outcome_ids
+            .iter()
+            .any(|id| id.trim().is_empty())
+        || facts
+            .routed_outcome_ids
+            .iter()
+            .enumerate()
+            .any(|(index, id)| facts.routed_outcome_ids[..index].contains(id))
+    {
+        return Err(RunContractViolation::EmptyIdentity);
+    }
+    if request.plan_id != run.plan_id {
+        return Err(RunContractViolation::RestartPlanMismatch);
+    }
+    if run.status != FeatureRunStatus::Active
+        || run.phase != FeatureRunPhase::SourceFrozen
+        || run.source_revision.as_deref() != Some(facts.frozen_source_revision.as_str())
+        || (facts.frozen_source_revision == facts.current_source_revision
+            && facts.frozen_source_digest == facts.current_source_digest)
+    {
+        return Err(RunContractViolation::RestartStaleSourceFreezeIneligible);
+    }
+
+    let previous_phase = run.phase;
+    let batch_id = run.active_batch_id.clone();
+    let released_role_owners = run.role_owners.clone();
+    let mut retired_run = apply_phase_transition(
+        run,
+        &PhaseTransition {
+            to: FeatureRunPhase::Cancelled,
+            cause: PhaseTransitionCause::PolicyCancelled,
+            reference: format!("stale_source_freeze:{}", facts.freeze_id),
+            owner: None,
+        },
+    )?;
+    retired_run.active_batch_id = None;
+    retired_run.batch_outcome_count = 0;
+    validate_feature_run(&retired_run)?;
+
+    Ok(StaleSourceFreezeRestartTransition {
+        request: request.clone(),
+        facts: facts.clone(),
+        disposition: FeatureRunRestartDisposition::Retired,
+        previous_phase,
+        batch_id,
         released_role_owners,
         retired_run,
     })

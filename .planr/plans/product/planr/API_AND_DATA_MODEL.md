@@ -41,6 +41,10 @@ The pure admission input contains mode, consumed, reserved, remaining, protected
 
 `planr run resolve-budget-hold --plan <id>`, MCP `planr_run_resolve_budget_hold`, and `POST /v1/plans/<id>/run/resolve-budget-hold` reuse `planr.feature_run_budget_hold_resolution.v2`. Resolution is explicit, plan-scoped, idempotent, and restores only the exact prior phase after the application transaction revalidates the compatible immutable contract, snapshot integrity, active reservation deadlines, phase, role owner, and lease generation. It rejects incompatible contracts with the restart action and keeps capability holds, corrupt state, expired deadlines, missing reservations, unrepaired ceilings, and owner mismatches held.
 
+### Stale Source-Freeze Restart
+
+`planr run restart --plan <id> --reason stale-source-freeze` and MCP `planr_run_restart` reuse `planr.feature_run_restart.v1`. Eligibility is closed: the run is active and source-frozen, its active freeze differs from current source, the plan has no verification item, and at least one code outcome is stranded in picked/running state. The atomic result policy-cancels the run, releases runtime ownership, preserves the old freeze and history, and routes the exact stranded outcomes to ready. Repeating the same request returns `already_retired`. A later ordinary pick creates the distinct successor run; no restart surface creates or rebinds a freeze.
+
 ## Core Tables
 
 ### projects

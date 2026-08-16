@@ -226,6 +226,7 @@ impl App {
             "planr_run_restart" => {
                 let reason = match required_arg(&args, "reason")? {
                     "incompatible-budget" => FeatureRunRestartReason::IncompatibleBudget,
+                    "stale-source-freeze" => FeatureRunRestartReason::StaleSourceFreeze,
                     value => bail!("invalid restart reason: {value}"),
                 };
                 Ok(mcp_json(self.restart_feature_run_value(

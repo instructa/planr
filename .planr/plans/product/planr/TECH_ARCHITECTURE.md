@@ -68,6 +68,8 @@ CLI, MCP, and HTTP restart adapters parse only the closed `incompatible-budget` 
 
 Compatible budget-hold resolution is a separate `app/feature_run_evidence` lifecycle. It resumes only the exact prior phase after one immediate transaction revalidates the persisted contract/snapshot, every active reservation and deadline, the canonical role owner, and lease generation. Incompatible contracts route to restart; capability holds, corrupt or exhausted state, missing reservations, expired deadlines, and ownership mismatch remain fail-closed. CLI, MCP, and HTTP are transport-only.
 
+Stale source-freeze restart uses the same ownership direction. `app/execution_run` is the sole plan-scoped diagnosis and orchestration owner; it admits only an active source-frozen run with a stale immutable freeze, no verification item, and stranded code outcomes. `execution_run` owns the pure terminal transition, and `app/repository/execution_run` atomically retires runtime ownership and routes those outcomes without changing the freeze row. Pick creates a distinct successor run later; Evidence readiness freezes current source. CLI and MCP are typed consumers only.
+
 ## Binding Evidence Ownership
 
 - `app/evidence` owns repository-policy parsing and whether the policy requires binding Evidence.

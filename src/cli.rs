@@ -422,6 +422,7 @@ pub(crate) struct RunRestartArgs {
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub(crate) enum FeatureRunRestartReasonArg {
     IncompatibleBudget,
+    StaleSourceFreeze,
 }
 
 #[derive(Args, Debug)]

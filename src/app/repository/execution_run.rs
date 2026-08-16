@@ -2,7 +2,8 @@ use crate::execution_run::{
     ExecutionBatch, ExecutionBatchStatus, FeatureRun, FeatureRunBudgetContractCompatibility,
     FeatureRunHoldReason, FeatureRunPhase, FeatureRunRestartDisposition,
     FeatureRunRestartTransition, FeatureRunStatus, FeatureRunTerminalReason, MakerReplacement,
-    MakerReplacementReason, RoleOwner, RunRole, owner_for_role, validate_feature_run,
+    MakerReplacementReason, RoleOwner, RunRole, StaleSourceFreezeRestartTransition,
+    owner_for_role, retire_stale_source_freeze_feature_run, validate_feature_run,
 };
 use crate::usage_policy::{
     BudgetPhase, ExecutionBudget, FEATURE_RUN_BUDGET_CONTRACT_SCHEMA, FeatureRunBudgetContract,
@@ -235,6 +236,32 @@ impl<'conn> ExecutionRunRepository<'conn> {
         run_id.map(|id| self.feature_run(&id)).transpose()
     }
 
+    pub(crate) fn plan_has_verification_item(&self, plan_id: &str) -> Result<bool> {
+        self.conn
+            .query_row(
+                "SELECT EXISTS(
+                   SELECT 1 FROM items JOIN plans ON plans.path = items.plan_path
+                   WHERE plans.id = ?1 AND items.work_type = 'verification'
+                 )",
+                [plan_id],
+                |row| row.get(0),
+            )
+            .map_err(Into::into)
+    }
+
+    pub(crate) fn stranded_code_outcome_ids(&self, plan_id: &str) -> Result<Vec<String>> {
+        let mut statement = self.conn.prepare(
+            "SELECT items.id FROM items JOIN plans ON plans.path = items.plan_path
+             WHERE plans.id = ?1 AND items.work_type = 'code'
+               AND items.status IN ('picked','running')
+             ORDER BY items.created_at, items.id",
+        )?;
+        statement
+            .query_map([plan_id], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
     pub(crate) fn create_feature_run(
         &self,
         project_id: &str,
@@ -381,6 +408,102 @@ impl<'conn> ExecutionRunRepository<'conn> {
             .conn
             .query_row(
                 "SELECT payload FROM events WHERE project_id = ?1 AND event_type = 'feature_run_incompatible_budget_retired' AND json_extract(payload, '$.request.plan_id') = ?2 ORDER BY id DESC LIMIT 1",
+                params![project_id, plan_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        payload
+            .map(|payload| serde_json::from_str(&payload).map_err(Into::into))
+            .transpose()
+    }
+
+    pub(crate) fn retire_stale_source_freeze_feature_run(
+        &self,
+        transition: &StaleSourceFreezeRestartTransition,
+        expected_run_revision: u64,
+        operator_worker_id: &str,
+    ) -> Result<PersistedFeatureRun> {
+        if transition.disposition != FeatureRunRestartDisposition::Retired {
+            bail!("feature_run_restart_transition_not_applicable");
+        }
+        require_nonempty("operator_worker_id", operator_worker_id)?;
+        let tx = Transaction::new_unchecked(self.conn, TransactionBehavior::Immediate)?;
+        let repository = ExecutionRunRepository::new(&tx);
+        let current = repository.feature_run(&transition.retired_run.id)?;
+        if current.revision != expected_run_revision {
+            bail!("feature_run_revision_conflict:{}", current.run.id);
+        }
+        let freeze = repository
+            .active_source_freeze(&current.run.id)?
+            .ok_or_else(|| anyhow!("feature_run_stale_source_freeze_missing:{}", current.run.id))?;
+        if freeze.id != transition.facts.freeze_id
+            || freeze.source_revision != transition.facts.frozen_source_revision
+            || freeze.source_digest != transition.facts.frozen_source_digest
+            || repository.plan_has_verification_item(&current.run.plan_id)?
+            || repository.stranded_code_outcome_ids(&current.run.plan_id)?
+                != transition.facts.routed_outcome_ids
+        {
+            bail!("feature_run_stale_source_freeze_facts_changed:{}", current.run.id);
+        }
+        let recomputed = retire_stale_source_freeze_feature_run(
+            &current.run,
+            &transition.request,
+            &transition.facts,
+        )
+        .map_err(|violation| anyhow!("feature_run_restart_rejected:{violation:?}"))?;
+        if recomputed != *transition {
+            bail!("feature_run_restart_transition_stale:{}", current.run.id);
+        }
+
+        if let Some(batch_id) = transition.batch_id.as_deref() {
+            let persisted_batch = repository.batch(batch_id)?;
+            if persisted_batch.batch.run_id != current.run.id {
+                bail!("feature_run_restart_batch_mismatch:{batch_id}");
+            }
+            if persisted_batch.batch.status != ExecutionBatchStatus::Ended {
+                let mut ended_batch = persisted_batch.batch;
+                ended_batch.status = ExecutionBatchStatus::Ended;
+                ended_batch.replacement = None;
+                repository.save_batch(&ended_batch, persisted_batch.revision)?;
+            }
+        }
+        repository.save_feature_run(&transition.retired_run, expected_run_revision)?;
+        for item_id in &transition.facts.routed_outcome_ids {
+            let changed = tx.execute(
+                "UPDATE items
+                 SET status = 'ready', worker_id = NULL, pick_token = NULL,
+                     last_heartbeat_at = NULL, paused_at = NULL, updated_at = datetime('now')
+                 WHERE id = ?1 AND work_type = 'code' AND status IN ('picked','running')
+                   AND plan_path = (SELECT path FROM plans WHERE id = ?2)",
+                params![item_id, transition.request.plan_id],
+            )?;
+            if changed != 1 {
+                bail!("feature_run_restart_outcome_routing_conflict:{item_id}");
+            }
+        }
+        let payload = serde_json::to_string(transition)?;
+        tx.execute(
+            "INSERT INTO events(project_id, item_id, worker_id, event_type, payload, timestamp)
+             VALUES (?1, NULL, ?2, 'feature_run_stale_source_freeze_retired', ?3, datetime('now'))",
+            params![current.project_id, operator_worker_id, payload],
+        )?;
+        tx.commit()?;
+        self.feature_run(&transition.retired_run.id)
+    }
+
+    pub(crate) fn latest_stale_source_freeze_feature_run_restart(
+        &self,
+        project_id: &str,
+        plan_id: &str,
+    ) -> Result<Option<StaleSourceFreezeRestartTransition>> {
+        let payload = self
+            .conn
+            .query_row(
+                "SELECT payload FROM events
+                 WHERE project_id = ?1
+                   AND event_type = 'feature_run_stale_source_freeze_retired'
+                   AND json_extract(payload, '$.request.plan_id') = ?2
+                 ORDER BY id DESC LIMIT 1",
                 params![project_id, plan_id],
                 |row| row.get::<_, String>(0),
             )

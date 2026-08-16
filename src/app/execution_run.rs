@@ -14,7 +14,8 @@ use crate::execution_run::{
     FeatureRunStatus, MakerReplacement, MakerReplacementReason, PhaseTransition,
     PhaseTransitionCause, RoleOwner, RunRole, apply_phase_transition, pause_batch_for_risk_review,
     replace_batch_maker, resume_batch_after_risk_review, retire_incompatible_feature_run,
-    roll_batch_for_same_maker,
+    retire_stale_source_freeze_feature_run, roll_batch_for_same_maker,
+    StaleSourceFreezeRestartFacts,
 };
 use crate::usage_policy::{
     BudgetPhase, FeatureRunBudgetContract, PolicyLoad, ReviewEscalation, ReviewInterruptDecision,
@@ -70,9 +71,12 @@ impl App {
                     crate::cli::FeatureRunRestartReasonArg::IncompatibleBudget => {
                         FeatureRunRestartReason::IncompatibleBudget
                     }
+                    crate::cli::FeatureRunRestartReasonArg::StaleSourceFreeze => {
+                        FeatureRunRestartReason::StaleSourceFreeze
+                    }
                 };
                 let value = self.restart_feature_run_value(&args.plan, reason)?;
-                self.emit(value, "incompatible feature run retired".to_string())
+                self.emit(value, "feature run retired for typed restart".to_string())
             }
             RunCommand::ResolveBudgetHold(args) => {
                 let value = self.resolve_feature_run_budget_hold_value(&args.plan)?;
@@ -274,37 +278,134 @@ impl App {
         let project = self.default_project()?;
         let repository = ExecutionRunRepository::new(&self.conn);
         let Some(persisted) = repository.active_feature_run_for_plan(&project.id, plan_id)? else {
-            let mut previous = repository
-                .latest_incompatible_feature_run_restart(&project.id, plan_id)?
-                .ok_or_else(|| anyhow!("feature_run_not_found_for_plan:{plan_id}"))?;
-            previous.disposition = FeatureRunRestartDisposition::AlreadyRetired;
-            let execution_state =
-                self.canonical_execution_state_value(&previous.retired_run.id, None)?;
-            return Ok(json!({
-                "schema_version": "planr.feature_run_restart.v1",
-                "restart": previous,
-                "execution_state": execution_state,
-            }));
+            return match reason {
+                FeatureRunRestartReason::IncompatibleBudget => {
+                    let mut previous = repository
+                        .latest_incompatible_feature_run_restart(&project.id, plan_id)?
+                        .ok_or_else(|| anyhow!("feature_run_not_found_for_plan:{plan_id}"))?;
+                    previous.disposition = FeatureRunRestartDisposition::AlreadyRetired;
+                    let execution_state =
+                        self.canonical_execution_state_value(&previous.retired_run.id, None)?;
+                    Ok(json!({"schema_version": "planr.feature_run_restart.v1",
+                        "restart": previous, "execution_state": execution_state}))
+                }
+                FeatureRunRestartReason::StaleSourceFreeze => {
+                    let mut previous = repository
+                        .latest_stale_source_freeze_feature_run_restart(&project.id, plan_id)?
+                        .ok_or_else(|| anyhow!("feature_run_not_found_for_plan:{plan_id}"))?;
+                    previous.disposition = FeatureRunRestartDisposition::AlreadyRetired;
+                    let execution_state =
+                        self.canonical_execution_state_value(&previous.retired_run.id, None)?;
+                    Ok(json!({"schema_version": "planr.feature_run_restart.v1",
+                        "restart": previous, "execution_state": execution_state}))
+                }
+            };
         };
-        let compatibility = repository.budget_contract_compatibility(&persisted.run.id)?;
         let request = FeatureRunRestartRequest {
             plan_id: plan_id.to_string(),
             reason,
         };
-        let transition =
-            retire_incompatible_feature_run(&persisted.run, &request, compatibility)
+        let transition = match reason {
+            FeatureRunRestartReason::IncompatibleBudget => {
+                let compatibility = repository.budget_contract_compatibility(&persisted.run.id)?;
+                let transition =
+                    retire_incompatible_feature_run(&persisted.run, &request, compatibility)
+                        .map_err(|violation| anyhow!("feature_run_restart_rejected:{violation:?}"))?;
+                repository.retire_incompatible_feature_run(
+                    &transition,
+                    persisted.revision,
+                    &worker_id(),
+                )?;
+                serde_json::to_value(transition)?
+            }
+            FeatureRunRestartReason::StaleSourceFreeze => {
+                let facts = self
+                    .stale_source_freeze_restart_facts(&persisted)?
+                    .ok_or_else(|| anyhow!("feature_run_stale_source_freeze_restart_not_required:{plan_id}"))?;
+                let transition = retire_stale_source_freeze_feature_run(
+                    &persisted.run,
+                    &request,
+                    &facts,
+                )
                 .map_err(|violation| anyhow!("feature_run_restart_rejected:{violation:?}"))?;
-        repository.retire_incompatible_feature_run(
-            &transition,
-            persisted.revision,
-            &worker_id(),
-        )?;
+                repository.retire_stale_source_freeze_feature_run(
+                    &transition,
+                    persisted.revision,
+                    &worker_id(),
+                )?;
+                serde_json::to_value(transition)?
+            }
+        };
         let execution_state = self.canonical_execution_state_value(&persisted.run.id, None)?;
         Ok(json!({
             "schema_version": "planr.feature_run_restart.v1",
             "restart": transition,
             "execution_state": execution_state,
         }))
+    }
+
+    pub(crate) fn stale_source_freeze_restart_facts(
+        &self,
+        persisted: &PersistedFeatureRun,
+    ) -> Result<Option<StaleSourceFreezeRestartFacts>> {
+        if persisted.run.status != FeatureRunStatus::Active
+            || persisted.run.phase != FeatureRunPhase::SourceFrozen
+        {
+            return Ok(None);
+        }
+        let repository = ExecutionRunRepository::new(&self.conn);
+        if repository.plan_has_verification_item(&persisted.run.plan_id)? {
+            return Ok(None);
+        }
+        let Some(freeze) = repository.active_source_freeze(&persisted.run.id)? else {
+            return Ok(None);
+        };
+        let snapshot = capture_repository_snapshot(&self.root)
+            .map_err(|error| anyhow!("checking stale source freeze restart: {error}"))?;
+        if freeze.source_revision == snapshot.source.revision
+            && freeze.source_digest == snapshot.source.tree_digest.as_str()
+        {
+            return Ok(None);
+        }
+        let routed_outcome_ids = repository.stranded_code_outcome_ids(&persisted.run.plan_id)?;
+        if routed_outcome_ids.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(StaleSourceFreezeRestartFacts {
+            freeze_id: freeze.id,
+            frozen_source_revision: freeze.source_revision,
+            frozen_source_digest: freeze.source_digest,
+            current_source_revision: snapshot.source.revision,
+            current_source_digest: snapshot.source.tree_digest.as_str().to_string(),
+            routed_outcome_ids,
+        }))
+    }
+
+    pub(crate) fn stale_source_freeze_restart_hold_for_run(
+        &self,
+        persisted: &PersistedFeatureRun,
+    ) -> Result<Option<Value>> {
+        let Some(facts) = self.stale_source_freeze_restart_facts(persisted)? else {
+            return Ok(None);
+        };
+        let command = format!(
+            "planr run restart --plan {} --reason stale-source-freeze --json",
+            persisted.run.plan_id
+        );
+        Ok(Some(json!({
+            "item": null,
+            "reason": "source_freeze_stale",
+            "repair": [command],
+            "work_packet": {
+                "kind": "hold",
+                "classification": "source_freeze_stale",
+                "reason_code": "source_freeze_stale",
+                "next_action": command,
+                "restart_facts": facts,
+                "execution_state": self.canonical_execution_state_value(&persisted.run.id, None)?,
+            },
+            "remaining": self.progress_value()?,
+        })))
     }
     pub(crate) fn outcome_work_packet(&self, item_id: &str) -> Result<Value> {
         let run = self.ensure_outcome_feature_run(item_id)?;

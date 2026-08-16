@@ -74,6 +74,13 @@ Planr turns broad product ideas and coding work into a coherent flow: product pl
 - REQ-PROD-EVIDENCE-003: Only explicit `planr.evidence.migration.v1` application materializes obligations. Planr must not synthesize them during planning, picking, readiness, audit, or review.
 - REQ-PROD-EVIDENCE-004: A verification-readiness failure must persist a capability hold after the failed lease transaction rolls back.
 
+## Stale Source-Freeze Recovery
+
+- REQ-PROD-FREEZE-001: A nonterminal source-frozen FeatureRun whose active freeze is stale and whose plan has no verification item must expose one typed public restart action instead of a bare internal error or `nothing_ready` result.
+- REQ-PROD-FREEZE-002: The restart must policy-cancel the unusable run, preserve the immutable old freeze and child history, and atomically route stranded code outcomes back to ready state.
+- REQ-PROD-FREEZE-003: A later ordinary pick remains the sole successor-run creation path; normal settlement and Evidence readiness remain the sole current-source freeze path.
+- REQ-PROD-FREEZE-004: CLI and MCP must consume the same central FeatureRun lifecycle result and must not own eligibility, source comparison, or persistence policy.
+
 ## User Personas
 
 - Solo operator: runs Codex and Claude Code in one repo and wants clean handoffs.
