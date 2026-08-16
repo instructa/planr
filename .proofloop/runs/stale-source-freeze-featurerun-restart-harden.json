@@ -1,0 +1,87 @@
+{
+  "schema_version": 3,
+  "kind": "proofloop-herdr-sol-luna/run-contract",
+  "task": {
+    "id": "stale-source-freeze-featurerun-restart-harden",
+    "source": ".planr/plans/build/stale-source-freeze-featurerun-restart-typed-stale-source-freeze-featurerun-restart.plan.md",
+    "goal": "Determine whether the existing focused lifecycle test already proves the stale-source-freeze restart invariant and, only where assertions are missing, merge one permanent public lifecycle invariant into that existing test.",
+    "hypothesis": "The existing focused restart test proves only incompatible-budget retirement, so one merged stale-source-freeze scenario is needed to prove atomic retirement, byte-for-byte old-freeze preservation, exact stranded-outcome restoration, idempotence, and distinct current-source successor run and freeze creation through ordinary pick/readiness."
+  },
+  "project_profile": ".proofloop/project-profile.json",
+  "phase": "harden",
+  "writer": "sol",
+  "allowed_paths": [
+    ".proofloop/**",
+    "src/app/execution_run.rs"
+  ],
+  "test_policy": {
+    "baseline_record": ".proofloop/evidence/stale-source-freeze-featurerun-restart-harden/test-baseline.json",
+    "result_record": ".proofloop/evidence/stale-source-freeze-featurerun-restart-harden/test-gate.json",
+    "ephemeral_directory": ".proofloop/evidence/stale-source-freeze-featurerun-restart-harden/probes",
+    "admission_record": ".proofloop/evidence/stale-source-freeze-featurerun-restart-harden/test-admission.json",
+    "permanent": {
+      "max_new_invariants": 1,
+      "max_changed_test_files": 1,
+      "max_added_test_lines": 100
+    },
+    "full_suite": {
+      "allowed": false,
+      "reason": null
+    }
+  },
+  "luna_mode": null,
+  "validation": {
+    "cwd": ".",
+    "command": "cargo test --bin planr app::execution_run::tests::restart_application_is_atomic_idempotent_and_rejects_a_healthy_run -- --exact --test-threads=1",
+    "timeout_seconds": 900,
+    "pass_criteria": [
+      "the one declared focused test executes at least once and passes",
+      "the public stale-source-freeze restart terminally retires the unusable old run and restores exactly its stranded outcome to ready in one application result",
+      "the old source-freeze row retains the same identity and byte-for-byte field value after retirement and repeated restart is idempotent",
+      "the next ordinary pick and readiness path create a distinct FeatureRun with one distinct source freeze bound to current source",
+      "no production behavior, second test file, full suite, adapter state, release, or publication changes"
+    ]
+  },
+  "evidence": {
+    "directory": ".proofloop/evidence/stale-source-freeze-featurerun-restart-harden",
+    "required": [
+      "baseline",
+      "diff",
+      "validation-result",
+      "test-gate",
+      "handoff",
+      "pane-ownership"
+    ]
+  },
+  "budgets": {
+    "checkpoint_minutes": 20,
+    "hard_stop_minutes": 45,
+    "max_patch_batches": 1
+  },
+  "stop_conditions": [
+    "out-of-scope write",
+    "second writer or nested delegation",
+    "hypothesis disproved or scope broadened",
+    "context compaction during design-sensitive work",
+    "checkpoint or hard-stop exceeded",
+    "a second permanent invariant is proposed",
+    "production behavior or product-plan contract edit",
+    "old dogfood adapter item or run mutation",
+    "full-suite execution",
+    "push, publish, or release"
+  ],
+  "manual_acceptance": {
+    "required": false,
+    "owner": "human",
+    "criteria": []
+  },
+  "cleanup": {
+    "ownership_record": ".proofloop/evidence/stale-source-freeze-featurerun-restart-harden/pane-ownership.json",
+    "sentinel_process_record": ".proofloop/evidence/stale-source-freeze-featurerun-restart-harden/sentinel-process.json",
+    "sentinel_state_record": ".proofloop/evidence/stale-source-freeze-featurerun-restart-harden/sentinel-state.json",
+    "stop_recorded_sentinel_process": true,
+    "close_recorded_workflow_panes": true,
+    "leave_preexisting_panes_open": true,
+    "retire_sentinel_state": true
+  }
+}

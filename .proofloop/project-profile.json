@@ -79,7 +79,8 @@
       "*.test.*",
       "**/*.test.*",
       "*.spec.*",
-      "**/*.spec.*"
+      "**/*.spec.*",
+      "src/app/execution_run.rs"
     ],
     "build": {
       "permanent_test_edits": "deny",

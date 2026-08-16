@@ -2128,6 +2128,106 @@ mod tests {
                 .to_string()
                 .contains("RestartBudgetContractCompatible")
         );
+
+        let (root, stale) = test_app();
+        add_outcome(&stale, "item-stale-source");
+        let initial = stale
+            .outcome_work_packet("item-stale-source")
+            .expect("initial ordinary outcome packet");
+        let old_run_id = initial["execution_state"]["feature_run"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let frozen = stale
+            .freeze_feature_run_source_value("plan-a")
+            .expect("initial readiness freeze")
+            .expect("active run");
+        let old_freeze_id = frozen["source_freeze"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let repository = ExecutionRunRepository::new(&stale.conn);
+        let old_freeze = repository
+            .source_freeze(&old_freeze_id)
+            .expect("old source freeze");
+        let old_freeze_bytes = serde_json::to_vec(&old_freeze).expect("serialized old freeze");
+        fs::write(root.path().join("plan-a.md"), "# Current plan\n")
+            .expect("make frozen source stale");
+        let current_source = capture_repository_snapshot(root.path()).expect("current source");
+        assert_ne!(
+            old_freeze.source_digest,
+            current_source.source.tree_digest.as_str()
+        );
+        let retired = stale
+            .restart_feature_run_value("plan-a", FeatureRunRestartReason::StaleSourceFreeze)
+            .expect("stale source restart");
+        assert_eq!(retired["restart"]["disposition"], "retired");
+        assert_eq!(retired["restart"]["facts"]["freeze_id"], old_freeze_id);
+        assert_eq!(
+            retired["restart"]["facts"]["routed_outcome_ids"],
+            json!(["item-stale-source"])
+        );
+        assert_eq!(retired["execution_state"]["feature_run"]["status"], "cancelled");
+        assert_eq!(retired["execution_state"]["feature_run"]["phase"], "cancelled");
+        assert_eq!(
+            retired["execution_state"]["feature_run"]["terminal_reason"],
+            "policy_cancelled"
+        );
+        let routed: (String, Option<String>, Option<String>) = stale
+            .conn
+            .query_row(
+                "SELECT status, worker_id, pick_token FROM items WHERE id = 'item-stale-source'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("routed outcome");
+        assert_eq!(routed, ("ready".to_string(), None, None));
+        assert_eq!(
+            serde_json::to_vec(
+                &repository
+                    .source_freeze(&old_freeze_id)
+                    .expect("preserved old freeze")
+            )
+            .expect("serialized preserved freeze"),
+            old_freeze_bytes
+        );
+        let repeated = stale
+            .restart_feature_run_value("plan-a", FeatureRunRestartReason::StaleSourceFreeze)
+            .expect("idempotent stale source restart");
+        assert_eq!(repeated["restart"]["disposition"], "already_retired");
+        assert_eq!(stale.conn.query_row("SELECT COUNT(*) FROM events WHERE event_type = 'feature_run_stale_source_freeze_retired'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+        let next = stale
+            .next_pick_value(None, Some("code"), Some("plan-a"))
+            .expect("next ordinary pick");
+        assert_eq!(next["work_packet"]["item_id"], "item-stale-source");
+        let new_run_id = next["work_packet"]["execution_state"]["feature_run"]["id"]
+            .as_str()
+            .unwrap();
+        assert_ne!(new_run_id, old_run_id);
+        let new_freeze = stale
+            .freeze_feature_run_source_value("plan-a")
+            .expect("successor readiness freeze")
+            .expect("successor run");
+        assert_eq!(new_freeze["created"], true);
+        assert_ne!(new_freeze["source_freeze"]["id"], old_freeze_id);
+        assert_eq!(new_freeze["source_freeze"]["run_id"], new_run_id);
+        assert_eq!(
+            new_freeze["source_freeze"]["source_revision"],
+            current_source.source.revision
+        );
+        assert_eq!(
+            new_freeze["source_freeze"]["source_digest"],
+            current_source.source.tree_digest.as_str()
+        );
+        assert_eq!(
+            serde_json::to_vec(
+                &repository
+                    .source_freeze(&old_freeze_id)
+                    .expect("old freeze after successor")
+            )
+            .expect("serialized old freeze after successor"),
+            old_freeze_bytes
+        );
     }
 
     #[test]
