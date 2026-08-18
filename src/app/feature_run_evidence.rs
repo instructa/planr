@@ -4210,40 +4210,28 @@ allow_overwrite = true
     fn verifier_pick_unlocks_readiness_and_one_sealed_repository_run_index() {
         let root = tempfile::tempdir().unwrap();
         write_budget_policy(root.path());
-        let policy_digest = write_ready_evidence_policy(root.path());
+        write_ready_evidence_policy(root.path());
         initialize_git(root.path());
         let app = test_app(root.path().to_path_buf());
+        let plan_path = root.path().join("plan-a.md");
+        std::fs::write(&plan_path, crate::planpack::build_plan_body("Plan", "product-plan", "ready")).unwrap();
+        app.conn.execute("UPDATE plans SET path = ?1 WHERE id = 'plan-a'", [plan_path.to_string_lossy().as_ref()]).unwrap();
         add_outcome(&app, "item-happy-path");
-        app.conn
-            .execute(
-                "INSERT INTO proof_obligations(
-                  id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
-                  binding, observation_requirements_json, fixture_policy_json, freshness_policy_json,
-                  assurance_policy_json, retry_aggregation, policy_digest, config_digest,
-                  source_digest, supersedes_obligation_id, created_at, obligation_shape
-                ) VALUES (
-                  'pob-ready', 'project-a', 'plan-a', 'item-happy-path', 'criterion-ready', 1,
-                  'ready process', 1, ?1, '{}', '{}', '{}', 'all_applicable_pass', ?2, ?2, ?2, NULL,
-                  datetime('now'), 'semantic_v1'
-                )",
-                params![
-                    json!([{
+        add_verification_outcome(&app, "item-happy-path-verifier");
+        app.conn.execute("UPDATE items SET plan_path = ?1 WHERE id IN ('item-happy-path', 'item-happy-path-verifier')", [plan_path.to_string_lossy().as_ref()]).unwrap();
+        app.evidence_migration_value(json!({"schema_version":"planr.evidence.migration.v1","plan_id":"plan-a","obligations":[{"id":"pob-ready","schema_version":"evidence.contract.v1","criterion_id":"criterion-ready","plan_id":"plan-a","item_id":"item-happy-path-verifier","title":"ready process","binding":true,"observations":[{
                         "id": "obs-ready",
                         "type": "com.example.ready.status",
                         "subject": "ready process",
                         "expected": {"status": "ready"},
                         "target": {"kind": "process", "uri": "local://ready"},
                         "payload_schema": {"schema_ref": "com.example.ready.status@v1"}
-                    }])
-                    .to_string(),
-                    policy_digest,
-                ],
-            )
-            .unwrap();
+                    }],"fixture_policy":{},"freshness_policy":{},"assurance_policy":{"retry_aggregation":"all_applicable_pass"}}]}), true).unwrap();
         let run = app
             .ensure_outcome_feature_run("item-happy-path")
             .unwrap()
             .unwrap();
+        app.close_item_value("item-happy-path", "ordinary outcome settled before readiness").unwrap();
         app.conn
             .execute(
                 "UPDATE feature_run_role_leases SET worker_id = 'maker-other' WHERE run_id = ?1 AND role = 'maker' AND released_at IS NULL",
@@ -4270,7 +4258,7 @@ allow_overwrite = true
         );
         assert_eq!(
             packet["work_packet"]["sealed_run_index"]["schema_version"],
-            "planr.evidence.run-index.v1"
+            "planr.evidence.run-index.v2"
         );
         assert!(
             packet["work_packet"]["sealed_run_index"]["repository_path"]
@@ -4287,7 +4275,7 @@ allow_overwrite = true
         assert!(root.path().join(repository_path).is_file());
         assert_eq!(
             readiness["run_index"]["schema_version"],
-            "planr.evidence.run-index.v1"
+            "planr.evidence.run-index.v2"
         );
         assert!(
             readiness["run_index"]["run_index_digest"]
