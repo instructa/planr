@@ -35,6 +35,7 @@
     "planr_pick_stale",
     "planr_run_restart",
     "planr_run_resolve_budget_hold",
+    "planr_run_repair_verification_admission",
     "planr_recover_sweep",
     "planr_approval_request",
     "planr_approval_approve",
