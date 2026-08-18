@@ -292,13 +292,18 @@ jobs:
           persist-credentials: false
 
       - name: Require every selected job and intentional skips
+        env:
+          PLANR_SELECTED_DOCS: ${{ needs.router.outputs.docs }}
+          PLANR_SELECTED_QUALITY: ${{ needs.router.outputs.quality }}
+          PLANR_SELECTED_RELEASE: ${{ needs.router.outputs.release }}
+          PLANR_SELECTED_LINUX_PORTABILITY: ${{ needs.router.outputs.linux_portability }}
         run: |
           node scripts/ci-router.mjs summary \
             --router-result "${{ needs.router.result }}" \
-            --selected "docs=${{ needs.router.outputs.docs }}" \
-            --selected "quality=${{ needs.router.outputs.quality }}" \
-            --selected "release=${{ needs.router.outputs.release }}" \
-            --selected "linux_portability=${{ needs.router.outputs.linux_portability }}" \
+            --selected "docs=$PLANR_SELECTED_DOCS" \
+            --selected "quality=$PLANR_SELECTED_QUALITY" \
+            --selected "release=$PLANR_SELECTED_RELEASE" \
+            --selected "linux_portability=$PLANR_SELECTED_LINUX_PORTABILITY" \
             --result "docs=${{ needs.docs.result }}" \
             --result "quality=${{ needs.quality.result }}" \
             --result "release=${{ needs.release-contracts.result }}" \
