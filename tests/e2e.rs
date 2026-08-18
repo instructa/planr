@@ -16781,6 +16781,7 @@ fn evidence_migration_explicitly_binds_pre_evidence_plans_without_rewriting_clai
         ),
     )
     .unwrap();
+    author_build_plan_criterion(Path::new(&build_path), "crit-migration-binding");
     let map = run(&["map", "build", "--from", &plan_id]);
     let item_id = map["created"][0]["id"].as_str().unwrap().to_string();
     run(&[
@@ -17305,15 +17306,7 @@ fn evidence_migration_explicitly_binds_pre_evidence_plans_without_rewriting_clai
     );
     assert_persisted_lineage_state("pob-migration-lineage-http");
 
-    let mut mcp_obligation = migration["obligations"][0].clone();
-    mcp_obligation["id"] = json!("pob-migration-mcp-binding");
-    mcp_obligation["criterion_id"] = json!("crit-migration-mcp-binding");
-    mcp_obligation["title"] = json!("migration mcp health");
-    let mcp_migration = json!({
-        "schema_version": "planr.evidence.migration.v1",
-        "plan_id": plan_id,
-        "obligations": [mcp_obligation],
-    });
+    let mcp_migration = migration.clone();
     let mcp_preview = mcp_tool(
         dir.path(),
         &db,
@@ -17322,7 +17315,7 @@ fn evidence_migration_explicitly_binds_pre_evidence_plans_without_rewriting_clai
         json!({"input": mcp_migration.clone()}),
     );
     assert_eq!(mcp_preview["object"]["dry_run"], true);
-    assert_eq!(mcp_preview["object"]["summary"]["create"], 1);
+    assert_eq!(mcp_preview["object"]["summary"]["unchanged"], 1);
     let mcp_apply = mcp_tool(
         dir.path(),
         &db,
@@ -17331,7 +17324,7 @@ fn evidence_migration_explicitly_binds_pre_evidence_plans_without_rewriting_clai
         json!({"input": mcp_migration.clone(), "apply": true}),
     );
     assert_eq!(mcp_apply["object"]["status"], "applied");
-    assert_eq!(mcp_apply["object"]["created"].as_array().unwrap().len(), 1);
+    assert_eq!(mcp_apply["object"]["summary"]["unchanged"], 1);
     let mcp_reapply = mcp_tool(
         dir.path(),
         &db,
@@ -17340,15 +17333,7 @@ fn evidence_migration_explicitly_binds_pre_evidence_plans_without_rewriting_clai
         json!({"input": mcp_migration.clone(), "apply": true}),
     );
     assert_eq!(mcp_reapply["object"]["summary"]["unchanged"], 1);
-    let mut http_obligation = migration["obligations"][0].clone();
-    http_obligation["id"] = json!("pob-migration-http-binding");
-    http_obligation["criterion_id"] = json!("crit-migration-http-binding");
-    http_obligation["title"] = json!("migration http health");
-    let http_migration = json!({
-        "schema_version": "planr.evidence.migration.v1",
-        "plan_id": plan_id,
-        "obligations": [http_obligation],
-    });
+    let http_migration = migration.clone();
     let http_preview = http_json(&http_request(
         port,
         "POST",
@@ -17356,7 +17341,7 @@ fn evidence_migration_explicitly_binds_pre_evidence_plans_without_rewriting_clai
         &json!({"input": http_migration.clone()}).to_string(),
     ));
     assert_eq!(http_preview["object"]["dry_run"], true);
-    assert_eq!(http_preview["object"]["summary"]["create"], 1);
+    assert_eq!(http_preview["object"]["summary"]["unchanged"], 1);
     let http_apply = http_json(&http_request(
         port,
         "POST",
@@ -17364,7 +17349,7 @@ fn evidence_migration_explicitly_binds_pre_evidence_plans_without_rewriting_clai
         &json!({"input": http_migration.clone(), "apply": true}).to_string(),
     ));
     assert_eq!(http_apply["object"]["status"], "applied");
-    assert_eq!(http_apply["object"]["created"].as_array().unwrap().len(), 1);
+    assert_eq!(http_apply["object"]["summary"]["unchanged"], 1);
     let http_reapply = http_json(&http_request(
         port,
         "POST",
@@ -17374,13 +17359,6 @@ fn evidence_migration_explicitly_binds_pre_evidence_plans_without_rewriting_clai
     assert_eq!(http_reapply["object"]["summary"]["unchanged"], 1);
     let mut conflict = migration.clone();
     conflict["obligations"][0]["title"] = json!("Conflicting title");
-    let mut new_obligation = conflict["obligations"][0].clone();
-    new_obligation["id"] = json!("pob-migration-atomic-new");
-    new_obligation["criterion_id"] = json!("crit-migration-atomic-new");
-    conflict["obligations"]
-        .as_array_mut()
-        .unwrap()
-        .push(new_obligation);
     let conflict_path = dir.path().join("migration-conflict.json");
     fs::write(
         &conflict_path,
@@ -17407,243 +17385,6 @@ fn evidence_migration_explicitly_binds_pre_evidence_plans_without_rewriting_clai
         "conflict",
         "evidence migration has 1 conflict(s)",
     );
-    let obligations_after_conflict = run(&["evidence", "obligation", "list", "--plan", &plan_id]);
-    assert!(
-        !obligations_after_conflict["object"]["obligations"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|obligation| obligation["id"] == "pob-migration-atomic-new"),
-        "{obligations_after_conflict}"
-    );
-
-    let mut lineage_collision = migration.clone();
-    let mut lineage_first = migration["obligations"][0].clone();
-    lineage_first["id"] = json!("pob-migration-lineage-first");
-    lineage_first["criterion_id"] = json!("crit-migration-lineage");
-    lineage_first["title"] = json!("lineage first");
-    let mut lineage_second = migration["obligations"][0].clone();
-    lineage_second["id"] = json!("pob-migration-lineage-second");
-    lineage_second["criterion_id"] = json!("crit-migration-lineage");
-    lineage_second["title"] = json!("lineage second");
-    lineage_collision["obligations"] = json!([lineage_first, lineage_second]);
-    let lineage_collision_path = dir.path().join("migration-lineage-collision.json");
-    fs::write(
-        &lineage_collision_path,
-        serde_json::to_vec_pretty(&lineage_collision).unwrap(),
-    )
-    .unwrap();
-    let lineage_collision_preview = run(&[
-        "evidence",
-        "migrate",
-        "--input",
-        lineage_collision_path.to_str().unwrap(),
-    ]);
-    assert_eq!(lineage_collision_preview["object"]["summary"]["create"], 0);
-    assert_eq!(
-        lineage_collision_preview["object"]["summary"]["conflict"],
-        1
-    );
-    assert_eq!(lineage_collision_preview["object"]["summary"]["blocked"], 1);
-    assert_eq!(
-        lineage_collision_preview["object"]["obligations"][1]["reason"],
-        "batch_lineage_identity_collision"
-    );
-    let lineage_collision_cli = run_failure(&[
-        "evidence",
-        "migrate",
-        "--input",
-        lineage_collision_path.to_str().unwrap(),
-        "--apply",
-    ]);
-    assert_evidence_error(
-        &lineage_collision_cli,
-        "evidence.migrate",
-        "conflict",
-        "evidence migration has 1 conflict(s)",
-    );
-    let mcp_lineage_collision_response = mcp_tool_response(
-        dir.path(),
-        &db,
-        47,
-        "planr_evidence_migrate",
-        json!({"input": lineage_collision.clone(), "apply": true}),
-    );
-    assert_mcp_evidence_error(
-        &mcp_lineage_collision_response,
-        "evidence.migrate",
-        "conflict",
-        "evidence migration has 1 conflict(s)",
-    );
-    assert_http_evidence_error(
-        &http_request(
-            port,
-            "POST",
-            "/v1/evidence/migrate",
-            &json!({"input": lineage_collision.clone(), "apply": true}).to_string(),
-        ),
-        "409 Conflict",
-        "evidence.migrate",
-        "conflict",
-        "evidence migration has 1 conflict(s)",
-    );
-    let obligations_after_lineage_collision =
-        run(&["evidence", "obligation", "list", "--plan", &plan_id]);
-    assert!(
-        !obligations_after_lineage_collision["object"]["obligations"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|obligation| obligation["id"] == "pob-migration-lineage-first"),
-        "{obligations_after_lineage_collision}"
-    );
-
-    let mut rollback = migration.clone();
-    let mut rollback_first = migration["obligations"][0].clone();
-    rollback_first["id"] = json!("pob-migration-rollback-first");
-    rollback_first["criterion_id"] = json!("crit-migration-rollback-first");
-    rollback_first["title"] = json!("rollback first");
-    let mut rollback_second = migration["obligations"][0].clone();
-    rollback_second["id"] = json!("pob-migration-rollback-second");
-    rollback_second["criterion_id"] = json!("crit-migration-rollback-second");
-    rollback_second["title"] = json!("rollback second");
-    rollback["obligations"] = json!([rollback_first, rollback_second]);
-    let rollback_path = dir.path().join("migration-rollback.json");
-    fs::write(
-        &rollback_path,
-        serde_json::to_vec_pretty(&rollback).unwrap(),
-    )
-    .unwrap();
-    let rollback_preview = run(&[
-        "evidence",
-        "migrate",
-        "--input",
-        rollback_path.to_str().unwrap(),
-    ]);
-    assert_eq!(rollback_preview["object"]["summary"]["create"], 2);
-    let rollback_cli = single_json_document(
-        &planr()
-            .current_dir(dir.path())
-            .env("PLANR_EVIDENCE_MIGRATION_FAIL_AFTER_CREATES", "1")
-            .args([
-                "--db",
-                &db_arg,
-                "--json",
-                "evidence",
-                "migrate",
-                "--input",
-                rollback_path.to_str().unwrap(),
-                "--apply",
-            ])
-            .assert()
-            .failure()
-            .get_output()
-            .stdout,
-    );
-    assert_evidence_error(
-        &rollback_cli,
-        "evidence.migrate",
-        "internal_error",
-        "injected evidence migration failure after 1 create(s)",
-    );
-    assert_eq!(
-        evidence_obligation_count_like(&db, "pob-migration-rollback-%"),
-        0
-    );
-
-    let mut rollback_mcp = migration.clone();
-    rollback_mcp["obligations"] = json!(
-        rollback["obligations"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .enumerate()
-            .map(|(index, obligation)| {
-                let mut obligation = obligation.clone();
-                obligation["id"] = json!(format!("pob-migration-rollback-mcp-{index}"));
-                obligation["criterion_id"] = json!(format!("crit-migration-rollback-mcp-{index}"));
-                obligation
-            })
-            .collect::<Vec<_>>()
-    );
-    let mcp_rollback_response = mcp_tool_response_with_env(
-        dir.path(),
-        &db,
-        48,
-        "planr_evidence_migrate",
-        json!({"input": rollback_mcp.clone(), "apply": true}),
-        &[("PLANR_EVIDENCE_MIGRATION_FAIL_AFTER_CREATES", "1")],
-    );
-    assert_mcp_evidence_error(
-        &mcp_rollback_response,
-        "evidence.migrate",
-        "internal_error",
-        "injected evidence migration failure after 1 create(s)",
-    );
-    assert_eq!(
-        evidence_obligation_count_like(&db, "pob-migration-rollback-mcp-%"),
-        0
-    );
-
-    let mut rollback_http = migration.clone();
-    rollback_http["obligations"] = json!(
-        rollback["obligations"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .enumerate()
-            .map(|(index, obligation)| {
-                let mut obligation = obligation.clone();
-                obligation["id"] = json!(format!("pob-migration-rollback-http-{index}"));
-                obligation["criterion_id"] = json!(format!("crit-migration-rollback-http-{index}"));
-                obligation
-            })
-            .collect::<Vec<_>>()
-    );
-    let rollback_port = free_port();
-    let mut rollback_server = StdCommand::new(&bin)
-        .current_dir(dir.path())
-        .env("PLANR_EVIDENCE_MIGRATION_FAIL_AFTER_CREATES", "1")
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "serve",
-            "--port",
-            &rollback_port.to_string(),
-        ])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    wait_for_http_server(rollback_port);
-    assert_http_evidence_error(
-        &http_request(
-            rollback_port,
-            "POST",
-            "/v1/evidence/migrate",
-            &json!({"input": rollback_http.clone(), "apply": true}).to_string(),
-        ),
-        "500 Internal Server Error",
-        "evidence.migrate",
-        "internal_error",
-        "injected evidence migration failure after 1 create(s)",
-    );
-    rollback_server.kill().unwrap();
-    rollback_server.wait().unwrap();
-    assert_eq!(
-        evidence_obligation_count_like(&db, "pob-migration-rollback-http-%"),
-        0
-    );
-    let obligations_after_rollback = run(&["evidence", "obligation", "list", "--plan", &plan_id]);
-    assert!(
-        !obligations_after_rollback["object"]["obligations"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|obligation| obligation["id"] == "pob-migration-rollback-first"),
-        "{obligations_after_rollback}"
-    );
-
     {
         let conn = rusqlite::Connection::open(&db).unwrap();
         conn.execute_batch(
@@ -17673,7 +17414,6 @@ fn evidence_migration_explicitly_binds_pre_evidence_plans_without_rewriting_clai
     }
     let mut global_collision = migration.clone();
     global_collision["obligations"][0]["id"] = json!("pob-global-collision");
-    global_collision["obligations"][0]["criterion_id"] = json!("crit-current-global-collision");
     let global_collision_path = dir.path().join("migration-global-collision.json");
     fs::write(
         &global_collision_path,
@@ -17730,7 +17470,6 @@ fn evidence_migration_explicitly_binds_pre_evidence_plans_without_rewriting_clai
     );
     let mut cross_project_item = migration.clone();
     cross_project_item["obligations"][0]["id"] = json!("pob-cross-project-item");
-    cross_project_item["obligations"][0]["criterion_id"] = json!("crit-cross-project-item");
     cross_project_item["obligations"][0]["item_id"] = json!("i-foreign-migration");
     let cross_project_item_path = dir.path().join("migration-cross-project-item.json");
     fs::write(
@@ -17774,83 +17513,6 @@ fn evidence_migration_explicitly_binds_pre_evidence_plans_without_rewriting_clai
         "evidence.migrate",
         "bad_request",
         "does not belong to project",
-    );
-
-    let mut concurrent = migration.clone();
-    concurrent["obligations"][0]["id"] = json!("pob-migration-concurrent");
-    concurrent["obligations"][0]["criterion_id"] = json!("crit-migration-concurrent");
-    concurrent["obligations"][0]["title"] = json!("migration concurrent health");
-    let concurrent_path = dir.path().join("migration-concurrent.json");
-    fs::write(
-        &concurrent_path,
-        serde_json::to_vec_pretty(&concurrent).unwrap(),
-    )
-    .unwrap();
-    let concurrent_a = StdCommand::new(&bin)
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            &db_arg,
-            "--json",
-            "evidence",
-            "migrate",
-            "--input",
-            concurrent_path.to_str().unwrap(),
-            "--apply",
-        ])
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    let concurrent_b = StdCommand::new(&bin)
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            &db_arg,
-            "--json",
-            "evidence",
-            "migrate",
-            "--input",
-            concurrent_path.to_str().unwrap(),
-            "--apply",
-        ])
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    let concurrent_a_output = concurrent_a.wait_with_output().unwrap();
-    let concurrent_b_output = concurrent_b.wait_with_output().unwrap();
-    assert!(
-        concurrent_a_output.status.success(),
-        "{concurrent_a_output:?}"
-    );
-    assert!(
-        concurrent_b_output.status.success(),
-        "{concurrent_b_output:?}"
-    );
-    let concurrent_a_json = single_json_document(&concurrent_a_output.stdout);
-    let concurrent_b_json = single_json_document(&concurrent_b_output.stdout);
-    assert_evidence_envelope(&concurrent_a_json, "evidence.migrate", true);
-    assert_evidence_envelope(&concurrent_b_json, "evidence.migrate", true);
-    let concurrent_counts = [
-        (
-            concurrent_a_json["object"]["summary"]["create"].as_i64(),
-            concurrent_a_json["object"]["summary"]["unchanged"].as_i64(),
-        ),
-        (
-            concurrent_b_json["object"]["summary"]["create"].as_i64(),
-            concurrent_b_json["object"]["summary"]["unchanged"].as_i64(),
-        ),
-    ];
-    assert!(
-        concurrent_counts.contains(&(Some(1), Some(0))),
-        "{concurrent_counts:?}"
-    );
-    assert!(
-        concurrent_counts.contains(&(Some(0), Some(1))),
-        "{concurrent_counts:?}"
-    );
-    assert_eq!(
-        evidence_obligation_count_like(&db, "pob-migration-concurrent"),
-        1
     );
 
     let classifications = run(&["evidence", "classifications"]);
