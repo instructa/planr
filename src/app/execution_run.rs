@@ -26,7 +26,7 @@ use crate::usage_policy::{
 };
 use crate::util::{short_id, worker_id};
 use anyhow::{Result, anyhow, bail};
-use rusqlite::{OptionalExtension, params};
+use rusqlite::params;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use time::OffsetDateTime;
