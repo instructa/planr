@@ -24109,6 +24109,7 @@ fn rust_implementation_has_owned_module_boundaries() {
         "src/app/repository.rs",
         "src/app/review.rs",
         "src/app/recovery.rs",
+        "src/app/settlement_materiality.rs",
         "src/app/execution_run.rs",
         "src/app/surfaces.rs",
         "src/app/inspection.rs",
@@ -24171,6 +24172,7 @@ fn rust_implementation_has_owned_module_boundaries() {
         ("src/app/lease.rs", 325),
         ("src/app/review.rs", 600),
         ("src/app/recovery.rs", 450),
+        ("src/app/settlement_materiality.rs", 500),
         ("src/app/surfaces.rs", 325),
         ("src/app/inspection.rs", 510),
         ("src/app/application.rs", 200),
@@ -24190,6 +24192,33 @@ fn rust_implementation_has_owned_module_boundaries() {
             line_count <= max_lines,
             "{file} has {line_count} lines; keep ownership split instead of growing a new hub"
         );
+    }
+
+    let app_mod = fs::read_to_string(root.join("src/app/mod.rs")).unwrap();
+    let flow = fs::read_to_string(root.join("src/app/flow.rs")).unwrap();
+    let settlement_materiality =
+        fs::read_to_string(root.join("src/app/settlement_materiality.rs")).unwrap();
+    assert!(app_mod.contains("\nmod settlement_materiality;\n"));
+    assert!(!app_mod.contains("pub(crate) mod settlement_materiality;"));
+    assert_eq!(
+        flow.matches("settlement_materiality_value(SettlementMaterialityInput")
+            .count(),
+        2,
+        "flow should retain exactly the two direct settlement callers"
+    );
+    for moved_owner in [
+        "fn settlement_materiality_value(",
+        "fn derive_change_summary(",
+        "fn git_changed_lines(",
+        "fn classify_change_kind(",
+        "fn unavailable_policy_materiality(",
+    ] {
+        assert!(settlement_materiality.contains(moved_owner));
+        assert!(!flow.contains(moved_owner), "flow duplicated {moved_owner}");
+    }
+    for moved_policy in ["load_policy(", "classify_materiality("] {
+        assert!(settlement_materiality.contains(moved_policy));
+        assert!(!flow.contains(moved_policy), "flow duplicated {moved_policy}");
     }
 
     let execution_run = fs::read_to_string(root.join("src/app/execution_run.rs")).unwrap();
