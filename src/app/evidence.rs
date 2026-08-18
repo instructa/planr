@@ -1,7 +1,7 @@
 use super::App;
 use super::repository::execution_run::{
     ExecutionRunRepository, FindingStatus, ReviewGateKind, ReviewGateStatus,
-    ReviewSourceBindingRecord, SourceFreezeRecord,
+    ReviewSourceBindingRecord, SourceFreezeRecord, VerificationAdmissionRecord,
 };
 use crate::cli::{
     EvidenceCapabilityCommand, EvidenceCommand, EvidenceCoverageScope, EvidenceHostCaptureCommand,
@@ -1861,6 +1861,15 @@ impl App {
             }
         };
         ensure_capability_manifest_instance_identity(&resolved.manifest, &resolved.instance)?;
+        if matches!(resolver, RunIndexCapabilityResolver::LiveRegistry)
+            && BuiltInEvidenceCatalog::load()?
+                .is_admission_bootstrap_manifest(&resolved.manifest)?
+        {
+            return Err(EvidenceCommandError::conflict(
+                "host capture admission bootstrap capability cannot execute a generic Evidence run",
+            )
+            .into());
+        }
         if capability.get("instance_id").and_then(Value::as_str)
             != Some(resolved.instance.id.as_str())
             || capability.get("manifest_id").and_then(Value::as_str)
@@ -2648,6 +2657,39 @@ impl App {
             {
                 bail!("host capture admission changed during atomic validation");
             }
+            let repository = ExecutionRunRepository::new(&self.conn);
+            let bootstrap = repository
+                .latest_verification_admission(&request.run_id, &request.freeze_id)?
+                .ok_or_else(|| {
+                    EvidenceCommandError::conflict(
+                        "host capture admission requires the current bootstrap admission",
+                    )
+                })?;
+            if bootstrap.plan_id != request.plan_id
+                || bootstrap.run_id != request.run_id
+                || bootstrap.freeze_id != request.freeze_id
+                || bootstrap.run_revision != request.run_revision
+                || bootstrap.verifier_worker_id != lease.verifier_worker_id
+                || bootstrap.verifier_lease_generation != lease.lease_generation
+                || bootstrap.sealed_run_index["run_index_digest"].as_str()
+                    != Some(bootstrap.run_index_digest.as_str())
+            {
+                return Err(EvidenceCommandError::conflict(
+                    "host capture bootstrap admission is not current",
+                )
+                .into());
+            }
+            repository.record_verification_admission(&VerificationAdmissionRecord {
+                plan_id: request.plan_id.clone(),
+                run_id: request.run_id.clone(),
+                freeze_id: request.freeze_id.clone(),
+                run_revision: request.run_revision,
+                verifier_worker_id: lease.verifier_worker_id.clone(),
+                verifier_lease_generation: lease.lease_generation,
+                verification_item_id: bootstrap.verification_item_id,
+                run_index_digest: sealed_run_index_digest.clone(),
+                sealed_run_index: sealed_run_index.clone(),
+            })?;
             Ok(())
         })();
         match admission_result {

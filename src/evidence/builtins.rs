@@ -89,6 +89,22 @@ impl BuiltInEvidenceCatalog {
         std::iter::once(self.host_admission_manifest.clone())
     }
 
+    pub(crate) fn is_admission_bootstrap_manifest(
+        &self,
+        manifest: &VerificationCapabilityManifest,
+    ) -> Result<bool> {
+        if manifest.id != self.host_admission_manifest.id {
+            return Ok(false);
+        }
+        if manifest.adapter_kind != self.host_admission_manifest.adapter_kind
+            || manifest.supported_interactions
+                != self.host_admission_manifest.supported_interactions
+        {
+            bail!("built-in host admission bootstrap manifest semantics changed");
+        }
+        Ok(true)
+    }
+
     pub(crate) fn resolve_schema(
         &self,
         observation_type: &NamespacedIdentifier,
