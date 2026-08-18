@@ -315,17 +315,21 @@ fn chrome_browser_client_manifest(
     serde_json::from_value(value).context("building Chrome browser-client manifest")
 }
 
-fn bind_instance_to_manifest(capture: &HostCaptureEvaluation, manifest: &VerificationCapabilityManifest) -> Result<Value> {
+fn bind_instance_to_manifest(
+    capture: &HostCaptureEvaluation,
+    manifest: &VerificationCapabilityManifest,
+) -> Result<Value> {
     let manifest_value = serde_json::to_value(manifest).context("serializing host manifest")?;
     let manifest_digest = sha256_json_digest(&manifest_value)?;
     let mut instance_value = capture.instance_value.clone();
     instance_value["manifest_id"] = json!("host-chrome-browser-client-manifest");
     instance_value["manifest_digest"] = json!(manifest_digest);
     instance_value["adapter_version"] = json!(manifest.version);
-    let instance = serde_json::from_value::<
-        crate::evidence::model::VerificationCapabilityInstance,
-    >(instance_value)
-    .context("binding Chrome browser-client instance to manifest")?;
+    let instance =
+        serde_json::from_value::<crate::evidence::model::VerificationCapabilityInstance>(
+            instance_value,
+        )
+        .context("binding Chrome browser-client instance to manifest")?;
     serde_json::to_value(&instance).context("serializing canonical Chrome browser-client instance")
 }
 
