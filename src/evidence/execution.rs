@@ -3905,18 +3905,20 @@ mod tests {
         seed(&conn, &obligation, &instance, &contract);
         let cancellation = CancellationToken::new();
         let mut input = run_input(root.path(), obligation, instance, contract, &cancellation);
-        insert_prior_attempt(
-            &conn,
-            "eatt-prior-zero",
-            "p-evidence",
-            input.obligation.id.as_str(),
-            input.capability_instance.id.as_str(),
-            0,
-            None,
-        );
+        let prior_attempt = json!({
+            "id": "eatt-prior-zero",
+            "status": "passed",
+            "exit": {"exit_code": 0, "signal": null, "error": null},
+            "retry_lineage": {
+                "attempt_number": 1,
+                "max_attempts": 3,
+                "previous_attempt_ids": []
+            },
+            "raw_result": {"execution_binding": input.execution_binding.clone()}
+        });
         conn.execute(
-            "UPDATE evidence_attempts SET attempt_json = json_set(attempt_json, '$.raw_result', json(?1)) WHERE id = ?2",
-            params![json!({"execution_binding": input.execution_binding}).to_string(), "eatt-prior-zero"],
+            "INSERT INTO evidence_attempts(id, project_id, obligation_id, capability_instance_id, attempt_status, execution_contract_digest, resolved_command_json, environment_digest, retry_predecessor_attempt_id, started_at, completed_at, exit_code, stdout_digest, stderr_digest, output_bounds_json, attempt_json, created_at) VALUES (?1, ?2, ?3, ?4, 'passed', ?5, '{\"cmd\":\"true\"}', ?6, NULL, '2026-07-29T00:00:00Z', '2026-07-29T00:00:01Z', 0, ?7, ?7, '{}', ?8, '2026-07-29T00:00:01Z')",
+            params!["eatt-prior-zero", "p-evidence", input.obligation.id.as_str(), input.capability_instance.id.as_str(), DIGEST_A, DIGEST_B, DIGEST_C, serde_json::to_string(&prior_attempt).unwrap()],
         )
         .unwrap();
         input.retry_of = Some(EvidenceId::parse("eatt-prior-zero").unwrap());
