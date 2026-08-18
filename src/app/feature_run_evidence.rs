@@ -3598,6 +3598,7 @@ allow_overwrite = true
         if with_item {
             add_verification_item(&app, "verification-phase");
         }
+        let verification_item_id = with_item.then_some("verification-phase");
         app.conn
             .execute(
                 "UPDATE items SET plan_path = ?1 WHERE id IN ('item-phase', 'verification-phase')",
@@ -3613,7 +3614,7 @@ allow_overwrite = true
                     "schema_version": "evidence.contract.v1",
                     "criterion_id": "criterion-phase-ready",
                     "plan_id": "plan-a",
-                    "item_id": "verification-phase",
+                    "item_id": verification_item_id,
                     "title": "ready process",
                     "binding": true,
                     "observations": [{
