@@ -30,6 +30,7 @@ use crate::evidence::{
         run_configured_process_adapter_guarded, run_repository_snapshot_pre_commit_test_hook,
         run_resolved_process, select_execution_binding_subset,
     },
+    host_capture_admission,
     parse_validated_artifact_import,
     policy::{
         capture_repository_snapshot, load_repository_observation_schema,
@@ -102,6 +103,22 @@ struct HermeticReuseInput<'a> {
     fixture_disclosure: &'a FixtureDisclosure,
     env: &'a BTreeMap<String, String>,
     execution_binding: &'a Value,
+}
+
+#[derive(Clone, Copy)]
+enum RunIndexCapabilityResolver {
+    LiveRegistry,
+    PendingHostCapture,
+}
+
+struct ResolvedRunIndexCapability {
+    manifest: VerificationCapabilityManifest,
+    instance: VerificationCapabilityInstance,
+}
+
+struct ValidatedRunIndexEntry {
+    execution_binding: Value,
+    instance: VerificationCapabilityInstance,
 }
 
 fn is_hermetic_reuse_candidate(
@@ -1346,11 +1363,21 @@ impl App {
                 }));
             }
         }
+        self.seal_run_index(scope.as_str(), scope_id, policy_digest, runs)
+    }
+
+    fn seal_run_index(
+        &self,
+        scope_kind: &str,
+        scope_id: &str,
+        policy_digest: &str,
+        runs: Vec<Value>,
+    ) -> Result<Value> {
         let snapshot = capture_repository_snapshot(&self.root)
             .map_err(|error| anyhow!("capturing readiness run-index source: {error}"))?;
         let mut run_index = json!({
             "schema_version": "planr.evidence.run-index.v2",
-            "scope": {"kind": scope.as_str(), "id": scope_id},
+            "scope": {"kind": scope_kind, "id": scope_id},
             "source": snapshot.source,
             "policy_digest": policy_digest,
             "runs": runs,
@@ -1371,7 +1398,90 @@ impl App {
         Ok(run_index)
     }
 
-    fn validate_sealed_run_index(&self, value: &Value) -> Result<(String, Vec<Value>)> {
+    fn build_host_capture_candidate_run_index(
+        &self,
+        obligation: &ProofObligation,
+        manifest: &VerificationCapabilityManifest,
+        instance: &VerificationCapabilityInstance,
+    ) -> Result<(Value, Value)> {
+        ensure_capability_manifest_instance_identity(manifest, instance)?;
+        let [(target, requirement_ids)] = canonical_target_partitions(&obligation.observations)?
+            .try_into()
+            .map_err(|_: Vec<_>| {
+                EvidenceCommandError::bad_request(
+                    "host capture admission requires exactly one canonical target subset",
+                )
+            })?;
+        let policy_digest = self
+            .evidence_policy_document()?
+            .ok_or_else(|| {
+                EvidenceCommandError::conflict(
+                    "host capture admission requires the current Evidence policy",
+                )
+            })?
+            .digest;
+        let run_index = self.seal_run_index(
+            "obligation",
+            obligation.id.as_str(),
+            &policy_digest,
+            vec![json!({
+                "index": 0,
+                "capability": {
+                    "instance_id": instance.id.as_str(),
+                    "manifest_id": instance.manifest_id.as_str(),
+                    "manifest_digest": instance.manifest_digest.as_str(),
+                    "manifest_version": instance.adapter_version,
+                },
+                "input": {
+                    "obligation_id": obligation.id.as_str(),
+                    "requirement_ids": requirement_ids,
+                    "capability_instance_id": instance.id.as_str(),
+                    "target": target,
+                    "environment": instance.environment,
+                    "execution_contract": manifest.availability_probe.execution,
+                    "fixture_disclosure": {
+                        "fixtures_used": false,
+                        "mocks_used": false
+                    }
+                }
+            })],
+        )?;
+        let run_index_digest = string_field(&run_index, "run_index_digest")?;
+        let execution_binding = run_index_execution_binding(
+            &run_index_digest,
+            0,
+            obligation.id.as_str(),
+            target,
+            requirement_ids,
+        );
+        Ok((run_index, execution_binding))
+    }
+
+    fn validate_sealed_run_index(
+        &self,
+        value: &Value,
+    ) -> Result<(String, Vec<ValidatedRunIndexEntry>)> {
+        self.validate_sealed_run_index_with_resolver(
+            value,
+            RunIndexCapabilityResolver::LiveRegistry,
+        )
+    }
+
+    fn validate_pending_host_capture_run_index(
+        &self,
+        value: &Value,
+    ) -> Result<(String, Vec<ValidatedRunIndexEntry>)> {
+        self.validate_sealed_run_index_with_resolver(
+            value,
+            RunIndexCapabilityResolver::PendingHostCapture,
+        )
+    }
+
+    fn validate_sealed_run_index_with_resolver(
+        &self,
+        value: &Value,
+        resolver: RunIndexCapabilityResolver,
+    ) -> Result<(String, Vec<ValidatedRunIndexEntry>)> {
         let object = value.as_object().ok_or_else(|| {
             EvidenceCommandError::bad_request("evidence run-index input must be an object")
         })?;
@@ -1429,20 +1539,21 @@ impl App {
                 EvidenceCommandError::conflict("evidence run-index policy is stale").into(),
             );
         }
-        let execution_bindings = self.validate_run_index_target_subsets(value, &declared_digest)?;
-        Ok((declared_digest, execution_bindings))
+        let entries =
+            self.validate_run_index_target_subsets(value, &declared_digest, resolver)?;
+        Ok((declared_digest, entries))
     }
 
     fn evidence_run_index_value(&self, value: Value) -> Result<Value> {
-        let (declared_digest, execution_bindings) = self.validate_sealed_run_index(&value)?;
+        let (declared_digest, validated_entries) = self.validate_sealed_run_index(&value)?;
         let runs = value["runs"]
             .as_array()
             .filter(|runs| !runs.is_empty())
             .ok_or_else(|| EvidenceCommandError::bad_request("evidence run-index has no runs"))?;
         let mut results = Vec::with_capacity(runs.len());
         let mut product_findings = Vec::new();
-        for ((expected_index, run), execution_binding) in
-            runs.iter().enumerate().zip(execution_bindings)
+        for ((expected_index, run), validated) in
+            runs.iter().enumerate().zip(validated_entries)
         {
             if run["index"].as_u64() != Some(expected_index as u64) {
                 return Err(EvidenceCommandError::bad_request(
@@ -1458,7 +1569,7 @@ impl App {
                 input,
                 false,
                 product_findings.is_empty(),
-                execution_binding,
+                validated.execution_binding,
             )?;
             let product_failed = result["receipt"]["proof_gaps"]
                 .as_array()
@@ -1523,7 +1634,8 @@ impl App {
         &self,
         value: &Value,
         run_index_digest: &str,
-    ) -> Result<Vec<Value>> {
+        resolver: RunIndexCapabilityResolver,
+    ) -> Result<Vec<ValidatedRunIndexEntry>> {
         let scope_kind = value["scope"]["kind"]
             .as_str()
             .ok_or_else(|| EvidenceCommandError::bad_request("run-index scope.kind is required"))?;
@@ -1640,27 +1752,25 @@ impl App {
                 )
                 .into());
             }
-            let instance = self.load_capability_instance(capability_instance_id)?;
-            if capability.get("manifest_id").and_then(Value::as_str)
-                != Some(instance.manifest_id.as_str())
-                || capability.get("manifest_digest").and_then(Value::as_str)
-                    != Some(instance.manifest_digest.as_str())
-                || capability.get("manifest_version").and_then(Value::as_str)
-                    != Some(instance.adapter_version.as_str())
-            {
-                return Err(EvidenceCommandError::bad_request(
-                    "run capability does not match the registered capability instance",
-                )
-                .into());
-            }
-            bindings.push(json!({
-                "schema_version": "planr.evidence.execution-binding.v2",
-                "run_index_digest": run_index_digest,
-                "run_index": index,
-                "obligation_id": obligation_id,
-                "target": target,
-                "requirement_ids": requirement_ids,
-            }));
+            let execution_binding = run_index_execution_binding(
+                run_index_digest,
+                index,
+                obligation_id,
+                target,
+                requirement_ids,
+            );
+            let resolved = self.resolve_run_index_capability(
+                resolver,
+                run_index_digest,
+                obligation_id,
+                &execution_binding,
+                capability,
+                capability_instance_id,
+            )?;
+            bindings.push(ValidatedRunIndexEntry {
+                execution_binding,
+                instance: resolved.instance,
+            });
         }
         if seen.len() != expected.len() {
             return Err(EvidenceCommandError::bad_request(
@@ -1671,6 +1781,73 @@ impl App {
         Ok(bindings)
     }
 
+    fn resolve_run_index_capability(
+        &self,
+        resolver: RunIndexCapabilityResolver,
+        run_index_digest: &str,
+        obligation_id: &str,
+        execution_binding: &Value,
+        capability: &serde_json::Map<String, Value>,
+        capability_instance_id: &str,
+    ) -> Result<ResolvedRunIndexCapability> {
+        let resolved = match resolver {
+            RunIndexCapabilityResolver::LiveRegistry => ResolvedRunIndexCapability {
+                manifest: self.load_capability_manifest(capability_instance_id)?,
+                instance: self.load_capability_instance(capability_instance_id)?,
+            },
+            RunIndexCapabilityResolver::PendingHostCapture => {
+                let admission = host_capture_admission::load_pending(
+                    &self.conn,
+                    run_index_digest,
+                )?
+                .ok_or_else(|| {
+                    EvidenceCommandError::conflict(
+                        "sealed host capture run has no pending admission",
+                    )
+                })?;
+                admission.validate_pending()?;
+                let valid_until = OffsetDateTime::parse(&admission.valid_until, &Rfc3339)?;
+                if valid_until <= OffsetDateTime::now_utc() {
+                    return Err(EvidenceCommandError::conflict(
+                        "pending host capture admission is expired",
+                    )
+                    .into());
+                }
+                if admission.sealed_run_index_digest != run_index_digest
+                    || admission.obligation_id != obligation_id
+                    || admission.execution_binding != *execution_binding
+                {
+                    return Err(EvidenceCommandError::conflict(
+                        "sealed host capture run does not match its pending admission binding",
+                    )
+                    .into());
+                }
+                ResolvedRunIndexCapability {
+                    manifest: serde_json::from_value(admission.manifest)
+                        .context("decoding pending host capture manifest")?,
+                    instance: serde_json::from_value(admission.instance)
+                        .context("decoding pending host capture instance")?,
+                }
+            }
+        };
+        ensure_capability_manifest_instance_identity(&resolved.manifest, &resolved.instance)?;
+        if capability.get("instance_id").and_then(Value::as_str)
+            != Some(resolved.instance.id.as_str())
+            || capability.get("manifest_id").and_then(Value::as_str)
+                != Some(resolved.instance.manifest_id.as_str())
+            || capability.get("manifest_digest").and_then(Value::as_str)
+                != Some(resolved.instance.manifest_digest.as_str())
+            || capability.get("manifest_version").and_then(Value::as_str)
+                != Some(resolved.instance.adapter_version.as_str())
+        {
+            return Err(EvidenceCommandError::bad_request(
+                "run capability does not match the resolved capability candidate",
+            )
+            .into());
+        }
+        Ok(resolved)
+    }
+
     fn host_capture_execution_subset(
         &self,
         value: &Value,
@@ -1678,7 +1855,7 @@ impl App {
         let run_index = value.get("run_index").ok_or_else(|| {
             EvidenceCommandError::bad_request("host capture requires a sealed run_index")
         })?;
-        let (_, execution_bindings) = self.validate_sealed_run_index(run_index)?;
+        let (_, validated_entries) = self.validate_sealed_run_index(run_index)?;
         let entry = value
             .get("run_index_entry")
             .and_then(Value::as_u64)
@@ -1699,14 +1876,16 @@ impl App {
         let run_input = run.get("input").cloned().ok_or_else(|| {
             EvidenceCommandError::bad_request("sealed host capture run requires input")
         })?;
-        let execution_binding = execution_bindings.get(entry).cloned().ok_or_else(|| {
+        let validated = validated_entries.get(entry).ok_or_else(|| {
             EvidenceCommandError::bad_request(
                 "host capture run_index_entry has no execution binding",
             )
         })?;
-        let instance_id = string_field(&run_input, "capability_instance_id")?;
-        let instance = self.load_capability_instance(&instance_id)?;
-        Ok((run_input, execution_binding, instance))
+        Ok((
+            run_input,
+            validated.execution_binding.clone(),
+            validated.instance.clone(),
+        ))
     }
 
     fn hermetic_reuse_binding(
@@ -3822,6 +4001,45 @@ fn canonical_target_partitions(
         }
     }
     Ok(result)
+}
+
+fn run_index_execution_binding(
+    run_index_digest: &str,
+    run_index: usize,
+    obligation_id: &str,
+    target: Value,
+    requirement_ids: Vec<String>,
+) -> Value {
+    json!({
+        "schema_version": "planr.evidence.execution-binding.v2",
+        "run_index_digest": run_index_digest,
+        "run_index": run_index,
+        "obligation_id": obligation_id,
+        "target": target,
+        "requirement_ids": requirement_ids,
+    })
+}
+
+fn ensure_capability_manifest_instance_identity(
+    manifest: &VerificationCapabilityManifest,
+    instance: &VerificationCapabilityInstance,
+) -> Result<()> {
+    let manifest_digest = crate::canonical_json::sha256_json_digest(
+        &serde_json::to_value(manifest)?,
+    )?;
+    if manifest.id != instance.manifest_id
+        || manifest.version != instance.adapter_version
+        || manifest_digest != instance.manifest_digest.as_str()
+    {
+        bail!(
+            "capability instance {} does not match manifest {}@{} {}",
+            instance.id.as_str(),
+            manifest.id.as_str(),
+            manifest.version,
+            manifest_digest,
+        );
+    }
+    Ok(())
 }
 
 fn evidence_run_verdict(status: AttemptStatus, exit: &Value, raw_result: &Value) -> String {
