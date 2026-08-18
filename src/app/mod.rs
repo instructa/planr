@@ -40,6 +40,7 @@ mod recovery;
 mod render;
 mod repository;
 mod review;
+mod settlement_materiality;
 pub(crate) mod stop;
 mod surfaces;
 mod verification_settlement_recovery;
