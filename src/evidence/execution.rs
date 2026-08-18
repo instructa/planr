@@ -45,6 +45,7 @@ pub(crate) struct ConfiguredProcessRunInput<'a> {
     pub retry_of: Option<EvidenceId>,
     pub attempt_index: u32,
     pub max_attempts: u32,
+    pub execution_binding: Value,
     pub cancellation: &'a CancellationToken,
 }
 
@@ -53,6 +54,73 @@ pub(crate) struct ConfiguredProcessRunOutput {
     pub attempt: EvidenceAttempt,
     pub receipt_value: Value,
     pub receipt_digest: String,
+}
+
+pub(crate) fn select_execution_binding_subset(
+    mut obligation: ProofObligation,
+    run_input: &Value,
+    execution_binding: &Value,
+) -> Result<(ProofObligation, TargetBinding)> {
+    if execution_binding.get("schema_version").and_then(Value::as_str)
+        != Some("planr.evidence.execution-binding.v2")
+    {
+        bail!("sealed execution binding schema_version is invalid");
+    }
+    if execution_binding
+        .get("obligation_id")
+        .and_then(Value::as_str)
+        != Some(obligation.id.as_str())
+        || run_input.get("obligation_id").and_then(Value::as_str)
+            != Some(obligation.id.as_str())
+    {
+        bail!("sealed execution binding obligation does not match run input");
+    }
+    let requirement_ids = execution_binding
+        .get("requirement_ids")
+        .and_then(Value::as_array)
+        .filter(|ids| !ids.is_empty())
+        .context("sealed execution binding requirement_ids must be non-empty")?
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_string)
+                .context("sealed execution binding requirement_ids must contain strings")
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut canonical_ids = requirement_ids.clone();
+    canonical_ids.sort();
+    canonical_ids.dedup();
+    if requirement_ids != canonical_ids {
+        bail!("sealed execution binding requirement_ids must be sorted and unique");
+    }
+    if run_input.get("requirement_ids") != execution_binding.get("requirement_ids") {
+        bail!("sealed execution binding requirement_ids do not match run input");
+    }
+    let selected = requirement_ids.iter().cloned().collect::<BTreeSet<_>>();
+    obligation
+        .observations
+        .retain(|observation| selected.contains(observation.id.as_str()));
+    if obligation.observations.len() != selected.len() {
+        bail!("sealed execution binding does not select an exact obligation subset");
+    }
+    let target_value = run_input
+        .get("target")
+        .cloned()
+        .context("run input target is required")?;
+    if execution_binding.get("target") != Some(&target_value) {
+        bail!("sealed execution binding target does not match run input");
+    }
+    let target: TargetBinding = serde_json::from_value(target_value.clone())?;
+    target.validate()?;
+    if obligation
+        .observations
+        .iter()
+        .any(|observation| observation.target != target_value)
+    {
+        bail!("sealed execution subset contains a foreign target requirement");
+    }
+    Ok((obligation, target))
 }
 
 #[derive(Debug)]
@@ -236,6 +304,7 @@ pub(crate) fn run_configured_process_adapter_guarded(
         input.retry_of.as_ref(),
         input.attempt_index,
         input.max_attempts,
+        &input.execution_binding,
     )?;
     let resolved = match ResolvedProcessRun::resolve(
         input.repository_root,
@@ -269,6 +338,7 @@ pub(crate) fn run_configured_process_adapter_guarded(
         "target": input.target,
         "environment": input.environment,
         "fixture_disclosure": input.fixture_disclosure,
+        "execution_binding": input.execution_binding,
     }))?;
     before_adapter_launch(conn)?;
     let started_at = timestamp();
@@ -371,6 +441,7 @@ pub(crate) fn run_configured_process_adapter_guarded(
                 resolved_command: resolved_run.command_identity.clone(),
                 exit: process_result.exit.clone(),
                 retry_lineage: retry_lineage.value.clone(),
+                execution_binding: Some(input.execution_binding.clone()),
                 stdout_digest: Sha256Digest::parse(process_result.stdout_digest.clone())?,
                 stderr_digest: Sha256Digest::parse(process_result.stderr_digest.clone())?,
                 raw_result: process_result.raw_result.clone(),
@@ -1921,6 +1992,7 @@ fn resolve_retry_lineage(
     retry_of: Option<&EvidenceId>,
     attempt_index: u32,
     max_attempts: u32,
+    execution_binding: &Value,
 ) -> Result<ResolvedRetryLineage> {
     if max_attempts == 0 {
         bail!("retry max_attempts must be at least one");
@@ -1970,6 +2042,9 @@ fn resolve_retry_lineage(
     }
     let predecessor_attempt: Value =
         serde_json::from_str(&predecessor.3).context("decoding retry predecessor attempt_json")?;
+    if predecessor_attempt.get("execution_binding") != Some(execution_binding) {
+        bail!("retry predecessor belongs to a different sealed execution subset");
+    }
     let predecessor_lineage = predecessor_attempt
         .get("retry_lineage")
         .context("retry predecessor is missing retry_lineage")?;
@@ -2869,6 +2944,14 @@ mod tests {
             retry_of: None,
             attempt_index: 0,
             max_attempts: 3,
+            execution_binding: json!({
+                "schema_version": "planr.evidence.execution-binding.v2",
+                "run_index_digest": DIGEST_A,
+                "run_index": 0,
+                "obligation_id": "obl-process",
+                "target": {"kind": "process", "uri": "local://process"},
+                "requirement_ids": ["obs-process"]
+            }),
             cancellation,
         }
     }

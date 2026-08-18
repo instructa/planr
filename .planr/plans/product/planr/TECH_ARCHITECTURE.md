@@ -68,7 +68,7 @@ CLI, MCP, and HTTP restart adapters parse only the closed `incompatible-budget` 
 
 Compatible budget-hold resolution is a separate `app/feature_run_evidence` lifecycle. It resumes only the exact prior phase after one immediate transaction revalidates the persisted contract/snapshot, every active reservation and deadline, the canonical role owner, and lease generation. Incompatible contracts route to restart; capability holds, corrupt or exhausted state, missing reservations, expired deadlines, and ownership mismatch remain fail-closed. CLI, MCP, and HTTP are transport-only.
 
-Stale source-freeze restart uses the same ownership direction. `app/execution_run` is the sole plan-scoped diagnosis and orchestration owner; it admits only an active source-frozen run with a stale immutable freeze, no verification item, and stranded code outcomes. `execution_run` owns the pure terminal transition, and `app/repository/execution_run` atomically retires runtime ownership and routes those outcomes without changing the freeze row. Pick creates a distinct successor run later; Evidence readiness freezes current source. CLI and MCP are typed consumers only.
+`execution_run` is the sole owner of ordinary implementation classification: planned `code`, `fix`, `docs`, and `test` work is maker-compatible, while verification and durable ReviewGates are control work. Application settlement, pick, accepted-risk handoff, Evidence continuation, and recovery consume that classification; repository queries only bind its canonical values. Premature source-freeze diagnosis admits an active source-frozen run with an immutable active freeze, open ordinary outcomes, and zero verification admission/attempt/receipt for that freeze. The pure terminal transition and optimistic repository transaction retire runtime ownership, release only active ordinary leases, preserve ready/pending work and freeze/history, and never create a successor. CLI and MCP parse only the typed `premature-source-freeze` reason; no stale-source compatibility path remains.
 
 ## Binding Evidence Ownership
 
@@ -78,6 +78,68 @@ Stale source-freeze restart uses the same ownership direction. `app/execution_ru
 - `app/proof` is the sole owner of `PlanEvidenceAuthority`: `nonbinding`, `binding_unsatisfied`, or `binding_active`, derived by joining policy, the checked declared criterion set, and authoritative active obligation rows.
 - FeatureRun handoff, verifier admission, audit, final-review admission, accepted-risk handoff, and stop activation consume that classification. They do not infer authority from an empty coverage list or verification logs.
 - Explicit Evidence migration remains the sole obligation writer and accepts only the exact declared criterion set. An incomplete or invalid binding set becomes a durable capability hold, not a compatibility route.
+
+Binding execution has one additional ownership chain. `app/evidence` partitions each canonical
+obligation by exact target and seals `planr.evidence.run-index.v2`; every run names one obligation,
+one target, and a sorted non-empty requirement subset. Admission recomputes the canonical partition
+and requires exact union/no duplicates before launch. `evidence/execution` applies that subset to
+result validation, retry lineage, independence, reuse, attempts, and receipts. Host capture consumes
+the same subset contract. `evidence/coverage` remains the sole coverage owner and never delegates
+closure authority to run-index aggregation.
+
+`execution_run` owns the pure pre-receipt `VerificationAdmissionRepair` transition and its closed
+reason-dependent seal rule: pre-seal reasons reject any run-index digest, while post-seal reasons
+require the exact admitted digest. `app/feature_run_evidence` owns diagnosis and orchestration over
+the exact plan/run/freeze/revision identity. It first rolls back a failed tentative verification
+lease, then persists the durable capability hold and repair diagnostic in a separate transaction.
+`app/repository/execution_run` revalidates those optimistic facts and atomically invalidates the
+freeze, releases verifier ownership and any present item lease, restores the original historical
+maker at the next lease generation, and opens the sole repair batch. `execution_state` is the
+canonical state projection; CLI, MCP, HTTP, and work packets only parse or render the same request.
+Verification map items are optional projections. Post-receipt ProductFindings and terminal
+one-shot exhaustion remain separate canonical lifecycles; item-keyed pick release has no repair
+branch.
+
+Post-receipt ProductFinding repair is owned end to end by `app/feature_run_evidence`. It reuses the
+same optional plan-path verification projection as ordinary verification dispatch for routing,
+maker packets, settlement, idempotent replay, selective replay, and conditional item release.
+`ProductRepairSettlementRecord` and its table own only invalidation, run, responsible maker,
+selective obligations, settlement evidence, and replacement freeze; they persist no map-item
+identity. `app/repository/execution_run` retains atomic persistence, and `execution_run` retains only
+pure lifecycle transitions.
+
+Plan coverage settlement is a plan/FeatureRun application transition in `app/evidence`, keyed by
+the exact verifier lease generation, active immutable freeze, and satisfied accepted receipt
+lineage whose source binding matches that freeze. It always reconciles the verification wall and
+persists `VerificationPassed` through `app/repository/execution_run`. A verification item is a
+zero-or-one projection: an active item is closed/logged in that same transaction, absence causes no
+item/log mutation, and a ready unleased item fails closed. One nullable-item event shape covers both.
+
+`app/final_review_admission` consumes the same exact freeze/coverage guard for binding plans and owns
+no item-status rule. Its one create-or-show flow resolves the durable final gate before
+creation-only phase admission: an existing Accepted gate may project from Complete only after its
+stored source binding still equals the current intact freeze and exact satisfied receipt lineage;
+new and non-Accepted active-binding gates remain SourceFrozen-only. `app/feature_run_evidence` keeps
+terminal one-shot exhaustion in the trusted attempt/receipt transaction: cancellation, budget
+reconciliation, and verifier release always occur; item failure/logging occurs only for one present
+active projection. `execution_run` remains pure phase-transition policy and the repository remains
+atomic persistence owner.
+
+The hard cut has no run-index v1 reader, first-observation target inference, host-only target
+equality rule, item-required repair/settlement/admission/exhaustion helper, persisted repair-item
+owner, fallback, alias, or runtime compatibility branch. Completed trusted
+Evidence v1 receipts remain canonical coverage records; unexecuted v1 run indexes and unbound
+in-flight retry lineage are not translated or inferred.
+
+Current Verification retirement has one ownership chain. `execution_run` owns the exact typed
+admission invariant and pure policy-cancel transition; `app/feature_run_evidence` owns the sole
+diagnosis/orchestration path; `app/repository/execution_run` owns one immediate optimistic
+transaction; and `app/execution_state` owns required/retired projection. CLI, MCP, HTTP, and run
+commands only parse or render `inconsistent-verification`. The transaction preserves every
+Evidence/history identity, invalidates the unusable freeze, ends or preserves-ended the referenced
+batch, releases exact verifier state, and creates no successor. Missing/stale admission errors and
+surface-local restart policy are deleted; admission-write validation and repository revalidation
+remain legitimate boundary checks.
 
 ## Backend Architecture
 

@@ -1,7 +1,7 @@
 use super::{
     App, LogInput, ReviewAnnotationInput, application::ArtifactInput, recovery::ItemRecoveryInput,
 };
-use crate::execution_run::FeatureRunRestartReason;
+use crate::execution_run::{FeatureRunRestartReason, VerificationAdmissionRepairRequest};
 use crate::integrations::{mcp_json, mcp_resources, mcp_tools};
 use crate::planpack::{build_plan_body, product_plan_files};
 use crate::util::{append_line, item_id, now_string, required_arg, write_if_missing};
@@ -226,7 +226,8 @@ impl App {
             "planr_run_restart" => {
                 let reason = match required_arg(&args, "reason")? {
                     "incompatible-budget" => FeatureRunRestartReason::IncompatibleBudget,
-                    "stale-source-freeze" => FeatureRunRestartReason::StaleSourceFreeze,
+                    "premature-source-freeze" => FeatureRunRestartReason::PrematureSourceFreeze,
+                    "inconsistent-verification" => FeatureRunRestartReason::InconsistentVerification,
                     value => bail!("invalid restart reason: {value}"),
                 };
                 Ok(mcp_json(self.restart_feature_run_value(
@@ -237,6 +238,11 @@ impl App {
             "planr_run_resolve_budget_hold" => Ok(mcp_json(
                 self.resolve_feature_run_budget_hold_value(required_arg(&args, "plan")?)?,
             )),
+            "planr_run_repair_verification_admission" => {
+                let request: VerificationAdmissionRepairRequest =
+                    serde_json::from_value(args.clone())?;
+                Ok(mcp_json(self.repair_verification_admission_value(request)?))
+            }
             "planr_plan_link" => {
                 let source_id = required_arg(&args, "source_id")?;
                 let item_id = required_arg(&args, "item_id")?;

@@ -386,7 +386,32 @@ pub(crate) enum RunCommand {
     Batch(RunBatchArgs),
     Restart(RunRestartArgs),
     ResolveBudgetHold(RunResolveBudgetHoldArgs),
+    RepairVerificationAdmission(RunRepairVerificationAdmissionArgs),
     SettleRepair(RunSettleRepairArgs),
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct RunRepairVerificationAdmissionArgs {
+    #[arg(long)]
+    pub(crate) plan: String,
+    #[arg(long)]
+    pub(crate) run: String,
+    #[arg(long)]
+    pub(crate) freeze: String,
+    #[arg(long)]
+    pub(crate) revision: u64,
+    #[arg(long, value_enum)]
+    pub(crate) reason: VerificationAdmissionRepairReasonArg,
+    #[arg(long)]
+    pub(crate) run_index_digest: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub(crate) enum VerificationAdmissionRepairReasonArg {
+    ReadinessBlocked,
+    RunIndexSealFailed,
+    SealedRunRejected,
+    CapabilityAdmissionFailed,
 }
 
 #[derive(Args, Debug)]
@@ -422,7 +447,8 @@ pub(crate) struct RunRestartArgs {
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub(crate) enum FeatureRunRestartReasonArg {
     IncompatibleBudget,
-    StaleSourceFreeze,
+    PrematureSourceFreeze,
+    InconsistentVerification,
 }
 
 #[derive(Args, Debug)]
@@ -480,9 +506,6 @@ pub(crate) struct PickReleaseArgs {
     pub(crate) item_id: String,
     #[arg(long)]
     pub(crate) force: bool,
-    /// Route a verification admission blocker back to the recorded maker.
-    #[arg(long)]
-    pub(crate) repair: Option<String>,
 }
 
 #[derive(Args, Debug)]

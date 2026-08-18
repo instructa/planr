@@ -1,5 +1,4 @@
 use super::App;
-use super::lease::PickFilter;
 use super::proof::PlanEvidenceAuthority;
 use super::repository::execution_run::{
     EvidenceInvalidationRecord, ExecutionRunRepository, PersistedFeatureRun, ReviewGateKind,
@@ -209,13 +208,9 @@ impl App {
         if maker.worker_id != gate.responsible_maker_id {
             bail!("accepted_risk_gate_maker_mismatch:{}", gate.id);
         }
-        if self
-            .peek_next_ready_item_filtered(&PickFilter {
-                exclude: None,
-                work_type: Some("code"),
-                plan_path: Some(plan.path.as_str()),
-            })?
-            .is_some()
+        if !repository
+            .open_ordinary_outcome_ids(&persisted.run.plan_id)?
+            .is_empty()
         {
             return Ok(None);
         }

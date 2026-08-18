@@ -1,21 +1,34 @@
 //! FeatureRun coordination at the Evidence and Usage Policy boundaries.
 
 use super::App;
+use super::evidence::CurrentPlanCoverageForSourceFreeze;
+use super::proof::PlanEvidenceAuthority;
 use super::repository::execution_run::{
     BudgetObservationRecord, BudgetReservationRecord, BudgetReservationStatus,
     EvidenceInvalidationRecord, ExecutionRunRepository, FindingStatus, PersistedFeatureRun,
     ProductRepairSettlementRecord, ReviewGateKind, ReviewGateRecord, ReviewGateStatus,
-    SourceFreezeRecord, SourceFreezeStatus,
+    SourceFreezeRecord, SourceFreezeStatus, VerificationAdmissionRecord,
+    VerificationAdmissionRepairSettlementRecord, VerificationReadinessDiagnosticRecord,
+    CurrentVerificationSnapshot,
 };
 use crate::cli::EvidenceCoverageScope;
 use crate::evidence::policy::capture_repository_snapshot;
 use crate::execution_policy::{BudgetTaskAdmission, BudgetTaskHoldReason, admit_budget_task};
 use crate::execution_run::{
-    ExecutionBatch, ExecutionBatchStatus, FeatureRunBudgetContractCompatibility,
+    CurrentVerificationDiagnosis, CurrentVerificationInvariantStatus,
+    CurrentVerificationItemLeaseStatus, EvidenceInvalidationKind, ExecutionBatch,
+    ExecutionBatchStatus,
+    FeatureRunBudgetContractCompatibility, FeatureRunRestartDisposition,
+    FeatureRunRestartReason, FeatureRunRestartRequest, InconsistentVerificationBatchFacts,
+    InconsistentVerificationRetirementFacts,
     FeatureRunBudgetHoldResolutionCause, FeatureRunBudgetHoldResolutionDisposition,
     FeatureRunBudgetHoldResolutionRequest, FeatureRunBudgetHoldResolutionTransition,
     FeatureRunHoldReason, FeatureRunPhase, PhaseTransition, PhaseTransitionCause, RoleOwner,
-    RunRole, apply_phase_transition, owner_for_role, resolve_budget_held_feature_run,
+    RunRole, VerificationAdmissionRepairFacts, VerificationAdmissionRepairReason,
+    VerificationAdmissionRepairRequest, apply_phase_transition, classify_current_verification,
+    owner_for_role, repair_verification_admission, resolve_budget_held_feature_run,
+    resolve_evidence_invalidation_kind,
+    retire_inconsistent_verification_feature_run,
 };
 use crate::usage_policy::{
     BudgetAmounts, BudgetPhase, BudgetProvenance, BudgetSnapshot, ExecutionBudget,
@@ -33,6 +46,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub(crate) struct VerificationPickReadinessError {
     plan_id: String,
     gaps: Value,
+    repair_request: Option<VerificationAdmissionRepairRequest>,
+    execution_state: Option<Value>,
 }
 
 impl VerificationPickReadinessError {
@@ -40,11 +55,32 @@ impl VerificationPickReadinessError {
         Self {
             plan_id: plan_id.to_string(),
             gaps: readiness["gaps"].clone(),
+            repair_request: None,
+            execution_state: None,
+        }
+    }
+
+    fn from_durable_diagnostic(
+        plan_id: &str,
+        diagnostic: Value,
+        repair_request: VerificationAdmissionRepairRequest,
+        execution_state: Value,
+    ) -> Self {
+        Self {
+            plan_id: plan_id.to_string(),
+            gaps: diagnostic,
+            repair_request: Some(repair_request),
+            execution_state: Some(execution_state),
         }
     }
 
     pub(crate) fn details(&self) -> Value {
-        json!({"plan_id": self.plan_id, "gaps": self.gaps})
+        json!({
+            "plan_id": self.plan_id,
+            "gaps": self.gaps,
+            "repair_request": self.repair_request,
+            "execution_state": self.execution_state,
+        })
     }
 }
 
@@ -82,6 +118,18 @@ pub(crate) struct VerificationAttemptExhaustion<'a> {
 
 pub(crate) type FeatureRunBudgetReservation = BudgetReservationRecord;
 
+#[derive(Clone, Debug)]
+pub(crate) struct CurrentVerificationDiagnosisSnapshot {
+    pub(crate) diagnosis: CurrentVerificationDiagnosis,
+    pub(crate) admission: Option<VerificationAdmissionRecord>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RepairSettlementDispatchMode {
+    ProductFinding,
+    VerificationAdmission,
+}
+
 fn add_selective_replay_metadata(
     packet: &mut Value,
     settlement: Option<&ProductRepairSettlementRecord>,
@@ -96,6 +144,172 @@ fn add_selective_replay_metadata(
 }
 
 impl App {
+    fn repair_settlement_dispatch(
+        &self,
+        invalidation: &EvidenceInvalidationRecord,
+    ) -> Result<Option<RepairSettlementDispatchMode>> {
+        resolve_evidence_invalidation_kind(
+            &invalidation.reason,
+            invalidation.finding_id.as_deref(),
+            &invalidation.affected_evidence_ids,
+        )
+        .map(|kind| {
+            kind.map(|kind| match kind {
+                EvidenceInvalidationKind::ProductFinding => {
+                    RepairSettlementDispatchMode::ProductFinding
+                }
+                EvidenceInvalidationKind::VerificationAdmission => {
+                    RepairSettlementDispatchMode::VerificationAdmission
+                }
+            })
+        })
+        .map_err(|violation| {
+            anyhow!(
+                "repair_invalidation_kind_rejected:{}:{violation:?}",
+                invalidation.id
+            )
+        })
+    }
+
+    pub(crate) fn pending_repair_settlement(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<(EvidenceInvalidationRecord, RepairSettlementDispatchMode)>> {
+        let repository = ExecutionRunRepository::new(&self.conn);
+        for invalidation in repository.invalidations(run_id)?.into_iter().rev() {
+            let Some(dispatch) = self.repair_settlement_dispatch(&invalidation)? else {
+                continue;
+            };
+            let settled = match dispatch {
+                RepairSettlementDispatchMode::ProductFinding => repository
+                    .product_repair_settlement(&invalidation.id)?
+                    .is_some(),
+                RepairSettlementDispatchMode::VerificationAdmission => repository
+                    .verification_admission_repair_settlement(&invalidation.id)?
+                    .is_some(),
+            };
+            if !settled
+                && self
+                    .historical_invalidation_reconciliation_payload(run_id, &invalidation.id)?
+                    .is_none()
+            {
+                return Ok(Some((invalidation, dispatch)));
+            }
+        }
+        Ok(None)
+    }
+
+    pub(crate) fn current_verification_diagnosis(
+        &self,
+        persisted: &PersistedFeatureRun,
+    ) -> Result<Option<CurrentVerificationDiagnosisSnapshot>> {
+        if persisted.run.status != crate::execution_run::FeatureRunStatus::Active
+            || persisted.run.phase != FeatureRunPhase::Verification
+        {
+            return Ok(None);
+        }
+        let CurrentVerificationSnapshot { facts, admission } =
+            ExecutionRunRepository::new(&self.conn).current_verification_snapshot(persisted)?;
+        if facts.verification_item.as_ref().is_some_and(|item| {
+            !matches!(
+                item.status,
+                CurrentVerificationItemLeaseStatus::Picked
+                    | CurrentVerificationItemLeaseStatus::Running
+            ) || item.worker_id.as_deref() != Some(facts.verifier_worker_id.as_str())
+        }) {
+            bail!("current_verification_item_ownership_conflict:{}", facts.run_id);
+        }
+        Ok(Some(CurrentVerificationDiagnosisSnapshot {
+            diagnosis: classify_current_verification(&facts),
+            admission,
+        }))
+    }
+
+    pub(crate) fn restart_inconsistent_verification_feature_run_value(
+        &self,
+        plan_id: &str,
+    ) -> Result<Value> {
+        let project = self.default_project()?;
+        let repository = ExecutionRunRepository::new(&self.conn);
+        let Some(persisted) = repository.active_feature_run_for_plan(&project.id, plan_id)? else {
+            let mut previous = repository
+                .latest_inconsistent_verification_feature_run_restart(&project.id, plan_id)?
+                .ok_or_else(|| anyhow!("feature_run_not_found_for_plan:{plan_id}"))?;
+            previous.disposition = FeatureRunRestartDisposition::AlreadyRetired;
+            let execution_state =
+                self.canonical_execution_state_value(&previous.retired_run.id, None)?;
+            return Ok(json!({"schema_version": "planr.feature_run_restart.v1",
+                "restart": previous, "execution_state": execution_state}));
+        };
+        let diagnosis = self
+            .current_verification_diagnosis(&persisted)?
+            .ok_or_else(|| anyhow!("feature_run_inconsistent_verification_restart_ineligible:{plan_id}"))?
+            .diagnosis;
+        if diagnosis.status != CurrentVerificationInvariantStatus::Inconsistent {
+            bail!("feature_run_inconsistent_verification_restart_not_required:{plan_id}");
+        }
+        let batch = persisted
+            .run
+            .active_batch_id
+            .as_deref()
+            .map(|id| repository.batch(id))
+            .transpose()?
+            .map(|persisted| InconsistentVerificationBatchFacts {
+                id: persisted.batch.id,
+                status: persisted.batch.status,
+            });
+        let facts = InconsistentVerificationRetirementFacts {
+            diagnosis,
+            batch,
+            active_verification_reservation_ids: repository
+                .active_verification_reservation_ids(&persisted.run.id)?,
+            preserved_history: repository.inconsistent_verification_preserved_history(
+                &persisted.project_id,
+                &persisted.run.plan_id,
+                &persisted.run.id,
+            )?,
+            invalidation_id: short_id("invalidation"),
+        };
+        let request = FeatureRunRestartRequest {
+            plan_id: plan_id.to_string(),
+            reason: FeatureRunRestartReason::InconsistentVerification,
+        };
+        let transition = retire_inconsistent_verification_feature_run(
+            &persisted.run,
+            &request,
+            &facts,
+        )
+        .map_err(|violation| anyhow!("feature_run_restart_rejected:{violation:?}"))?;
+        repository.retire_inconsistent_verification_feature_run(&transition, &worker_id())?;
+        Ok(json!({"schema_version": "planr.feature_run_restart.v1",
+            "restart": transition,
+            "execution_state": self.canonical_execution_state_value(&persisted.run.id, None)?}))
+    }
+
+    fn inconsistent_verification_restart_hold_for_run(
+        &self,
+        persisted: &PersistedFeatureRun,
+        diagnosis: &CurrentVerificationDiagnosis,
+    ) -> Result<Option<Value>> {
+        if diagnosis.status != CurrentVerificationInvariantStatus::Inconsistent {
+            return Ok(None);
+        }
+        let command = format!(
+            "planr --json run restart --plan {} --reason inconsistent-verification",
+            persisted.run.plan_id
+        );
+        Ok(Some(json!({
+            "item": null,
+            "reason": "current_verification_inconsistent",
+            "repair": [command],
+            "work_packet": {"kind": "hold", "classification": "current_verification_inconsistent",
+                "reason_code": "current_verification_inconsistent", "next_action": command,
+                "current_verification": diagnosis,
+                "execution_state": self.canonical_execution_state_value(&persisted.run.id, None)?},
+            "remaining": self.progress_value()?,
+        })))
+    }
+
     pub(crate) fn validate_review_source_binding(
         &self,
         repository: &ExecutionRunRepository<'_>,
@@ -132,7 +346,6 @@ impl App {
         &self,
         item_id: &str,
         force: bool,
-        repair_reference: Option<&str>,
     ) -> Result<Option<Value>> {
         let item = self.get_item(item_id)?;
         if item.work_type.as_str() != "verification" {
@@ -149,135 +362,6 @@ impl App {
         let persisted = repository
             .active_feature_run_for_plan(&project.id, &plan_id)?
             .ok_or_else(|| anyhow!("verification_release_run_missing:{plan_id}"))?;
-
-        if let Some(reference) = repair_reference {
-            if reference.trim().is_empty() {
-                bail!("verification_repair_reference_required:{item_id}");
-            }
-            if !matches!(
-                persisted.run.phase,
-                FeatureRunPhase::Verification | FeatureRunPhase::SourceFrozen
-            ) {
-                bail!(
-                    "verification_repair_wrong_phase:{}:{:?}",
-                    persisted.run.id,
-                    persisted.run.phase
-                );
-            }
-            let freeze = repository
-                .active_source_freeze(&persisted.run.id)?
-                .ok_or_else(|| {
-                    anyhow!("verification_repair_missing_freeze:{}", persisted.run.id)
-                })?;
-            let maker_worker_id = self.conn.query_row(
-                "SELECT worker_id FROM feature_run_role_leases WHERE run_id = ?1 AND role = 'maker' ORDER BY lease_generation DESC LIMIT 1",
-                [&persisted.run.id],
-                |row| row.get::<_, String>(0),
-            )?;
-            if !force
-                && current_worker != maker_worker_id
-                && item.worker_id.as_deref() != Some(current_worker.as_str())
-            {
-                bail!("verification_repair_requires_verifier_or_maker:{item_id}");
-            }
-            let affected_evidence_ids = self
-                .conn
-                .prepare(
-                    "SELECT obligations.id FROM proof_obligations AS obligations
-                     WHERE obligations.plan_id = ?1 AND obligations.binding = 1
-                       AND NOT EXISTS (
-                         SELECT 1 FROM proof_obligations AS successors
-                         WHERE successors.supersedes_obligation_id = obligations.id
-                       )
-                     ORDER BY obligations.id",
-                )?
-                .query_map([&plan_id], |row| row.get::<_, String>(0))?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            if affected_evidence_ids.is_empty() {
-                bail!("verification_repair_missing_binding_obligation:{plan_id}");
-            }
-            let invalidation = EvidenceInvalidationRecord {
-                id: short_id("invalidation"),
-                run_id: persisted.run.id.clone(),
-                freeze_id: freeze.id,
-                finding_id: None,
-                reason: format!("verification_admission_blocker:{reference}"),
-                affected_evidence_ids,
-            };
-            let maker_generation = self.conn.query_row(
-                "SELECT COALESCE(MAX(lease_generation), 0) + 1 FROM feature_run_role_leases WHERE run_id = ?1 AND role = 'maker'",
-                [&persisted.run.id],
-                |row| row.get::<_, u64>(0),
-            )?;
-            let cause = if persisted.run.phase == FeatureRunPhase::Verification {
-                PhaseTransitionCause::ProductFinding
-            } else {
-                PhaseTransitionCause::SourceInvalidated
-            };
-            let mut repair = apply_phase_transition(
-                &persisted.run,
-                &PhaseTransition {
-                    to: FeatureRunPhase::Implementation,
-                    cause,
-                    reference: format!("verification_repair:{reference}"),
-                    owner: Some(RoleOwner {
-                        role: RunRole::Maker,
-                        worker_id: maker_worker_id.clone(),
-                        lease_generation: maker_generation,
-                    }),
-                },
-            )
-            .map_err(|violation| anyhow!("verification_repair_transition:{violation:?}"))?;
-            let batch = ExecutionBatch {
-                id: short_id("batch"),
-                run_id: persisted.run.id.clone(),
-                maker_worker_id: maker_worker_id.clone(),
-                status: ExecutionBatchStatus::Active,
-                settled_outcome_ids: Vec::new(),
-                replacement: None,
-            };
-            repair.active_batch_id = Some(batch.id.clone());
-            repair.batch_outcome_count = 0;
-            self.conn
-                .execute_batch("BEGIN IMMEDIATE; SAVEPOINT route_verification_repair")?;
-            let result = (|| -> Result<()> {
-                if persisted.run.phase == FeatureRunPhase::Verification {
-                    self.reconcile_active_phase_wall(&persisted.run.id, BudgetPhase::Verification)?;
-                }
-                repository.invalidate_source(&invalidation)?;
-                repository.save_feature_run_with_new_batch(&repair, persisted.revision, &batch)?;
-                self.conn.execute(
-                    "UPDATE items SET status = 'ready', worker_id = NULL, pick_token = NULL,
-                         picked_at = NULL, last_heartbeat_at = NULL, paused_at = NULL,
-                         updated_at = datetime('now') WHERE id = ?1 AND work_type = 'verification'",
-                    [item_id],
-                )?;
-                self.record_event(
-                    "verification_repair_routed",
-                    Some(item_id),
-                    json!({
-                        "run_id": persisted.run.id, "repair_reference": reference,
-                        "invalidation_id": invalidation.id, "responsible_maker_id": maker_worker_id,
-                    }),
-                )?;
-                Ok(())
-            })();
-            match result {
-                Ok(()) => self
-                    .conn
-                    .execute_batch("RELEASE route_verification_repair; COMMIT")?,
-                Err(error) => {
-                    let _ = self.conn.execute_batch("ROLLBACK TO route_verification_repair; RELEASE route_verification_repair; ROLLBACK");
-                    return Err(error);
-                }
-            }
-            return Ok(Some(json!({
-                "released": item_id, "item": self.get_item(item_id)?,
-                "feature_run": repair, "disposition": "routed_to_repair",
-                "repair_id": invalidation.id, "repair_reference": reference,
-                "responsible_maker_id": maker_worker_id,
-            })));
-        }
 
         if item.status == "ready" && persisted.run.phase == FeatureRunPhase::SourceFrozen {
             return Ok(Some(json!({
@@ -369,6 +453,162 @@ impl App {
             "feature_run": released,
             "disposition": "released",
         })))
+    }
+
+    fn persist_verification_pick_readiness_failure(
+        &self,
+        plan_id: &str,
+        freeze_id: &str,
+        verifier_worker_id: &str,
+        reason: VerificationAdmissionRepairReason,
+        diagnostic: Value,
+    ) -> Result<VerificationPickReadinessError> {
+        let project = self.default_project()?;
+        let repository = ExecutionRunRepository::new(&self.conn);
+        let persisted = repository
+            .active_feature_run_for_plan(&project.id, plan_id)?
+            .ok_or_else(|| anyhow!("verification_readiness_hold_run_missing:{plan_id}"))?;
+        if persisted.run.phase != FeatureRunPhase::SourceFrozen {
+            bail!("verification_readiness_hold_wrong_phase:{}:{:?}", persisted.run.id, persisted.run.phase);
+        }
+        let freeze = repository
+            .active_source_freeze(&persisted.run.id)?
+            .ok_or_else(|| anyhow!("verification_readiness_hold_freeze_missing:{}", persisted.run.id))?;
+        if freeze.id != freeze_id {
+            bail!("verification_readiness_hold_freeze_changed:{}", persisted.run.id);
+        }
+        let held = apply_phase_transition(
+            &persisted.run,
+            &PhaseTransition {
+                to: FeatureRunPhase::Held,
+                cause: PhaseTransitionCause::CapabilityHold,
+                reference: format!("verification_readiness:{}", freeze.id),
+                owner: None,
+            },
+        )
+        .map_err(|violation| anyhow!("verification_readiness_hold_transition:{violation:?}"))?;
+        let repair_request = VerificationAdmissionRepairRequest {
+            plan_id: plan_id.to_string(),
+            run_id: persisted.run.id.clone(),
+            freeze_id: freeze.id.clone(),
+            run_revision: persisted
+                .revision
+                .checked_add(1)
+                .ok_or_else(|| anyhow!("verification_readiness_hold_revision_overflow:{}", persisted.run.id))?,
+            reason,
+            run_index_digest: None,
+        };
+        repository.persist_verification_readiness_hold(
+            &held,
+            persisted.revision,
+            &freeze.id,
+            &VerificationReadinessDiagnosticRecord {
+                repair_request: repair_request.clone(),
+                verifier_worker_id: verifier_worker_id.to_string(),
+                diagnostic: diagnostic.clone(),
+            },
+        )?;
+        Ok(VerificationPickReadinessError::from_durable_diagnostic(
+            plan_id,
+            diagnostic,
+            repair_request,
+            self.canonical_execution_state_value(&persisted.run.id, None)?,
+        ))
+    }
+
+    pub(crate) fn repair_verification_admission_value(
+        &self,
+        request: VerificationAdmissionRepairRequest,
+    ) -> Result<Value> {
+        let project = self.default_project()?;
+        let repository = ExecutionRunRepository::new(&self.conn);
+        if let Some(previous) = repository.latest_verification_admission_repair(&request)? {
+            repository.prove_verification_admission_repair_idempotent(&previous)?;
+            return Ok(json!({
+                "schema_version": "planr.feature_run_verification_admission_repair.v1",
+                "repair": previous,
+                "verification_item_id": previous.facts.verification_item_id,
+                "execution_state": self.canonical_execution_state_value(&previous.request.run_id, None)?,
+            }));
+        }
+        let persisted = repository.feature_run(&request.run_id)?;
+        if persisted.project_id != project.id
+            || persisted.run.plan_id != request.plan_id
+            || persisted.revision != request.run_revision
+        {
+            bail!("verification_admission_repair_stale_identity:{}", request.run_id);
+        }
+        let freeze = repository
+            .active_source_freeze(&request.run_id)?
+            .ok_or_else(|| anyhow!("verification_admission_repair_missing_freeze:{}", request.run_id))?;
+        if freeze.id != request.freeze_id {
+            bail!("verification_admission_repair_stale_freeze:{}", request.freeze_id);
+        }
+        let requester_worker_id = worker_id();
+        let admitted_run_index_digest = if request.reason.requires_run_index_digest() {
+            let admission = repository
+                .latest_verification_admission(&request.run_id, &request.freeze_id)?
+                .ok_or_else(|| anyhow!("verification_admission_repair_seal_missing:{}", request.run_id))?;
+            if admission.run_revision != request.run_revision
+                || admission.verifier_worker_id != requester_worker_id
+                || Some(admission.run_index_digest.as_str()) != request.run_index_digest.as_deref()
+            {
+                bail!("verification_admission_repair_seal_mismatch:{}", request.run_id);
+            }
+            Some(admission.run_index_digest)
+        } else {
+            let diagnostic = repository
+                .latest_verification_readiness_diagnostic(&request.run_id, &request.freeze_id)?
+                .ok_or_else(|| anyhow!("verification_admission_repair_diagnostic_missing:{}", request.run_id))?;
+            if diagnostic.repair_request != request
+                || diagnostic.verifier_worker_id != requester_worker_id
+            {
+                bail!("verification_admission_repair_wrong_owner:{}", request.run_id);
+            }
+            None
+        };
+        let (historical_maker_worker_id, next_maker_lease_generation) =
+            repository.historical_maker_identity(&request.run_id)?;
+        let verification_item_id = repository
+            .verification_item_projection(&request.plan_id)?
+            .map(|item| item.id);
+        let facts = VerificationAdmissionRepairFacts {
+            active_freeze_id: freeze.id,
+            requester_worker_id,
+            historical_maker_worker_id,
+            next_maker_lease_generation,
+            verification_item_id,
+            admitted_run_index_digest,
+            invalidation_id: short_id("invalidation"),
+            repair_batch_id: short_id("batch"),
+        };
+        let transition = repair_verification_admission(
+            &persisted.run,
+            persisted.revision,
+            &request,
+            &facts,
+        )
+        .map_err(|violation| anyhow!("verification_admission_repair_rejected:{violation:?}"))?;
+        self.conn.execute_batch("BEGIN IMMEDIATE; SAVEPOINT repair_verification_admission")?;
+        let result = (|| -> Result<()> {
+            if persisted.run.phase == FeatureRunPhase::Verification {
+                self.reconcile_active_phase_wall(&persisted.run.id, BudgetPhase::Verification)?;
+            }
+            repository.persist_verification_admission_repair(&transition, &worker_id())
+        })();
+        match result {
+            Ok(()) => self.conn.execute_batch("RELEASE repair_verification_admission; COMMIT")?,
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK TO repair_verification_admission; RELEASE repair_verification_admission; ROLLBACK");
+                return Err(error);
+            }
+        }
+        Ok(json!({
+            "schema_version": "planr.feature_run_verification_admission_repair.v1",
+            "repair": transition,
+            "verification_item_id": transition.facts.verification_item_id,
+            "execution_state": self.canonical_execution_state_value(&request.run_id, None)?,
+        }))
     }
 
     fn add_review_finding_reverification_metadata(
@@ -565,7 +805,7 @@ impl App {
         conn: &rusqlite::Connection,
         lease: &CanonicalFeatureRunEvidenceLease,
         exhaustion: VerificationAttemptExhaustion<'_>,
-    ) -> Result<(String, String)> {
+    ) -> Result<(Option<String>, String)> {
         let VerificationAttemptExhaustion {
             obligation_id,
             attempt_id,
@@ -595,25 +835,51 @@ impl App {
         {
             bail!("verification_exhaustion_stale_lease:{}", lease.run_id);
         }
-        let item_ids = conn
+        let verification_items = conn
             .prepare(
-                "SELECT items.id
+                "SELECT items.id, items.status, items.worker_id
                  FROM items JOIN plans ON plans.path = items.plan_path
                  WHERE plans.id = ?1 AND items.work_type = 'verification'
-                   AND items.status IN ('picked','running') AND items.worker_id = ?2
+                   AND items.status IN ('ready','picked','running')
                  ORDER BY items.created_at, items.id",
             )?
-            .query_map(params![lease.plan_id, lease.verifier_worker_id], |row| {
-                row.get::<_, String>(0)
+            .query_map([&lease.plan_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        let [item_id] = item_ids.as_slice() else {
+        if verification_items
+            .iter()
+            .any(|(_, status, _)| status == "ready")
+        {
             bail!(
-                "verification_exhaustion_requires_one_active_item:{}:{}",
-                lease.plan_id,
-                item_ids.len()
+                "verification_exhaustion_requires_verification_item_lease:{}",
+                lease.plan_id
             );
-        };
+        }
+        let active_items = verification_items
+            .into_iter()
+            .filter(|(_, status, _)| matches!(status.as_str(), "picked" | "running"))
+            .collect::<Vec<_>>();
+        if active_items.len() > 1 {
+            bail!(
+                "verification_exhaustion_ambiguous_active_items:{}:{}",
+                lease.plan_id,
+                active_items.len()
+            );
+        }
+        let item_id = active_items
+            .first()
+            .map(|(item_id, _, item_worker)| {
+                if item_worker.as_deref() != Some(lease.verifier_worker_id.as_str()) {
+                    bail!("verification_exhaustion_stale_item_owner:{item_id}");
+                }
+                Ok(item_id.clone())
+            })
+            .transpose()?;
         let terminal = apply_phase_transition(
             &persisted.run,
             &PhaseTransition {
@@ -626,29 +892,44 @@ impl App {
         .map_err(|violation| anyhow!("verification_exhaustion_transition:{violation:?}"))?;
         self.reconcile_active_phase_wall(&lease.run_id, BudgetPhase::Verification)?;
         repository.save_feature_run(&terminal, persisted.revision)?;
-        let changed = conn.execute(
-            "UPDATE items
-             SET status = 'failed', error = ?2, worker_id = NULL, pick_token = NULL,
-                 last_heartbeat_at = NULL, paused_at = NULL, updated_at = datetime('now')
-             WHERE id = ?1 AND work_type = 'verification'
-               AND status IN ('picked','running') AND worker_id = ?3",
-            params![
+        let log_id = if let Some(item_id) = item_id.as_deref() {
+            let summary = format!(
+                "non-repeatable verification attempt {attempt_id} exhausted {max_attempts} allowed attempt(s)"
+            );
+            let log_id = self.add_log_entry(super::flow::LogInput {
                 item_id,
-                format!(
-                    "non-repeatable verification attempt {attempt_id} exhausted {max_attempts} allowed attempt(s)"
-                ),
-                lease.verifier_worker_id,
-            ],
-        )?;
-        if changed != 1 {
-            bail!("verification_exhaustion_stale_item:{item_id}");
-        }
+                kind: "failure",
+                summary: &summary,
+                files: &[],
+                commands: &[],
+                tests: &[],
+                source: Some("evidence.run"),
+                profile: None,
+                route_observation: None,
+            })?;
+            let changed = conn.execute(
+                "UPDATE items
+                 SET status = 'failed', error = ?2, worker_id = NULL, pick_token = NULL,
+                     last_heartbeat_at = NULL, paused_at = NULL, updated_at = datetime('now')
+                 WHERE id = ?1 AND work_type = 'verification'
+                   AND status IN ('picked','running') AND worker_id = ?3",
+                params![item_id, summary, lease.verifier_worker_id],
+            )?;
+            if changed != 1 {
+                bail!("verification_exhaustion_stale_item:{item_id}");
+            }
+            Some(log_id)
+        } else {
+            None
+        };
         self.record_event(
             "verification_attempts_exhausted",
-            Some(item_id),
+            item_id.as_deref(),
             json!({
                 "run_id": lease.run_id,
                 "freeze_id": lease.freeze_id,
+                "item_id": item_id.clone(),
+                "log_id": log_id.clone(),
                 "obligation_id": obligation_id,
                 "attempt_id": attempt_id,
                 "attempt_index": attempt_index,
@@ -656,7 +937,7 @@ impl App {
                 "repeatability": repeatability,
             }),
         )?;
-        Ok((item_id.clone(), terminal.id))
+        Ok((item_id, terminal.id))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1421,7 +1702,7 @@ impl App {
         let project = self.default_project()?;
         let repository = ExecutionRunRepository::new(&self.conn);
         if let Some(run) = repository.active_feature_run_for_plan(&project.id, plan_id)?
-            && let Some(hold) = self.stale_source_freeze_restart_hold_for_run(&run)?
+            && let Some(hold) = self.premature_source_freeze_restart_hold_for_run(&run)?
         {
             return Ok(Some(hold));
         }
@@ -1451,24 +1732,7 @@ impl App {
         if let Some(run) = repository.active_feature_run_for_plan(&project.id, plan_id)?
             && run.run.phase == FeatureRunPhase::Implementation
         {
-            let invalidations = repository.invalidations(&run.run.id)?;
-            let mut latest_open = None;
-            for invalidation in invalidations.iter().rev() {
-                if repository
-                    .product_repair_settlement(&invalidation.id)?
-                    .is_none()
-                    && self
-                        .historical_invalidation_reconciliation_payload(
-                            &run.run.id,
-                            &invalidation.id,
-                        )?
-                        .is_none()
-                {
-                    latest_open = Some(invalidation);
-                    break;
-                }
-            }
-            if let Some(latest) = latest_open {
+            if let Some((latest, dispatch)) = self.pending_repair_settlement(&run.run.id)? {
                 let maker_worker_id = run
                     .run
                     .role_owners
@@ -1479,6 +1743,12 @@ impl App {
                 if maker_worker_id != worker_id() {
                     return Ok(None);
                 }
+                let replay_obligation_ids = match dispatch {
+                    RepairSettlementDispatchMode::ProductFinding => Some(
+                        self.product_repair_obligation_ids(&latest.affected_evidence_ids)?,
+                    ),
+                    RepairSettlementDispatchMode::VerificationAdmission => None,
+                };
                 match self.admit_feature_run_budget(
                     &run,
                     BudgetPhase::Repair,
@@ -1489,35 +1759,29 @@ impl App {
                     FeatureRunBudgetAdmission::Held(hold) => return Ok(Some(hold)),
                     FeatureRunBudgetAdmission::Reserved(_) => {}
                 }
-                let verification_item_id = self.product_repair_verification_item(plan_id)?;
-                let replay_obligation_ids =
-                    self.product_repair_obligation_ids(&latest.affected_evidence_ids)?;
-                return Ok(Some(json!({
-                    "work_packet": {"kind": "outcome", "mode": "product_finding_repair", "execution_state": self.canonical_execution_state_value(&run.run.id, None)?,
-                        "repair_id": latest.id, "responsible_maker_id": maker_worker_id,
-                        "verification_item_id": verification_item_id, "invalidation": latest,
-                        "selective_replay_obligation_ids": replay_obligation_ids},
-                    "remaining": self.progress_value()?,
-                })));
+                let plan = self.get_plan(plan_id)?;
+                let verification_item_id = self
+                    .ready_verification_item_for_plan_path(Some(plan.path.as_str()))?;
+                let mut packet = json!({
+                    "kind": "outcome",
+                    "mode": match dispatch {
+                        RepairSettlementDispatchMode::ProductFinding => "product_finding_repair",
+                        RepairSettlementDispatchMode::VerificationAdmission => "verification_admission_repair",
+                    },
+                    "execution_state": self.canonical_execution_state_value(&run.run.id, None)?,
+                    "repair_id": latest.id,
+                    "responsible_maker_id": maker_worker_id,
+                    "verification_item_id": verification_item_id,
+                    "invalidation": latest,
+                });
+                if let Some(replay_obligation_ids) = replay_obligation_ids {
+                    packet["selective_replay_obligation_ids"] = json!(replay_obligation_ids);
+                }
+                return Ok(Some(json!({"work_packet": packet,
+                    "remaining": self.progress_value()?})));
             }
         }
         Ok(None)
-    }
-
-    fn product_repair_verification_item(&self, plan_id: &str) -> Result<String> {
-        self.conn
-            .query_row(
-                "SELECT items.id
-                 FROM items JOIN plans ON plans.path = items.plan_path
-                 WHERE plans.id = ?1 AND items.work_type = 'verification'
-                   AND items.status IN ('ready','picked','running')
-                 ORDER BY items.created_at, items.id LIMIT 1",
-                [plan_id],
-                |row| row.get::<_, String>(0),
-            )
-            .map_err(|error| {
-                anyhow!("product_finding_repair_verification_item_missing:{plan_id}:{error}")
-            })
     }
 
     fn product_repair_obligation_ids(&self, affected_ids: &[String]) -> Result<Vec<String>> {
@@ -1559,6 +1823,190 @@ impl App {
         Ok(obligations.into_iter().collect())
     }
 
+    pub(crate) fn settle_repair_value(
+        &self,
+        plan_id: &str,
+        invalidation_id: &str,
+        summary: &str,
+        files: &[String],
+        commands: &[String],
+        tests: &[String],
+    ) -> Result<Value> {
+        let project = self.default_project()?;
+        let repository = ExecutionRunRepository::new(&self.conn);
+        let persisted = repository
+            .active_feature_run_for_plan(&project.id, plan_id)?
+            .ok_or_else(|| anyhow!("repair_settlement_run_missing:{plan_id}"))?;
+        let invalidation = repository
+            .invalidations(&persisted.run.id)?
+            .into_iter()
+            .find(|invalidation| invalidation.id == invalidation_id)
+            .ok_or_else(|| anyhow!("repair_settlement_invalidation_missing:{invalidation_id}"))?;
+        match self
+            .repair_settlement_dispatch(&invalidation)?
+            .ok_or_else(|| anyhow!("repair_settlement_invalidation_unsupported:{invalidation_id}"))?
+        {
+            RepairSettlementDispatchMode::ProductFinding => {
+                self.settle_product_finding_repair_value(
+                    plan_id,
+                    invalidation_id,
+                    summary,
+                    files,
+                    commands,
+                    tests,
+                )
+            }
+            RepairSettlementDispatchMode::VerificationAdmission => self
+                .settle_verification_admission_repair_value(
+                    plan_id,
+                    &invalidation,
+                    summary,
+                    files,
+                    commands,
+                    tests,
+                ),
+        }
+    }
+
+    fn settle_verification_admission_repair_value(
+        &self,
+        plan_id: &str,
+        invalidation: &EvidenceInvalidationRecord,
+        summary: &str,
+        files: &[String],
+        commands: &[String],
+        tests: &[String],
+    ) -> Result<Value> {
+        let project = self.default_project()?;
+        let repository = ExecutionRunRepository::new(&self.conn);
+        let persisted = repository
+            .active_feature_run_for_plan(&project.id, plan_id)?
+            .ok_or_else(|| anyhow!("verification_admission_repair_settlement_run_missing:{plan_id}"))?;
+        let plan = self.get_plan(plan_id)?;
+        if let Some(existing) = repository
+            .verification_admission_repair_settlement(&invalidation.id)?
+        {
+            repository.prove_verification_admission_repair_settlement(
+                invalidation,
+                &existing,
+                &worker_id(),
+            )?;
+            let source_freeze = repository.source_freeze(&existing.source_freeze_id)?;
+            let verification_item_id =
+                self.ready_verification_item_for_plan_path(Some(plan.path.as_str()))?;
+            let mut handoff = self.canonical_verification_handoff_value(
+                plan_id,
+                verification_item_id,
+                serde_json::to_value(source_freeze)?,
+            )?;
+            handoff["settlement"] = serde_json::to_value(existing)?;
+            handoff["created"] = json!(false);
+            return Ok(handoff);
+        }
+        if persisted.run.phase != FeatureRunPhase::Implementation
+            || persisted.run.status != crate::execution_run::FeatureRunStatus::Active
+            || persisted.run.role_owners.len() != 1
+        {
+            bail!(
+                "verification_admission_repair_settlement_requires_implementation:{}",
+                invalidation.id
+            );
+        }
+        let maker = owner_for_role(&persisted.run, RunRole::Maker)
+            .ok_or_else(|| anyhow!("feature_run_missing_maker:{}", persisted.run.id))?;
+        if maker.worker_id != worker_id() {
+            bail!(
+                "verification_admission_repair_settlement_maker_mismatch:{}",
+                invalidation.id
+            );
+        }
+        let repair_batch_id = persisted
+            .run
+            .active_batch_id
+            .clone()
+            .ok_or_else(|| anyhow!("verification_admission_repair_batch_missing:{}", persisted.run.id))?;
+        let verification_item_id =
+            self.ready_verification_item_for_plan_path(Some(plan.path.as_str()))?;
+        let snapshot = capture_repository_snapshot(&self.root)
+            .map_err(|error| anyhow!("capturing repaired canonical source freeze: {error}"))?;
+        let freeze = SourceFreezeRecord {
+            id: short_id("freeze"),
+            run_id: persisted.run.id.clone(),
+            source_revision: snapshot.source.revision.clone(),
+            source_digest: snapshot.source.tree_digest.as_str().to_string(),
+            status: SourceFreezeStatus::Active,
+        };
+        let frozen = apply_phase_transition(
+            &persisted.run,
+            &PhaseTransition {
+                to: FeatureRunPhase::SourceFrozen,
+                cause: PhaseTransitionCause::ImplementationSettled,
+                reference: freeze.source_revision.clone(),
+                owner: None,
+            },
+        )
+        .map_err(|violation| {
+            anyhow!(
+                "verification_admission_repair_settlement_refreeze:{violation:?}"
+            )
+        })?;
+        let settlement = VerificationAdmissionRepairSettlementRecord {
+            invalidation_id: invalidation.id.clone(),
+            run_id: persisted.run.id.clone(),
+            repair_batch_id,
+            responsible_maker_id: worker_id(),
+            ended_revision: persisted.revision.checked_add(1).ok_or_else(|| {
+                anyhow!(
+                    "verification_admission_repair_settlement_revision_overflow:{}",
+                    persisted.run.id
+                )
+            })?,
+            settlement: json!({
+                "summary": summary,
+                "files": files,
+                "commands": commands,
+                "tests": tests,
+            }),
+            source_freeze_id: freeze.id.clone(),
+            source_revision: freeze.source_revision.clone(),
+            source_digest: freeze.source_digest.clone(),
+        };
+        self.conn.execute_batch(
+            "BEGIN IMMEDIATE; SAVEPOINT settle_verification_admission_repair",
+        )?;
+        let result = (|| -> Result<()> {
+            self.reconcile_active_phase_wall(&persisted.run.id, BudgetPhase::Repair)?;
+            repository.persist_verification_admission_repair_settlement(
+                invalidation,
+                persisted.revision,
+                verification_item_id.as_deref(),
+                &settlement,
+                &freeze,
+                &frozen,
+                &worker_id(),
+            )
+        })();
+        match result {
+            Ok(()) => self.conn.execute_batch(
+                "RELEASE settle_verification_admission_repair; COMMIT",
+            )?,
+            Err(error) => {
+                let _ = self.conn.execute_batch(
+                    "ROLLBACK TO settle_verification_admission_repair; RELEASE settle_verification_admission_repair; ROLLBACK",
+                );
+                return Err(error);
+            }
+        }
+        let mut handoff = self.canonical_verification_handoff_value(
+            plan_id,
+            verification_item_id,
+            serde_json::to_value(&freeze)?,
+        )?;
+        handoff["settlement"] = serde_json::to_value(settlement)?;
+        handoff["created"] = json!(true);
+        Ok(handoff)
+    }
+
     pub(crate) fn settle_product_finding_repair_value(
         &self,
         plan_id: &str,
@@ -1573,6 +2021,7 @@ impl App {
         let persisted = repository
             .active_feature_run_for_plan(&project.id, plan_id)?
             .ok_or_else(|| anyhow!("product_finding_repair_run_missing:{plan_id}"))?;
+        let plan = self.get_plan(plan_id)?;
         if let Some(existing) = repository.product_repair_settlement(invalidation_id)? {
             if existing.run_id != persisted.run.id || existing.responsible_maker_id != worker_id() {
                 bail!("product_finding_repair_owner_or_run_mismatch:{invalidation_id}");
@@ -1606,9 +2055,15 @@ impl App {
             let source_freeze = repository
                 .active_source_freeze(&existing.run_id)?
                 .unwrap_or(repository.source_freeze(&existing.source_freeze_id)?);
+            let verifier_worker_id = owner_for_role(&persisted.run, RunRole::Verifier)
+                .map(|owner| owner.worker_id.as_str());
+            let verification_item_id = self.verification_item_for_plan_path(
+                Some(plan.path.as_str()),
+                verifier_worker_id,
+            )?;
             let mut handoff = self.canonical_verification_handoff_value(
                 plan_id,
-                Some(existing.verification_item_id.clone()),
+                verification_item_id,
                 serde_json::to_value(source_freeze)?,
             )?;
             handoff["work_packet"]["mode"] = json!("selective_replay");
@@ -1634,7 +2089,8 @@ impl App {
             .ok_or_else(|| {
                 anyhow!("product_finding_repair_invalidation_missing:{invalidation_id}")
             })?;
-        let verification_item_id = self.product_repair_verification_item(plan_id)?;
+        let verification_item_id =
+            self.ready_verification_item_for_plan_path(Some(plan.path.as_str()))?;
         let selective_obligation_ids =
             self.product_repair_obligation_ids(&invalidation.affected_evidence_ids)?;
         let snapshot = capture_repository_snapshot(&self.root)
@@ -1688,21 +2144,22 @@ impl App {
             .map_err(|violation| anyhow!("product_finding_repair_refreeze:{violation:?}"))?;
             repository.save_feature_run(&frozen, persisted.revision)?;
             repository.freeze_source(&freeze)?;
-            let released = self.conn.execute(
-                "UPDATE items SET status = 'ready', worker_id = NULL, pick_token = NULL,
-                     picked_at = NULL, last_heartbeat_at = NULL, updated_at = datetime('now')
-                 WHERE id = ?1 AND work_type = 'verification'
-                   AND status IN ('ready','picked','running')",
-                [&verification_item_id],
-            )?;
-            if released != 1 {
-                bail!("product_finding_repair_verifier_release_failed:{verification_item_id}");
+            if let Some(verification_item_id) = verification_item_id.as_deref() {
+                let released = self.conn.execute(
+                    "UPDATE items SET status = 'ready', worker_id = NULL, pick_token = NULL,
+                         picked_at = NULL, last_heartbeat_at = NULL, updated_at = datetime('now')
+                     WHERE id = ?1 AND work_type = 'verification'
+                       AND status IN ('ready','picked','running')",
+                    [verification_item_id],
+                )?;
+                if released != 1 {
+                    bail!("product_finding_repair_verifier_release_failed:{verification_item_id}");
+                }
             }
             repository.record_product_repair_settlement(&ProductRepairSettlementRecord {
                 invalidation_id: invalidation_id.to_string(),
                 run_id: persisted.run.id.clone(),
                 responsible_maker_id: worker_id(),
-                verification_item_id: verification_item_id.clone(),
                 selective_obligation_ids: selective_obligation_ids.clone(),
                 settlement: settlement_value.clone(),
                 source_freeze_id: freeze.id.clone(),
@@ -1797,7 +2254,7 @@ impl App {
         }
         let mut handoff = self.canonical_verification_handoff_value(
             plan_id,
-            Some(verification_item_id),
+            verification_item_id,
             serde_json::to_value(&freeze)?,
         )?;
         handoff["work_packet"]["mode"] = json!("selective_replay");
@@ -1819,13 +2276,24 @@ impl App {
         let Some(run) = repository.active_feature_run_for_plan(&project.id, plan_id)? else {
             return Ok(None);
         };
-        if let Some(hold) = self.stale_source_freeze_restart_hold_for_run(&run)? {
+        if let Some(hold) = self.premature_source_freeze_restart_hold_for_run(&run)? {
             return Ok(Some(hold));
         }
-        let verification_item_id = self.ready_or_owned_verification_item_for_plan_path(
-            Some(plan.path.as_str()),
-            worker_id().as_str(),
-        )?;
+        let current_verification = self.current_verification_diagnosis(&run)?;
+        if let Some(snapshot) = current_verification.as_ref()
+            && let Some(hold) = self.inconsistent_verification_restart_hold_for_run(
+                &run,
+                &snapshot.diagnosis,
+            )?
+        {
+            return Ok(Some(hold));
+        }
+        let verification_item_id = match current_verification.as_ref() {
+            Some(snapshot) => snapshot.diagnosis.facts.verification_item
+                .as_ref().map(|item| item.id.clone()),
+            None => self.ready_or_owned_verification_item_for_plan_path(
+                Some(plan.path.as_str()), worker_id().as_str())?,
+        };
         if run.run.phase == FeatureRunPhase::SourceFrozen {
             let freeze = repository
                 .active_source_freeze(&run.run.id)?
@@ -1836,6 +2304,18 @@ impl App {
                 || snapshot.source.tree_digest.as_str() != freeze.source_digest
             {
                 bail!("source_freeze_stale:{}", freeze.id);
+            }
+            if self.plan_evidence_authority(plan_id)? == PlanEvidenceAuthority::BindingActive
+                && matches!(
+                    self.current_plan_coverage_for_source_freeze(
+                        &project.id,
+                        plan_id,
+                        &freeze,
+                    )?,
+                    CurrentPlanCoverageForSourceFreeze::Satisfied(_)
+                )
+            {
+                return Ok(None);
             }
             let repair =
                 repository.product_repair_settlement_for_source_freeze(&run.run.id, &freeze.id)?;
@@ -1878,6 +2358,7 @@ impl App {
                 .execute_batch("BEGIN IMMEDIATE; SAVEPOINT verification_pick")?;
             let mut sealed_run_index = None;
             let mut budget_hold = None;
+            let mut preseal_failure = None;
             let pick_result = (|| -> Result<()> {
                 repository.save_feature_run(&verification, run.revision)?;
                 let verification = repository.feature_run(&run.run.id)?;
@@ -1897,24 +2378,72 @@ impl App {
                 if let Some(item_id) = verification_item_id.as_deref() {
                     self.lease_verification_item(item_id, &verifier_worker_id)?;
                 }
-                let readiness =
-                    self.evidence_readiness_value(EvidenceCoverageScope::Plan, plan_id)?;
+                let readiness = match self.evidence_readiness_value(EvidenceCoverageScope::Plan, plan_id) {
+                    Ok(readiness) => readiness,
+                    Err(error) => {
+                        preseal_failure = Some((
+                            VerificationAdmissionRepairReason::RunIndexSealFailed,
+                            json!({"message": error.to_string()}),
+                        ));
+                        return Err(error);
+                    }
+                };
                 if readiness["status"] != "passed" {
+                    preseal_failure = Some((
+                        VerificationAdmissionRepairReason::ReadinessBlocked,
+                        readiness["gaps"].clone(),
+                    ));
                     return Err(VerificationPickReadinessError::from_readiness(
                         plan_id, &readiness,
                     )
                     .into());
                 }
                 sealed_run_index = readiness.get("run_index").cloned();
-                if sealed_run_index.is_none() {
-                    bail!("verification_pick_missing_sealed_run_index:{plan_id}");
-                }
+                let Some(sealed) = sealed_run_index.as_ref() else {
+                    let error = anyhow!("verification_pick_missing_sealed_run_index:{plan_id}");
+                    preseal_failure = Some((
+                        VerificationAdmissionRepairReason::RunIndexSealFailed,
+                        json!({"message": error.to_string()}),
+                    ));
+                    return Err(error);
+                };
+                let Some(run_index_digest) = sealed["run_index_digest"].as_str() else {
+                    let error = anyhow!("verification_pick_missing_run_index_digest:{plan_id}");
+                    preseal_failure = Some((
+                        VerificationAdmissionRepairReason::RunIndexSealFailed,
+                        json!({"message": error.to_string()}),
+                    ));
+                    return Err(error);
+                };
+                let admitted = repository.feature_run(&run.run.id)?;
+                repository.record_verification_admission(&VerificationAdmissionRecord {
+                    plan_id: plan_id.to_string(),
+                    run_id: run.run.id.clone(),
+                    freeze_id: freeze.id.clone(),
+                    run_revision: admitted.revision,
+                    verifier_worker_id: verifier_worker_id.clone(),
+                    verifier_lease_generation: lease_generation,
+                    verification_item_id: verification_item_id.clone(),
+                    run_index_digest: run_index_digest.to_string(),
+                    sealed_run_index: sealed.clone(),
+                })?;
                 Ok(())
             })();
             if let Err(error) = pick_result {
                 let _ = self.conn.execute_batch(
                     "ROLLBACK TO verification_pick; RELEASE verification_pick; ROLLBACK",
                 );
+                if let Some((reason, diagnostic)) = preseal_failure {
+                    return Err(self
+                        .persist_verification_pick_readiness_failure(
+                            plan_id,
+                            &freeze.id,
+                            &verifier_worker_id,
+                            reason,
+                            diagnostic,
+                        )?
+                        .into());
+                }
                 return Err(error);
             }
             self.conn
@@ -1922,8 +2451,12 @@ impl App {
             if let Some(hold) = budget_hold {
                 return Ok(Some(hold));
             }
+            let admitted = repository
+                .latest_verification_admission(&run.run.id, &freeze.id)?
+                .ok_or_else(|| anyhow!("verification_pick_admission_record_missing:{}", run.run.id))?;
             let mut packet = json!({"kind": "verification", "execution_state": self.canonical_execution_state_value(&verification.id, None)?,
                 "item_id": verification_item_id, "source_freeze": freeze, "verification_lease": {"worker_id": verifier_worker_id, "generation": lease_generation}, "sealed_run_index": sealed_run_index});
+            packet["verification_admission"] = serde_json::to_value(admitted)?;
             add_selective_replay_metadata(&mut packet, repair.as_ref());
             self.add_review_finding_reverification_metadata(&mut packet, &run.run.id, plan_id)?;
             return Ok(Some(json!({"work_packet": packet,
@@ -1953,28 +2486,20 @@ impl App {
                 FeatureRunBudgetAdmission::Reserved(_) => {}
             }
         }
-        let sealed_run_index = if peek {
-            None
-        } else {
-            let readiness = self.evidence_readiness_value(EvidenceCoverageScope::Plan, plan_id)?;
-            if readiness["status"] != "passed" {
-                return Err(
-                    VerificationPickReadinessError::from_readiness(plan_id, &readiness).into(),
-                );
-            }
-            let Some(run_index) = readiness.get("run_index").cloned() else {
-                bail!("verification_pick_missing_sealed_run_index:{plan_id}");
-            };
-            Some(run_index)
-        };
         let source_freeze = repository
             .active_source_freeze(&run.run.id)?
             .ok_or_else(|| anyhow!("verification_run_missing_freeze:{}", run.run.id))?;
+        let admission = current_verification
+            .as_ref()
+            .and_then(|snapshot| snapshot.admission.clone())
+            .ok_or_else(|| anyhow!("current_verification_diagnosis_missing_admission:{}", run.run.id))?;
+        let sealed_run_index = admission.sealed_run_index.clone();
         let repair = repository
             .product_repair_settlement_for_source_freeze(&run.run.id, &source_freeze.id)?;
         let mut packet = json!({"kind": "verification", "execution_state": self.canonical_execution_state_value(&run.run.id, None)?,
             "item_id": verification_item_id, "verifier_worker_id": verifier.worker_id, "verification_lease": {"worker_id": verifier.worker_id, "generation": verifier.lease_generation},
-            "source_freeze": source_freeze, "sealed_run_index": sealed_run_index});
+            "source_freeze": source_freeze, "sealed_run_index": sealed_run_index,
+            "verification_admission": admission});
         add_selective_replay_metadata(&mut packet, repair.as_ref());
         self.add_review_finding_reverification_metadata(&mut packet, &run.run.id, plan_id)?;
         Ok(Some(
@@ -2201,6 +2726,15 @@ impl App {
         if persisted.run.phase != FeatureRunPhase::Implementation {
             return Ok(None);
         }
+        let open_ordinary_outcome_ids =
+            repository.open_ordinary_outcome_ids(&persisted.run.plan_id)?;
+        if !open_ordinary_outcome_ids.is_empty() {
+            bail!(
+                "feature_run_source_freeze_open_ordinary_outcomes:{}:{}",
+                plan_id,
+                open_ordinary_outcome_ids.join(",")
+            );
+        }
         let repair_refreeze = !repository.invalidations(&persisted.run.id)?.is_empty();
         if !repair_refreeze
             && let Some(hold) =
@@ -2344,7 +2878,11 @@ impl App {
             .ok_or_else(|| anyhow!("product_finding_missing_verifier:{run_id}"))?
             .worker_id
             .clone();
-        let verification_item_id = self.product_repair_verification_item(&persisted.run.plan_id)?;
+        let plan = self.get_plan(&persisted.run.plan_id)?;
+        let verification_item_id = self.ready_or_owned_verification_item_for_plan_path(
+            Some(plan.path.as_str()),
+            &verifier_worker_id,
+        )?;
         let maker_worker_id = self.conn.query_row(
             "SELECT worker_id FROM feature_run_role_leases WHERE run_id = ?1 AND role = 'maker' ORDER BY lease_generation DESC LIMIT 1",
             [run_id],
@@ -2405,15 +2943,18 @@ impl App {
             self.reconcile_active_phase_wall(run_id, BudgetPhase::Verification)?;
             repository.invalidate_source(&invalidation)?;
             repository.save_feature_run_with_new_batch(&repair, persisted.revision, &batch)?;
-            let released = self.conn.execute(
-                "UPDATE items SET status = 'ready', worker_id = NULL, pick_token = NULL,
-                     picked_at = NULL, last_heartbeat_at = NULL, updated_at = datetime('now')
-                 WHERE id = ?1 AND work_type = 'verification'
-                   AND status IN ('picked','running') AND worker_id = ?2",
-                params![verification_item_id, verifier_worker_id],
-            )?;
-            if released != 1 {
-                bail!("product_finding_verifier_release_failed:{verification_item_id}");
+            if let Some(verification_item_id) = verification_item_id.as_deref() {
+                let released = self.conn.execute(
+                    "UPDATE items SET status = 'ready', worker_id = NULL, pick_token = NULL,
+                         picked_at = NULL, last_heartbeat_at = NULL, updated_at = datetime('now')
+                     WHERE id = ?1 AND work_type = 'verification'
+                       AND (status = 'ready'
+                            OR (status IN ('picked','running') AND worker_id = ?2))",
+                    params![verification_item_id, verifier_worker_id],
+                )?;
+                if released != 1 {
+                    bail!("product_finding_verifier_release_failed:{verification_item_id}");
+                }
             }
             Ok(json!({
                 "classification": "product_finding",
@@ -2589,8 +3130,8 @@ mod tests {
         ReviewAttemptRecord, ReviewGateRecord, ReviewScopeKind, ReviewVerdict,
     };
     use crate::evidence::model::{
-        CapabilityBinding, PermissionState, RawResultRef, Sha256Digest, SourceBinding,
-        TrustedProvenance, TrustedReceiptInput, VantagePoint, build_trusted_receipt,
+        CapabilityBinding, PermissionState, RawResultRef, Sha256Digest, TrustedProvenance,
+        TrustedReceiptInput, VantagePoint, build_trusted_receipt,
     };
     use crate::execution_run::FeatureRunTerminalReason;
     use crate::storage::ensure_schema;
@@ -2616,10 +3157,11 @@ mod tests {
     }
 
     fn add_outcome(app: &App, id: &str) {
+        let plan_path = app.get_plan("plan-a").expect("plan").path;
         app.conn
             .execute(
-                "INSERT INTO items(id, project_id, title, description, status, work_type, worker_id, plan_path, created_at, updated_at) VALUES (?1, 'project-a', ?1, 'outcome', 'picked', 'code', ?2, 'plan-a.md', datetime('now'), datetime('now'))",
-                params![id, worker_id()],
+                "INSERT INTO items(id, project_id, title, description, status, work_type, worker_id, plan_path, created_at, updated_at) VALUES (?1, 'project-a', ?1, 'outcome', 'picked', 'code', ?2, ?3, datetime('now'), datetime('now'))",
+                params![id, worker_id(), plan_path],
             )
             .expect("outcome item");
     }
@@ -2981,43 +3523,71 @@ allow_overwrite = true
         policy_digest
     }
 
-    fn verification_fixture() -> (tempfile::TempDir, App, String, String) {
+    fn verification_fixture(
+        with_item: bool,
+        initial_verifier_pick: bool,
+    ) -> (tempfile::TempDir, App, String, String) {
         let root = tempfile::tempdir().unwrap();
         write_budget_policy(root.path());
-        let policy_digest = write_ready_evidence_policy(root.path());
+        write_ready_evidence_policy(root.path());
+        let plan_path = root.path().join("plan-a.md");
+        std::fs::write(
+            &plan_path,
+            crate::planpack::build_plan_body("Plan", "product-plan", "phase ready"),
+        )
+        .unwrap();
         initialize_git(root.path());
         let app = test_app(root.path().to_path_buf());
-        add_outcome(&app, "item-phase");
-        add_verification_item(&app, "verification-phase");
         app.conn
             .execute(
-                "INSERT INTO proof_obligations(
-                  id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
-                  binding, observation_requirements_json, fixture_policy_json, freshness_policy_json,
-                  assurance_policy_json, retry_aggregation, policy_digest, config_digest,
-                  source_digest, supersedes_obligation_id, created_at, obligation_shape
-                ) VALUES (
-                  'pob-phase-ready', 'project-a', 'plan-a', 'item-phase', 'criterion-phase-ready', 1,
-                  'ready process', 1, ?1, '{}', '{}', '{}', 'all_applicable_pass', ?2, ?2, ?2, NULL,
-                  datetime('now'), 'semantic_v1'
-                )",
-                params![
-                    json!([{
+                "UPDATE plans SET path = ?1 WHERE id = 'plan-a'",
+                [plan_path.to_string_lossy().as_ref()],
+            )
+            .unwrap();
+        add_outcome(&app, "item-phase");
+        if with_item {
+            add_verification_item(&app, "verification-phase");
+        }
+        app.conn
+            .execute(
+                "UPDATE items SET plan_path = ?1 WHERE id IN ('item-phase', 'verification-phase')",
+                [plan_path.to_string_lossy().as_ref()],
+            )
+            .unwrap();
+        app.evidence_migration_value(
+            json!({
+                "schema_version": "planr.evidence.migration.v1",
+                "plan_id": "plan-a",
+                "obligations": [{
+                    "id": "pob-phase-ready",
+                    "schema_version": "evidence.contract.v1",
+                    "criterion_id": "criterion-phase-ready",
+                    "plan_id": "plan-a",
+                    "item_id": "item-phase",
+                    "title": "ready process",
+                    "binding": true,
+                    "observations": [{
                         "id": "obs-phase-ready",
                         "type": "com.example.ready.status",
                         "subject": "ready process",
                         "expected": {"status": "ready"},
                         "target": {"kind": "process", "uri": "local://ready"},
                         "payload_schema": {"schema_ref": "com.example.ready.status@v1"}
-                    }])
-                    .to_string(),
-                    policy_digest,
-                ],
-            )
+                    }],
+                    "fixture_policy": {"fixtures_allowed": false, "mocks_allowed": false, "disclosure_required": true},
+                    "freshness_policy": {"max_age_seconds": 3600, "invalidate_on": ["source_change"]},
+                    "assurance_policy": {"retry_aggregation": "all_applicable_pass"}
+                }]
+            }),
+            true,
+        )
             .unwrap();
         let run = app
             .ensure_outcome_feature_run("item-phase")
             .unwrap()
+            .unwrap();
+        app.conn
+            .execute("UPDATE items SET status = 'closed', worker_id = NULL WHERE id = 'item-phase'", [])
             .unwrap();
         app.conn
             .execute(
@@ -3030,6 +3600,9 @@ allow_overwrite = true
             .unwrap()
             .unwrap();
         let freeze_id = frozen["source_freeze"]["id"].as_str().unwrap().to_string();
+        if !initial_verifier_pick {
+            return (root, app, run.run.id, freeze_id);
+        }
         let packet = app
             .verification_work_packet_value("plan-a", false)
             .unwrap()
@@ -3201,9 +3774,9 @@ allow_overwrite = true
 
     #[test]
     fn verification_release_atomically_restores_the_source_frozen_boundary() {
-        let (_root, app, run_id, _freeze_id) = verification_fixture();
+        let (_root, app, run_id, _freeze_id) = verification_fixture(true, true);
         let released = app
-            .release_verification_pick_value("verification-phase", false, None)
+            .release_verification_pick_value("verification-phase", false)
             .unwrap()
             .unwrap();
         assert_eq!(released["disposition"], "released");
@@ -3225,7 +3798,7 @@ allow_overwrite = true
         assert_eq!(active_verifiers, 0);
 
         let repeated = app
-            .release_verification_pick_value("verification-phase", false, None)
+            .release_verification_pick_value("verification-phase", false)
             .unwrap()
             .unwrap();
         assert_eq!(repeated["disposition"], "already_released");
@@ -3233,7 +3806,7 @@ allow_overwrite = true
 
     #[test]
     fn exhausted_one_shot_atomically_fails_item_and_terminally_releases_lease() {
-        let (_root, app, run_id, _freeze_id) = verification_fixture();
+        let (_root, app, run_id, _freeze_id) = verification_fixture(true, true);
         let lease = app
             .resolve_feature_run_evidence_lease("project-a", "plan-a")
             .unwrap()
@@ -3279,6 +3852,7 @@ allow_overwrite = true
             )
             .unwrap();
         app.conn.execute_batch("COMMIT").unwrap();
+        let item_id = item_id.expect("verification item projection");
         assert_eq!(app.get_item(&item_id).unwrap().status.as_str(), "failed");
         let settled = app
             .canonical_execution_state_value(&settled_run_id, None)
@@ -3301,42 +3875,88 @@ allow_overwrite = true
     }
 
     #[test]
-    fn verification_repair_retires_the_verifier_and_routes_the_recorded_maker() {
-        let (_root, app, run_id, _freeze_id) = verification_fixture();
-        app.release_verification_pick_value("verification-phase", false, None)
-            .unwrap()
-            .unwrap();
-        let routed = app
-            .release_verification_pick_value(
-                "verification-phase",
-                true,
-                Some("ctx-admission-blocker"),
-            )
-            .unwrap()
-            .unwrap();
-        assert_eq!(routed["disposition"], "routed_to_repair");
-        assert_eq!(routed["responsible_maker_id"], "maker-other");
-        assert_eq!(routed["item"]["status"], "ready");
+    fn verification_admission_repair_is_itemless_safe_seal_bound_and_atomic() {
+        let protected_counts = |app: &App| (
+            ["evidence_attempts", "evidence_receipts", "coverage_verdicts", "coverage_verdict_history", "review_findings"]
+                .map(|table| app.conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get::<_, u64>(0)).unwrap()),
+            app.conn.query_row("SELECT COUNT(*) FROM feature_run_evidence_invalidations WHERE reason = 'product_finding'", [], |row| row.get::<_, u64>(0)).unwrap(),
+        );
+        for reason in [VerificationAdmissionRepairReason::ReadinessBlocked, VerificationAdmissionRepairReason::RunIndexSealFailed] {
+            assert!(!reason.requires_run_index_digest());
+        }
+        for reason in [VerificationAdmissionRepairReason::SealedRunRejected, VerificationAdmissionRepairReason::CapabilityAdmissionFailed] {
+            assert!(reason.requires_run_index_digest());
+        }
+        let mut equivalent = Vec::new();
+        for with_item in [false, true] {
+            let (_root, app, run_id, freeze_id) = verification_fixture(with_item, true);
+            let repository = ExecutionRunRepository::new(&app.conn);
+            let admitted = repository.latest_verification_admission(&run_id, &freeze_id).unwrap().unwrap();
+            let persisted = repository.feature_run(&run_id).unwrap();
+            let request = VerificationAdmissionRepairRequest {
+                plan_id: "plan-a".into(), run_id: run_id.clone(), freeze_id: freeze_id.clone(),
+                run_revision: persisted.revision,
+                reason: if with_item { VerificationAdmissionRepairReason::CapabilityAdmissionFailed } else { VerificationAdmissionRepairReason::SealedRunRejected },
+                run_index_digest: Some(admitted.run_index_digest),
+            };
+            let before = protected_counts(&app);
+            if !with_item {
+                let stale = [
+                    { let mut value = request.clone(); value.plan_id = "plan-stale".into(); value },
+                    { let mut value = request.clone(); value.run_id = "run-stale".into(); value },
+                    { let mut value = request.clone(); value.freeze_id = "freeze-stale".into(); value },
+                    { let mut value = request.clone(); value.run_revision += 1; value },
+                    { let mut value = request.clone(); value.run_index_digest = Some("sha256:stale".into()); value },
+                ];
+                for candidate in stale {
+                    assert!(app.repair_verification_admission_value(candidate).is_err());
+                    assert_eq!(repository.feature_run(&run_id).unwrap(), persisted);
+                    assert_eq!(protected_counts(&app), before);
+                }
+            }
+            let repaired = app.repair_verification_admission_value(request.clone()).unwrap();
+            let repaired_revision = repository.feature_run(&run_id).unwrap().revision;
+            let repeated = app.repair_verification_admission_value(request).unwrap();
+            assert_eq!(repaired["repair"], repeated["repair"]);
+            assert_eq!(repository.feature_run(&run_id).unwrap().revision, repaired_revision);
+            let transition: crate::execution_run::VerificationAdmissionRepairTransition = serde_json::from_value(repaired["repair"].clone()).unwrap();
+            let current = repository.feature_run(&run_id).unwrap();
+            let maker = owner_for_role(&current.run, RunRole::Maker).unwrap();
+            assert_eq!((maker.worker_id.as_str(), maker.lease_generation), ("maker-other", 2));
+            assert_eq!(repository.source_freeze(&freeze_id).unwrap().status, SourceFreezeStatus::Invalidated);
+            assert_eq!(transition.facts.verification_item_id.is_some(), with_item);
+            assert_eq!(repository.verification_item_projection("plan-a").unwrap().is_some(), with_item);
+            assert_eq!(repository.batch(current.run.active_batch_id.as_deref().unwrap()).unwrap().batch.status, ExecutionBatchStatus::Active);
+            assert!(owner_for_role(&current.run, RunRole::Verifier).is_none());
+            let state = app.canonical_execution_state_value(&run_id, None).unwrap();
+            assert_eq!((state["phase"].clone(), state["next_action"].clone()), (json!("implementation"), json!("settle_next_outcome")));
+            assert_eq!(protected_counts(&app), before);
+            assert_eq!(app.conn.query_row("SELECT COUNT(*) FROM events WHERE event_type = 'feature_run_verification_admission_repaired'", [], |row| row.get::<_, u64>(0)).unwrap(), 1);
+            equivalent.push(json!({"phase": state["phase"], "next": state["next_action"], "maker": maker.worker_id, "generation": maker.lease_generation, "batch": "active"}));
+        }
+        assert_eq!(equivalent[0], equivalent[1]);
 
+        let (_root, app, run_id, freeze_id) = verification_fixture(true, false);
+        app.conn.execute("INSERT INTO proof_obligations(id, project_id, plan_id, item_id, criterion_id, obligation_version, title, binding, observation_requirements_json, fixture_policy_json, freshness_policy_json, assurance_policy_json, retry_aggregation, policy_digest, config_digest, source_digest, supersedes_obligation_id, created_at, obligation_shape) SELECT 'pob-readiness-conflict', project_id, plan_id, item_id, criterion_id, obligation_version + 1, title, binding, observation_requirements_json, fixture_policy_json, freshness_policy_json, assurance_policy_json, retry_aggregation, policy_digest, config_digest, source_digest, NULL, datetime('now'), obligation_shape FROM proof_obligations WHERE id = 'pob-phase-ready'", []).unwrap();
+        let before = protected_counts(&app);
+        assert!(app.verification_work_packet_value("plan-a", false).unwrap_err().to_string().contains("verification_pick_readiness_blocked"));
         let repository = ExecutionRunRepository::new(&app.conn);
-        let persisted = repository.feature_run(&run_id).unwrap();
-        assert_eq!(persisted.run.phase, FeatureRunPhase::Implementation);
-        assert_eq!(
-            owner_for_role(&persisted.run, RunRole::Maker)
-                .unwrap()
-                .worker_id,
-            "maker-other"
-        );
-        let invalidations = repository.invalidations(&run_id).unwrap();
-        assert_eq!(invalidations.len(), 1);
-        assert_eq!(
-            invalidations[0].reason,
-            "verification_admission_blocker:ctx-admission-blocker"
-        );
-        assert_eq!(
-            invalidations[0].affected_evidence_ids,
-            vec!["pob-phase-ready"]
-        );
+        let held = repository.feature_run(&run_id).unwrap();
+        let diagnostic = repository.latest_verification_readiness_diagnostic(&run_id, &freeze_id).unwrap().unwrap();
+        assert_eq!((held.run.phase, held.run.hold_reason), (FeatureRunPhase::Held, Some(FeatureRunHoldReason::Capability)));
+        assert!(owner_for_role(&held.run, RunRole::Verifier).is_none());
+        let item = repository.verification_item_projection("plan-a").unwrap().unwrap();
+        assert_eq!((item.status, item.worker_id), (CurrentVerificationItemLeaseStatus::Ready, None));
+        assert_eq!(diagnostic.repair_request.reason, VerificationAdmissionRepairReason::ReadinessBlocked);
+        assert!(diagnostic.repair_request.run_index_digest.is_none());
+        let mut invalid = diagnostic.repair_request.clone();
+        invalid.run_index_digest = Some("sha256:forbidden".into());
+        assert!(app.repair_verification_admission_value(invalid).is_err());
+        assert_eq!(repository.feature_run(&run_id).unwrap(), held);
+        let repaired = app.repair_verification_admission_value(diagnostic.repair_request).unwrap();
+        assert_eq!(repaired["repair"]["repaired_run"]["phase"], "implementation");
+        assert_eq!(repository.source_freeze(&freeze_id).unwrap().status, SourceFreezeStatus::Invalidated);
+        assert_eq!(protected_counts(&app), before);
     }
 
     #[test]
@@ -3920,6 +4540,18 @@ allow_overwrite = true
         app.verification_work_packet_value("plan-a", false)
             .unwrap()
             .unwrap();
+        let repository = ExecutionRunRepository::new(&app.conn);
+        let run = repository
+            .active_feature_run_for_plan("project-a", "plan-a")
+            .unwrap()
+            .unwrap();
+        let freeze = repository
+            .active_source_freeze(&run.run.id)
+            .unwrap()
+            .unwrap();
+        let source = capture_repository_snapshot(&app.root).unwrap().source;
+        assert_eq!(source.revision.as_str(), freeze.source_revision.as_str());
+        assert_eq!(source.tree_digest.as_str(), freeze.source_digest.as_str());
         let (instance_id, manifest_id, manifest_digest): (String, String, String) = app
             .conn
             .query_row(
@@ -3958,14 +4590,7 @@ allow_overwrite = true
             id: crate::evidence::EvidenceId::parse(receipt_id).unwrap(),
             criterion_id: crate::evidence::EvidenceId::parse("criterion-settle").unwrap(),
             obligation_id: crate::evidence::EvidenceId::parse("pob-settle").unwrap(),
-            source: SourceBinding {
-                revision: "0123456789abcdef0123456789abcdef01234567".to_string(),
-                tree_digest: Sha256Digest::parse(
-                    "sha256:3333333333333333333333333333333333333333333333333333333333333333",
-                )
-                .unwrap(),
-                dirty: false,
-            },
+            source,
             target: crate::evidence::TargetBinding {
                 kind: "process".to_string(),
                 uri: Some("local://ready".to_string()),
@@ -4104,6 +4729,12 @@ allow_overwrite = true
             .join("\n");
         std::fs::write(&budget_policy_path, unbounded_policy).unwrap();
         let policy_digest = write_ready_evidence_policy(root.path());
+        let plan_path = root.path().join("plan-a.md");
+        std::fs::write(
+            &plan_path,
+            crate::planpack::build_plan_body("Plan", "product-plan", "settle"),
+        )
+        .unwrap();
         std::fs::write(root.path().join(".gitignore"), "planr.sqlite*\n").unwrap();
         initialize_git(root.path());
         let database_path = root.path().join("planr.sqlite");
@@ -4120,13 +4751,30 @@ allow_overwrite = true
         )
         .expect("plan");
         let app = App::new(conn, root.path().to_path_buf(), database_path, true, false);
+        app.conn
+            .execute(
+                "UPDATE plans SET path = ?1 WHERE id = 'plan-a'",
+                [plan_path.to_string_lossy().as_ref()],
+            )
+            .unwrap();
         add_outcome(&app, "item-settle-maker");
         add_verification_item(&app, "item-settle-verification");
+        app.conn
+            .execute(
+                "UPDATE items SET plan_path = ?1 WHERE id IN ('item-settle-maker', 'item-settle-verification')",
+                [plan_path.to_string_lossy().as_ref()],
+            )
+            .unwrap();
         seed_settlement_obligation(&app, &policy_digest);
         let run = app
             .ensure_outcome_feature_run("item-settle-maker")
             .unwrap()
             .unwrap();
+        app.close_item_value(
+            "item-settle-maker",
+            "initial ordinary outcome settled before source freeze",
+        )
+        .unwrap();
         app.conn
             .execute(
                 "UPDATE feature_run_role_leases SET worker_id = 'maker-other' WHERE run_id = ?1 AND role = 'maker' AND released_at IS NULL",
@@ -4849,12 +5497,12 @@ allow_overwrite = true
         assert_eq!(causal_boundary.1, causal_boundary.2);
         let before = app
             .repair_work_packet_value("plan-a")
-            .expect_err("historical invalidation reproduces false-open repair classification");
-        assert!(
-            before
-                .to_string()
-                .contains("product_finding_repair_verification_item_missing")
-        );
+            .expect("historical invalidation has a canonical repair packet")
+            .expect("unreconciled historical invalidation remains repairable");
+        assert_eq!(before["work_packet"]["kind"], "outcome");
+        assert_eq!(before["work_packet"]["mode"], "product_finding_repair");
+        assert_eq!(before["work_packet"]["repair_id"], input["invalidation_id"]);
+        assert!(before["work_packet"]["verification_item_id"].is_null());
 
         let reconciled = app
             .recover_verification_settlement_value(input.clone())
@@ -6374,6 +7022,74 @@ allow_overwrite = true
     }
 
     #[test]
+    fn satisfied_exact_coverage_routes_to_final_review_and_cannot_release_verification() {
+        let (_root, app, policy_digest) = settlement_app();
+        seed_receipt_bound_settlement(&app, &policy_digest);
+        let coverage = app
+            .evidence_coverage_value(EvidenceCoverageScope::Plan, "plan-a")
+            .unwrap();
+        assert_eq!(
+            coverage["feature_run_verification_settlement"]["phase"],
+            "source_frozen"
+        );
+        assert_eq!(
+            coverage["feature_run_verification_settlement"]["next_action"],
+            "planr plan final-review plan-a"
+        );
+
+        let repository = ExecutionRunRepository::new(&app.conn);
+        let snapshot = || {
+            let persisted = repository
+                .active_feature_run_for_plan("project-a", "plan-a")
+                .unwrap()
+                .unwrap();
+            let run_id = &persisted.run.id;
+            let freeze = repository.active_source_freeze(run_id).unwrap().unwrap();
+            let count = |sql| {
+                app.conn
+                    .query_row(sql, [run_id], |row| row.get::<_, u64>(0))
+                    .unwrap()
+            };
+            let item: (String, Option<String>) = app
+                .conn
+                .query_row(
+                    "SELECT status, worker_id FROM items WHERE id = 'item-settle-verification'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            json!({
+                "revision": persisted.revision,
+                "phase": persisted.run.phase,
+                "role_owners": persisted.run.role_owners,
+                "active_verifier_leases": count("SELECT COUNT(*) FROM feature_run_role_leases WHERE run_id = ?1 AND role = 'verifier' AND released_at IS NULL"),
+                "verification_budget_reservations": count("SELECT COUNT(*) FROM feature_run_budget_reservations WHERE run_id = ?1 AND phase = 'verification'"),
+                "verification_budget_observations": count("SELECT COUNT(*) FROM feature_run_budget_observations WHERE run_id = ?1 AND phase = 'verification'"),
+                "verification_item": item,
+                "source_freeze": [freeze.id, freeze.source_revision, freeze.source_digest],
+                "event_count": app.conn.query_row("SELECT COUNT(*) FROM events", [], |row| row.get::<_, u64>(0)).unwrap(),
+            })
+        };
+        let before = snapshot();
+        assert_eq!(before["phase"], "source_frozen");
+        let run_id = repository
+            .active_feature_run_for_plan("project-a", "plan-a")
+            .unwrap()
+            .unwrap()
+            .run
+            .id;
+        let state = app.canonical_execution_state_value(&run_id, None).unwrap();
+        assert_eq!(state["reason_code"], "binding_evidence_satisfied");
+        assert_eq!(state["next_action"], "open_final_review");
+        assert!(
+            app.verification_work_packet_value("plan-a", false)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(snapshot(), before, "duplicate verification mutated settlement facts");
+    }
+
+    #[test]
     fn satisfied_plan_coverage_atomically_resumes_remaining_code_without_leasing_it() {
         let (_root, app, policy_digest) = settlement_app();
         seed_receipt_bound_settlement(&app, &policy_digest);
@@ -7189,111 +7905,90 @@ allow_overwrite = true
     }
 
     #[test]
-    fn product_finding_closes_verification_and_refreeze_closes_repair_without_overlap() {
-        let (_root, app, run_id, freeze_id) = verification_fixture();
-        app.conn
-            .execute(
+    fn product_finding_repair_is_itemless_safe_across_settlement_and_replay() {
+        let mut canonical_results = Vec::new();
+        for with_item in [false, true] {
+            let (_root, app, run_id, freeze_id) = verification_fixture(with_item, true);
+            app.conn.execute(
                 "UPDATE feature_run_role_leases SET worker_id = ?1 WHERE run_id = ?2 AND role = 'maker'",
-                rusqlite::params![worker_id(), run_id],
-            )
-            .unwrap();
-        let routed = app
-            .route_evidence_product_finding_value(&run_id, &freeze_id, "pob-phase-ready")
-            .unwrap();
-        let repair_id = routed["repair_id"].as_str().unwrap();
-        assert_eq!(repair_id, routed["invalidation"]["id"]);
-        assert_eq!(routed["verification_item_id"], "verification-phase");
-        let released: (String, Option<String>) = app
-            .conn
-            .query_row(
-                "SELECT status, worker_id FROM items WHERE id = 'verification-phase'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!(released, ("ready".to_string(), None));
-        assert!(
-            app.load_active_budget_reservation(&run_id, &format!("verification:{run_id}"))
-                .unwrap()
-                .is_none()
-        );
-        let repair = app.repair_work_packet_value("plan-a").unwrap().unwrap();
-        assert_eq!(repair["work_packet"]["repair_id"], repair_id);
-        assert_eq!(
-            repair["work_packet"]["verification_item_id"],
-            "verification-phase"
-        );
-        let refrozen = app
-            .settle_product_finding_repair_value(
-                "plan-a",
-                repair_id,
-                "repair complete",
-                &["tests/e2e.rs".to_string()],
-                &["cargo test".to_string()],
-                &["passed".to_string()],
-            )
-            .unwrap();
-        assert_eq!(refrozen["work_packet"]["kind"], "verification_handoff");
-        assert_eq!(refrozen["work_packet"]["mode"], "selective_replay");
-        assert_eq!(
-            refrozen["work_packet"]["selective_replay_obligation_ids"],
-            json!(["pob-phase-ready"])
-        );
-        assert_eq!(refrozen["work_packet"]["source_freeze"]["status"], "active");
-        assert!(
-            app.load_active_budget_reservation(&run_id, &format!("repair:{run_id}"))
-                .unwrap()
-                .is_none()
-        );
-        assert_eq!(
-            refrozen["work_packet"]["execution_state"]["phase"],
-            "source_frozen"
-        );
-        let selective_packet = app
-            .verification_work_packet_value("plan-a", true)
-            .unwrap()
-            .unwrap();
-        assert_eq!(selective_packet["work_packet"]["mode"], "selective_replay");
-        assert_eq!(selective_packet["work_packet"]["repair_id"], repair_id);
-        assert_eq!(
-            selective_packet["work_packet"]["responsible_maker_id"],
-            worker_id()
-        );
-        assert_eq!(
-            selective_packet["work_packet"]["selective_replay_obligation_ids"],
-            json!(["pob-phase-ready"])
-        );
-        let repeated = app
-            .settle_product_finding_repair_value(
-                "plan-a",
-                repair_id,
-                "repair complete",
-                &[],
-                &[],
-                &[],
-            )
-            .unwrap();
-        assert_eq!(repeated["created"], false);
-        assert_eq!(
-            repeated["work_packet"]["source_freeze"]["id"],
-            refrozen["work_packet"]["source_freeze"]["id"]
-        );
-        let observations = ExecutionRunRepository::new(&app.conn)
-            .budget_observations(&run_id)
-            .unwrap();
-        assert_eq!(
-            observations
-                .iter()
-                .filter(|observation| observation.wall_seconds.is_some())
-                .count(),
-            2,
-            "verification and repair phase intervals are the only wall owners"
-        );
+                params![worker_id(), run_id],
+            ).unwrap();
+            let item_count: u64 = app.conn.query_row("SELECT COUNT(*) FROM items", [], |row| row.get(0)).unwrap();
+            let outcome_before: (String, Option<String>, String) = app.conn.query_row(
+                "SELECT status, worker_id, updated_at FROM items WHERE id = 'item-phase'", [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            ).unwrap();
+            let receipts_before: u64 = app.conn.query_row("SELECT COUNT(*) FROM evidence_receipts", [], |row| row.get(0)).unwrap();
+
+            let routed = app.route_evidence_product_finding_value(&run_id, &freeze_id, "pob-phase-ready").unwrap();
+            let repair_id = routed["repair_id"].as_str().unwrap();
+            assert_eq!(repair_id, routed["invalidation"]["id"]);
+            assert_eq!(routed["verification_item_id"].is_null(), !with_item);
+            let repository = ExecutionRunRepository::new(&app.conn);
+            let repair_run = repository.feature_run(&run_id).unwrap();
+            let repair_batch_id = repair_run.run.active_batch_id.clone().unwrap();
+            let repair = app.repair_work_packet_value("plan-a").unwrap().unwrap();
+            assert_eq!(repair["work_packet"]["repair_id"], repair_id);
+            assert_eq!(repair["work_packet"]["verification_item_id"].is_null(), !with_item);
+
+            let refrozen = app.settle_product_finding_repair_value(
+                "plan-a", repair_id, "repair complete", &["src/app/feature_run_evidence.rs".into()],
+                &["focused invariant".into()], &["passed".into()],
+            ).unwrap();
+            assert_eq!(refrozen["work_packet"]["kind"], "verification_handoff");
+            assert_eq!(refrozen["work_packet"]["mode"], "selective_replay");
+            assert_eq!(refrozen["work_packet"]["verification_item_id"].is_null(), !with_item);
+            assert_eq!(refrozen["work_packet"]["selective_replay_obligation_ids"], json!(["pob-phase-ready"]));
+            assert_eq!(refrozen["work_packet"]["execution_state"]["phase"], "source_frozen");
+
+            let settlement = repository.product_repair_settlement(repair_id).unwrap().unwrap();
+            assert!(serde_json::to_value(&settlement).unwrap().get("verification_item_id").is_none());
+            assert_eq!(settlement.responsible_maker_id, worker_id());
+            assert_eq!(settlement.selective_obligation_ids, ["pob-phase-ready"]);
+            let repeated = app.settle_product_finding_repair_value("plan-a", repair_id, "ignored", &[], &[], &[]).unwrap();
+            assert_eq!(repeated["created"], false);
+            assert_eq!(repeated["work_packet"]["verification_item_id"].is_null(), !with_item);
+            assert_eq!(repeated["work_packet"]["source_freeze"]["id"], settlement.source_freeze_id);
+            let selective = app.verification_work_packet_value("plan-a", true).unwrap().unwrap();
+            assert_eq!(selective["work_packet"]["item_id"].is_null(), !with_item);
+            assert_eq!(selective["work_packet"]["mode"], "selective_replay");
+            assert_eq!(selective["work_packet"]["repair_id"], repair_id);
+            assert_eq!(selective["work_packet"]["selective_replay_obligation_ids"], json!(["pob-phase-ready"]));
+
+            let settled_run = repository.feature_run(&run_id).unwrap();
+            let ended_batch = repository.batch(&repair_batch_id).unwrap();
+            assert_eq!(repository.source_freeze(&freeze_id).unwrap().status, SourceFreezeStatus::Invalidated);
+            assert_eq!(repository.source_freeze(&settlement.source_freeze_id).unwrap().status, SourceFreezeStatus::Active);
+            assert_eq!(ended_batch.batch.status, ExecutionBatchStatus::Ended);
+            assert_eq!(ended_batch.batch.maker_worker_id, worker_id());
+            assert_eq!(app.conn.query_row("SELECT COUNT(*) FROM items", [], |row| row.get::<_, u64>(0)).unwrap(), item_count);
+            assert_eq!(app.conn.query_row(
+                "SELECT status, worker_id, updated_at FROM items WHERE id = 'item-phase'", [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, String>(2)?)),
+            ).unwrap(), outcome_before);
+            if with_item {
+                assert_eq!(app.conn.query_row(
+                    "SELECT status, worker_id FROM items WHERE id = 'verification-phase'", [],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+                ).unwrap(), ("ready".into(), None));
+            }
+            let receipts_after: u64 = app.conn.query_row("SELECT COUNT(*) FROM evidence_receipts", [], |row| row.get(0)).unwrap();
+            assert_eq!((receipts_before, receipts_after), (0, 0));
+            assert!(app.load_active_budget_reservation(&run_id, &format!("repair:{run_id}")).unwrap().is_none());
+            canonical_results.push(json!({
+                "phase": settled_run.run.phase,
+                "batch_count": settled_run.run.batch_outcome_count, "owners": settled_run.run.role_owners,
+                "old_freeze": "invalidated", "new_freeze": "active", "repair_batch": ended_batch.batch.status,
+                "maker": settlement.responsible_maker_id, "obligations": settlement.selective_obligation_ids,
+                "handoff_phase": refrozen["work_packet"]["execution_state"]["phase"], "receipts": receipts_after,
+            }));
+        }
+        assert_eq!(canonical_results[0], canonical_results[1]);
     }
 
     #[test]
     fn product_repair_follows_invalidation_obligations_to_the_active_successor() {
-        let (_root, app, _run_id, _freeze_id) = verification_fixture();
+        let (_root, app, _run_id, _freeze_id) = verification_fixture(true, true);
         app.conn
             .execute(
                 "INSERT INTO proof_obligations(
@@ -7320,7 +8015,7 @@ allow_overwrite = true
 
     #[test]
     fn product_repair_reopens_the_same_material_gate_with_exact_source_binding() {
-        let (_root, app, run_id, freeze_id) = verification_fixture();
+        let (_root, app, run_id, freeze_id) = verification_fixture(true, true);
         app.conn
             .execute(
                 "UPDATE feature_run_role_leases SET worker_id = ?1 WHERE run_id = ?2 AND role = 'maker'",

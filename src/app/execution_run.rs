@@ -13,10 +13,12 @@ use crate::execution_run::{
     FeatureRunRestartDisposition, FeatureRunRestartReason, FeatureRunRestartRequest,
     FeatureRunStatus, MakerReplacement, MakerReplacementReason, PhaseTransition,
     PhaseTransitionCause, RoleOwner, RunRole, apply_phase_transition, pause_batch_for_risk_review,
-    replace_batch_maker, resume_batch_after_risk_review, retire_incompatible_feature_run,
-    retire_stale_source_freeze_feature_run, roll_batch_for_same_maker,
-    StaleSourceFreezeRestartFacts,
+    PrematureSourceFreezeRestartFacts, VerificationAdmissionRepairReason,
+    VerificationAdmissionRepairRequest, is_ordinary_implementation_work_type, replace_batch_maker,
+    resume_batch_after_risk_review, retire_incompatible_feature_run,
+    retire_premature_source_freeze_feature_run, roll_batch_for_same_maker,
 };
+use crate::model::ItemStatus;
 use crate::usage_policy::{
     BudgetPhase, FeatureRunBudgetContract, PolicyLoad, ReviewEscalation, ReviewInterruptDecision,
     ReviewInterruptRequest, admit_review_interrupt, feature_run_budget_contract_from_policy,
@@ -32,6 +34,151 @@ pub(crate) struct OutcomeSettlement<'a> {
     pub(crate) summary: &'a str,
     pub(crate) materiality: &'a Value,
     pub(crate) escalation: Option<ReviewEscalation>,
+}
+
+pub(crate) struct ExistingOutcomeSettlement<'a> {
+    pub(crate) item_id: &'a str,
+    pub(crate) summary: &'a str,
+    pub(crate) claimed_files: &'a [String],
+    pub(crate) escalation: Option<ReviewEscalation>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OutcomeSettlementDisposition {
+    FreshlyRecorded,
+    AlreadySettled,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct OutcomeSettlementTransition {
+    pub(crate) disposition: OutcomeSettlementDisposition,
+    pub(crate) materiality: Value,
+    work_packet: Value,
+}
+
+impl OutcomeSettlementTransition {
+    fn freshly_recorded(work_packet: Value, materiality: &Value) -> Self {
+        Self {
+            disposition: OutcomeSettlementDisposition::FreshlyRecorded,
+            materiality: materiality.clone(),
+            work_packet,
+        }
+    }
+
+    fn already_settled(work_packet: Value, materiality: Value) -> Self {
+        Self {
+            disposition: OutcomeSettlementDisposition::AlreadySettled,
+            materiality,
+            work_packet,
+        }
+    }
+
+    pub(crate) fn into_work_packet(self) -> Value {
+        self.work_packet
+    }
+}
+
+impl std::ops::Deref for OutcomeSettlementTransition {
+    type Target = Value;
+
+    fn deref(&self) -> &Self::Target {
+        &self.work_packet
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AlreadySettledOutcomeViolation {
+    MissingOutcome,
+    ItemNotTerminal,
+    PhaseMismatch,
+    RunStatusMismatch,
+    MakerCardinality,
+    MakerMismatch,
+    ActiveBatchMissing,
+    OutcomeIdMismatch,
+    OutcomeRunMismatch,
+    OutcomeBatchMismatch,
+    OutcomeItemMismatch,
+    OutcomeOrdinalMismatch,
+    OutcomePayloadShapeMismatch,
+    OutcomeSummaryMismatch,
+    OutcomeEscalationMismatch,
+    OutcomeClaimedFilesMismatch,
+    ExistingOutcomeRequiresRetryAdmission,
+    BatchRunMismatch,
+    BatchStatusMismatch,
+    BatchMakerMismatch,
+    BatchCounterMismatch,
+    BatchMembershipMismatch,
+    RunCounterMismatch,
+}
+
+fn already_settled_outcome_error(
+    run_id: &str,
+    item_id: &str,
+    violation: AlreadySettledOutcomeViolation,
+) -> anyhow::Error {
+    anyhow!("already_settled_outcome_rejected:{run_id}:{item_id}:{violation:?}")
+}
+
+fn persisted_outcome_materiality(
+    outcome: &Value,
+    summary: &str,
+    escalation: &Option<ReviewEscalation>,
+    claimed_files: &[String],
+) -> std::result::Result<Value, AlreadySettledOutcomeViolation> {
+    let payload = outcome
+        .as_object()
+        .ok_or(AlreadySettledOutcomeViolation::OutcomePayloadShapeMismatch)?;
+    if payload.len() != 3
+        || !payload.contains_key("summary")
+        || !payload.contains_key("materiality")
+        || !payload.contains_key("escalation")
+    {
+        return Err(AlreadySettledOutcomeViolation::OutcomePayloadShapeMismatch);
+    }
+    if payload.get("summary").and_then(Value::as_str) != Some(summary) {
+        return Err(AlreadySettledOutcomeViolation::OutcomeSummaryMismatch);
+    }
+    let expected_escalation = json!(escalation);
+    if payload.get("escalation") != Some(&expected_escalation) {
+        return Err(AlreadySettledOutcomeViolation::OutcomeEscalationMismatch);
+    }
+    let materiality = payload
+        .get("materiality")
+        .filter(|value| value.is_object())
+        .ok_or(AlreadySettledOutcomeViolation::OutcomePayloadShapeMismatch)?;
+    let persisted_files = materiality
+        .pointer("/change_summary/files")
+        .and_then(Value::as_array)
+        .ok_or(AlreadySettledOutcomeViolation::OutcomePayloadShapeMismatch)?;
+    if !persisted_files.iter().all(Value::is_string) {
+        return Err(AlreadySettledOutcomeViolation::OutcomePayloadShapeMismatch);
+    }
+    if persisted_files.len() != claimed_files.len()
+        || persisted_files
+            .iter()
+            .zip(claimed_files)
+            .any(|(persisted, claimed)| persisted.as_str() != Some(claimed.as_str()))
+    {
+        return Err(AlreadySettledOutcomeViolation::OutcomeClaimedFilesMismatch);
+    }
+    Ok(materiality.clone())
+}
+
+fn admitted_outcome_escalation(
+    escalation: Option<ReviewEscalation>,
+) -> Result<Option<ReviewEscalation>> {
+    escalation
+        .map(|escalation| {
+            match admit_review_interrupt(&ReviewInterruptRequest::StructuredEscalation {
+                escalation: escalation.clone(),
+            }) {
+                ReviewInterruptDecision::OpenCheckpoint { escalation } => Ok(escalation),
+                decision => bail!("review_escalation_rejected:{decision:?}"),
+            }
+        })
+        .transpose()
 }
 impl App {
     pub(crate) fn execution_run(&self, command: RunCommand) -> Result<()> {
@@ -71,8 +218,11 @@ impl App {
                     crate::cli::FeatureRunRestartReasonArg::IncompatibleBudget => {
                         FeatureRunRestartReason::IncompatibleBudget
                     }
-                    crate::cli::FeatureRunRestartReasonArg::StaleSourceFreeze => {
-                        FeatureRunRestartReason::StaleSourceFreeze
+                    crate::cli::FeatureRunRestartReasonArg::PrematureSourceFreeze => {
+                        FeatureRunRestartReason::PrematureSourceFreeze
+                    }
+                    crate::cli::FeatureRunRestartReasonArg::InconsistentVerification => {
+                        FeatureRunRestartReason::InconsistentVerification
                     }
                 };
                 let value = self.restart_feature_run_value(&args.plan, reason)?;
@@ -82,8 +232,35 @@ impl App {
                 let value = self.resolve_feature_run_budget_hold_value(&args.plan)?;
                 self.emit(value, "feature run budget hold resolved".to_string())
             }
+            RunCommand::RepairVerificationAdmission(args) => {
+                let reason = match args.reason {
+                    crate::cli::VerificationAdmissionRepairReasonArg::ReadinessBlocked => {
+                        VerificationAdmissionRepairReason::ReadinessBlocked
+                    }
+                    crate::cli::VerificationAdmissionRepairReasonArg::RunIndexSealFailed => {
+                        VerificationAdmissionRepairReason::RunIndexSealFailed
+                    }
+                    crate::cli::VerificationAdmissionRepairReasonArg::SealedRunRejected => {
+                        VerificationAdmissionRepairReason::SealedRunRejected
+                    }
+                    crate::cli::VerificationAdmissionRepairReasonArg::CapabilityAdmissionFailed => {
+                        VerificationAdmissionRepairReason::CapabilityAdmissionFailed
+                    }
+                };
+                let value = self.repair_verification_admission_value(
+                    VerificationAdmissionRepairRequest {
+                        plan_id: args.plan,
+                        run_id: args.run,
+                        freeze_id: args.freeze,
+                        run_revision: args.revision,
+                        reason,
+                        run_index_digest: args.run_index_digest,
+                    },
+                )?;
+                self.emit(value, "verification admission repaired".to_string())
+            }
             RunCommand::SettleRepair(args) => {
-                let value = self.settle_product_finding_repair_value(
+                let value = self.settle_repair_value(
                     &args.plan,
                     &args.invalidation,
                     &args.summary,
@@ -93,7 +270,7 @@ impl App {
                 )?;
                 self.emit(
                     value,
-                    "product finding repair settled and source refrozen".to_string(),
+                    "repair settled and source refrozen".to_string(),
                 )
             }
         }
@@ -203,6 +380,10 @@ impl App {
         &self,
         item_id: &str,
     ) -> Result<Option<PersistedFeatureRun>> {
+        let item = self.get_item(item_id)?;
+        if !is_ordinary_implementation_work_type(&item.work_type) {
+            return Ok(None);
+        }
         if let Some(hold) = self.binding_evidence_hold_for_item(item_id)? {
             bail!(
                 "binding_evidence_obligations_missing:{item_id}; next action: {}",
@@ -211,7 +392,6 @@ impl App {
                     .unwrap_or("planr evidence migrate --input <migration-file> --apply")
             );
         }
-        let item = self.get_item(item_id)?;
         let Some(plan_path) = item.plan_path.as_deref() else {
             return Ok(None);
         };
@@ -275,6 +455,9 @@ impl App {
         plan_id: &str,
         reason: FeatureRunRestartReason,
     ) -> Result<Value> {
+        if reason == FeatureRunRestartReason::InconsistentVerification {
+            return self.restart_inconsistent_verification_feature_run_value(plan_id);
+        }
         let project = self.default_project()?;
         let repository = ExecutionRunRepository::new(&self.conn);
         let Some(persisted) = repository.active_feature_run_for_plan(&project.id, plan_id)? else {
@@ -289,9 +472,9 @@ impl App {
                     Ok(json!({"schema_version": "planr.feature_run_restart.v1",
                         "restart": previous, "execution_state": execution_state}))
                 }
-                FeatureRunRestartReason::StaleSourceFreeze => {
+                FeatureRunRestartReason::PrematureSourceFreeze => {
                     let mut previous = repository
-                        .latest_stale_source_freeze_feature_run_restart(&project.id, plan_id)?
+                        .latest_premature_source_freeze_feature_run_restart(&project.id, plan_id)?
                         .ok_or_else(|| anyhow!("feature_run_not_found_for_plan:{plan_id}"))?;
                     previous.disposition = FeatureRunRestartDisposition::AlreadyRetired;
                     let execution_state =
@@ -299,6 +482,7 @@ impl App {
                     Ok(json!({"schema_version": "planr.feature_run_restart.v1",
                         "restart": previous, "execution_state": execution_state}))
                 }
+                FeatureRunRestartReason::InconsistentVerification => unreachable!("dispatched above"),
             };
         };
         let request = FeatureRunRestartRequest {
@@ -318,23 +502,24 @@ impl App {
                 )?;
                 serde_json::to_value(transition)?
             }
-            FeatureRunRestartReason::StaleSourceFreeze => {
+            FeatureRunRestartReason::PrematureSourceFreeze => {
                 let facts = self
-                    .stale_source_freeze_restart_facts(&persisted)?
-                    .ok_or_else(|| anyhow!("feature_run_stale_source_freeze_restart_not_required:{plan_id}"))?;
-                let transition = retire_stale_source_freeze_feature_run(
+                    .premature_source_freeze_restart_facts(&persisted)?
+                    .ok_or_else(|| anyhow!("feature_run_premature_source_freeze_restart_not_required:{plan_id}"))?;
+                let transition = retire_premature_source_freeze_feature_run(
                     &persisted.run,
                     &request,
                     &facts,
                 )
                 .map_err(|violation| anyhow!("feature_run_restart_rejected:{violation:?}"))?;
-                repository.retire_stale_source_freeze_feature_run(
+                repository.retire_premature_source_freeze_feature_run(
                     &transition,
                     persisted.revision,
                     &worker_id(),
                 )?;
                 serde_json::to_value(transition)?
             }
+            FeatureRunRestartReason::InconsistentVerification => unreachable!("dispatched above"),
         };
         let execution_state = self.canonical_execution_state_value(&persisted.run.id, None)?;
         Ok(json!({
@@ -344,62 +529,73 @@ impl App {
         }))
     }
 
-    pub(crate) fn stale_source_freeze_restart_facts(
+    pub(crate) fn premature_source_freeze_restart_facts(
         &self,
         persisted: &PersistedFeatureRun,
-    ) -> Result<Option<StaleSourceFreezeRestartFacts>> {
+    ) -> Result<Option<PrematureSourceFreezeRestartFacts>> {
         if persisted.run.status != FeatureRunStatus::Active
             || persisted.run.phase != FeatureRunPhase::SourceFrozen
         {
             return Ok(None);
         }
         let repository = ExecutionRunRepository::new(&self.conn);
-        if repository.plan_has_verification_item(&persisted.run.plan_id)? {
-            return Ok(None);
-        }
         let Some(freeze) = repository.active_source_freeze(&persisted.run.id)? else {
             return Ok(None);
         };
-        let snapshot = capture_repository_snapshot(&self.root)
-            .map_err(|error| anyhow!("checking stale source freeze restart: {error}"))?;
-        if freeze.source_revision == snapshot.source.revision
-            && freeze.source_digest == snapshot.source.tree_digest.as_str()
+        let open_outcome_ids =
+            repository.open_ordinary_outcome_ids(&persisted.run.plan_id)?;
+        if open_outcome_ids.is_empty() {
+            return Ok(None);
+        }
+        let released_outcome_ids =
+            repository.active_ordinary_outcome_lease_ids(&persisted.run.plan_id)?;
+        let (
+            verification_admission_count,
+            verification_attempt_count,
+            verification_receipt_count,
+        ) = repository.source_freeze_verification_activity(
+            &persisted.project_id,
+            &persisted.run.plan_id,
+            &persisted.run.id,
+            &freeze,
+        )?;
+        if verification_admission_count != 0
+            || verification_attempt_count != 0
+            || verification_receipt_count != 0
         {
             return Ok(None);
         }
-        let routed_outcome_ids = repository.stranded_code_outcome_ids(&persisted.run.plan_id)?;
-        if routed_outcome_ids.is_empty() {
-            return Ok(None);
-        }
-        Ok(Some(StaleSourceFreezeRestartFacts {
+        Ok(Some(PrematureSourceFreezeRestartFacts {
             freeze_id: freeze.id,
             frozen_source_revision: freeze.source_revision,
             frozen_source_digest: freeze.source_digest,
-            current_source_revision: snapshot.source.revision,
-            current_source_digest: snapshot.source.tree_digest.as_str().to_string(),
-            routed_outcome_ids,
+            open_outcome_ids,
+            released_outcome_ids,
+            verification_admission_count,
+            verification_attempt_count,
+            verification_receipt_count,
         }))
     }
 
-    pub(crate) fn stale_source_freeze_restart_hold_for_run(
+    pub(crate) fn premature_source_freeze_restart_hold_for_run(
         &self,
         persisted: &PersistedFeatureRun,
     ) -> Result<Option<Value>> {
-        let Some(facts) = self.stale_source_freeze_restart_facts(persisted)? else {
+        let Some(facts) = self.premature_source_freeze_restart_facts(persisted)? else {
             return Ok(None);
         };
         let command = format!(
-            "planr run restart --plan {} --reason stale-source-freeze --json",
+            "planr --json run restart --plan {} --reason premature-source-freeze",
             persisted.run.plan_id
         );
         Ok(Some(json!({
             "item": null,
-            "reason": "source_freeze_stale",
+            "reason": "source_freeze_premature",
             "repair": [command],
             "work_packet": {
                 "kind": "hold",
-                "classification": "source_freeze_stale",
-                "reason_code": "source_freeze_stale",
+                "classification": "source_freeze_premature",
+                "reason_code": "source_freeze_premature",
                 "next_action": command,
                 "restart_facts": facts,
                 "execution_state": self.canonical_execution_state_value(&persisted.run.id, None)?,
@@ -467,9 +663,16 @@ impl App {
         })))
     }
 
-    pub(crate) fn settle_feature_run_outcome(&self, input: OutcomeSettlement<'_>) -> Result<Value> {
+    pub(crate) fn settle_existing_feature_run_outcome(
+        &self,
+        input: ExistingOutcomeSettlement<'_>,
+    ) -> Result<OutcomeSettlementTransition> {
         let Some(persisted) = self.ensure_outcome_feature_run(input.item_id)? else {
-            return Ok(json!({"kind": "outcome", "transition": "legacy_unplanned"}));
+            return Err(already_settled_outcome_error(
+                "unplanned",
+                input.item_id,
+                AlreadySettledOutcomeViolation::MissingOutcome,
+            ));
         };
         if self
             .incompatible_feature_run_hold_value(input.item_id, &persisted)?
@@ -479,6 +682,159 @@ impl App {
                 "feature_run_budget_contract_incompatible:{}",
                 persisted.run.id
             );
+        }
+        let repository = ExecutionRunRepository::new(&self.conn);
+        let existing_outcome = repository
+            .outcome_for_run_item(&persisted.run.id, input.item_id)?
+            .ok_or_else(|| {
+                already_settled_outcome_error(
+                    &persisted.run.id,
+                    input.item_id,
+                    AlreadySettledOutcomeViolation::MissingOutcome,
+                )
+            })?;
+        let item = self.get_item(input.item_id)?;
+        let reject = |violation| {
+            already_settled_outcome_error(&persisted.run.id, input.item_id, violation)
+        };
+        if persisted.run.phase != FeatureRunPhase::Implementation {
+            return Err(reject(AlreadySettledOutcomeViolation::PhaseMismatch));
+        }
+        if persisted.run.status != FeatureRunStatus::Active {
+            return Err(reject(AlreadySettledOutcomeViolation::RunStatusMismatch));
+        }
+        if !matches!(item.status, ItemStatus::Closed | ItemStatus::ClosedPartial) {
+            return Err(reject(AlreadySettledOutcomeViolation::ItemNotTerminal));
+        }
+        let makers = persisted
+            .run
+            .role_owners
+            .iter()
+            .filter(|owner| owner.role == RunRole::Maker)
+            .collect::<Vec<_>>();
+        if makers.len() != 1 {
+            return Err(reject(AlreadySettledOutcomeViolation::MakerCardinality));
+        }
+        let maker = makers[0];
+        if maker.worker_id != worker_id() {
+            return Err(reject(AlreadySettledOutcomeViolation::MakerMismatch));
+        }
+        let batch_id = persisted
+            .run
+            .active_batch_id
+            .as_deref()
+            .ok_or_else(|| reject(AlreadySettledOutcomeViolation::ActiveBatchMissing))?;
+        let batch = repository
+            .batch(batch_id)
+            .map_err(|_| reject(AlreadySettledOutcomeViolation::ActiveBatchMissing))?;
+        let escalation = admitted_outcome_escalation(input.escalation)?;
+        if existing_outcome.id != format!("outcome-{}", input.item_id) {
+            return Err(reject(AlreadySettledOutcomeViolation::OutcomeIdMismatch));
+        }
+        if existing_outcome.run_id != persisted.run.id {
+            return Err(reject(AlreadySettledOutcomeViolation::OutcomeRunMismatch));
+        }
+        if existing_outcome.batch_id != batch_id {
+            return Err(reject(AlreadySettledOutcomeViolation::OutcomeBatchMismatch));
+        }
+        if existing_outcome.item_id != input.item_id {
+            return Err(reject(AlreadySettledOutcomeViolation::OutcomeItemMismatch));
+        }
+        if existing_outcome.ordinal == 0
+            || existing_outcome.ordinal != persisted.run.batch_outcome_count
+        {
+            return Err(reject(AlreadySettledOutcomeViolation::OutcomeOrdinalMismatch));
+        }
+        let materiality = persisted_outcome_materiality(
+            &existing_outcome.outcome,
+            input.summary,
+            &escalation,
+            input.claimed_files,
+        )
+        .map_err(reject)?;
+        if batch.batch.run_id != persisted.run.id {
+            return Err(reject(AlreadySettledOutcomeViolation::BatchRunMismatch));
+        }
+        if batch.batch.status != ExecutionBatchStatus::Active {
+            return Err(reject(AlreadySettledOutcomeViolation::BatchStatusMismatch));
+        }
+        if batch.batch.maker_worker_id != maker.worker_id {
+            return Err(reject(AlreadySettledOutcomeViolation::BatchMakerMismatch));
+        }
+        if batch.batch.settled_count() != persisted.run.batch_outcome_count {
+            return Err(reject(AlreadySettledOutcomeViolation::BatchCounterMismatch));
+        }
+        let batch_index = usize::try_from(existing_outcome.ordinal - 1)
+            .map_err(|_| reject(AlreadySettledOutcomeViolation::OutcomeOrdinalMismatch))?;
+        if batch.batch.settled_outcome_ids.get(batch_index) != Some(&existing_outcome.id) {
+            return Err(reject(AlreadySettledOutcomeViolation::BatchMembershipMismatch));
+        }
+        let run_outcomes = repository.outcomes(&persisted.run.id)?;
+        if u32::try_from(run_outcomes.len()).ok() != Some(persisted.run.outcomes_settled)
+            || run_outcomes
+                .iter()
+                .filter(|outcome| outcome.item_id == input.item_id)
+                .count()
+                != 1
+        {
+            return Err(reject(AlreadySettledOutcomeViolation::RunCounterMismatch));
+        }
+        let execution_state = self.canonical_execution_state_value(&persisted.run.id, None)?;
+        let work_packet = json!({
+            "kind": "outcome",
+            "run_id": persisted.run.id,
+            "batch_id": batch_id,
+            "run_revision": persisted.revision,
+            "batch_outcome_count": persisted.run.batch_outcome_count,
+            "transition": "already_settled",
+            "disposition": "already_settled",
+            "materiality": &materiality,
+            "review_gate": null,
+            "execution_state": execution_state,
+        });
+        Ok(OutcomeSettlementTransition::already_settled(
+            work_packet,
+            materiality,
+        ))
+    }
+
+    pub(crate) fn settle_feature_run_outcome(
+        &self,
+        input: OutcomeSettlement<'_>,
+    ) -> Result<OutcomeSettlementTransition> {
+        let Some(persisted) = self.ensure_outcome_feature_run(input.item_id)? else {
+            return Ok(OutcomeSettlementTransition::freshly_recorded(
+                json!({"kind": "outcome", "transition": "legacy_unplanned"}),
+                input.materiality,
+            ));
+        };
+        if self
+            .incompatible_feature_run_hold_value(input.item_id, &persisted)?
+            .is_some()
+        {
+            bail!(
+                "feature_run_budget_contract_incompatible:{}",
+                persisted.run.id
+            );
+        }
+        let repository = ExecutionRunRepository::new(&self.conn);
+        let item = self.get_item(input.item_id)?;
+        if repository
+            .outcome_for_run_item(&persisted.run.id, input.item_id)?
+            .is_some()
+        {
+            return Err(already_settled_outcome_error(
+                &persisted.run.id,
+                input.item_id,
+                AlreadySettledOutcomeViolation::ExistingOutcomeRequiresRetryAdmission,
+            ));
+        }
+        if matches!(item.status, ItemStatus::Closed | ItemStatus::ClosedPartial) {
+            return Err(already_settled_outcome_error(
+                &persisted.run.id,
+                input.item_id,
+                AlreadySettledOutcomeViolation::MissingOutcome,
+            ));
         }
         if persisted.run.phase != FeatureRunPhase::Implementation {
             bail!("feature_run_not_accepting_outcomes:{}", persisted.run.id);
@@ -497,24 +853,13 @@ impl App {
         }
         let review_required =
             input.materiality["decision"]["review"].as_str() == Some("independent_high_signal");
-        let escalation = input
-            .escalation
-            .map(|escalation| {
-                match admit_review_interrupt(&ReviewInterruptRequest::StructuredEscalation {
-                    escalation: escalation.clone(),
-                }) {
-                    ReviewInterruptDecision::OpenCheckpoint { escalation } => Ok(escalation),
-                    decision => bail!("review_escalation_rejected:{decision:?}"),
-                }
-            })
-            .transpose()?;
+        let escalation = admitted_outcome_escalation(input.escalation)?;
         let checkpoint_required = review_required || escalation.is_some();
         let batch_id = persisted
             .run
             .active_batch_id
             .clone()
             .ok_or_else(|| anyhow!("feature_run_missing_active_batch:{}", persisted.run.id))?;
-        let repository = ExecutionRunRepository::new(&self.conn);
         let batch = repository.batch(&batch_id)?;
         if batch.batch.maker_worker_id != maker.worker_id {
             bail!("feature_run_batch_maker_mismatch:{}", persisted.run.id);
@@ -605,16 +950,19 @@ impl App {
             &persisted.run.id,
             gate.as_ref().map(|gate| gate.id.as_str()),
         )?;
-        Ok(json!({
-            "kind": "outcome",
-            "run_id": persisted.run.id,
-            "batch_id": batch_id,
-            "run_revision": settled_run_revision,
-            "batch_outcome_count": ordinal,
-            "transition": transition,
-            "review_gate": gate,
-            "execution_state": execution_state,
-        }))
+        Ok(OutcomeSettlementTransition::freshly_recorded(
+            json!({
+                "kind": "outcome",
+                "run_id": persisted.run.id,
+                "batch_id": batch_id,
+                "run_revision": settled_run_revision,
+                "batch_outcome_count": ordinal,
+                "transition": transition,
+                "review_gate": gate,
+                "execution_state": execution_state,
+            }),
+            input.materiality,
+        ))
     }
 
     pub(crate) fn replace_feature_run_maker_value(
@@ -794,6 +1142,79 @@ impl App {
         self.review_gate_pick_value_for_worker(plan_id, peek, &worker_id())
     }
 
+    fn reconcile_final_review_repair_source(
+        &self,
+        repository: &ExecutionRunRepository<'_>,
+        persisted: &PersistedFeatureRun,
+        gate: &ReviewGateRecord,
+    ) -> Result<()> {
+        if gate.kind != ReviewGateKind::FinalProduct
+            || !matches!(
+                persisted.run.phase,
+                FeatureRunPhase::Verification | FeatureRunPhase::SourceFrozen
+            )
+        {
+            return Ok(());
+        }
+        let Some(active) = repository.active_source_freeze(&gate.run_id)? else {
+            return Ok(());
+        };
+        let snapshot = capture_repository_snapshot(&self.root)
+            .map_err(|error| anyhow!("final_review_repair_source_capture:{error}"))?;
+        if snapshot.source.revision == active.source_revision
+            && snapshot.source.tree_digest.as_str() == active.source_digest
+        {
+            return Ok(());
+        }
+        if persisted.run.phase == FeatureRunPhase::Verification {
+            self.reconcile_active_phase_wall(&gate.run_id, BudgetPhase::Repair)?;
+            self.reconcile_active_phase_wall(&gate.run_id, BudgetPhase::Verification)?;
+        }
+        let obligation_ids = self
+            .conn
+            .prepare(
+                "SELECT id FROM proof_obligations WHERE plan_id = ?1 AND binding = 1 ORDER BY id",
+            )?
+            .query_map([&gate.scope_id], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        repository.invalidate_source(&EvidenceInvalidationRecord {
+            id: short_id("invalidation"),
+            run_id: gate.run_id.clone(),
+            freeze_id: active.id,
+            finding_id: repository
+                .findings(&gate.id)?
+                .first()
+                .map(|finding| finding.id.clone()),
+            reason: "resolved_final_review_repair_source_changed".to_string(),
+            affected_evidence_ids: obligation_ids,
+        })?;
+        let replacement = SourceFreezeRecord {
+            id: short_id("freeze"),
+            run_id: gate.run_id.clone(),
+            source_revision: snapshot.source.revision.clone(),
+            source_digest: snapshot.source.tree_digest.as_str().to_string(),
+            status: SourceFreezeStatus::Active,
+        };
+        repository.freeze_source(&replacement)?;
+        let mut refrozen = if persisted.run.phase == FeatureRunPhase::Verification {
+            apply_phase_transition(
+                &persisted.run,
+                &PhaseTransition {
+                    to: FeatureRunPhase::SourceFrozen,
+                    cause: PhaseTransitionCause::SourceInvalidated,
+                    reference: format!("source_freeze:{}", replacement.id),
+                    owner: None,
+                },
+            )
+            .map_err(|violation| anyhow!("final_review_repair_refreeze:{violation:?}"))?
+        } else {
+            persisted.run.clone()
+        };
+        refrozen.source_revision = Some(replacement.source_revision);
+        repository.save_feature_run(&refrozen, persisted.revision)?;
+        Ok(())
+    }
+
     pub(crate) fn resolve_review_gate_findings_value(
         &self,
         gate_id: &str,
@@ -826,55 +1247,7 @@ impl App {
                 &gate,
                 finding_ids,
             )?;
-            if gate.kind == ReviewGateKind::FinalProduct
-                && persisted.run.phase == FeatureRunPhase::Verification
-                && let Some(active) = repository.active_source_freeze(&gate.run_id)?
-            {
-                let snapshot = capture_repository_snapshot(&self.root)
-                    .map_err(|error| anyhow!("final_review_repair_source_capture:{error}"))?;
-                if snapshot.source.revision != active.source_revision
-                    || snapshot.source.tree_digest.as_str() != active.source_digest
-                {
-                    self.reconcile_active_phase_wall(&gate.run_id, BudgetPhase::Repair)?;
-                    self.reconcile_active_phase_wall(&gate.run_id, BudgetPhase::Verification)?;
-                    let obligation_ids = self
-                        .conn
-                        .prepare("SELECT id FROM proof_obligations WHERE plan_id = ?1 AND binding = 1 ORDER BY id")?
-                        .query_map([&gate.scope_id], |row| row.get::<_, String>(0))?
-                        .collect::<rusqlite::Result<Vec<_>>>()?;
-                    repository.invalidate_source(&EvidenceInvalidationRecord {
-                        id: short_id("invalidation"),
-                        run_id: gate.run_id.clone(),
-                        freeze_id: active.id,
-                        finding_id: repository
-                            .findings(&gate.id)?
-                            .first()
-                            .map(|finding| finding.id.clone()),
-                        reason: "resolved_final_review_repair_source_changed".to_string(),
-                        affected_evidence_ids: obligation_ids,
-                    })?;
-                    let replacement = SourceFreezeRecord {
-                        id: short_id("freeze"),
-                        run_id: gate.run_id.clone(),
-                        source_revision: snapshot.source.revision.clone(),
-                        source_digest: snapshot.source.tree_digest.as_str().to_string(),
-                        status: SourceFreezeStatus::Active,
-                    };
-                    repository.freeze_source(&replacement)?;
-                    let mut refrozen = apply_phase_transition(
-                        &persisted.run,
-                        &PhaseTransition {
-                            to: FeatureRunPhase::SourceFrozen,
-                            cause: PhaseTransitionCause::SourceInvalidated,
-                            reference: format!("source_freeze:{}", replacement.id),
-                            owner: None,
-                        },
-                    )
-                    .map_err(|violation| anyhow!("final_review_repair_refreeze:{violation:?}"))?;
-                    refrozen.source_revision = Some(replacement.source_revision);
-                    repository.save_feature_run(&refrozen, persisted.revision)?;
-                }
-            }
+            self.reconcile_final_review_repair_source(&repository, &persisted, &gate)?;
             for finding_id in finding_ids {
                 let current = repository
                     .findings(gate_id)?
@@ -2129,7 +2502,7 @@ mod tests {
                 .contains("RestartBudgetContractCompatible")
         );
 
-        let (root, stale) = test_app();
+        let (_root, stale) = test_app();
         add_outcome(&stale, "item-stale-source");
         let initial = stale
             .outcome_work_packet("item-stale-source")
@@ -2151,22 +2524,16 @@ mod tests {
             .source_freeze(&old_freeze_id)
             .expect("old source freeze");
         let old_freeze_bytes = serde_json::to_vec(&old_freeze).expect("serialized old freeze");
-        fs::write(root.path().join("plan-a.md"), "# Current plan\n")
-            .expect("make frozen source stale");
-        let current_source = capture_repository_snapshot(root.path()).expect("current source");
-        assert_ne!(
-            old_freeze.source_digest,
-            current_source.source.tree_digest.as_str()
-        );
         let retired = stale
-            .restart_feature_run_value("plan-a", FeatureRunRestartReason::StaleSourceFreeze)
-            .expect("stale source restart");
+            .restart_feature_run_value("plan-a", FeatureRunRestartReason::PrematureSourceFreeze)
+            .expect("premature source-freeze restart");
         assert_eq!(retired["restart"]["disposition"], "retired");
         assert_eq!(retired["restart"]["facts"]["freeze_id"], old_freeze_id);
         assert_eq!(
-            retired["restart"]["facts"]["routed_outcome_ids"],
+            retired["restart"]["facts"]["open_outcome_ids"],
             json!(["item-stale-source"])
         );
+        assert_eq!(retired["restart"]["facts"]["released_outcome_ids"], json!(["item-stale-source"]));
         assert_eq!(retired["execution_state"]["feature_run"]["status"], "cancelled");
         assert_eq!(retired["execution_state"]["feature_run"]["phase"], "cancelled");
         assert_eq!(
@@ -2192,10 +2559,10 @@ mod tests {
             old_freeze_bytes
         );
         let repeated = stale
-            .restart_feature_run_value("plan-a", FeatureRunRestartReason::StaleSourceFreeze)
-            .expect("idempotent stale source restart");
+            .restart_feature_run_value("plan-a", FeatureRunRestartReason::PrematureSourceFreeze)
+            .expect("idempotent premature source-freeze restart");
         assert_eq!(repeated["restart"]["disposition"], "already_retired");
-        assert_eq!(stale.conn.query_row("SELECT COUNT(*) FROM events WHERE event_type = 'feature_run_stale_source_freeze_retired'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(stale.conn.query_row("SELECT COUNT(*) FROM events WHERE event_type = 'feature_run_premature_source_freeze_retired'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
         let next = stale
             .next_pick_value(None, Some("code"), Some("plan-a"))
             .expect("next ordinary pick");
@@ -2213,11 +2580,11 @@ mod tests {
         assert_eq!(new_freeze["source_freeze"]["run_id"], new_run_id);
         assert_eq!(
             new_freeze["source_freeze"]["source_revision"],
-            current_source.source.revision
+            old_freeze.source_revision
         );
         assert_eq!(
             new_freeze["source_freeze"]["source_digest"],
-            current_source.source.tree_digest.as_str()
+            old_freeze.source_digest
         );
         assert_eq!(
             serde_json::to_vec(
@@ -2995,5 +3362,75 @@ mod tests {
             repair["work_packet"]["selective_replay_obligation_ids"],
             json!(["pob-only"])
         );
+    }
+
+    #[test]
+    fn source_frozen_final_review_repair_retry_refreezes_once() {
+        let (root, app) = test_app();
+        add_outcome(&app, "item-refreeze-retry");
+        app.outcome_work_packet("item-refreeze-retry")
+            .expect("feature run");
+        let settled = app
+            .settle_feature_run_outcome(OutcomeSettlement {
+                item_id: "item-refreeze-retry",
+                summary: "settled refreeze retry fixture",
+                materiality: &materiality(false),
+                escalation: None,
+            })
+            .expect("settle ordinary outcome");
+        app.close_item_core("item-refreeze-retry", "settled refreeze retry fixture", false)
+            .expect("close ordinary outcome");
+        app
+            .freeze_feature_run_source_value("plan-a")
+            .expect("freeze")
+            .expect("frozen run");
+        let run_id = settled["run_id"].as_str().unwrap();
+        let repository = ExecutionRunRepository::new(&app.conn);
+        let old_freeze = repository.active_source_freeze(run_id).unwrap().unwrap();
+        let gate = ReviewGateRecord {
+            id: "gate-refreeze-retry".into(), run_id: run_id.into(),
+            scope_kind: ReviewScopeKind::Plan, scope_id: "plan-a".into(),
+            kind: ReviewGateKind::FinalProduct, status: ReviewGateStatus::Pending,
+            required_risk: None, responsible_maker_id: worker_id(), latest_attempt: 0,
+            source_revision: Some(old_freeze.source_revision.clone()),
+        };
+        repository.create_review_gate(&gate).unwrap();
+        let finding = FindingRecord {
+            id: "finding-refreeze-retry".into(), gate_id: gate.id.clone(),
+            attempt_id: "attempt-refreeze-retry".into(), severity: "high".into(),
+            target: "plan-a".into(), owner_worker_id: worker_id(),
+            status: FindingStatus::Resolved, invalidated_evidence_ids: Vec::new(),
+        };
+        repository.append_review_attempt(
+            &ReviewAttemptRecord {
+                id: finding.attempt_id.clone(), gate_id: gate.id.clone(), attempt_number: 1,
+                reviewer_worker_id: "reviewer-a".into(), reviewer_mode: "independent".into(),
+                verdict: ReviewVerdict::ChangesRequested,
+                source_revision: old_freeze.source_revision.clone(), artifacts: Vec::new(),
+            },
+            std::slice::from_ref(&finding), 0,
+        ).unwrap();
+        let gate_before = repository.review_gate(&gate.id).unwrap();
+        let findings_before = repository.findings(&gate.id).unwrap();
+        fs::write(root.path().join("plan-a.md"), "# Repaired source\n").unwrap();
+        let frozen_run = repository.feature_run(run_id).unwrap();
+        app.reconcile_final_review_repair_source(&repository, &frozen_run, &gate_before).unwrap();
+        let replacement = repository.active_source_freeze(run_id).unwrap().unwrap();
+        assert_ne!(replacement.id, old_freeze.id);
+        assert_eq!(repository.source_freeze(&old_freeze.id).unwrap().status, SourceFreezeStatus::Invalidated);
+        let after = repository.feature_run(run_id).unwrap();
+        assert_eq!(after.run.phase, FeatureRunPhase::SourceFrozen);
+        assert_eq!(after.run.source_revision.as_deref(), Some(replacement.source_revision.as_str()));
+        assert_eq!(repository.review_gate(&gate.id).unwrap(), gate_before);
+        assert_eq!(repository.findings(&gate.id).unwrap(), findings_before);
+        let freeze_counts = || app.conn.query_row(
+            "SELECT COUNT(*), SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) FROM feature_run_source_freezes WHERE run_id = ?1",
+            [run_id], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        ).unwrap();
+        assert_eq!(freeze_counts(), (2, 1));
+        app.reconcile_final_review_repair_source(&repository, &after, &gate_before).unwrap();
+        assert_eq!(repository.active_source_freeze(run_id).unwrap().unwrap(), replacement);
+        assert_eq!(repository.feature_run(run_id).unwrap(), after);
+        assert_eq!(freeze_counts(), (2, 1));
     }
 }

@@ -277,12 +277,26 @@ CREATE TABLE IF NOT EXISTS feature_run_product_repair_settlements(
   invalidation_id TEXT PRIMARY KEY REFERENCES feature_run_evidence_invalidations(id),
   run_id TEXT NOT NULL REFERENCES feature_runs(id) ON DELETE CASCADE,
   responsible_maker_id TEXT NOT NULL,
-  verification_item_id TEXT NOT NULL REFERENCES items(id),
   selective_obligation_ids_json TEXT NOT NULL CHECK(json_valid(selective_obligation_ids_json)),
   settlement_json TEXT NOT NULL CHECK(json_valid(settlement_json)),
   source_freeze_id TEXT NOT NULL REFERENCES feature_run_source_freezes(id),
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE(invalidation_id, run_id)
+);
+
+CREATE TABLE IF NOT EXISTS feature_run_verification_admission_repair_settlements(
+  invalidation_id TEXT PRIMARY KEY REFERENCES feature_run_evidence_invalidations(id),
+  run_id TEXT NOT NULL REFERENCES feature_runs(id) ON DELETE CASCADE,
+  repair_batch_id TEXT NOT NULL,
+  responsible_maker_id TEXT NOT NULL CHECK(length(trim(responsible_maker_id)) > 0),
+  ended_revision INTEGER NOT NULL CHECK(ended_revision >= 1),
+  settlement_json TEXT NOT NULL CHECK(json_valid(settlement_json)),
+  source_freeze_id TEXT NOT NULL REFERENCES feature_run_source_freezes(id),
+  source_revision TEXT NOT NULL CHECK(length(trim(source_revision)) > 0),
+  source_digest TEXT NOT NULL CHECK(length(trim(source_digest)) > 0),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(invalidation_id, run_id),
+  FOREIGN KEY(repair_batch_id, run_id) REFERENCES execution_batches(id, run_id)
 );
 
 -- One-shot hard-cut settlement starts from stranded targets and follows
@@ -294,6 +308,7 @@ CREATE INDEX IF NOT EXISTS idx_events_item_type_timestamp ON events(item_id, eve
 "#,
     );
     let result = result
+        .and_then(|()| remove_product_repair_verification_item_column(conn))
         .and_then(|()| ensure_execution_run_additive_columns(conn))
         .and_then(|()| ensure_budget_storage_integrity(conn))
         .and_then(|()| migrate_accepted_legacy_review_chains_once(conn));
@@ -309,6 +324,20 @@ CREATE INDEX IF NOT EXISTS idx_events_item_type_timestamp ON events(item_id, eve
             Err(error.into())
         }
     }
+}
+
+fn remove_product_repair_verification_item_column(conn: &Connection) -> rusqlite::Result<()> {
+    if column_exists(
+        conn,
+        "feature_run_product_repair_settlements",
+        "verification_item_id",
+    )? {
+        conn.execute_batch(
+            "ALTER TABLE feature_run_product_repair_settlements
+             DROP COLUMN verification_item_id;",
+        )?;
+    }
+    Ok(())
 }
 
 fn upgrade_feature_run_terminal_reason_constraint(conn: &Connection) -> Result<()> {

@@ -25,6 +25,88 @@ Evidence Contract v1 is Planr's local-first contract for proving acceptance crit
 - Migration is the sole obligation-materialization path. It is explicit, plan-scoped, previewable, idempotent, and accepts only an exact declared criterion binding set before materializing ordinary immutable `ProofObligation` rows. It must not rewrite plans, logs, reviews, artifacts, or historical claims.
 - Planr artifacts remain files or references with digests. An artifact alone is not trusted evidence unless a trusted receipt binds it to the source revision, target, environment, execution identity, observation results, and policy.
 
+## Binding Execution Orchestration
+
+Before verification admission, FeatureRun source freeze is legal only when no open ordinary
+implementation outcome remains. Planned `code`, `fix`, `docs`, and `test` share the one domain-owned
+maker-compatible classification. An active source-frozen run that still has open ordinary work and
+has no verifier admission, Evidence attempt, or receipt for its immutable freeze is retired only by
+the typed `premature-source-freeze` transition. Retirement preserves the freeze and all Evidence
+history, releases active ordinary leases, and creates no successor. The repository-owned no-model
+`com.planr.premature_freeze.lifecycle.v1` capability is reserved for the final frozen-source HARDEN
+observation; registering it does not execute or satisfy that observation during BUILD.
+
+An active Verification FeatureRun whose current admission is absent or unequal across the active
+plan/run/revision, freeze, verifier worker/generation, optional item, or admitted/sealed run-index
+digest is retired only by the typed `inconsistent-verification` transition. Exact equality rejects
+retirement. One immediate optimistic transaction invalidates but preserves the freeze, ends or
+preserves-ended the referenced batch, releases exact roles, Verification reservations, and only an
+exact verifier-owned optional item, preserves every prior Evidence/history identity, emits one
+typed event, and creates no successor. Repetition reads that event and writes nothing. The
+repository-owned `com.planr.inconsistent_verification.retirement.v1` capability is registered during
+BUILD but first executes only after HARDEN supplies the exact focused invariant.
+
+`planr.evidence.run-index.v2` is the sole executable run-index shape. Readiness consumes canonical
+authoritative obligation rows and seals exactly one run for every distinct canonical target within
+each obligation. A run names one `obligation_id`, one target, and sorted non-empty unique
+`requirement_ids`. For each obligation, admission recomputes the target partition and requires the
+run subsets to be disjoint and to form the exact union of authoritative observation requirement
+IDs. Requirements from different obligations never share a run.
+
+Execution, structured and ordinary result validation, receipt observation construction, retry
+predecessor validation, independence, hermetic reuse, and persisted attempt/receipt lineage bind
+only the selected requirement subset plus the sealed source, policy, target, capability,
+environment, execution contract, and run-index digest. Extra, missing, duplicate, foreign-target,
+or cross-subset data fails before trusted receipt persistence. `evidence/coverage` remains the sole
+coverage and closure owner; a run-index result is not a coverage verdict.
+
+A multi-target obligation that would execute a `non_repeatable_one_shot` capability fails readiness
+before launch or durable allowance claim. Host capture consumes the same sealed target/subset
+contract as process execution and owns no first-observation or all-targets-equal policy.
+
+Pre-receipt admission failure persists no attempt, receipt, coverage verdict, or ProductFinding.
+One explicit optimistic plan/run/freeze/revision-scoped FeatureRun repair request has a closed
+reason enum and conditional seal binding. Pre-seal `readiness-blocked` and
+`run-index-seal-failed` require `run_index_digest` to be absent; post-seal pre-receipt
+`sealed-run-rejected` and `capability-admission-failed` require the exact admitted digest. A failed
+readiness lease transaction rolls back before Planr persists its durable capability hold and
+diagnostic, so no unusable verifier lease is committed to create repair context. The repair
+invalidates the active freeze, releases verifier ownership and any present verification-item
+lease, restores the original maker at the next lease generation, starts one repair batch, emits one
+repair event, and projects an optional `verification_item_id`. Post-receipt `product_failed` and
+terminal one-shot exhaustion remain their existing distinct lifecycles.
+
+Satisfied plan coverage settles the active FeatureRun by exact verifier lease generation, active
+immutable freeze, and accepted trusted receipt lineage whose source binding exactly equals that
+freeze. A verification map item is a zero-or-one projection. If one item is picked or running under
+the verifier, settlement closes and logs it in the same transaction; if none exists, settlement
+performs zero item/log mutations. A ready unleased verification item remains fail-closed. The
+transition always reconciles the verification budget wall, applies `VerificationPassed` to
+`SourceFrozen` (or `Implementation` if ordinary work reopened), persists/releases roles through the
+canonical repository transaction, and emits one event shape with nullable `item_id` and `log_id`.
+
+Binding final-review admission is item-independent: it requires the post-settlement SourceFrozen
+run, an intact active freeze, and satisfied coverage whose accepted receipt/source binding exactly
+matches that freeze. Terminal `non_repeatable_one_shot` exhaustion is also zero-or-one item inside
+the trusted attempt/receipt transaction. Attempt/receipt persistence, budget reconciliation,
+FeatureRun cancellation, and verifier release always commit atomically; item failure/logging occurs
+only when one active projection is present, and ready-unleased remains fail-closed.
+
+Post-receipt ProductFinding repair remains distinct from pre-receipt admission repair. The
+application resolves the verification map item as an optional current plan-path projection for
+routing, maker work packets, settlement, idempotent replay, selective-replay handoff, and verifier
+release. Absence performs no item mutation; only a present eligible item is updated. Durable
+ProductRepair settlement persists invalidation/run/maker/selective-obligation/settlement/freeze
+lineage and no item identity. The lifecycle does not reclassify the outcome or create a receipt.
+
+This is a hard cut: run-index v1, first-observation target inference, all-targets-equal checks,
+item-keyed `pick release --repair`, item-required repair, persisted repair-item identity,
+settlement, final-review, and exhaustion ownership, readers, aliases, fallbacks, shims, and runtime
+compatibility do not exist.
+Completed trusted Evidence v1 receipts remain coverage records because coverage is independent of
+run-index orchestration; unexecuted v1 run indexes and in-flight retry lineage lacking the v2
+execution binding are not translated or inferred.
+
 ## Versioning And Compatibility
 
 - `schema_version` for all v1 objects is `evidence.contract.v1`.
@@ -92,7 +174,7 @@ Required fields:
 
 - `id`, `schema_version`, `version`, `adapter_kind`, `adapter_digest`.
 - Supported surfaces, observation type/schema/digest triples, interactions, artifacts, runtime targets, provenance path, permissions, costs, determinism, repeatability, independence, blind spots, and availability probe contract.
-- When a capability explicitly declares `repeatability = non_repeatable_one_shot`, Planr derives `max_attempts = 1`; any conflicting caller declaration is rejected before launch. Before the adapter can spawn, Planr atomically claims one durable allowance scoped to the active FeatureRun source freeze. That claim survives process, receipt, or settlement failure, so every later fresh initial, retry, or concurrent contender for the freeze is rejected without spawning. Its committed non-passing attempt (`attempt_index + 1 = max_attempts`), including `product_failed`, atomically exhausts that FeatureRun verification allowance with the attempt and receipt. Planr records `verification_attempts_exhausted`, releases the verifier lease, exposes no next verification action, and does not create a product-finding repair or replay path. Missing or other repeatability values never infer one-shot behavior.
+- When a capability explicitly declares `repeatability = non_repeatable_one_shot`, Planr derives `max_attempts = 1`; any conflicting caller declaration is rejected before launch. Before the adapter can spawn, Planr atomically claims one durable allowance scoped to the active FeatureRun source freeze. That claim survives process, receipt, or settlement failure, so every later fresh initial, retry, or concurrent contender for the freeze is rejected without spawning. Its committed non-passing attempt (`attempt_index + 1 = max_attempts`), including `product_failed`, atomically exhausts that FeatureRun verification allowance with the attempt and receipt. Planr records `verification_attempts_exhausted`, releases the verifier lease, exposes no next verification action, and does not create a product-finding repair or replay path. A projected verification item is optional: when active it is failed/logged atomically; when absent there is no item/log mutation; when ready but unleased the transaction fails closed. Missing or other repeatability values never infer one-shot behavior.
 - Process adapters declare a closed `availability_probe.kind = process` contract with executable name, arguments, optional working directory, timeout, stdout/stderr byte limits, and the payload schema binding for emitted observations.
 
 A manifest is a claim about what a method can observe. It is not proof that the method is available now.

@@ -7,8 +7,10 @@ use crate::evidence::coverage::evaluate_plan_coverage;
 use crate::evidence::policy::capture_repository_snapshot;
 use crate::execution_run::{
     ExecutionBatch, ExecutionBatchStatus, FeatureRunPhase, PhaseTransition, PhaseTransitionCause,
-    RoleOwner, RunRole, apply_phase_transition,
+    ORDINARY_IMPLEMENTATION_WORK_TYPE_NAMES, RoleOwner, RunRole, apply_phase_transition,
+    is_ordinary_implementation_work_type,
 };
+use crate::model::WorkType;
 use crate::usage_policy::BudgetPhase;
 use crate::util::{short_id, worker_id};
 use anyhow::{Context, Result, anyhow, bail};
@@ -165,9 +167,18 @@ impl App {
         let plan = self.get_plan(&request.plan_id)?;
         let remaining_work: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM items WHERE project_id = ?1 AND plan_path = ?2
-             AND id <> ?3 AND work_type IN ('code','verification')
+             AND id <> ?3
+             AND work_type IN (?4, ?5, ?6, ?7, 'verification')
              AND status NOT IN ('closed','closed_partial','cancelled')",
-            params![project.id, plan.path, final_item_id],
+            params![
+                project.id,
+                plan.path,
+                final_item_id,
+                ORDINARY_IMPLEMENTATION_WORK_TYPE_NAMES[0],
+                ORDINARY_IMPLEMENTATION_WORK_TYPE_NAMES[1],
+                ORDINARY_IMPLEMENTATION_WORK_TYPE_NAMES[2],
+                ORDINARY_IMPLEMENTATION_WORK_TYPE_NAMES[3],
+            ],
             |row| row.get(0),
         )?;
         if remaining_work != 0 {
@@ -714,7 +725,7 @@ impl App {
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )?;
         if item_plan_path != plan.path
-            || item_work_type != "code"
+            || !is_ordinary_implementation_work_type(&WorkType::from(item_work_type.clone()))
             || !matches!(item_status.as_str(), "picked" | "running")
             || item_worker.as_deref() != Some(maker.worker_id.as_str())
         {
@@ -1037,7 +1048,7 @@ impl App {
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )?;
         if item_plan_path != plan.path
-            || item_work_type != "code"
+            || !is_ordinary_implementation_work_type(&WorkType::from(item_work_type.clone()))
             || !matches!(item_status.as_str(), "picked" | "running")
             || item_worker.as_deref() != Some(current_worker)
         {
@@ -1053,14 +1064,23 @@ impl App {
         if historical_maker != current_worker {
             bail!("verification_settlement_recovery_wrong_maker");
         }
-        let competing_code: i64 = self.conn.query_row(
+        let competing_ordinary: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM items WHERE project_id = ?1 AND plan_path = ?2
-             AND work_type = 'code' AND status IN ('picked','running') AND id <> ?3",
-            params![project.id, plan.path, input.next_item_id],
+             AND work_type IN (?4, ?5, ?6, ?7)
+             AND status IN ('picked','running') AND id <> ?3",
+            params![
+                project.id,
+                plan.path,
+                input.next_item_id,
+                ORDINARY_IMPLEMENTATION_WORK_TYPE_NAMES[0],
+                ORDINARY_IMPLEMENTATION_WORK_TYPE_NAMES[1],
+                ORDINARY_IMPLEMENTATION_WORK_TYPE_NAMES[2],
+                ORDINARY_IMPLEMENTATION_WORK_TYPE_NAMES[3],
+            ],
             |row| row.get(0),
         )?;
-        if competing_code != 0 {
-            bail!("verification_settlement_recovery_competing_code_lease");
+        if competing_ordinary != 0 {
+            bail!("verification_settlement_recovery_competing_ordinary_lease");
         }
         let unresolved_predecessors: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM links JOIN items predecessor ON predecessor.id = links.from_item

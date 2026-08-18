@@ -4,11 +4,11 @@ These tasks are implementation-ready work items for coding agents. They intentio
 
 ## Core FeatureRun Recovery
 
-### TASK-CORE-FREEZE-001: Add Typed Stale Source-Freeze Restart
+### TASK-CORE-FREEZE-001: Canonicalize Ordinary Outcomes And Premature Source-Freeze Restart
 
-Keep the central FeatureRun lifecycle/application service as the single policy owner. Diagnose only an active stale source freeze with no verification item, terminally retire the unusable run without mutating its freeze, atomically route stranded code outcomes to ready, and expose the same typed restart through pick, CLI, and MCP. Successor run creation and current-source freezing stay on canonical pick/readiness paths. Add no database repair, fallback, compatibility path, nullable special-case wrapper, legacy handling, or adapter/UI owner.
+Keep `src/execution_run.rs` as the single classification and transition owner. Treat planned code/fix/docs/test as ordinary implementation outcomes everywhere settlement, pick, handoff, freeze, verification continuation, and recovery need maker compatibility. Diagnose only an active premature freeze with open ordinary outcomes and zero verification activity; atomically retire the run, end batch/roles, release active ordinary leases, preserve ready/pending work plus freeze/history, and expose the typed result through CLI and MCP. Successor creation stays on ordinary pick. Add no stale-source alias, code-only semantic list, database repair, compatibility reader, plan-specific path, or adapter/UI policy owner.
 
-Acceptance: the focused existing central restart application test passes in BUILD; one public lifecycle invariant is admitted separately in HARDEN.
+Acceptance: BUILD compilation and ownership evidence pass without test edits; one public code-to-fix lifecycle invariant is admitted separately in HARDEN through the registered no-model capability.
 
 ## Alpha 6 Binding Evidence Hard Cut
 
@@ -17,6 +17,80 @@ Acceptance: the focused existing central restart application test passes in BUIL
 Keep typed build-plan frontmatter as criterion identity authority and `app/proof` as the sole completeness owner; reject zero, partial, duplicate, and undeclared binding sets before implementation, readiness, coverage settlement, and final review; persist a capability hold when verifier readiness fails; remove claim-log, partial-row, and empty-lineage compatibility authority; retain explicit migration as the only obligation writer.
 
 Acceptance: `cargo check --lib` passes, followed by one focused lifecycle invariant in the separate hardening phase.
+
+## Binding Evidence Multi-Target And Itemless Repair Hard Cut
+
+### TASK-BEMT-001 (code): Seal And Execute Exact Target Subsets
+
+Replace run-index v1 with v2 target partitions from canonical active obligations. Persist exact
+subset bindings and apply them to execution, structured/ordinary results, retry, independence,
+reuse, attempts, receipts, one-shot readiness, and host capture. Keep coverage canonical. Delete
+first-observation, all-target-equality, v1, and compatibility owners.
+
+Acceptance: exact-union/no-duplicate multi-target verification, subset lineage, no-launch one-shot
+readiness, host-capture parity, persisted v2 consequences, and losing-owner deletion have focused
+Evidence under the active Proofloop contract.
+
+### TASK-BEMT-002 (fix): Repair Itemless Verification Admission
+
+After TASK-BEMT-001, add the sole optimistic plan/run/freeze/revision-scoped pre-receipt repair
+transition. Use one closed reason enum: pre-seal reasons require no run-index digest, while
+post-seal reasons require the exact admitted digest. Roll back failed readiness leasing before
+persisting its capability hold/diagnostic. Atomically invalidate the freeze, release verifier
+ownership and zero-or-one active item lease, restore the original maker at the next generation,
+and open one repair batch with nullable verification-item projection. Create no Evidence attempt,
+receipt, coverage verdict, or ProductFinding, and delete item-keyed `pick release --repair` plus all
+item-required/alternate pre-receipt lifecycle owners.
+
+Acceptance: itemless/item-backed equivalence, pre-seal absent-digest/post-seal exact-digest
+validation, durable readiness hold, stale optimistic rollback and proven idempotence, original-maker
+generation restoration, zero Evidence/ProductFinding writes, and one-request CLI/MCP/HTTP/work-
+packet projection have focused Evidence under the active Proofloop contract.
+
+## Canonical Itemless Verification Lifecycle Settlement
+
+### TASK-ITEMLESS-SETTLEMENT-001 (fix): Remove Item Status From Lifecycle Authority
+
+Replace item-required plan coverage settlement, binding final-review admission, and terminal
+one-shot exhaustion together. Key settlement by active FeatureRun, exact verifier lease generation,
+active freeze, and satisfied accepted receipt/source binding. Close/log one active verification item
+or mutate zero items/logs when absent; retain ready-unleased failure. Always reconcile budget and
+persist phase/role changes through the repository. Keep `execution_run` pure, coverage unchanged,
+and add no item synthesis, alternate API, compatibility path, direct DB path, or plan exception.
+
+Acceptance: BUILD compiles the relevant binaries without tracked-test edits or test execution; one
+separate HARDEN invariant in existing `tests/e2e.rs` covers itemless pass settlement, exact-freeze
+final review including idempotent re-show of the same Accepted gate from Complete, terminal
+exhaustion, and ready-unleased failure through the registered no-model capability.
+
+## Itemless Post-Receipt ProductFinding Repair
+
+### TASK-ITEMLESS-PRODUCT-FINDING-001 (fix): Delete Repair Item Ownership
+
+Keep post-receipt ProductFinding routing, repair packets, settlement, refreeze, idempotent replay,
+selective replay, and verifier release in `app/feature_run_evidence`. Delete the required repair-item
+query/error and reuse the existing optional plan-path projection. Update only a present eligible
+item. Remove verification-item identity from `ProductRepairSettlementRecord` and its canonical
+table through repository-owned schema evolution; add no sentinel, dual column, compatibility read,
+coercion, fallback, or direct database repair. Preserve pure transitions, repository atomicity,
+ProductFinding classification, selective obligations, and zero receipt creation.
+
+Acceptance: one Sol-only BUILD compile and open-item progress log are followed by a separate HARDEN
+contract admitting at most one invariant to one existing test file within 100 added lines.
+
+## Canonical Inconsistent Verification Retirement
+
+### TASK-INCONSISTENT-VERIFICATION-001 (fix): Retire The Current Inconsistent Run
+
+Keep exact current-invariant classification and pure retirement in `execution_run`, one application
+diagnosis in `app/feature_run_evidence`, one immediate repository transaction, and one
+execution-state projection. Hard-cut missing/stale admission and surface-local policy. Preserve all
+Evidence/history, invalidate but retain the freeze, finish exact runtime ownership, create no
+successor, and register only the future deterministic no-model capability. BUILD edits no tests and
+executes no Evidence; HARDEN separately owns the one exact existing-file invariant.
+
+Acceptance: `cargo check --bin planr` passes under the BUILD contract, the schema/manifest digests
+are registered, ownership audit has one winner per layer, and BUILD stops before HARDEN.
 
 ## V1.1 Differentiation
 

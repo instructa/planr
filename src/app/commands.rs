@@ -566,7 +566,6 @@ impl App {
                 if let Some(value) = self.release_verification_pick_value(
                     &args.item_id,
                     args.force,
-                    args.repair.as_deref(),
                 )? {
                     self.emit(value, "verification pick released".to_string())?;
                     return Ok(());

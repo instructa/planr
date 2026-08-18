@@ -1,5 +1,6 @@
 use super::App;
 use super::lease::PickFilter;
+use super::repository::execution_run::ExecutionRunRepository;
 use crate::cli::{DoneArgs, DoneEscalationReason};
 use crate::model::ItemStatus;
 use crate::route_audit::{RouteObservation, load_route_observation};
@@ -278,7 +279,6 @@ fn derive_change_summary(
     tests: &[String],
     policy_loaded: bool,
 ) -> (ChangeSummary, Vec<String>) {
-    let files = unique_files(files);
     let mut reasons = Vec::new();
     if policy_loaded
         && files.is_empty()
@@ -286,10 +286,10 @@ fn derive_change_summary(
     {
         reasons.push("missing_changed_files".to_string());
     }
-    let line_evidence = git_changed_lines(root, &files);
+    let line_evidence = git_changed_lines(root, files);
     reasons.extend(line_evidence.reasons);
-    let kind = classify_change_kind(&files);
-    let triggers = infer_materiality_triggers(&files);
+    let kind = classify_change_kind(files);
+    let triggers = infer_materiality_triggers(files);
     let risk = if !reasons.is_empty() || !triggers.is_empty() {
         RiskLevel::High
     } else if matches!(
@@ -377,7 +377,7 @@ fn materiality_value(input: MaterialityValueInput<'_>) -> Value {
             "changed_files": change.changed_files,
             "changed_lines": change.changed_lines,
             "kind": change_kind_str(change.kind),
-            "files": unique_files(input.files),
+            "files": input.files,
         },
         "decision": {
             "material": decision.material,
@@ -527,39 +527,68 @@ impl App {
         self.conn
             .execute_batch("BEGIN IMMEDIATE; SAVEPOINT surface_settlement")?;
         let result = (|| -> Result<Value> {
-            self.adopt_ready_item(input.item_id)?;
-            let materiality = self.settlement_materiality(
-                input.item_id,
-                input.summary,
-                input.files,
-                input.commands,
-                input.tests,
-                escalation.is_some(),
+            let settled_item = self.get_item(input.item_id)?;
+            let settlement_is_retry = matches!(
+                settled_item.status,
+                ItemStatus::Closed | ItemStatus::ClosedPartial
             );
-            let log_id = if input.write_log {
-                Some(self.add_log_entry(LogInput {
-                    item_id: input.item_id,
-                    kind: "completion",
-                    summary: input.summary,
-                    files: input.files,
-                    commands: input.commands,
-                    tests: input.tests,
-                    source: Some(input.source),
-                    profile: input.profile,
-                    route_observation: None,
-                })?)
+            let claimed_files = unique_files(input.files);
+            self.adopt_ready_item(input.item_id)?;
+            let (outcome_settlement, log_id) = if settlement_is_retry {
+                let outcome_settlement = self.settle_existing_feature_run_outcome(
+                    super::execution_run::ExistingOutcomeSettlement {
+                        item_id: input.item_id,
+                        summary: input.summary,
+                        claimed_files: &claimed_files,
+                        escalation: escalation.clone(),
+                    },
+                )?;
+                let log_id = Some(self.latest_completion_log_id(input.item_id)?.ok_or_else(|| {
+                    anyhow!("already_settled_outcome_completion_log_missing:{}", input.item_id)
+                })?);
+                (outcome_settlement, log_id)
             } else {
-                None
+                let materiality = self.settlement_materiality(
+                    input.item_id,
+                    input.summary,
+                    &claimed_files,
+                    input.commands,
+                    input.tests,
+                    escalation.is_some(),
+                );
+                let log_id = if input.write_log {
+                    Some(self.add_log_entry(LogInput {
+                        item_id: input.item_id,
+                        kind: "completion",
+                        summary: input.summary,
+                        files: input.files,
+                        commands: input.commands,
+                        tests: input.tests,
+                        source: Some(input.source),
+                        profile: input.profile,
+                        route_observation: None,
+                    })?)
+                } else {
+                    None
+                };
+                let outcome_settlement = self.settle_feature_run_outcome(
+                    super::execution_run::OutcomeSettlement {
+                        item_id: input.item_id,
+                        summary: input.summary,
+                        materiality: &materiality,
+                        escalation,
+                    },
+                )?;
+                (outcome_settlement, log_id)
             };
-            let work_packet =
-                self.settle_feature_run_outcome(super::execution_run::OutcomeSettlement {
-                    item_id: input.item_id,
-                    summary: input.summary,
-                    materiality: &materiality,
-                    escalation,
-                })?;
-            self.close_item_core(input.item_id, input.summary, false)?;
-            self.persist_settlement_materiality(input.item_id, &materiality)?;
+            let already_settled = outcome_settlement.disposition
+                == super::execution_run::OutcomeSettlementDisposition::AlreadySettled;
+            let materiality = outcome_settlement.materiality.clone();
+            let work_packet = outcome_settlement.into_work_packet();
+            if !already_settled {
+                self.close_item_core(input.item_id, input.summary, false)?;
+                self.persist_settlement_materiality(input.item_id, &materiality)?;
+            }
             Ok(json!({
                 "closed": input.item_id,
                 "item": self.get_item(input.item_id)?,
@@ -700,7 +729,7 @@ impl App {
                 "changed_files": change.changed_files,
                 "changed_lines": change.changed_lines,
                 "kind": change_kind_str(change.kind),
-                "files": unique_files(input.files),
+                "files": input.files,
             },
             "decision": {
                 "material": false,
@@ -918,28 +947,37 @@ impl App {
         let settlement = (|| -> Result<(bool, Value, String, bool, Value, Option<Value>)> {
             let settled_item = self.get_item(&item_id)?;
             let adopted = self.adopt_ready_item(&item_id)?;
-            let materiality = self.settlement_materiality(
-                &item_id,
-                &args.summary,
-                &args.files,
-                &args.cmd,
-                &args.tests,
-                escalation.is_some(),
-            );
-            let review_required = materiality["effective_review"]["required"]
-                .as_bool()
-                .unwrap_or(escalation.is_some());
             let settlement_is_retry = matches!(
                 settled_item.status,
                 ItemStatus::Closed | ItemStatus::ClosedPartial
             );
+            let claimed_files = unique_files(&args.files);
             let previous_log_id = settlement_is_retry
                 .then(|| self.latest_completion_log_id(&item_id))
                 .transpose()?
                 .flatten();
-            let log_id = if let Some(log_id) = previous_log_id {
-                log_id
+            let (outcome_settlement, log_id) = if settlement_is_retry {
+                let outcome_settlement = self.settle_existing_feature_run_outcome(
+                    super::execution_run::ExistingOutcomeSettlement {
+                        item_id: &item_id,
+                        summary: &args.summary,
+                        claimed_files: &claimed_files,
+                        escalation: escalation.clone(),
+                    },
+                )?;
+                let log_id = previous_log_id.ok_or_else(|| {
+                    anyhow!("already_settled_outcome_completion_log_missing:{item_id}")
+                })?;
+                (outcome_settlement, log_id)
             } else {
+                let materiality = self.settlement_materiality(
+                    &item_id,
+                    &args.summary,
+                    &claimed_files,
+                    &args.cmd,
+                    &args.tests,
+                    escalation.is_some(),
+                );
                 let log_id = self.add_log_entry(LogInput {
                     item_id: &item_id,
                     kind: "completion",
@@ -958,24 +996,34 @@ impl App {
                 {
                     bail!("injected_failure: after completion log");
                 }
-                log_id
+                let outcome_settlement = self.settle_feature_run_outcome(
+                    super::execution_run::OutcomeSettlement {
+                        item_id: &item_id,
+                        summary: &args.summary,
+                        materiality: &materiality,
+                        escalation: escalation.clone(),
+                    },
+                )?;
+                (outcome_settlement, log_id)
             };
-            let mut run_transition =
-                self.settle_feature_run_outcome(super::execution_run::OutcomeSettlement {
-                    item_id: &item_id,
-                    summary: &args.summary,
-                    materiality: &materiality,
-                    escalation: escalation.clone(),
-                })?;
-            self.close_item_core(&item_id, &args.summary, false)?;
-            if std::env::var("PLANR_TEST_FAIL_AFTER_REVIEW_GATE")
-                .ok()
-                .as_deref()
-                == Some("1")
-            {
-                bail!("injected_failure: after review gate");
+            let already_settled = outcome_settlement.disposition
+                == super::execution_run::OutcomeSettlementDisposition::AlreadySettled;
+            let materiality = outcome_settlement.materiality.clone();
+            let review_required = materiality["effective_review"]["required"]
+                .as_bool()
+                .unwrap_or(escalation.is_some());
+            let mut run_transition = outcome_settlement.into_work_packet();
+            if !already_settled {
+                self.close_item_core(&item_id, &args.summary, false)?;
+                if std::env::var("PLANR_TEST_FAIL_AFTER_REVIEW_GATE")
+                    .ok()
+                    .as_deref()
+                    == Some("1")
+                {
+                    bail!("injected_failure: after review gate");
+                }
+                self.persist_settlement_materiality(&item_id, &materiality)?;
             }
-            self.persist_settlement_materiality(&item_id, &materiality)?;
             let next = if args.next {
                 if run_transition["transition"] == "review_gate" {
                     Some(json!({
@@ -984,18 +1032,27 @@ impl App {
                         "review_gate": run_transition["review_gate"],
                     }))
                 } else {
-                    let compatible_code_ready = self
+                    let ordinary_ready = self
                         .peek_next_ready_item_filtered(&PickFilter {
                             exclude: None,
-                            work_type: Some("code"),
+                            work_type: None,
                             plan_path: item.plan_path.as_deref(),
+                            ordinary_implementation: true,
                         })?
                         .is_some();
+                    let open_ordinary_outcome_ids = plan_id
+                        .as_deref()
+                        .map(|plan_id| {
+                            ExecutionRunRepository::new(&self.conn)
+                                .open_ordinary_outcome_ids(plan_id)
+                        })
+                        .transpose()?
+                        .unwrap_or_default();
                     if run_transition["transition"] == "batch_cap_reached" {
                         let plan_id = plan_id.as_deref().ok_or_else(|| {
                             anyhow!("batch_roll_requires_planned_outcome:{item_id}")
                         })?;
-                        if compatible_code_ready {
+                        if ordinary_ready {
                             let rollover =
                                 self.roll_feature_run_batch_value(plan_id, &worker_id())?;
                             run_transition["successor_batch_id"] =
@@ -1003,8 +1060,14 @@ impl App {
                             run_transition["rollover"] = rollover;
                         }
                     }
-                    if compatible_code_ready {
-                        Some(self.next_pick_value(None, Some("code"), plan_id.as_deref())?)
+                    if ordinary_ready {
+                        Some(self.next_ordinary_implementation_pick_value(plan_id.as_deref())?)
+                    } else if !open_ordinary_outcome_ids.is_empty() {
+                        Some(json!({
+                            "item": null,
+                            "reason": "ordinary_implementation_blocked",
+                            "open_ordinary_outcome_ids": open_ordinary_outcome_ids,
+                        }))
                     } else if plan_id.is_some() {
                         let verification_item_id =
                             self.ready_verification_item_for_plan_path(item.plan_path.as_deref())?;
@@ -1014,7 +1077,7 @@ impl App {
                             "verification_item_id": verification_item_id,
                         }))
                     } else {
-                        Some(self.next_pick_value(None, Some("code"), None)?)
+                        Some(self.next_ordinary_implementation_pick_value(None)?)
                     }
                 }
             } else {

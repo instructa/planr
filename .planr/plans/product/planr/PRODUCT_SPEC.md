@@ -72,14 +72,47 @@ Planr turns broad product ideas and coding work into a coherent flow: product pl
 - REQ-PROD-EVIDENCE-001: Typed build-plan frontmatter owns one non-empty, unique, closed criterion identity list; acceptance prose is narrative only. Repository Evidence policy, that declared list, and authoritative active plan obligations jointly determine one canonical authority: `nonbinding`, `binding_unsatisfied`, or `binding_active`.
 - REQ-PROD-EVIDENCE-002: A binding plan with zero, partial, duplicate, or undeclared criterion bindings must fail closed before implementation activation and at every later lifecycle boundary. It must never reach coverage settlement or final review through claim logs, partial rows, empty coverage, or empty receipt lineage.
 - REQ-PROD-EVIDENCE-003: Only explicit `planr.evidence.migration.v1` application materializes obligations. Planr must not synthesize them during planning, picking, readiness, audit, or review.
-- REQ-PROD-EVIDENCE-004: A verification-readiness failure must persist a capability hold after the failed lease transaction rolls back.
+- REQ-PROD-EVIDENCE-004: A verification-readiness failure must roll back its tentative verifier/item lease transaction, then persist a durable capability hold and diagnostic that projects the exact pre-seal repair request.
+- REQ-PROD-EVIDENCE-005: `planr.evidence.run-index.v2` must seal one run per canonical `(obligation_id, target)` with sorted non-empty `requirement_ids`; each obligation's run subsets must form the exact no-duplicate union of its authoritative observations.
+- REQ-PROD-EVIDENCE-006: Execution, structured and ordinary results, retry lineage, independence, reuse, attempts, and receipts must bind only the sealed v2 subset. Coverage remains the sole per-requirement satisfaction and closure owner.
+- REQ-PROD-EVIDENCE-007: A multi-target obligation using a `non_repeatable_one_shot` capability must fail readiness before launch or allowance claim. Host capture must consume the same v2 target/subset contract as process execution.
+- REQ-PROD-EVIDENCE-008: Pre-receipt admission errors must create neither trusted Evidence nor ProductFindings. One explicit optimistic plan/run/freeze/revision-scoped repair transition uses a closed reason enum: pre-seal reasons forbid `run_index_digest`, while post-seal pre-receipt reasons require the exact admitted digest. It invalidates the freeze, releases verifier ownership, restores the original maker at the next generation, opens one repair batch, and treats any verification item as optional projection.
+- REQ-PROD-EVIDENCE-009: Run-index v1, first-observation target inference, all-targets-equal validation, item-keyed `pick release --repair`, and every item-required verification-repair owner must be deleted without compatibility, fallback, alias, migration, or dual-shape code.
+- REQ-PROD-EVIDENCE-010: Satisfied plan coverage settles the active FeatureRun by exact verifier
+  lease generation, active immutable freeze, and trusted receipt/source binding. A verification map
+  item is a zero-or-one projection: close/log one active item atomically or mutate zero items/logs
+  when absent; a ready unleased item remains fail-closed.
+- REQ-PROD-EVIDENCE-011: Binding final review is one create-or-show contract. New gates and existing
+  gates that are not Accepted require post-settlement SourceFrozen plus satisfied coverage whose
+  accepted receipt/source binding exactly matches the intact active freeze. An existing Accepted
+  gate remains showable after the FeatureRun becomes Complete only when its stored binding still
+  equals that same current freeze and exact coverage. Item existence or status has no authority.
+- REQ-PROD-EVIDENCE-012: Terminal one-shot exhaustion always commits attempt/receipt, reconciles the
+  verification budget, cancels the FeatureRun, and releases the verifier. It fails/logs a projected
+  verification item only when present and supports true itemless state without an exactly-one-item
+  invariant.
+- REQ-PROD-EVIDENCE-013: Post-receipt ProductFinding repair is application-owned and distinct from
+  pre-receipt admission repair. Routing, maker work packets, settlement, idempotent replay,
+  selective-replay handoff, and verifier release treat a verification item as an optional current
+  projection. Durable ProductRepair settlement stores no item identity; absence causes no item
+  mutation, while a present eligible item alone is updated. ProductFinding classification,
+  selective obligation lineage, and receipt creation remain unchanged.
+- REQ-PROD-EVIDENCE-014: An active Verification FeatureRun whose current admission identity is
+  absent or unequal across plan, run, revision, active freeze, verifier worker/generation, optional
+  item, or admitted/sealed run-index digest exposes only the typed `inconsistent-verification`
+  retirement. Exact equality is healthy and rejects retirement.
+- REQ-PROD-EVIDENCE-015: The retirement is a hard cut: one optimistic transaction invalidates but
+  preserves the freeze, ends or preserves-ended the batch, releases exact roles/reservations and
+  only an exact verifier-owned optional item, preserves all Evidence/history identities, emits one
+  event, and creates no successor. Ordinary pick alone may later create a successor.
 
-## Stale Source-Freeze Recovery
+## Ordinary Outcomes And Premature Source-Freeze Recovery
 
-- REQ-PROD-FREEZE-001: A nonterminal source-frozen FeatureRun whose active freeze is stale and whose plan has no verification item must expose one typed public restart action instead of a bare internal error or `nothing_ready` result.
-- REQ-PROD-FREEZE-002: The restart must policy-cancel the unusable run, preserve the immutable old freeze and child history, and atomically route stranded code outcomes back to ready state.
-- REQ-PROD-FREEZE-003: A later ordinary pick remains the sole successor-run creation path; normal settlement and Evidence readiness remain the sole current-source freeze path.
-- REQ-PROD-FREEZE-004: CLI and MCP must consume the same central FeatureRun lifecycle result and must not own eligibility, source comparison, or persistence policy.
+- REQ-PROD-FREEZE-001: Planned `code`, `fix`, `docs`, and `test` items are ordinary maker-compatible implementation outcomes. Verification is control work and review remains a durable ReviewGate.
+- REQ-PROD-FREEZE-002: Source freeze is eligible only after every ordinary outcome is terminal; open blocked or ready ordinary work remains in implementation and can never be hidden by a code-only candidate search.
+- REQ-PROD-FREEZE-003: An active source-frozen FeatureRun with an immutable active freeze, at least one open ordinary outcome, and no verification admission, attempt, or receipt for that freeze exposes the sole typed `premature-source-freeze` restart.
+- REQ-PROD-FREEZE-004: Restart atomically policy-cancels the run, ends its batch and runtime roles, returns only active ordinary leases to ready, preserves ready/pending work plus immutable freeze/history, and creates no successor. A later ordinary pick is the sole successor-run path.
+- REQ-PROD-FREEZE-005: CLI and MCP consume the same central FeatureRun result and own neither ordinary classification nor eligibility/persistence policy. No stale-source alias, source-digest comparison, compatibility reader, or plan-specific exception exists.
 
 ## User Personas
 

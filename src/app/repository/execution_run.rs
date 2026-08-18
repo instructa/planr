@@ -1,19 +1,29 @@
 use crate::execution_run::{
+    CurrentVerificationAdmissionIdentity, CurrentVerificationInvariantFacts,
+    CurrentVerificationItemLease, CurrentVerificationItemLeaseStatus, EvidenceInvalidationKind,
     ExecutionBatch, ExecutionBatchStatus, FeatureRun, FeatureRunBudgetContractCompatibility,
-    FeatureRunHoldReason, FeatureRunPhase, FeatureRunRestartDisposition,
-    FeatureRunRestartTransition, FeatureRunStatus, FeatureRunTerminalReason, MakerReplacement,
-    MakerReplacementReason, RoleOwner, RunRole, StaleSourceFreezeRestartTransition,
-    owner_for_role, retire_stale_source_freeze_feature_run, validate_feature_run,
+    FeatureRunHoldReason, FeatureRunPhase, FeatureRunRestartDisposition, FeatureRunRestartTransition,
+    FeatureRunStatus, FeatureRunTerminalReason, MakerReplacement,
+    HistoryIdentitySet, InconsistentVerificationBatchFacts,
+    InconsistentVerificationRetirementTransition, MakerReplacementReason,
+    ORDINARY_IMPLEMENTATION_WORK_TYPE_NAMES,
+    PrematureSourceFreezeRestartTransition, RoleOwner, RunRole, owner_for_role,
+    VerificationAdmissionRepairRequest, VerificationAdmissionRepairTransition,
+    classify_current_verification, repair_verification_admission,
+    resolve_evidence_invalidation_kind,
+    retire_inconsistent_verification_feature_run, retire_premature_source_freeze_feature_run,
+    validate_feature_run,
 };
+use crate::canonical_json::sha256_json_digest;
 use crate::usage_policy::{
     BudgetPhase, ExecutionBudget, FEATURE_RUN_BUDGET_CONTRACT_SCHEMA, FeatureRunBudgetContract,
     FeatureRunBudgetMode, MeteringMode, feature_run_budget_contract_digest,
     validate_execution_budget, validate_feature_run_budget_contract,
 };
 use anyhow::{Context, Result, anyhow, bail};
-use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, Params, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 pub(crate) struct ExecutionRunRepository<'conn> {
     conn: &'conn Connection,
@@ -209,10 +219,66 @@ pub(crate) struct ProductRepairSettlementRecord {
     pub(crate) invalidation_id: String,
     pub(crate) run_id: String,
     pub(crate) responsible_maker_id: String,
-    pub(crate) verification_item_id: String,
     pub(crate) selective_obligation_ids: Vec<String>,
     pub(crate) settlement: serde_json::Value,
     pub(crate) source_freeze_id: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct VerificationAdmissionRepairSettlementRecord {
+    pub(crate) invalidation_id: String,
+    pub(crate) run_id: String,
+    pub(crate) repair_batch_id: String,
+    pub(crate) responsible_maker_id: String,
+    pub(crate) ended_revision: u64,
+    pub(crate) settlement: serde_json::Value,
+    pub(crate) source_freeze_id: String,
+    pub(crate) source_revision: String,
+    pub(crate) source_digest: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct VerificationAdmissionRecord {
+    pub(crate) plan_id: String,
+    pub(crate) run_id: String,
+    pub(crate) freeze_id: String,
+    pub(crate) run_revision: u64,
+    pub(crate) verifier_worker_id: String,
+    pub(crate) verifier_lease_generation: u64,
+    pub(crate) verification_item_id: Option<String>,
+    pub(crate) run_index_digest: String,
+    pub(crate) sealed_run_index: Value,
+}
+
+impl VerificationAdmissionRecord {
+    pub(crate) fn current_identity(&self) -> CurrentVerificationAdmissionIdentity {
+        CurrentVerificationAdmissionIdentity {
+            plan_id: self.plan_id.clone(),
+            run_id: self.run_id.clone(),
+            freeze_id: self.freeze_id.clone(),
+            run_revision: self.run_revision,
+            verifier_worker_id: self.verifier_worker_id.clone(),
+            verifier_lease_generation: self.verifier_lease_generation,
+            verification_item_id: self.verification_item_id.clone(),
+            run_index_digest: self.run_index_digest.clone(),
+            sealed_run_index_digest: self.sealed_run_index["run_index_digest"]
+                .as_str()
+                .map(str::to_string),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct VerificationReadinessDiagnosticRecord {
+    pub(crate) repair_request: VerificationAdmissionRepairRequest,
+    pub(crate) verifier_worker_id: String,
+    pub(crate) diagnostic: Value,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CurrentVerificationSnapshot {
+    pub(crate) facts: CurrentVerificationInvariantFacts,
+    pub(crate) admission: Option<VerificationAdmissionRecord>,
 }
 
 impl<'conn> ExecutionRunRepository<'conn> {
@@ -236,30 +302,562 @@ impl<'conn> ExecutionRunRepository<'conn> {
         run_id.map(|id| self.feature_run(&id)).transpose()
     }
 
-    pub(crate) fn plan_has_verification_item(&self, plan_id: &str) -> Result<bool> {
-        self.conn
+    pub(crate) fn verification_item_projection(
+        &self,
+        plan_id: &str,
+    ) -> Result<Option<CurrentVerificationItemLease>> {
+        let mut statement = self.conn.prepare(
+            "SELECT items.id, items.status, items.worker_id
+             FROM items JOIN plans ON plans.path = items.plan_path
+             WHERE plans.id = ?1 AND items.work_type = 'verification'
+               AND items.status IN ('ready','picked','running')
+             ORDER BY items.created_at, items.id LIMIT 2",
+        )?;
+        let rows = statement
+            .query_map([plan_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        if rows.len() > 1 {
+            bail!("verification_admission_repair_ambiguous_items:{plan_id}");
+        }
+        rows.into_iter()
+            .next()
+            .map(|(id, status, worker_id)| {
+                let status = match status.as_str() {
+                    "ready" => CurrentVerificationItemLeaseStatus::Ready,
+                    "picked" => CurrentVerificationItemLeaseStatus::Picked,
+                    "running" => CurrentVerificationItemLeaseStatus::Running,
+                    value => bail!("invalid current verification item status: {value}"),
+                };
+                Ok(CurrentVerificationItemLease {
+                    id,
+                    status,
+                    worker_id,
+                })
+            })
+            .transpose()
+    }
+
+    pub(crate) fn historical_maker_identity(&self, run_id: &str) -> Result<(String, u64)> {
+        let (worker_id, generation): (String, u64) = self.conn.query_row(
+            "SELECT worker_id, lease_generation FROM feature_run_role_leases
+             WHERE run_id = ?1 AND role = 'maker'
+             ORDER BY lease_generation DESC LIMIT 1",
+            [run_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let next_generation = generation
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("verification_admission_repair_maker_generation_overflow:{run_id}"))?;
+        Ok((worker_id, next_generation))
+    }
+
+    pub(crate) fn record_verification_admission(
+        &self,
+        record: &VerificationAdmissionRecord,
+    ) -> Result<()> {
+        if self.conn.is_autocommit() {
+            bail!("verification_admission_requires_active_transaction");
+        }
+        let current = self.feature_run(&record.run_id)?;
+        let verifier = owner_for_role(&current.run, RunRole::Verifier)
+            .ok_or_else(|| anyhow!("verification_admission_missing_verifier:{}", record.run_id))?;
+        let freeze = self
+            .active_source_freeze(&record.run_id)?
+            .ok_or_else(|| anyhow!("verification_admission_missing_freeze:{}", record.run_id))?;
+        let item = self.verification_item_projection(&record.plan_id)?;
+        if current.run.plan_id != record.plan_id
+            || current.run.phase != FeatureRunPhase::Verification
+            || current.revision != record.run_revision
+            || freeze.id != record.freeze_id
+            || verifier.worker_id != record.verifier_worker_id
+            || verifier.lease_generation != record.verifier_lease_generation
+            || item.as_ref().map(|item| item.id.as_str()) != record.verification_item_id.as_deref()
+            || record.run_index_digest.trim().is_empty()
+            || record.sealed_run_index["run_index_digest"].as_str()
+                != Some(record.run_index_digest.as_str())
+        {
+            bail!("verification_admission_record_stale:{}", record.run_id);
+        }
+        self.conn.execute(
+            "INSERT INTO events(project_id, item_id, worker_id, event_type, payload, timestamp)
+             VALUES (?1, ?2, ?3, 'feature_run_verification_admitted', ?4, datetime('now'))",
+            params![
+                current.project_id,
+                record.verification_item_id,
+                record.verifier_worker_id,
+                serde_json::to_string(record)?,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn latest_verification_admission(
+        &self,
+        run_id: &str,
+        freeze_id: &str,
+    ) -> Result<Option<VerificationAdmissionRecord>> {
+        let payload = self
+            .conn
             .query_row(
-                "SELECT EXISTS(
-                   SELECT 1 FROM items JOIN plans ON plans.path = items.plan_path
-                   WHERE plans.id = ?1 AND items.work_type = 'verification'
-                 )",
-                [plan_id],
-                |row| row.get(0),
+                "SELECT payload FROM events
+                 WHERE event_type = 'feature_run_verification_admitted'
+                   AND json_extract(payload, '$.run_id') = ?1
+                   AND json_extract(payload, '$.freeze_id') = ?2
+                 ORDER BY id DESC LIMIT 1",
+                params![run_id, freeze_id],
+                |row| row.get::<_, String>(0),
             )
+            .optional()?;
+        payload
+            .map(|payload| serde_json::from_str(&payload).map_err(Into::into))
+            .transpose()
+    }
+
+    pub(crate) fn latest_verification_admission_for_run(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<VerificationAdmissionRecord>> {
+        let payload = self
+            .conn
+            .query_row(
+                "SELECT payload FROM events
+                 WHERE event_type = 'feature_run_verification_admitted'
+                   AND json_extract(payload, '$.run_id') = ?1
+                 ORDER BY id DESC LIMIT 1",
+                [run_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        payload
+            .map(|payload| serde_json::from_str(&payload).map_err(Into::into))
+            .transpose()
+    }
+
+    pub(crate) fn current_verification_snapshot(
+        &self,
+        persisted: &PersistedFeatureRun,
+    ) -> Result<CurrentVerificationSnapshot> {
+        if persisted.run.status != FeatureRunStatus::Active
+            || persisted.run.phase != FeatureRunPhase::Verification
+        {
+            bail!("current_verification_requires_active_verification:{}", persisted.run.id);
+        }
+        let run_source_revision = persisted
+            .run
+            .source_revision
+            .clone()
+            .ok_or_else(|| anyhow!("current_verification_missing_run_source:{}", persisted.run.id))?;
+        let freeze = self
+            .active_source_freeze(&persisted.run.id)?
+            .ok_or_else(|| anyhow!("current_verification_missing_freeze:{}", persisted.run.id))?;
+        let verifier = owner_for_role(&persisted.run, RunRole::Verifier)
+            .ok_or_else(|| anyhow!("current_verification_missing_verifier:{}", persisted.run.id))?;
+        let verification_item = self.verification_item_projection(&persisted.run.plan_id)?;
+        let admission = self.latest_verification_admission_for_run(&persisted.run.id)?;
+        Ok(CurrentVerificationSnapshot {
+            facts: CurrentVerificationInvariantFacts {
+                plan_id: persisted.run.plan_id.clone(),
+                run_id: persisted.run.id.clone(),
+                run_revision: persisted.revision,
+                run_source_revision,
+                freeze_id: freeze.id,
+                freeze_source_revision: freeze.source_revision,
+                freeze_source_digest: freeze.source_digest,
+                verifier_worker_id: verifier.worker_id.clone(),
+                verifier_lease_generation: verifier.lease_generation,
+                verification_item,
+                admission: admission.as_ref().map(VerificationAdmissionRecord::current_identity),
+            },
+            admission,
+        })
+    }
+
+    pub(crate) fn persist_verification_readiness_hold(
+        &self,
+        held_run: &FeatureRun,
+        expected_run_revision: u64,
+        freeze_id: &str,
+        diagnostic: &VerificationReadinessDiagnosticRecord,
+    ) -> Result<PersistedFeatureRun> {
+        let tx = Transaction::new_unchecked(self.conn, TransactionBehavior::Immediate)?;
+        let repository = ExecutionRunRepository::new(&tx);
+        let current = repository.feature_run(&held_run.id)?;
+        let freeze = repository
+            .active_source_freeze(&held_run.id)?
+            .ok_or_else(|| anyhow!("verification_readiness_hold_missing_freeze:{}", held_run.id))?;
+        if current.revision != expected_run_revision
+            || current.run.phase != FeatureRunPhase::SourceFrozen
+            || freeze.id != freeze_id
+            || diagnostic.repair_request.run_revision
+                != expected_run_revision
+                    .checked_add(1)
+                    .ok_or_else(|| anyhow!("verification_readiness_hold_revision_overflow:{}", held_run.id))?
+            || diagnostic.repair_request.plan_id != current.run.plan_id
+            || diagnostic.repair_request.run_id != current.run.id
+            || diagnostic.repair_request.freeze_id != freeze.id
+            || owner_for_role(&current.run, RunRole::Verifier).is_some()
+        {
+            bail!("verification_readiness_hold_stale:{}", held_run.id);
+        }
+        repository.save_feature_run(held_run, expected_run_revision)?;
+        tx.execute(
+            "INSERT INTO events(project_id, item_id, worker_id, event_type, payload, timestamp)
+             VALUES (?1, NULL, ?2, 'feature_run_verification_readiness_held', ?3, datetime('now'))",
+            params![
+                current.project_id,
+                diagnostic.verifier_worker_id,
+                serde_json::to_string(diagnostic)?,
+            ],
+        )?;
+        tx.commit()?;
+        self.feature_run(&held_run.id)
+    }
+
+    pub(crate) fn latest_verification_readiness_diagnostic(
+        &self,
+        run_id: &str,
+        freeze_id: &str,
+    ) -> Result<Option<VerificationReadinessDiagnosticRecord>> {
+        let payload = self
+            .conn
+            .query_row(
+                "SELECT payload FROM events
+                 WHERE event_type = 'feature_run_verification_readiness_held'
+                   AND json_extract(payload, '$.repair_request.run_id') = ?1
+                   AND json_extract(payload, '$.repair_request.freeze_id') = ?2
+                 ORDER BY id DESC LIMIT 1",
+                params![run_id, freeze_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        payload
+            .map(|payload| serde_json::from_str(&payload).map_err(Into::into))
+            .transpose()
+    }
+
+    pub(crate) fn latest_verification_admission_repair(
+        &self,
+        request: &VerificationAdmissionRepairRequest,
+    ) -> Result<Option<VerificationAdmissionRepairTransition>> {
+        let mut statement = self.conn.prepare(
+            "SELECT payload FROM events
+             WHERE event_type = 'feature_run_verification_admission_repaired'
+               AND json_extract(payload, '$.request.run_id') = ?1
+             ORDER BY id DESC",
+        )?;
+        let payloads = statement
+            .query_map([&request.run_id], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for payload in payloads {
+            let transition: VerificationAdmissionRepairTransition =
+                serde_json::from_str(&payload)?;
+            if transition.request == *request {
+                return Ok(Some(transition));
+            }
+        }
+        Ok(None)
+    }
+
+    pub(crate) fn prove_verification_admission_repair_idempotent(
+        &self,
+        transition: &VerificationAdmissionRepairTransition,
+    ) -> Result<()> {
+        let current = self.feature_run(&transition.request.run_id)?;
+        let freeze = self.source_freeze(&transition.request.freeze_id)?;
+        let batch = self.batch(&transition.repair_batch.id)?;
+        let item = self.verification_item_projection(&transition.request.plan_id)?;
+        let mut event_statement = self.conn.prepare(
+            "SELECT payload FROM events
+             WHERE event_type = 'feature_run_verification_admission_repaired'
+               AND json_extract(payload, '$.request.run_id') = ?1",
+        )?;
+        let event_payloads = event_statement
+            .query_map([&transition.request.run_id], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut matching_event_count = 0;
+        for payload in event_payloads {
+            let candidate: VerificationAdmissionRepairTransition =
+                serde_json::from_str(&payload)?;
+            if candidate.request == transition.request {
+                matching_event_count += 1;
+            }
+        }
+        let invalidation_count: u64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM feature_run_evidence_invalidations
+             WHERE id = ?1 AND run_id = ?2 AND freeze_id = ?3
+               AND finding_id IS NULL AND reason = ?4
+               AND affected_evidence_ids_json = '[]'",
+            params![
+                transition.facts.invalidation_id,
+                transition.request.run_id,
+                transition.request.freeze_id,
+                format!(
+                    "verification_admission_repair:{}",
+                    transition.request.reason.as_str()
+                ),
+            ],
+            |row| row.get(0),
+        )?;
+        if current.revision != transition.resulting_run_revision
+            || current.run != transition.repaired_run
+            || freeze.status != SourceFreezeStatus::Invalidated
+            || batch.batch != transition.repair_batch
+            || item.as_ref().map(|item| item.id.as_str())
+                != transition.facts.verification_item_id.as_deref()
+            || item.as_ref().is_some_and(|item| {
+                item.status != CurrentVerificationItemLeaseStatus::Ready || item.worker_id.is_some()
+            })
+            || matching_event_count != 1
+            || invalidation_count != 1
+        {
+            bail!("verification_admission_repair_idempotence_unproven:{}", transition.request.run_id);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn persist_verification_admission_repair(
+        &self,
+        transition: &VerificationAdmissionRepairTransition,
+        operator_worker_id: &str,
+    ) -> Result<()> {
+        if self.conn.is_autocommit() {
+            bail!("verification_admission_repair_requires_active_transaction");
+        }
+        require_nonempty("operator_worker_id", operator_worker_id)?;
+        let current = self.feature_run(&transition.request.run_id)?;
+        let freeze = self
+            .active_source_freeze(&current.run.id)?
+            .ok_or_else(|| anyhow!("verification_admission_repair_missing_freeze:{}", current.run.id))?;
+        if current.revision != transition.request.run_revision
+            || current.run.plan_id != transition.request.plan_id
+            || freeze.id != transition.request.freeze_id
+            || operator_worker_id != transition.facts.requester_worker_id
+        {
+            bail!("verification_admission_repair_stale_identity:{}", current.run.id);
+        }
+        let (_, attempt_count, receipt_count) = self.source_freeze_verification_activity(
+            &current.project_id,
+            &current.run.plan_id,
+            &current.run.id,
+            &freeze,
+        )?;
+        let one_shot_count: u64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM feature_run_one_shot_claims WHERE freeze_id = ?1",
+            [&freeze.id],
+            |row| row.get(0),
+        )?;
+        let product_finding_count: u64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM feature_run_evidence_invalidations
+             WHERE run_id = ?1 AND freeze_id = ?2 AND reason = 'product_finding'",
+            params![current.run.id, freeze.id],
+            |row| row.get(0),
+        )?;
+        if attempt_count != 0 || receipt_count != 0 || one_shot_count != 0 || product_finding_count != 0 {
+            bail!("verification_admission_repair_not_pre_receipt:{}", current.run.id);
+        }
+        let (maker_worker_id, maker_generation) = self.historical_maker_identity(&current.run.id)?;
+        let item = self.verification_item_projection(&current.run.plan_id)?;
+        if maker_worker_id != transition.facts.historical_maker_worker_id
+            || maker_generation != transition.facts.next_maker_lease_generation
+            || item.as_ref().map(|item| item.id.as_str())
+                != transition.facts.verification_item_id.as_deref()
+        {
+            bail!("verification_admission_repair_facts_changed:{}", current.run.id);
+        }
+        if transition.request.reason.requires_run_index_digest() {
+            let verifier = owner_for_role(&current.run, RunRole::Verifier)
+                .ok_or_else(|| anyhow!("verification_admission_repair_missing_verifier:{}", current.run.id))?;
+            if verifier.worker_id != operator_worker_id
+                || item.as_ref().is_some_and(|item| {
+                    !matches!(item.status, CurrentVerificationItemLeaseStatus::Picked | CurrentVerificationItemLeaseStatus::Running)
+                        || item.worker_id.as_deref() != Some(operator_worker_id)
+                })
+            {
+                bail!("verification_admission_repair_wrong_owner:{}", current.run.id);
+            }
+            let admission = self
+                .latest_verification_admission(&current.run.id, &freeze.id)?
+                .ok_or_else(|| anyhow!("verification_admission_repair_seal_missing:{}", current.run.id))?;
+            if admission.run_index_digest != transition.request.run_index_digest.as_deref().unwrap_or_default()
+                || admission.run_revision != current.revision
+                || admission.verifier_worker_id != operator_worker_id
+                || admission.verification_item_id != transition.facts.verification_item_id
+            {
+                bail!("verification_admission_repair_seal_mismatch:{}", current.run.id);
+            }
+        } else {
+            let diagnostic = self
+                .latest_verification_readiness_diagnostic(&current.run.id, &freeze.id)?
+                .ok_or_else(|| anyhow!("verification_admission_repair_diagnostic_missing:{}", current.run.id))?;
+            if diagnostic.repair_request != transition.request
+                || diagnostic.verifier_worker_id != operator_worker_id
+                || item.as_ref().is_some_and(|item| {
+                    item.status != CurrentVerificationItemLeaseStatus::Ready || item.worker_id.is_some()
+                })
+            {
+                bail!("verification_admission_repair_diagnostic_mismatch:{}", current.run.id);
+            }
+        }
+        let recomputed = repair_verification_admission(
+            &current.run,
+            current.revision,
+            &transition.request,
+            &transition.facts,
+        )
+        .map_err(|violation| anyhow!("verification_admission_repair_rejected:{violation:?}"))?;
+        if recomputed != *transition {
+            bail!("verification_admission_repair_transition_stale:{}", current.run.id);
+        }
+        invalidate_source_in(
+            self.conn,
+            &EvidenceInvalidationRecord {
+                id: transition.facts.invalidation_id.clone(),
+                run_id: current.run.id.clone(),
+                freeze_id: freeze.id,
+                finding_id: None,
+                reason: format!(
+                    "verification_admission_repair:{}",
+                    transition.request.reason.as_str()
+                ),
+                affected_evidence_ids: Vec::new(),
+            },
+        )?;
+        self.save_feature_run_with_new_batch(
+            &transition.repaired_run,
+            current.revision,
+            &transition.repair_batch,
+        )?;
+        if let Some(item) = item {
+            if matches!(
+                item.status,
+                CurrentVerificationItemLeaseStatus::Picked
+                    | CurrentVerificationItemLeaseStatus::Running
+            ) {
+                let changed = self.conn.execute(
+                    "UPDATE items SET status = 'ready', worker_id = NULL, pick_token = NULL,
+                         picked_at = NULL, last_heartbeat_at = NULL, paused_at = NULL,
+                         updated_at = datetime('now')
+                     WHERE id = ?1 AND status IN ('picked','running') AND worker_id = ?2",
+                    params![item.id, operator_worker_id],
+                )?;
+                if changed != 1 {
+                    bail!("verification_admission_repair_item_release_failed:{}", item.id);
+                }
+            }
+        }
+        self.conn.execute(
+            "INSERT INTO events(project_id, item_id, worker_id, event_type, payload, timestamp)
+             VALUES (?1, ?2, ?3, 'feature_run_verification_admission_repaired', ?4, datetime('now'))",
+            params![
+                current.project_id,
+                transition.facts.verification_item_id,
+                operator_worker_id,
+                serde_json::to_string(transition)?,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn open_ordinary_outcome_ids(&self, plan_id: &str) -> Result<Vec<String>> {
+        let mut statement = self.conn.prepare(
+            "SELECT items.id FROM items JOIN plans ON plans.path = items.plan_path
+             WHERE plans.id = ?1 AND items.work_type IN (?2, ?3, ?4, ?5)
+               AND items.status NOT IN ('closed','closed_partial','cancelled')
+             ORDER BY items.created_at, items.id",
+        )?;
+        statement
+            .query_map(
+                params![
+                    plan_id,
+                    ORDINARY_IMPLEMENTATION_WORK_TYPE_NAMES[0],
+                    ORDINARY_IMPLEMENTATION_WORK_TYPE_NAMES[1],
+                    ORDINARY_IMPLEMENTATION_WORK_TYPE_NAMES[2],
+                    ORDINARY_IMPLEMENTATION_WORK_TYPE_NAMES[3],
+                ],
+                |row| row.get::<_, String>(0),
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(Into::into)
     }
 
-    pub(crate) fn stranded_code_outcome_ids(&self, plan_id: &str) -> Result<Vec<String>> {
+    pub(crate) fn active_ordinary_outcome_lease_ids(
+        &self,
+        plan_id: &str,
+    ) -> Result<Vec<String>> {
         let mut statement = self.conn.prepare(
             "SELECT items.id FROM items JOIN plans ON plans.path = items.plan_path
-             WHERE plans.id = ?1 AND items.work_type = 'code'
+             WHERE plans.id = ?1 AND items.work_type IN (?2, ?3, ?4, ?5)
                AND items.status IN ('picked','running')
              ORDER BY items.created_at, items.id",
         )?;
         statement
-            .query_map([plan_id], |row| row.get::<_, String>(0))?
+            .query_map(
+                params![
+                    plan_id,
+                    ORDINARY_IMPLEMENTATION_WORK_TYPE_NAMES[0],
+                    ORDINARY_IMPLEMENTATION_WORK_TYPE_NAMES[1],
+                    ORDINARY_IMPLEMENTATION_WORK_TYPE_NAMES[2],
+                    ORDINARY_IMPLEMENTATION_WORK_TYPE_NAMES[3],
+                ],
+                |row| row.get::<_, String>(0),
+            )?
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(Into::into)
+    }
+
+    pub(crate) fn source_freeze_verification_activity(
+        &self,
+        project_id: &str,
+        plan_id: &str,
+        run_id: &str,
+        freeze: &SourceFreezeRecord,
+    ) -> Result<(u64, u64, u64)> {
+        let role_admissions = self.conn.query_row(
+            "SELECT COUNT(*) FROM feature_run_role_leases
+             WHERE run_id = ?1 AND role = 'verifier'",
+            [run_id],
+            |row| row.get::<_, u64>(0),
+        )?;
+        let one_shot_admissions = self.conn.query_row(
+            "SELECT COUNT(*) FROM feature_run_one_shot_claims WHERE freeze_id = ?1",
+            [&freeze.id],
+            |row| row.get::<_, u64>(0),
+        )?;
+        let attempts = self.conn.query_row(
+            "SELECT COUNT(*) FROM evidence_attempts AS attempts
+             JOIN proof_obligations AS obligations ON obligations.id = attempts.obligation_id
+             WHERE attempts.project_id = ?1 AND obligations.plan_id = ?2
+               AND attempts.created_at >= (
+                 SELECT created_at FROM feature_run_source_freezes WHERE id = ?3
+               )",
+            params![project_id, plan_id, freeze.id],
+            |row| row.get::<_, u64>(0),
+        )?;
+        let receipts = self.conn.query_row(
+            "SELECT COUNT(*) FROM evidence_receipts AS receipts
+             JOIN proof_obligations AS obligations ON obligations.id = receipts.obligation_id
+             WHERE receipts.project_id = ?1 AND obligations.plan_id = ?2
+               AND json_extract(receipts.trusted_binding_json, '$.source.revision') = ?3
+               AND json_extract(receipts.trusted_binding_json, '$.source.tree_digest') = ?4",
+            params![
+                project_id,
+                plan_id,
+                freeze.source_revision,
+                freeze.source_digest,
+            ],
+            |row| row.get::<_, u64>(0),
+        )?;
+        Ok((
+            role_admissions + one_shot_admissions,
+            attempts,
+            receipts,
+        ))
     }
 
     pub(crate) fn create_feature_run(
@@ -417,9 +1015,9 @@ impl<'conn> ExecutionRunRepository<'conn> {
             .transpose()
     }
 
-    pub(crate) fn retire_stale_source_freeze_feature_run(
+    pub(crate) fn retire_premature_source_freeze_feature_run(
         &self,
-        transition: &StaleSourceFreezeRestartTransition,
+        transition: &PrematureSourceFreezeRestartTransition,
         expected_run_revision: u64,
         operator_worker_id: &str,
     ) -> Result<PersistedFeatureRun> {
@@ -435,17 +1033,32 @@ impl<'conn> ExecutionRunRepository<'conn> {
         }
         let freeze = repository
             .active_source_freeze(&current.run.id)?
-            .ok_or_else(|| anyhow!("feature_run_stale_source_freeze_missing:{}", current.run.id))?;
+            .ok_or_else(|| anyhow!("feature_run_premature_source_freeze_missing:{}", current.run.id))?;
+        let open_outcome_ids = repository.open_ordinary_outcome_ids(&current.run.plan_id)?;
+        let released_outcome_ids =
+            repository.active_ordinary_outcome_lease_ids(&current.run.plan_id)?;
+        let (
+            verification_admission_count,
+            verification_attempt_count,
+            verification_receipt_count,
+        ) = repository.source_freeze_verification_activity(
+            &current.project_id,
+            &current.run.plan_id,
+            &current.run.id,
+            &freeze,
+        )?;
         if freeze.id != transition.facts.freeze_id
             || freeze.source_revision != transition.facts.frozen_source_revision
             || freeze.source_digest != transition.facts.frozen_source_digest
-            || repository.plan_has_verification_item(&current.run.plan_id)?
-            || repository.stranded_code_outcome_ids(&current.run.plan_id)?
-                != transition.facts.routed_outcome_ids
+            || open_outcome_ids != transition.facts.open_outcome_ids
+            || released_outcome_ids != transition.facts.released_outcome_ids
+            || verification_admission_count != transition.facts.verification_admission_count
+            || verification_attempt_count != transition.facts.verification_attempt_count
+            || verification_receipt_count != transition.facts.verification_receipt_count
         {
-            bail!("feature_run_stale_source_freeze_facts_changed:{}", current.run.id);
+            bail!("feature_run_premature_source_freeze_facts_changed:{}", current.run.id);
         }
-        let recomputed = retire_stale_source_freeze_feature_run(
+        let recomputed = retire_premature_source_freeze_feature_run(
             &current.run,
             &transition.request,
             &transition.facts,
@@ -468,12 +1081,12 @@ impl<'conn> ExecutionRunRepository<'conn> {
             }
         }
         repository.save_feature_run(&transition.retired_run, expected_run_revision)?;
-        for item_id in &transition.facts.routed_outcome_ids {
+        for item_id in &transition.facts.released_outcome_ids {
             let changed = tx.execute(
                 "UPDATE items
                  SET status = 'ready', worker_id = NULL, pick_token = NULL,
                      last_heartbeat_at = NULL, paused_at = NULL, updated_at = datetime('now')
-                 WHERE id = ?1 AND work_type = 'code' AND status IN ('picked','running')
+                 WHERE id = ?1 AND status IN ('picked','running')
                    AND plan_path = (SELECT path FROM plans WHERE id = ?2)",
                 params![item_id, transition.request.plan_id],
             )?;
@@ -484,24 +1097,219 @@ impl<'conn> ExecutionRunRepository<'conn> {
         let payload = serde_json::to_string(transition)?;
         tx.execute(
             "INSERT INTO events(project_id, item_id, worker_id, event_type, payload, timestamp)
-             VALUES (?1, NULL, ?2, 'feature_run_stale_source_freeze_retired', ?3, datetime('now'))",
+             VALUES (?1, NULL, ?2, 'feature_run_premature_source_freeze_retired', ?3, datetime('now'))",
             params![current.project_id, operator_worker_id, payload],
         )?;
         tx.commit()?;
         self.feature_run(&transition.retired_run.id)
     }
 
-    pub(crate) fn latest_stale_source_freeze_feature_run_restart(
+    pub(crate) fn latest_premature_source_freeze_feature_run_restart(
         &self,
         project_id: &str,
         plan_id: &str,
-    ) -> Result<Option<StaleSourceFreezeRestartTransition>> {
+    ) -> Result<Option<PrematureSourceFreezeRestartTransition>> {
         let payload = self
             .conn
             .query_row(
                 "SELECT payload FROM events
                  WHERE project_id = ?1
-                   AND event_type = 'feature_run_stale_source_freeze_retired'
+                   AND event_type = 'feature_run_premature_source_freeze_retired'
+                   AND json_extract(payload, '$.request.plan_id') = ?2
+                 ORDER BY id DESC LIMIT 1",
+                params![project_id, plan_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        payload
+            .map(|payload| serde_json::from_str(&payload).map_err(Into::into))
+            .transpose()
+    }
+
+    pub(crate) fn active_verification_reservation_ids(&self, run_id: &str) -> Result<Vec<String>> {
+        let mut statement = self.conn.prepare(
+            "SELECT id FROM feature_run_budget_reservations
+             WHERE run_id = ?1 AND phase = 'verification' AND status = 'active'
+             ORDER BY started_at_unix_ms, id",
+        )?;
+        statement
+            .query_map([run_id], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    pub(crate) fn inconsistent_verification_preserved_history(
+        &self,
+        project_id: &str,
+        plan_id: &str,
+        run_id: &str,
+    ) -> Result<HistoryIdentitySet> {
+        history_identity_set(
+            self.conn,
+            "WITH scope(plan_id, project_id, run_id) AS (VALUES (?1, ?2, ?3))
+             SELECT identity FROM (
+               SELECT 'proof_obligation:' || obligations.id AS identity FROM proof_obligations obligations, scope WHERE obligations.plan_id = scope.plan_id
+               UNION ALL SELECT 'evidence_attempt:' || attempts.id FROM evidence_attempts attempts JOIN proof_obligations obligations ON obligations.id = attempts.obligation_id, scope WHERE obligations.plan_id = scope.plan_id
+               UNION ALL SELECT 'attempt_artifact:' || links.id FROM evidence_attempt_artifacts links JOIN evidence_attempts attempts ON attempts.id = links.attempt_id JOIN proof_obligations obligations ON obligations.id = attempts.obligation_id, scope WHERE obligations.plan_id = scope.plan_id
+               UNION ALL SELECT 'stored_artifact:' || artifacts.id FROM artifacts JOIN evidence_attempt_artifacts links ON links.artifact_id = artifacts.id JOIN evidence_attempts attempts ON attempts.id = links.attempt_id JOIN proof_obligations obligations ON obligations.id = attempts.obligation_id, scope WHERE obligations.plan_id = scope.plan_id
+               UNION ALL SELECT 'evidence_receipt:' || receipts.id FROM evidence_receipts receipts JOIN proof_obligations obligations ON obligations.id = receipts.obligation_id, scope WHERE obligations.plan_id = scope.plan_id
+               UNION ALL SELECT 'observation_result:' || results.id FROM evidence_observation_results results JOIN evidence_receipts receipts ON receipts.id = results.receipt_id JOIN proof_obligations obligations ON obligations.id = receipts.obligation_id, scope WHERE obligations.plan_id = scope.plan_id
+               UNION ALL SELECT 'coverage_verdict:' || verdicts.id FROM coverage_verdicts verdicts, scope WHERE verdicts.project_id = scope.project_id
+               UNION ALL SELECT 'coverage_history:' || history.id FROM coverage_verdict_history history, scope WHERE history.project_id = scope.project_id
+               UNION ALL SELECT 'review_gate:' || gates.id FROM review_gates gates, scope WHERE gates.run_id = scope.run_id
+               UNION ALL SELECT 'review_attempt:' || attempts.id FROM review_attempts attempts JOIN review_gates gates ON gates.id = attempts.gate_id, scope WHERE gates.run_id = scope.run_id
+               UNION ALL SELECT 'review_finding:' || findings.id FROM review_findings findings, scope WHERE findings.run_id = scope.run_id
+               UNION ALL SELECT 'review_binding:' || bindings.gate_id FROM final_review_source_bindings bindings JOIN review_gates gates ON gates.id = bindings.gate_id, scope WHERE gates.run_id = scope.run_id
+               UNION ALL SELECT 'outcome:' || outcomes.id FROM execution_run_outcomes outcomes, scope WHERE outcomes.run_id = scope.run_id
+               UNION ALL SELECT 'one_shot:' || claims.freeze_id FROM feature_run_one_shot_claims claims, scope WHERE claims.run_id = scope.run_id
+               UNION ALL SELECT 'budget_observation:' || observations.id FROM feature_run_budget_observations observations, scope WHERE observations.run_id = scope.run_id
+               UNION ALL SELECT 'run_event:' || events.id FROM events, scope WHERE events.project_id = scope.project_id AND events.event_type <> 'feature_run_inconsistent_verification_retired' AND json_valid(events.payload) = 1 AND (json_extract(events.payload, '$.run_id') = scope.run_id OR json_extract(events.payload, '$.request.run_id') = scope.run_id OR json_extract(events.payload, '$.retired_run.id') = scope.run_id)
+             ) ORDER BY identity",
+            params![plan_id, project_id, run_id],
+        )
+    }
+
+    pub(crate) fn retire_inconsistent_verification_feature_run(
+        &self,
+        transition: &InconsistentVerificationRetirementTransition,
+        operator_worker_id: &str,
+    ) -> Result<PersistedFeatureRun> {
+        if transition.disposition != FeatureRunRestartDisposition::Retired
+            || transition.successor_run_id.is_some()
+        {
+            bail!("feature_run_restart_transition_not_applicable");
+        }
+        require_nonempty("operator_worker_id", operator_worker_id)?;
+        let tx = Transaction::new_unchecked(self.conn, TransactionBehavior::Immediate)?;
+        let repository = ExecutionRunRepository::new(&tx);
+        let current = repository.feature_run(&transition.retired_run.id)?;
+        if current.revision != transition.facts.diagnosis.facts.run_revision {
+            bail!("feature_run_revision_conflict:{}", current.run.id);
+        }
+        let snapshot = repository.current_verification_snapshot(&current)?;
+        let batch = current
+            .run
+            .active_batch_id
+            .as_deref()
+            .map(|id| repository.batch(id))
+            .transpose()?
+            .map(|persisted| InconsistentVerificationBatchFacts {
+                id: persisted.batch.id,
+                status: persisted.batch.status,
+            });
+        let revalidated_facts = crate::execution_run::InconsistentVerificationRetirementFacts {
+            diagnosis: classify_current_verification(&snapshot.facts),
+            batch,
+            active_verification_reservation_ids: repository
+                .active_verification_reservation_ids(&current.run.id)?,
+            preserved_history: repository.inconsistent_verification_preserved_history(
+                &current.project_id,
+                &current.run.plan_id,
+                &current.run.id,
+            )?,
+            invalidation_id: transition.facts.invalidation_id.clone(),
+        };
+        let recomputed = retire_inconsistent_verification_feature_run(
+            &current.run,
+            &transition.request,
+            &revalidated_facts,
+        )
+        .map_err(|violation| anyhow!("feature_run_restart_rejected:{violation:?}"))?;
+        if recomputed != *transition {
+            bail!("feature_run_restart_transition_stale:{}", current.run.id);
+        }
+        if let Some(effect) = transition.batch_effect.as_ref() {
+            let persisted_batch = repository.batch(&effect.id)?;
+            if persisted_batch.batch.run_id != current.run.id
+                || persisted_batch.batch.status != effect.previous_status
+            {
+                bail!("feature_run_restart_batch_mismatch:{}", effect.id);
+            }
+            if persisted_batch.batch.status != ExecutionBatchStatus::Ended {
+                let mut ended = persisted_batch.batch;
+                ended.status = ExecutionBatchStatus::Ended;
+                ended.replacement = None;
+                repository.save_batch(&ended, persisted_batch.revision)?;
+            }
+        }
+        invalidate_source_in(
+            &tx,
+            &EvidenceInvalidationRecord {
+                id: transition.facts.invalidation_id.clone(),
+                run_id: current.run.id.clone(),
+                freeze_id: transition.invalidated_freeze_id.clone(),
+                finding_id: None,
+                reason: "inconsistent_verification".to_string(),
+                affected_evidence_ids: Vec::new(),
+            },
+        )?;
+        for reservation_id in &transition.released_verification_reservation_ids {
+            repository.release_budget_reservation(reservation_id, &current.run.id)?;
+        }
+        repository.save_feature_run(&transition.retired_run, current.revision)?;
+        if let Some(item_id) = transition.released_verification_item_id.as_deref() {
+            let changed = tx.execute(
+                "UPDATE items SET status = 'ready', worker_id = NULL, pick_token = NULL,
+                     picked_at = NULL, last_heartbeat_at = NULL, paused_at = NULL,
+                     updated_at = datetime('now')
+                 WHERE id = ?1 AND status IN ('picked','running') AND worker_id = ?2
+                   AND plan_path = (SELECT path FROM plans WHERE id = ?3)",
+                params![
+                    item_id,
+                    transition.facts.diagnosis.facts.verifier_worker_id,
+                    transition.request.plan_id,
+                ],
+            )?;
+            if changed != 1 {
+                bail!("feature_run_restart_verification_item_conflict:{item_id}");
+            }
+        }
+        tx.execute(
+            "INSERT INTO events(project_id, item_id, worker_id, event_type, payload, timestamp)
+             VALUES (?1, ?2, ?3, 'feature_run_inconsistent_verification_retired', ?4, datetime('now'))",
+            params![
+                current.project_id,
+                transition.released_verification_item_id,
+                operator_worker_id,
+                serde_json::to_string(transition)?,
+            ],
+        )?;
+        let active_successors: u64 = tx.query_row(
+            "SELECT COUNT(*) FROM feature_runs
+             WHERE project_id = ?1 AND plan_id = ?2 AND status IN ('active','held')",
+            params![current.project_id, current.run.plan_id],
+            |row| row.get(0),
+        )?;
+        let history_after = repository.inconsistent_verification_preserved_history(
+            &current.project_id,
+            &current.run.plan_id,
+            &current.run.id,
+        )?;
+        let persisted_after = repository.feature_run(&current.run.id)?;
+        let freeze_after = repository.source_freeze(&transition.invalidated_freeze_id)?;
+        if active_successors != 0
+            || history_after != transition.facts.preserved_history
+            || persisted_after.run != transition.retired_run
+            || persisted_after.revision != transition.resulting_run_revision
+            || freeze_after.status != SourceFreezeStatus::Invalidated
+        {
+            bail!("feature_run_restart_atomic_postcondition_failed:{}", current.run.id);
+        }
+        tx.commit()?;
+        self.feature_run(&transition.retired_run.id)
+    }
+
+    pub(crate) fn latest_inconsistent_verification_feature_run_restart(
+        &self,
+        project_id: &str,
+        plan_id: &str,
+    ) -> Result<Option<InconsistentVerificationRetirementTransition>> {
+        let payload = self
+            .conn
+            .query_row(
+                "SELECT payload FROM events
+                 WHERE project_id = ?1
+                   AND event_type = 'feature_run_inconsistent_verification_retired'
                    AND json_extract(payload, '$.request.plan_id') = ?2
                  ORDER BY id DESC LIMIT 1",
                 params![project_id, plan_id],
@@ -1176,6 +1984,38 @@ impl<'conn> ExecutionRunRepository<'conn> {
         .collect()
     }
 
+    pub(crate) fn outcome_for_run_item(
+        &self,
+        run_id: &str,
+        item_id: &str,
+    ) -> Result<Option<RunOutcomeRecord>> {
+        self.conn
+            .query_row(
+                "SELECT id, batch_id, ordinal, outcome_json FROM execution_run_outcomes WHERE run_id = ?1 AND item_id = ?2",
+                params![run_id, item_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .optional()?
+            .map(|(id, batch_id, ordinal, outcome_json)| {
+                Ok(RunOutcomeRecord {
+                    id,
+                    run_id: run_id.to_string(),
+                    batch_id,
+                    item_id: item_id.to_string(),
+                    ordinal: to_u32(ordinal, "outcome ordinal")?,
+                    outcome: serde_json::from_str(&outcome_json)?,
+                })
+            })
+            .transpose()
+    }
+
     pub(crate) fn create_review_gate(&self, gate: &ReviewGateRecord) -> Result<()> {
         if gate.kind == ReviewGateKind::FinalProduct {
             require_nonempty(
@@ -1800,8 +2640,8 @@ impl<'conn> ExecutionRunRepository<'conn> {
         let raw = self
             .conn
             .query_row(
-                "SELECT run_id, responsible_maker_id, verification_item_id,
-                        selective_obligation_ids_json, settlement_json, source_freeze_id
+                "SELECT run_id, responsible_maker_id, selective_obligation_ids_json,
+                        settlement_json, source_freeze_id
                  FROM feature_run_product_repair_settlements WHERE invalidation_id = ?1",
                 [invalidation_id],
                 |row| {
@@ -1811,7 +2651,6 @@ impl<'conn> ExecutionRunRepository<'conn> {
                         row.get::<_, String>(2)?,
                         row.get::<_, String>(3)?,
                         row.get::<_, String>(4)?,
-                        row.get::<_, String>(5)?,
                     ))
                 },
             )
@@ -1821,10 +2660,9 @@ impl<'conn> ExecutionRunRepository<'conn> {
                 invalidation_id: invalidation_id.to_string(),
                 run_id: raw.0,
                 responsible_maker_id: raw.1,
-                verification_item_id: raw.2,
-                selective_obligation_ids: serde_json::from_str(&raw.3)?,
-                settlement: serde_json::from_str(&raw.4)?,
-                source_freeze_id: raw.5,
+                selective_obligation_ids: serde_json::from_str(&raw.2)?,
+                settlement: serde_json::from_str(&raw.3)?,
+                source_freeze_id: raw.4,
             })
         })
         .transpose()
@@ -1856,19 +2694,306 @@ impl<'conn> ExecutionRunRepository<'conn> {
     ) -> Result<()> {
         self.conn.execute(
             "INSERT INTO feature_run_product_repair_settlements(
-               invalidation_id, run_id, responsible_maker_id, verification_item_id,
+               invalidation_id, run_id, responsible_maker_id,
                selective_obligation_ids_json, settlement_json, source_freeze_id
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 settlement.invalidation_id,
                 settlement.run_id,
                 settlement.responsible_maker_id,
-                settlement.verification_item_id,
                 serde_json::to_string(&settlement.selective_obligation_ids)?,
                 serde_json::to_string(&settlement.settlement)?,
                 settlement.source_freeze_id,
             ],
         )?;
+        Ok(())
+    }
+
+    pub(crate) fn verification_admission_repair_settlement(
+        &self,
+        invalidation_id: &str,
+    ) -> Result<Option<VerificationAdmissionRepairSettlementRecord>> {
+        let raw = self
+            .conn
+            .query_row(
+                "SELECT run_id, repair_batch_id, responsible_maker_id, ended_revision,
+                        settlement_json, source_freeze_id, source_revision, source_digest
+                 FROM feature_run_verification_admission_repair_settlements
+                 WHERE invalidation_id = ?1",
+                [invalidation_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, String>(7)?,
+                    ))
+                },
+            )
+            .optional()?;
+        raw.map(|raw| {
+            Ok(VerificationAdmissionRepairSettlementRecord {
+                invalidation_id: invalidation_id.to_string(),
+                run_id: raw.0,
+                repair_batch_id: raw.1,
+                responsible_maker_id: raw.2,
+                ended_revision: to_u64(raw.3, "verification admission repair ended revision")?,
+                settlement: serde_json::from_str(&raw.4)?,
+                source_freeze_id: raw.5,
+                source_revision: raw.6,
+                source_digest: raw.7,
+            })
+        })
+        .transpose()
+    }
+
+    pub(crate) fn persist_verification_admission_repair_settlement(
+        &self,
+        invalidation: &EvidenceInvalidationRecord,
+        expected_run_revision: u64,
+        expected_verification_item_id: Option<&str>,
+        settlement: &VerificationAdmissionRepairSettlementRecord,
+        freeze: &SourceFreezeRecord,
+        frozen_run: &FeatureRun,
+        operator_worker_id: &str,
+    ) -> Result<()> {
+        if self.conn.is_autocommit() {
+            bail!("verification_admission_repair_settlement_requires_active_transaction");
+        }
+        for (field, value) in [
+            ("invalidation_id", settlement.invalidation_id.as_str()),
+            ("run_id", settlement.run_id.as_str()),
+            ("repair_batch_id", settlement.repair_batch_id.as_str()),
+            ("responsible_maker_id", settlement.responsible_maker_id.as_str()),
+            ("source_freeze_id", settlement.source_freeze_id.as_str()),
+            ("source_revision", settlement.source_revision.as_str()),
+            ("source_digest", settlement.source_digest.as_str()),
+            ("operator_worker_id", operator_worker_id),
+        ] {
+            require_nonempty(field, value)?;
+        }
+        if resolve_evidence_invalidation_kind(
+            &invalidation.reason,
+            invalidation.finding_id.as_deref(),
+            &invalidation.affected_evidence_ids,
+        )
+        .map_err(|violation| {
+            anyhow!(
+                "verification_admission_repair_invalidation_rejected:{}:{violation:?}",
+                invalidation.id
+            )
+        })? != Some(EvidenceInvalidationKind::VerificationAdmission)
+        {
+            bail!(
+                "verification_admission_repair_invalidation_kind_mismatch:{}",
+                invalidation.id
+            );
+        }
+        let current = self.feature_run(&settlement.run_id)?;
+        if current.revision != expected_run_revision
+            || current.run.phase != FeatureRunPhase::Implementation
+            || current.run.status != FeatureRunStatus::Active
+            || current.run.active_batch_id.as_deref()
+                != Some(settlement.repair_batch_id.as_str())
+            || current.run.batch_outcome_count != 0
+            || current.run.role_owners.len() != 1
+            || owner_for_role(&current.run, RunRole::Maker)
+                .is_none_or(|maker| maker.worker_id != operator_worker_id)
+            || settlement.invalidation_id != invalidation.id
+            || settlement.responsible_maker_id != operator_worker_id
+            || settlement.ended_revision != expected_run_revision.saturating_add(1)
+            || settlement.source_freeze_id != freeze.id
+            || settlement.source_revision != freeze.source_revision
+            || settlement.source_digest != freeze.source_digest
+        {
+            bail!(
+                "verification_admission_repair_settlement_stale_identity:{}",
+                invalidation.id
+            );
+        }
+        let persisted_invalidation = self
+            .invalidations(&current.run.id)?
+            .into_iter()
+            .find(|candidate| candidate.id == invalidation.id)
+            .ok_or_else(|| {
+                anyhow!(
+                    "verification_admission_repair_invalidation_missing:{}",
+                    invalidation.id
+                )
+            })?;
+        if persisted_invalidation != *invalidation
+            || invalidation.run_id != current.run.id
+            || self
+                .verification_admission_repair_settlement(&invalidation.id)?
+                .is_some()
+            || self.active_source_freeze(&current.run.id)?.is_some()
+        {
+            bail!(
+                "verification_admission_repair_settlement_facts_changed:{}",
+                invalidation.id
+            );
+        }
+        let invalidated_freeze = self.source_freeze(&invalidation.freeze_id)?;
+        if invalidated_freeze.run_id != current.run.id
+            || invalidated_freeze.status != SourceFreezeStatus::Invalidated
+        {
+            bail!(
+                "verification_admission_repair_invalidated_freeze_mismatch:{}",
+                invalidation.id
+            );
+        }
+        let item = self.verification_item_projection(&current.run.plan_id)?;
+        if item.as_ref().map(|item| item.id.as_str()) != expected_verification_item_id
+            || item.as_ref().is_some_and(|item| {
+                item.status != CurrentVerificationItemLeaseStatus::Ready
+                    || item.worker_id.is_some()
+            })
+        {
+            bail!(
+                "verification_admission_repair_verification_item_mismatch:{}",
+                invalidation.id
+            );
+        }
+        let persisted_batch = self.batch(&settlement.repair_batch_id)?;
+        if persisted_batch.batch.run_id != current.run.id
+            || persisted_batch.batch.maker_worker_id != operator_worker_id
+            || persisted_batch.batch.status != ExecutionBatchStatus::Active
+            || !persisted_batch.batch.settled_outcome_ids.is_empty()
+            || persisted_batch.batch.replacement.is_some()
+        {
+            bail!(
+                "verification_admission_repair_batch_mismatch:{}",
+                settlement.repair_batch_id
+            );
+        }
+        if frozen_run.id != current.run.id
+            || frozen_run.plan_id != current.run.plan_id
+            || frozen_run.phase != FeatureRunPhase::SourceFrozen
+            || frozen_run.status != FeatureRunStatus::Active
+            || frozen_run.active_batch_id.as_deref()
+                != Some(settlement.repair_batch_id.as_str())
+            || frozen_run.source_revision.as_deref() != Some(freeze.source_revision.as_str())
+            || !frozen_run.role_owners.is_empty()
+        {
+            bail!(
+                "verification_admission_repair_frozen_run_mismatch:{}",
+                current.run.id
+            );
+        }
+        let mut ended_batch = persisted_batch.batch;
+        ended_batch.status = ExecutionBatchStatus::Ended;
+        self.save_batch(&ended_batch, persisted_batch.revision)?;
+        self.save_feature_run(frozen_run, expected_run_revision)?;
+        self.freeze_source(freeze)?;
+        self.conn.execute(
+            "INSERT INTO feature_run_verification_admission_repair_settlements(
+               invalidation_id, run_id, repair_batch_id, responsible_maker_id,
+               ended_revision, settlement_json, source_freeze_id, source_revision, source_digest
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                settlement.invalidation_id,
+                settlement.run_id,
+                settlement.repair_batch_id,
+                settlement.responsible_maker_id,
+                settlement.ended_revision,
+                serde_json::to_string(&settlement.settlement)?,
+                settlement.source_freeze_id,
+                settlement.source_revision,
+                settlement.source_digest,
+            ],
+        )?;
+        self.conn.execute(
+            "INSERT INTO events(project_id, item_id, worker_id, event_type, payload, timestamp)
+             VALUES (?1, ?2, ?3, 'feature_run_verification_admission_repair_settled', ?4, datetime('now'))",
+            params![
+                current.project_id,
+                expected_verification_item_id,
+                operator_worker_id,
+                serde_json::to_string(settlement)?,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn prove_verification_admission_repair_settlement(
+        &self,
+        invalidation: &EvidenceInvalidationRecord,
+        settlement: &VerificationAdmissionRepairSettlementRecord,
+        operator_worker_id: &str,
+    ) -> Result<()> {
+        if resolve_evidence_invalidation_kind(
+            &invalidation.reason,
+            invalidation.finding_id.as_deref(),
+            &invalidation.affected_evidence_ids,
+        )
+        .map_err(|violation| {
+            anyhow!(
+                "verification_admission_repair_invalidation_rejected:{}:{violation:?}",
+                invalidation.id
+            )
+        })? != Some(EvidenceInvalidationKind::VerificationAdmission)
+        {
+            bail!(
+                "verification_admission_repair_invalidation_kind_mismatch:{}",
+                invalidation.id
+            );
+        }
+        let current = self.feature_run(&settlement.run_id)?;
+        let persisted_invalidation = self
+            .invalidations(&current.run.id)?
+            .into_iter()
+            .find(|candidate| candidate.id == invalidation.id);
+        let batch = self.batch(&settlement.repair_batch_id)?;
+        let active_freeze = self.active_source_freeze(&current.run.id)?;
+        if persisted_invalidation.as_ref() != Some(invalidation)
+            || settlement.invalidation_id != invalidation.id
+            || settlement.responsible_maker_id != operator_worker_id
+            || current.run.phase != FeatureRunPhase::SourceFrozen
+            || current.run.status != FeatureRunStatus::Active
+            || current.revision != settlement.ended_revision
+            || current.run.active_batch_id.as_deref()
+                != Some(settlement.repair_batch_id.as_str())
+            || current.run.source_revision.as_deref()
+                != Some(settlement.source_revision.as_str())
+            || !current.run.role_owners.is_empty()
+            || batch.batch.run_id != current.run.id
+            || batch.batch.maker_worker_id != settlement.responsible_maker_id
+            || batch.batch.status != ExecutionBatchStatus::Ended
+            || batch.batch.replacement.is_some()
+            || active_freeze.as_ref().is_none_or(|freeze| {
+                freeze.id != settlement.source_freeze_id
+                    || freeze.source_revision != settlement.source_revision
+                    || freeze.source_digest != settlement.source_digest
+                    || freeze.status != SourceFreezeStatus::Active
+            })
+        {
+            bail!(
+                "verification_admission_repair_settlement_replay_unproven:{}",
+                invalidation.id
+            );
+        }
+        let mut events = self.conn.prepare(
+            "SELECT payload FROM events
+             WHERE event_type = 'feature_run_verification_admission_repair_settled'
+               AND json_extract(payload, '$.invalidation_id') = ?1
+             ORDER BY id",
+        )?;
+        let payloads = events
+            .query_map([&invalidation.id], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        if payloads.len() != 1
+            || serde_json::from_str::<VerificationAdmissionRepairSettlementRecord>(&payloads[0])?
+                != *settlement
+        {
+            bail!(
+                "verification_admission_repair_settlement_event_unproven:{}",
+                invalidation.id
+            );
+        }
         Ok(())
     }
 }
@@ -1908,6 +3033,22 @@ fn invalidate_source_in(
         ],
     )?;
     Ok(())
+}
+
+fn history_identity_set<P: Params>(
+    conn: &Connection,
+    sql: &str,
+    params: P,
+) -> Result<HistoryIdentitySet> {
+    let mut statement = conn.prepare(sql)?;
+    let identities = statement
+        .query_map(params, |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(HistoryIdentitySet {
+        count: u64::try_from(identities.len())
+            .map_err(|_| anyhow!("history_identity_count_overflow"))?,
+        identity_digest: sha256_json_digest(&json!(identities))?,
+    })
 }
 
 struct RawRunRow {

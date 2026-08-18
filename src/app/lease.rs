@@ -2,6 +2,7 @@
 //! leased, and the runtime state (heartbeat, progress, pause) of held work.
 
 use super::App;
+use crate::execution_run::ORDINARY_IMPLEMENTATION_WORK_TYPE_NAMES;
 use crate::util::{collect_rows, short_id, worker_id};
 use anyhow::{Result, bail};
 use rusqlite::{OptionalExtension, params};
@@ -14,6 +15,7 @@ pub(crate) struct PickFilter<'a> {
     pub(crate) exclude: Option<&'a str>,
     pub(crate) work_type: Option<&'a str>,
     pub(crate) plan_path: Option<&'a str>,
+    pub(crate) ordinary_implementation: bool,
 }
 
 impl App {
@@ -46,9 +48,10 @@ impl App {
                 "SELECT id FROM items
                  WHERE project_id = ?1 AND status = 'ready'
                  AND id IS NOT ?2
-                 AND (?3 IS NULL OR work_type = ?3)
-                 AND (?4 IS NULL OR plan_path = ?4)
-                 AND (worker_id IS NULL OR worker_id = ?5)
+                 AND (?3 = 0 OR work_type IN (?4, ?5, ?6, ?7))
+                 AND (?8 IS NULL OR work_type = ?8)
+                 AND (?9 IS NULL OR plan_path = ?9)
+                 AND (worker_id IS NULL OR worker_id = ?10)
                  AND NOT EXISTS (
                    SELECT 1 FROM plans p
                    JOIN feature_runs run ON run.plan_id = p.id
@@ -61,11 +64,16 @@ impl App {
                    SELECT 1 FROM items c WHERE c.parent_item_id = items.id
                    AND c.status NOT IN ('cancelled')
                  )
-                 ORDER BY CASE WHEN worker_id = ?5 THEN 0 ELSE 1 END, priority DESC, created_at ASC
+                 ORDER BY CASE WHEN worker_id = ?10 THEN 0 ELSE 1 END, priority DESC, created_at ASC
                  LIMIT 1",
                 params![
                     project.id,
                     filter.exclude,
+                    filter.ordinary_implementation,
+                    ORDINARY_IMPLEMENTATION_WORK_TYPE_NAMES[0],
+                    ORDINARY_IMPLEMENTATION_WORK_TYPE_NAMES[1],
+                    ORDINARY_IMPLEMENTATION_WORK_TYPE_NAMES[2],
+                    ORDINARY_IMPLEMENTATION_WORK_TYPE_NAMES[3],
                     filter.work_type,
                     filter.plan_path,
                     worker
@@ -97,8 +105,9 @@ impl App {
                      SELECT id FROM items
                      WHERE project_id = ?3 AND status = 'ready'
                      AND id IS NOT ?4
-                     AND (?5 IS NULL OR work_type = ?5)
-                     AND (?6 IS NULL OR plan_path = ?6)
+                     AND (?5 = 0 OR work_type IN (?6, ?7, ?8, ?9))
+                     AND (?10 IS NULL OR work_type = ?10)
+                     AND (?11 IS NULL OR plan_path = ?11)
                      AND (worker_id IS NULL OR worker_id = ?1)
                      AND NOT EXISTS (
                        SELECT 1 FROM plans p
@@ -122,6 +131,11 @@ impl App {
                     token,
                     project.id,
                     filter.exclude,
+                    filter.ordinary_implementation,
+                    ORDINARY_IMPLEMENTATION_WORK_TYPE_NAMES[0],
+                    ORDINARY_IMPLEMENTATION_WORK_TYPE_NAMES[1],
+                    ORDINARY_IMPLEMENTATION_WORK_TYPE_NAMES[2],
+                    ORDINARY_IMPLEMENTATION_WORK_TYPE_NAMES[3],
                     filter.work_type,
                     filter.plan_path
                 ],

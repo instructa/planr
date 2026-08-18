@@ -1,6 +1,8 @@
 use super::App;
 use super::lease::PickFilter;
 use super::repository::execution_run::ExecutionRunRepository;
+use crate::execution_run::is_ordinary_implementation_work_type;
+use crate::model::WorkType;
 use crate::secrets::looks_secret_like;
 use crate::storage::row_to_item;
 use crate::util::collect_rows;
@@ -24,6 +26,13 @@ impl App {
         self.pick_value(exclude, work_type, plan, false)
     }
 
+    pub(crate) fn next_ordinary_implementation_pick_value(
+        &self,
+        plan: Option<&str>,
+    ) -> Result<Value> {
+        self.pick_value_with_ordinary_filter(None, None, plan, false, true)
+    }
+
     /// `pick --peek`: the same packet a pick would hand out, without
     /// writing the lease, heartbeat, or pick event. Drivers read the
     /// routing block for dispatch decisions and leave the lease for the
@@ -42,6 +51,23 @@ impl App {
         work_type: Option<&str>,
         plan: Option<&str>,
         peek: bool,
+    ) -> Result<Value> {
+        self.pick_value_with_ordinary_filter(
+            exclude,
+            work_type,
+            plan,
+            peek,
+            plan.is_some() && work_type.is_none(),
+        )
+    }
+
+    fn pick_value_with_ordinary_filter(
+        &self,
+        exclude: Option<&str>,
+        work_type: Option<&str>,
+        plan: Option<&str>,
+        peek: bool,
+        ordinary_implementation: bool,
     ) -> Result<Value> {
         if work_type == Some("review") {
             let plan_id = plan.ok_or_else(|| {
@@ -71,7 +97,9 @@ impl App {
                     })
                 }));
         }
-        if matches!(work_type, None | Some("code"))
+        if work_type.is_none_or(|value| {
+            is_ordinary_implementation_work_type(&WorkType::from(value.to_string()))
+        })
             && let Some(plan_id) = plan
             && let Some(packet) = self.repair_work_packet_value(plan_id)?
         {
@@ -82,6 +110,7 @@ impl App {
             exclude,
             work_type,
             plan_path: plan_path.as_ref().map(|plan| plan.path.as_str()),
+            ordinary_implementation,
         };
         if let Some(id) = self.peek_next_ready_item_filtered(&filter)? {
             let hold = self.peek_outcome_work_packet(&id)?;
@@ -109,7 +138,9 @@ impl App {
             Ok(packet)
         } else {
             if !peek
-                && work_type == Some("code")
+                && work_type.is_some_and(|value| {
+                    is_ordinary_implementation_work_type(&WorkType::from(value.to_string()))
+                })
                 && let Some(plan_id) = plan
                 && let Some(handoff) =
                     self.resume_accepted_risk_verification_handoff_value(plan_id)?
@@ -152,6 +183,9 @@ impl App {
             return Ok(hold);
         }
         let item = self.get_item(item_id)?;
+        if !is_ordinary_implementation_work_type(&item.work_type) {
+            return Ok(json!({"kind": "outcome", "item_id": item_id}));
+        }
         let Some(plan_path) = item.plan_path.as_deref() else {
             return Ok(json!({"kind": "outcome", "item_id": item_id}));
         };
@@ -190,6 +224,17 @@ impl App {
         for item in ready_items {
             let cause = if filter.exclude == Some(item.id.as_str()) {
                 "this outcome is excluded from the current lease".to_string()
+            } else if filter.ordinary_implementation
+                && !is_ordinary_implementation_work_type(&item.work_type)
+            {
+                let ordinary_pick = match plan {
+                    Some(plan_id) => format!("planr pick --plan {plan_id} --json"),
+                    None => "planr pick --json".to_string(),
+                };
+                if !repair.contains(&ordinary_pick) {
+                    repair.push(ordinary_pick);
+                }
+                format!("work_type `{}` is not an ordinary implementation outcome", item.work_type)
             } else if let Some(required) =
                 filter.work_type.filter(|wt| *wt != item.work_type.as_str())
             {

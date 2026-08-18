@@ -1,13 +1,17 @@
 use super::App;
+use super::evidence::CurrentPlanCoverageForSourceFreeze;
+use super::feature_run_evidence::RepairSettlementDispatchMode;
 use super::proof::PlanEvidenceAuthority;
 use super::repository::execution_run::{
-    BudgetReservationStatus, ExecutionRunRepository, FindingRecord, PersistedBudgetReservation,
-    ReviewAttemptRecord, ReviewGateKind, ReviewGateRecord, ReviewGateStatus,
+    BudgetReservationStatus, ExecutionRunRepository, FindingRecord, FindingStatus,
+    PersistedBudgetReservation, ReviewAttemptRecord, ReviewGateKind, ReviewGateRecord,
+    ReviewGateStatus,
 };
 use crate::execution_run::{
-    ExecutionBatch, FeatureRun, FeatureRunBudgetContractCompatibility, FeatureRunHoldReason,
+    CurrentVerificationDiagnosis, CurrentVerificationInvariantStatus, ExecutionBatch, FeatureRun,
+    FeatureRunBudgetContractCompatibility, FeatureRunHoldReason,
     FeatureRunPhase, FeatureRunRestartDisposition, FeatureRunRestartReason, FeatureRunStatus,
-    FeatureRunTerminalReason, RoleOwner, RunRole, StaleSourceFreezeRestartFacts,
+    FeatureRunTerminalReason, PrematureSourceFreezeRestartFacts, RoleOwner, RunRole,
 };
 use crate::usage_policy::{
     BudgetAmounts, BudgetProvenance, BudgetSnapshot, FeatureRunBudgetMode, FeatureRunBudgetPhase,
@@ -108,10 +112,16 @@ pub(crate) enum CanonicalFeatureRunRestartDto {
         incompatibility: FeatureRunBudgetContractCompatibility,
         disposition: Option<FeatureRunRestartDisposition>,
     },
-    StaleSourceFreeze {
+    PrematureSourceFreeze {
         status: &'static str,
         reason: FeatureRunRestartReason,
-        source_freeze: StaleSourceFreezeRestartFacts,
+        source_freeze: PrematureSourceFreezeRestartFacts,
+        disposition: Option<FeatureRunRestartDisposition>,
+    },
+    InconsistentVerification {
+        status: &'static str,
+        reason: FeatureRunRestartReason,
+        current_verification: CurrentVerificationDiagnosis,
         disposition: Option<FeatureRunRestartDisposition>,
     },
 }
@@ -120,7 +130,8 @@ impl CanonicalFeatureRunRestartDto {
     fn status(&self) -> &'static str {
         match self {
             Self::IncompatibleBudget { status, .. }
-            | Self::StaleSourceFreeze { status, .. } => status,
+            | Self::PrematureSourceFreeze { status, .. }
+            | Self::InconsistentVerification { status, .. } => status,
         }
     }
 }
@@ -324,10 +335,17 @@ impl App {
         let repository = ExecutionRunRepository::new(&self.conn);
         let persisted = repository.feature_run(run_id)?;
         let compatibility = repository.budget_contract_compatibility(run_id)?;
-        let stale_source_freeze = if compatibility.is_incompatible() {
+        let premature_source_freeze = if compatibility.is_incompatible() {
             None
         } else {
-            self.stale_source_freeze_restart_facts(&persisted)?
+            self.premature_source_freeze_restart_facts(&persisted)?
+        };
+        let inconsistent_verification = if compatibility.is_incompatible() {
+            None
+        } else {
+            self.current_verification_diagnosis(&persisted)?
+                .map(|snapshot| snapshot.diagnosis)
+                .filter(|diagnosis| diagnosis.status == CurrentVerificationInvariantStatus::Inconsistent)
         };
         let restart = if compatibility.is_incompatible()
             && matches!(
@@ -340,22 +358,42 @@ impl App {
                 incompatibility: compatibility,
                 disposition: None,
             })
-        } else if let Some(source_freeze) = stale_source_freeze {
-            Some(CanonicalFeatureRunRestartDto::StaleSourceFreeze {
+        } else if let Some(current_verification) = inconsistent_verification {
+            Some(CanonicalFeatureRunRestartDto::InconsistentVerification {
                 status: "required",
-                reason: FeatureRunRestartReason::StaleSourceFreeze,
+                reason: FeatureRunRestartReason::InconsistentVerification,
+                current_verification,
+                disposition: None,
+            })
+        } else if let Some(source_freeze) = premature_source_freeze {
+            Some(CanonicalFeatureRunRestartDto::PrematureSourceFreeze {
+                status: "required",
+                reason: FeatureRunRestartReason::PrematureSourceFreeze,
                 source_freeze,
                 disposition: None,
             })
         } else if persisted.run.status == FeatureRunStatus::Cancelled {
             if let Some(transition) = repository
-                .latest_stale_source_freeze_feature_run_restart(
+                .latest_inconsistent_verification_feature_run_restart(
                     &persisted.project_id,
                     &persisted.run.plan_id,
                 )?
                 .filter(|transition| transition.retired_run.id == persisted.run.id)
             {
-                Some(CanonicalFeatureRunRestartDto::StaleSourceFreeze {
+                Some(CanonicalFeatureRunRestartDto::InconsistentVerification {
+                    status: "retired",
+                    reason: transition.request.reason,
+                    current_verification: transition.facts.diagnosis,
+                    disposition: Some(transition.disposition),
+                })
+            } else if let Some(transition) = repository
+                .latest_premature_source_freeze_feature_run_restart(
+                    &persisted.project_id,
+                    &persisted.run.plan_id,
+                )?
+                .filter(|transition| transition.retired_run.id == persisted.run.id)
+            {
+                Some(CanonicalFeatureRunRestartDto::PrematureSourceFreeze {
                     status: "retired",
                     reason: transition.request.reason,
                     source_freeze: transition.facts,
@@ -411,6 +449,9 @@ impl App {
             .map(|gate| repository.findings(&gate.id))
             .transpose()?
             .unwrap_or_default();
+        let has_unresolved_review_finding = findings
+            .iter()
+            .any(|finding| finding.status == FindingStatus::Open);
         let budget = (|| -> Result<BudgetSnapshot> {
             let reservations = repository.budget_reservations(run_id)?;
             let released_through = canonical_released_budget_phase(&persisted.run, &reservations)?;
@@ -451,6 +492,9 @@ impl App {
             let reason_code = match gate.status {
                 ReviewGateStatus::Pending => "review_gate_pending",
                 ReviewGateStatus::Leased => "review_gate_leased",
+                ReviewGateStatus::ChangesRequested if !has_unresolved_review_finding => {
+                    "review_finding_reverification_pending"
+                }
                 ReviewGateStatus::ChangesRequested => "review_changes_requested",
                 ReviewGateStatus::Accepted | ReviewGateStatus::Cancelled => return None,
             };
@@ -463,6 +507,29 @@ impl App {
         });
         let evidence_authority = if persisted.run.phase == FeatureRunPhase::SourceFrozen {
             Some(self.plan_evidence_authority(&persisted.run.plan_id)?)
+        } else {
+            None
+        };
+        let pending_repair_dispatch = if persisted.run.phase == FeatureRunPhase::Implementation {
+            self.pending_repair_settlement(&persisted.run.id)?
+                .map(|(_, dispatch)| dispatch)
+        } else {
+            None
+        };
+        let current_plan_coverage = if unmet_gate.is_none()
+            && persisted.run.phase == FeatureRunPhase::SourceFrozen
+            && evidence_authority == Some(PlanEvidenceAuthority::BindingActive)
+        {
+            let freeze = repository
+                .active_source_freeze(&persisted.run.id)?
+                .ok_or_else(|| {
+                    anyhow::anyhow!("source_frozen_run_missing_freeze:{}", persisted.run.id)
+                })?;
+            Some(self.current_plan_coverage_for_source_freeze(
+                &persisted.project_id,
+                &persisted.run.plan_id,
+                &freeze,
+            )?)
         } else {
             None
         };
@@ -486,17 +553,28 @@ impl App {
                     },
                     "restart_incompatible_feature_run",
                 ),
-                CanonicalFeatureRunRestartDto::StaleSourceFreeze { .. } => (
-                    "source_freeze_stale",
-                    "restart_stale_source_freeze_feature_run",
+                CanonicalFeatureRunRestartDto::PrematureSourceFreeze { .. } => (
+                    "source_freeze_premature",
+                    "restart_premature_source_freeze_feature_run",
+                ),
+                CanonicalFeatureRunRestartDto::InconsistentVerification { .. } => (
+                    "current_verification_inconsistent",
+                    "restart_inconsistent_verification_feature_run",
                 ),
             }
+        } else if matches!(restart.as_ref(), Some(
+            CanonicalFeatureRunRestartDto::InconsistentVerification { status: "retired", .. }
+        )) {
+            ("inconsistent_verification_retired", "none")
         } else if let Some(gate) = unmet_gate.as_ref() {
             (
                 gate.reason_code,
                 match gate.status {
                     ReviewGateStatus::Pending => "lease_review_gate",
                     ReviewGateStatus::Leased => "complete_review_gate",
+                    ReviewGateStatus::ChangesRequested if !has_unresolved_review_finding => {
+                        "lease_verification"
+                    }
                     ReviewGateStatus::ChangesRequested => "resolve_review_findings",
                     ReviewGateStatus::Accepted | ReviewGateStatus::Cancelled => "none",
                 },
@@ -504,7 +582,16 @@ impl App {
         } else {
             match persisted.run.phase {
                 FeatureRunPhase::Implementation => {
-                    ("implementation_in_progress", "settle_next_outcome")
+                    if pending_repair_dispatch
+                        == Some(RepairSettlementDispatchMode::VerificationAdmission)
+                    {
+                        (
+                            "verification_admission_repair_pending",
+                            "settle_verification_admission_repair",
+                        )
+                    } else {
+                        ("implementation_in_progress", "settle_next_outcome")
+                    }
                 }
                 FeatureRunPhase::RiskReview => ("risk_review_in_progress", "complete_review_gate"),
                 FeatureRunPhase::SourceFrozen
@@ -519,6 +606,14 @@ impl App {
                         "binding_evidence_obligations_missing",
                         "repair_evidence_obligations",
                     )
+                }
+                FeatureRunPhase::SourceFrozen
+                    if matches!(
+                        current_plan_coverage.as_ref(),
+                        Some(CurrentPlanCoverageForSourceFreeze::Satisfied(_))
+                    ) =>
+                {
+                    ("binding_evidence_satisfied", "open_final_review")
                 }
                 FeatureRunPhase::SourceFrozen => ("source_frozen", "lease_verification"),
                 FeatureRunPhase::Verification => {
@@ -550,6 +645,9 @@ impl App {
             .map(|gate| repository.review_source_binding(&gate.id))
             .transpose()?
             .flatten();
+        let feature_run_id = persisted.run.id.clone();
+        let is_capability_held = persisted.run.phase == FeatureRunPhase::Held
+            && persisted.run.hold_reason == Some(FeatureRunHoldReason::Capability);
         let mut value = serde_json::to_value(CanonicalExecutionStateDto {
             schema_version: "planr.execution_state.v2",
             reason_code,
@@ -567,6 +665,39 @@ impl App {
         })
         .map_err(anyhow::Error::from)?;
         value["review_source_binding"] = serde_json::to_value(review_source_binding)?;
+        let verification_admission_repair = if is_capability_held {
+            repository
+                .active_source_freeze(&feature_run_id)?
+                .map(|freeze| {
+                    repository
+                        .latest_verification_readiness_diagnostic(&feature_run_id, &freeze.id)
+                })
+                .transpose()?
+                .flatten()
+                .filter(|diagnostic| {
+                    diagnostic.repair_request.run_revision == persisted.revision
+                })
+                .map(|diagnostic| diagnostic.repair_request)
+        } else {
+            None
+        };
+        if let Some(request) = verification_admission_repair.as_ref() {
+            let mut command = format!(
+                "planr --json run repair-verification-admission --plan {} --run {} --freeze {} --revision {} --reason {}",
+                request.plan_id,
+                request.run_id,
+                request.freeze_id,
+                request.run_revision,
+                request.reason.as_str(),
+            );
+            if let Some(run_index_digest) = request.run_index_digest.as_deref() {
+                command.push_str(" --run-index-digest ");
+                command.push_str(run_index_digest);
+            }
+            value["next_action"] = json!(command);
+        }
+        value["verification_admission_repair"] =
+            serde_json::to_value(verification_admission_repair)?;
         Ok(value)
     }
 
@@ -857,7 +988,7 @@ fn canonical_released_budget_phase(
 #[cfg(test)]
 mod tests {
     use super::super::repository::execution_run::{
-        BudgetObservationRecord, BudgetReservationRecord,
+        BudgetObservationRecord, BudgetReservationRecord, ReviewScopeKind, ReviewVerdict,
     };
     use super::*;
     use crate::execution_run::{
@@ -1049,6 +1180,75 @@ mod tests {
             .create_budget_reservation(&active)
             .expect("active reservation");
         (app, contract)
+    }
+
+    #[test]
+    fn resolved_review_findings_project_reverification_handoff_without_second_owner() {
+        let (app, _) = implementation_projection_fixture();
+        let repository = ExecutionRunRepository::new(&app.conn);
+        let gate_id = "gate-reprojection";
+        repository
+            .create_review_gate(&ReviewGateRecord {
+                id: gate_id.into(),
+                run_id: "run-projection".into(),
+                scope_kind: ReviewScopeKind::Plan,
+                scope_id: "plan-a".into(),
+                kind: ReviewGateKind::FinalProduct,
+                status: ReviewGateStatus::Pending,
+                required_risk: None,
+                responsible_maker_id: "maker-a".into(),
+                latest_attempt: 0,
+                source_revision: Some("source-a".into()),
+            })
+            .expect("final product gate");
+        repository
+            .append_review_attempt(
+                &ReviewAttemptRecord {
+                    id: "attempt-reprojection".into(),
+                    gate_id: gate_id.into(),
+                    attempt_number: 1,
+                    reviewer_worker_id: "reviewer-a".into(),
+                    reviewer_mode: "independent".into(),
+                    verdict: ReviewVerdict::ChangesRequested,
+                    source_revision: "source-a".into(),
+                    artifacts: Vec::new(),
+                },
+                &[FindingRecord {
+                    id: "finding-reprojection".into(),
+                    gate_id: gate_id.into(),
+                    attempt_id: "attempt-reprojection".into(),
+                    severity: "high".into(),
+                    target: "plan-a".into(),
+                    owner_worker_id: "maker-a".into(),
+                    status: FindingStatus::Open,
+                    invalidated_evidence_ids: Vec::new(),
+                }],
+                0,
+            )
+            .expect("changes-requested attempt");
+
+        let open = app
+            .canonical_execution_state_value_at("run-projection", Some(gate_id), PROJECTED_AT_UNIX_MS)
+            .expect("open finding projection");
+        assert_eq!(open["reason_code"], "review_changes_requested");
+        assert_eq!(open["next_action"], "resolve_review_findings");
+        assert_eq!(open["review_gate"]["status"], "changes_requested");
+        assert_eq!(open["findings"][0]["status"], "open");
+
+        repository
+            .set_finding_status("finding-reprojection", FindingStatus::Open, FindingStatus::Resolved)
+            .expect("resolve finding");
+        let resolved = app
+            .canonical_execution_state_value_at("run-projection", Some(gate_id), PROJECTED_AT_UNIX_MS)
+            .expect("resolved finding projection");
+
+        assert_eq!(resolved["reason_code"], "review_finding_reverification_pending");
+        assert_eq!(resolved["unmet_gate"]["reason_code"], "review_finding_reverification_pending");
+        assert_eq!(resolved["next_action"], "lease_verification");
+        assert_eq!(resolved["review_gate"]["id"], gate_id);
+        assert_eq!(resolved["review_gate"]["status"], "changes_requested");
+        assert_eq!(resolved["findings"][0]["status"], "resolved");
+        assert_eq!(repository.review_gate(gate_id).expect("persisted gate").status, ReviewGateStatus::ChangesRequested);
     }
 
     #[test]

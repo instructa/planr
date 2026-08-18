@@ -53,13 +53,14 @@ struct EvaluationScope {
 /// One authoritative active obligation row selected by the Evidence coverage
 /// domain. Consumers may decide completeness from these typed facts, but must
 /// not duplicate the binding/supersession query that selects them.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct AuthoritativeObligationBindingRow {
     pub id: String,
     pub plan_id: String,
     pub item_id: Option<String>,
     pub criterion_id: String,
     pub obligation_version: i64,
+    pub observations: Vec<ObservationRequirement>,
 }
 
 #[derive(Debug, Clone)]
@@ -184,17 +185,43 @@ pub fn authoritative_obligation_ids_for_scope(
     scope: &str,
     scope_id: &str,
 ) -> Result<Vec<String>, EvidenceDomainError> {
+    authoritative_obligation_bindings_for_scope(conn, project_id, scope, scope_id)
+        .map(|rows| rows.into_iter().map(|row| row.id).collect())
+}
+
+pub fn authoritative_obligation_bindings_for_scope(
+    conn: &Connection,
+    project_id: &str,
+    scope: &str,
+    scope_id: &str,
+) -> Result<Vec<AuthoritativeObligationBindingRow>, EvidenceDomainError> {
+    if scope == "criterion" {
+        let canonical_ids = load_authoritative_criterion_obligation_ids(
+            conn,
+            project_id,
+            scope_id,
+        )?
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+        return authoritative_obligation_bindings_by_clause(
+            conn,
+            project_id,
+            "WHERE project_id = ?1 AND criterion_id = ?2",
+            scope_id,
+        )
+        .map(|rows| {
+            rows.into_iter()
+                .filter(|row| canonical_ids.contains(&row.id))
+                .collect()
+        });
+    }
     let where_clause = match scope {
         "obligation" => "WHERE project_id = ?1 AND id = ?2",
-        "criterion" => {
-            return load_authoritative_criterion_obligation_ids(conn, project_id, scope_id);
-        }
         "item" => "WHERE project_id = ?1 AND item_id = ?2",
         "plan" => "WHERE project_id = ?1 AND plan_id = ?2",
         _ => return Err(EvidenceDomainError::InvalidTrustedBinding("coverage.scope")),
     };
-    authoritative_obligation_bindings_for_scope(conn, project_id, where_clause, scope_id)
-        .map(|rows| rows.into_iter().map(|row| row.id).collect())
+    authoritative_obligation_bindings_by_clause(conn, project_id, where_clause, scope_id)
 }
 
 /// Load authoritative active obligation rows for a prevalidated scope clause.
@@ -207,7 +234,7 @@ pub fn authoritative_plan_obligation_bindings(
     project_id: &str,
     plan_id: &str,
 ) -> Result<Vec<AuthoritativeObligationBindingRow>, EvidenceDomainError> {
-    authoritative_obligation_bindings_for_scope(
+    authoritative_obligation_bindings_by_clause(
         conn,
         project_id,
         "WHERE project_id = ?1 AND plan_id = ?2",
@@ -1002,7 +1029,7 @@ fn load_obligations_for_scope(
     scope_id: &str,
 ) -> Result<Vec<ObligationRow>, EvidenceDomainError> {
     let ids =
-        authoritative_obligation_bindings_for_scope(conn, project_id, where_clause, scope_id)?
+        authoritative_obligation_bindings_by_clause(conn, project_id, where_clause, scope_id)?
             .into_iter()
             .map(|row| row.id)
             .collect::<Vec<_>>();
@@ -1011,14 +1038,15 @@ fn load_obligations_for_scope(
         .collect()
 }
 
-fn authoritative_obligation_bindings_for_scope(
+fn authoritative_obligation_bindings_by_clause(
     conn: &Connection,
     project_id: &str,
     where_clause: &str,
     scope_id: &str,
 ) -> Result<Vec<AuthoritativeObligationBindingRow>, EvidenceDomainError> {
     let sql = format!(
-        "SELECT id, plan_id, item_id, criterion_id, obligation_version
+        "SELECT id, plan_id, item_id, criterion_id, obligation_version,
+                observation_requirements_json
          FROM proof_obligations
          {where_clause}
            AND binding = 1
@@ -1041,6 +1069,13 @@ fn authoritative_obligation_bindings_for_scope(
                 item_id: row.get(2)?,
                 criterion_id: row.get(3)?,
                 obligation_version: row.get(4)?,
+                observations: serde_json::from_str(&row.get::<_, String>(5)?).map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        5,
+                        rusqlite::types::Type::Text,
+                        Box::new(error),
+                    )
+                })?,
             })
         })
         .map_err(|err| EvidenceDomainError::Digest(err.to_string()))?

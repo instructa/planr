@@ -2804,6 +2804,14 @@ process.stdout.write(JSON.stringify(result));
                 retry_of: None,
                 attempt_index: 0,
                 max_attempts: 1,
+                execution_binding: json!({
+                    "schema_version": "planr.evidence.execution-binding.v2",
+                    "run_index_digest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+                    "run_index": 0,
+                    "obligation_id": "obl-generic-validator",
+                    "target": {"kind": "process", "uri": "local://generic-validator"},
+                    "requirement_ids": ["obs-generic-validator"]
+                }),
                 cancellation: &cancellation,
             },
         )

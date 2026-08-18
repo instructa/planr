@@ -98,12 +98,12 @@ pub fn mcp_tools() -> Vec<Value> {
         ),
         tool(
             "planr_run_restart",
-            "Retire one plan's active FeatureRun only for a typed incompatible-budget or stale-source-freeze lifecycle reason",
+            "Retire one plan's active FeatureRun only for a typed incompatible-budget, premature-source-freeze, or inconsistent-verification lifecycle reason",
             json!({
                 "plan": prop("string", "Plan id"),
                 "reason": {
                     "type": "string",
-                    "enum": ["incompatible-budget", "stale-source-freeze"],
+                    "enum": ["incompatible-budget", "premature-source-freeze", "inconsistent-verification"],
                     "description": "Typed restart reason"
                 }
             }),
@@ -114,6 +114,23 @@ pub fn mcp_tools() -> Vec<Value> {
             "Resume one compatible budget-held FeatureRun only after its persisted reservation, deadline, phase, lease generation, and owner are revalidated",
             json!({"plan": prop("string", "Plan id")}),
             &["plan"],
+        ),
+        tool(
+            "planr_run_repair_verification_admission",
+            "Atomically repair one exact pre-receipt verification admission failure without requiring a verification item",
+            json!({
+                "plan_id": prop("string", "Exact plan id"),
+                "run_id": prop("string", "Exact FeatureRun id"),
+                "freeze_id": prop("string", "Exact active source-freeze id"),
+                "run_revision": prop("integer", "Exact optimistic FeatureRun revision"),
+                "reason": {
+                    "type": "string",
+                    "enum": ["readiness-blocked", "run-index-seal-failed", "sealed-run-rejected", "capability-admission-failed"],
+                    "description": "Closed pre-receipt repair reason"
+                },
+                "run_index_digest": prop("string", "Required only for post-seal reasons; forbidden for pre-seal reasons")
+            }),
+            &["plan_id", "run_id", "freeze_id", "run_revision", "reason"],
         ),
         tool(
             "planr_plan_link",

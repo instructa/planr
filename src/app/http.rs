@@ -2,7 +2,7 @@ use super::{
     App, LogInput, ReviewAnnotationInput, application::ArtifactInput, recovery::ItemRecoveryInput,
 };
 use crate::cli::ServeArgs;
-use crate::execution_run::FeatureRunRestartReason;
+use crate::execution_run::{FeatureRunRestartReason, VerificationAdmissionRepairRequest};
 use crate::util::{infer_error_code, item_id, path_item_id, short_id};
 use anyhow::{Result, anyhow, bail};
 use rusqlite::params;
@@ -201,6 +201,8 @@ impl App {
                         .ok_or_else(|| anyhow!("missing plan id in run restart route"))?;
                     let reason = match body_json.get("reason").and_then(Value::as_str) {
                         Some("incompatible-budget") => FeatureRunRestartReason::IncompatibleBudget,
+                        Some("premature-source-freeze") => FeatureRunRestartReason::PrematureSourceFreeze,
+                        Some("inconsistent-verification") => FeatureRunRestartReason::InconsistentVerification,
                         Some(value) => bail!("invalid restart reason: {value}"),
                         None => bail!("missing reason"),
                     };
@@ -213,6 +215,19 @@ impl App {
                         anyhow!("missing plan id in budget hold resolution route")
                     })?;
                     serde_json::to_string(&self.resolve_feature_run_budget_hold_value(plan_id)?)?
+                }
+                ("POST", p)
+                    if p.starts_with("/v1/plans/")
+                        && p.ends_with("/run/repair-verification-admission") =>
+                {
+                    let plan_id = path_plan_id(p, "run/repair-verification-admission")
+                        .ok_or_else(|| anyhow!("missing plan id in verification admission repair route"))?;
+                    let request: VerificationAdmissionRepairRequest =
+                        serde_json::from_value(body_json.clone())?;
+                    if request.plan_id != plan_id {
+                        bail!("verification admission repair plan id does not match route");
+                    }
+                    serde_json::to_string(&self.repair_verification_admission_value(request)?)?
                 }
                 ("GET", p) if p.ends_with("/items") => {
                     serde_json::to_string(&json!({"items": self.all_items()?}))?

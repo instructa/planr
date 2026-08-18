@@ -3,9 +3,15 @@
 //! This module owns legal phase changes, batch accounting, role ownership, and
 //! maker replacement provenance. It performs no persistence or host dispatch.
 
+use crate::model::WorkType;
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_BATCH_OUTCOME_CAP: u32 = 3;
+pub const ORDINARY_IMPLEMENTATION_WORK_TYPE_NAMES: [&str; 4] = ["code", "fix", "docs", "test"];
+
+pub fn is_ordinary_implementation_work_type(work_type: &WorkType) -> bool {
+    ORDINARY_IMPLEMENTATION_WORK_TYPE_NAMES.contains(&work_type.as_str())
+}
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -146,7 +152,8 @@ impl FeatureRunBudgetContractCompatibility {
 #[serde(rename_all = "kebab-case")]
 pub enum FeatureRunRestartReason {
     IncompatibleBudget,
-    StaleSourceFreeze,
+    PrematureSourceFreeze,
+    InconsistentVerification,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -180,25 +187,236 @@ pub struct FeatureRunRestartTransition {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct StaleSourceFreezeRestartFacts {
+pub struct PrematureSourceFreezeRestartFacts {
     pub freeze_id: String,
     pub frozen_source_revision: String,
     pub frozen_source_digest: String,
-    pub current_source_revision: String,
-    pub current_source_digest: String,
-    pub routed_outcome_ids: Vec<String>,
+    pub open_outcome_ids: Vec<String>,
+    pub released_outcome_ids: Vec<String>,
+    pub verification_admission_count: u64,
+    pub verification_attempt_count: u64,
+    pub verification_receipt_count: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct StaleSourceFreezeRestartTransition {
+pub struct PrematureSourceFreezeRestartTransition {
     pub request: FeatureRunRestartRequest,
-    pub facts: StaleSourceFreezeRestartFacts,
+    pub facts: PrematureSourceFreezeRestartFacts,
     pub disposition: FeatureRunRestartDisposition,
     pub previous_phase: FeatureRunPhase,
     pub batch_id: Option<String>,
     pub released_role_owners: Vec<RoleOwner>,
     pub retired_run: FeatureRun,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CurrentVerificationItemLeaseStatus {
+    Ready,
+    Picked,
+    Running,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CurrentVerificationItemLease {
+    pub id: String,
+    pub status: CurrentVerificationItemLeaseStatus,
+    pub worker_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CurrentVerificationAdmissionIdentity {
+    pub plan_id: String,
+    pub run_id: String,
+    pub freeze_id: String,
+    pub run_revision: u64,
+    pub verifier_worker_id: String,
+    pub verifier_lease_generation: u64,
+    pub verification_item_id: Option<String>,
+    pub run_index_digest: String,
+    pub sealed_run_index_digest: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CurrentVerificationInvariantFacts {
+    pub plan_id: String,
+    pub run_id: String,
+    pub run_revision: u64,
+    pub run_source_revision: String,
+    pub freeze_id: String,
+    pub freeze_source_revision: String,
+    pub freeze_source_digest: String,
+    pub verifier_worker_id: String,
+    pub verifier_lease_generation: u64,
+    pub verification_item: Option<CurrentVerificationItemLease>,
+    pub admission: Option<CurrentVerificationAdmissionIdentity>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CurrentVerificationInconsistency {
+    ActiveFreezeSourceMismatch,
+    MissingAdmission,
+    AdmissionPlanMismatch,
+    AdmissionRunMismatch,
+    AdmissionFreezeMismatch,
+    AdmissionRevisionMismatch,
+    AdmissionVerifierWorkerMismatch,
+    AdmissionVerifierLeaseGenerationMismatch,
+    AdmissionVerificationItemMismatch,
+    AdmissionRunIndexDigestMissing,
+    SealedRunIndexDigestMissing,
+    SealedRunIndexDigestMismatch,
+}
+
+impl CurrentVerificationInconsistency {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ActiveFreezeSourceMismatch => "active_freeze_source_mismatch",
+            Self::MissingAdmission => "missing_admission",
+            Self::AdmissionPlanMismatch => "admission_plan_mismatch",
+            Self::AdmissionRunMismatch => "admission_run_mismatch",
+            Self::AdmissionFreezeMismatch => "admission_freeze_mismatch",
+            Self::AdmissionRevisionMismatch => "admission_revision_mismatch",
+            Self::AdmissionVerifierWorkerMismatch => "admission_verifier_worker_mismatch",
+            Self::AdmissionVerifierLeaseGenerationMismatch => {
+                "admission_verifier_lease_generation_mismatch"
+            }
+            Self::AdmissionVerificationItemMismatch => "admission_verification_item_mismatch",
+            Self::AdmissionRunIndexDigestMissing => "admission_run_index_digest_missing",
+            Self::SealedRunIndexDigestMissing => "sealed_run_index_digest_missing",
+            Self::SealedRunIndexDigestMismatch => "sealed_run_index_digest_mismatch",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CurrentVerificationInvariantStatus {
+    Healthy,
+    Inconsistent,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CurrentVerificationDiagnosis {
+    pub facts: CurrentVerificationInvariantFacts,
+    pub status: CurrentVerificationInvariantStatus,
+    pub inconsistency: Option<CurrentVerificationInconsistency>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryIdentitySet {
+    pub count: u64,
+    pub identity_digest: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InconsistentVerificationBatchFacts {
+    pub id: String,
+    pub status: ExecutionBatchStatus,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InconsistentVerificationBatchDisposition {
+    Ended,
+    PreservedEnded,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InconsistentVerificationBatchEffect {
+    pub id: String,
+    pub previous_status: ExecutionBatchStatus,
+    pub disposition: InconsistentVerificationBatchDisposition,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InconsistentVerificationRetirementFacts {
+    pub diagnosis: CurrentVerificationDiagnosis,
+    pub batch: Option<InconsistentVerificationBatchFacts>,
+    pub active_verification_reservation_ids: Vec<String>,
+    pub preserved_history: HistoryIdentitySet,
+    pub invalidation_id: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InconsistentVerificationRetirementTransition {
+    pub request: FeatureRunRestartRequest,
+    pub facts: InconsistentVerificationRetirementFacts,
+    pub disposition: FeatureRunRestartDisposition,
+    pub previous_phase: FeatureRunPhase,
+    pub batch_effect: Option<InconsistentVerificationBatchEffect>,
+    pub released_role_owners: Vec<RoleOwner>,
+    pub released_verification_reservation_ids: Vec<String>,
+    pub released_verification_item_id: Option<String>,
+    pub invalidated_freeze_id: String,
+    pub retired_run: FeatureRun,
+    pub resulting_run_revision: u64,
+    pub successor_run_id: Option<String>,
+}
+
+pub fn classify_current_verification(
+    facts: &CurrentVerificationInvariantFacts,
+) -> CurrentVerificationDiagnosis {
+    let current_item_id = facts
+        .verification_item
+        .as_ref()
+        .map(|item| item.id.as_str());
+    let inconsistency = if facts.run_source_revision != facts.freeze_source_revision {
+        Some(CurrentVerificationInconsistency::ActiveFreezeSourceMismatch)
+    } else if facts.admission.is_none() {
+        Some(CurrentVerificationInconsistency::MissingAdmission)
+    } else {
+        let admission = facts.admission.as_ref().expect("admission presence checked");
+        if admission.plan_id != facts.plan_id {
+            Some(CurrentVerificationInconsistency::AdmissionPlanMismatch)
+        } else if admission.run_id != facts.run_id {
+            Some(CurrentVerificationInconsistency::AdmissionRunMismatch)
+        } else if admission.freeze_id != facts.freeze_id {
+            Some(CurrentVerificationInconsistency::AdmissionFreezeMismatch)
+        } else if admission.run_revision != facts.run_revision {
+            Some(CurrentVerificationInconsistency::AdmissionRevisionMismatch)
+        } else if admission.verifier_worker_id != facts.verifier_worker_id {
+            Some(CurrentVerificationInconsistency::AdmissionVerifierWorkerMismatch)
+        } else if admission.verifier_lease_generation != facts.verifier_lease_generation {
+            Some(CurrentVerificationInconsistency::AdmissionVerifierLeaseGenerationMismatch)
+        } else if admission.verification_item_id.as_deref() != current_item_id {
+            Some(CurrentVerificationInconsistency::AdmissionVerificationItemMismatch)
+        } else if admission.run_index_digest.trim().is_empty() {
+            Some(CurrentVerificationInconsistency::AdmissionRunIndexDigestMissing)
+        } else if admission
+            .sealed_run_index_digest
+            .as_deref()
+            .is_none_or(|digest| digest.trim().is_empty())
+        {
+            Some(CurrentVerificationInconsistency::SealedRunIndexDigestMissing)
+        } else if admission.sealed_run_index_digest.as_deref()
+            != Some(admission.run_index_digest.as_str())
+        {
+            Some(CurrentVerificationInconsistency::SealedRunIndexDigestMismatch)
+        } else {
+            None
+        }
+    };
+    CurrentVerificationDiagnosis {
+        facts: facts.clone(),
+        status: if inconsistency.is_some() {
+            CurrentVerificationInvariantStatus::Inconsistent
+        } else {
+            CurrentVerificationInvariantStatus::Healthy
+        },
+        inconsistency,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -230,6 +448,258 @@ pub struct FeatureRunBudgetHoldResolutionTransition {
     pub previous_phase: FeatureRunPhase,
     pub active_reservation_ids: Vec<String>,
     pub resumed_run: FeatureRun,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceInvalidationKind {
+    ProductFinding,
+    VerificationAdmission,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceInvalidationKindViolation {
+    VerificationAdmissionShapeInvalid,
+}
+
+pub fn resolve_evidence_invalidation_kind(
+    reason: &str,
+    finding_id: Option<&str>,
+    affected_evidence_ids: &[String],
+) -> Result<Option<EvidenceInvalidationKind>, EvidenceInvalidationKindViolation> {
+    match reason {
+        "product_finding" | "final_review_product_finding" => {
+            Ok(Some(EvidenceInvalidationKind::ProductFinding))
+        }
+        "verification_admission_repair:readiness-blocked"
+        | "verification_admission_repair:run-index-seal-failed"
+        | "verification_admission_repair:sealed-run-rejected"
+        | "verification_admission_repair:capability-admission-failed" => {
+            if finding_id.is_some() || !affected_evidence_ids.is_empty() {
+                return Err(
+                    EvidenceInvalidationKindViolation::VerificationAdmissionShapeInvalid,
+                );
+            }
+            Ok(Some(EvidenceInvalidationKind::VerificationAdmission))
+        }
+        _ => Ok(None),
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum VerificationAdmissionRepairReason {
+    ReadinessBlocked,
+    RunIndexSealFailed,
+    SealedRunRejected,
+    CapabilityAdmissionFailed,
+}
+
+impl VerificationAdmissionRepairReason {
+    pub fn requires_run_index_digest(self) -> bool {
+        matches!(
+            self,
+            Self::SealedRunRejected | Self::CapabilityAdmissionFailed
+        )
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ReadinessBlocked => "readiness-blocked",
+            Self::RunIndexSealFailed => "run-index-seal-failed",
+            Self::SealedRunRejected => "sealed-run-rejected",
+            Self::CapabilityAdmissionFailed => "capability-admission-failed",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VerificationAdmissionRepairRequest {
+    pub plan_id: String,
+    pub run_id: String,
+    pub freeze_id: String,
+    pub run_revision: u64,
+    pub reason: VerificationAdmissionRepairReason,
+    pub run_index_digest: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VerificationAdmissionRepairFacts {
+    pub active_freeze_id: String,
+    pub requester_worker_id: String,
+    pub historical_maker_worker_id: String,
+    pub next_maker_lease_generation: u64,
+    pub verification_item_id: Option<String>,
+    pub admitted_run_index_digest: Option<String>,
+    pub invalidation_id: String,
+    pub repair_batch_id: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VerificationAdmissionRepairTransition {
+    pub request: VerificationAdmissionRepairRequest,
+    pub facts: VerificationAdmissionRepairFacts,
+    pub previous_phase: FeatureRunPhase,
+    pub released_verifier: Option<RoleOwner>,
+    pub repair_batch: ExecutionBatch,
+    pub repaired_run: FeatureRun,
+    pub resulting_run_revision: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerificationAdmissionRepairViolation {
+    EmptyIdentity,
+    PlanMismatch,
+    RunMismatch,
+    FreezeMismatch,
+    RevisionMismatch,
+    ReasonSealMismatch,
+    WrongPhase,
+    WrongOwner,
+    MissingVerifier,
+    UnexpectedVerifier,
+    MakerGenerationInvalid,
+    TransitionInvalid,
+}
+
+pub fn repair_verification_admission(
+    run: &FeatureRun,
+    actual_run_revision: u64,
+    request: &VerificationAdmissionRepairRequest,
+    facts: &VerificationAdmissionRepairFacts,
+) -> Result<VerificationAdmissionRepairTransition, VerificationAdmissionRepairViolation> {
+    validate_feature_run(run)
+        .map_err(|_| VerificationAdmissionRepairViolation::TransitionInvalid)?;
+    if [
+        request.plan_id.as_str(),
+        request.run_id.as_str(),
+        request.freeze_id.as_str(),
+        facts.active_freeze_id.as_str(),
+        facts.requester_worker_id.as_str(),
+        facts.historical_maker_worker_id.as_str(),
+        facts.invalidation_id.as_str(),
+        facts.repair_batch_id.as_str(),
+    ]
+    .into_iter()
+    .any(|value| value.trim().is_empty())
+        || facts
+            .verification_item_id
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty())
+    {
+        return Err(VerificationAdmissionRepairViolation::EmptyIdentity);
+    }
+    if request.plan_id != run.plan_id {
+        return Err(VerificationAdmissionRepairViolation::PlanMismatch);
+    }
+    if request.run_id != run.id {
+        return Err(VerificationAdmissionRepairViolation::RunMismatch);
+    }
+    if request.freeze_id != facts.active_freeze_id {
+        return Err(VerificationAdmissionRepairViolation::FreezeMismatch);
+    }
+    if request.run_revision != actual_run_revision {
+        return Err(VerificationAdmissionRepairViolation::RevisionMismatch);
+    }
+    let request_digest = request.run_index_digest.as_deref();
+    if request.reason.requires_run_index_digest() {
+        if request_digest.is_none_or(|value| value.trim().is_empty())
+            || request_digest != facts.admitted_run_index_digest.as_deref()
+        {
+            return Err(VerificationAdmissionRepairViolation::ReasonSealMismatch);
+        }
+    } else if request_digest.is_some() || facts.admitted_run_index_digest.is_some() {
+        return Err(VerificationAdmissionRepairViolation::ReasonSealMismatch);
+    }
+    if facts.next_maker_lease_generation == 0 {
+        return Err(VerificationAdmissionRepairViolation::MakerGenerationInvalid);
+    }
+    let released_verifier = owner_for_role(run, RunRole::Verifier).cloned();
+    let pre_seal = !request.reason.requires_run_index_digest();
+    if pre_seal {
+        let eligible = run.phase == FeatureRunPhase::SourceFrozen
+            || (run.phase == FeatureRunPhase::Held
+                && run.status == FeatureRunStatus::Held
+                && run.held_from_phase == Some(FeatureRunPhase::SourceFrozen)
+                && run.hold_reason == Some(FeatureRunHoldReason::Capability));
+        if !eligible {
+            return Err(VerificationAdmissionRepairViolation::WrongPhase);
+        }
+        if released_verifier.is_some() {
+            return Err(VerificationAdmissionRepairViolation::UnexpectedVerifier);
+        }
+    } else {
+        if run.phase != FeatureRunPhase::Verification {
+            return Err(VerificationAdmissionRepairViolation::WrongPhase);
+        }
+        let verifier = released_verifier
+            .as_ref()
+            .ok_or(VerificationAdmissionRepairViolation::MissingVerifier)?;
+        if verifier.worker_id != facts.requester_worker_id {
+            return Err(VerificationAdmissionRepairViolation::WrongOwner);
+        }
+    }
+    if facts.requester_worker_id == facts.historical_maker_worker_id {
+        return Err(VerificationAdmissionRepairViolation::WrongOwner);
+    }
+
+    let source_frozen = if run.phase == FeatureRunPhase::Held {
+        apply_phase_transition(
+            run,
+            &PhaseTransition {
+                to: FeatureRunPhase::SourceFrozen,
+                cause: PhaseTransitionCause::HoldResolved,
+                reference: format!("verification_admission_repair:{}", request.freeze_id),
+                owner: None,
+            },
+        )
+        .map_err(|_| VerificationAdmissionRepairViolation::TransitionInvalid)?
+    } else {
+        run.clone()
+    };
+    let mut repaired_run = apply_phase_transition(
+        &source_frozen,
+        &PhaseTransition {
+            to: FeatureRunPhase::Implementation,
+            cause: PhaseTransitionCause::SourceInvalidated,
+            reference: format!("verification_admission_repair:{}", request.freeze_id),
+            owner: Some(RoleOwner {
+                role: RunRole::Maker,
+                worker_id: facts.historical_maker_worker_id.clone(),
+                lease_generation: facts.next_maker_lease_generation,
+            }),
+        },
+    )
+    .map_err(|_| VerificationAdmissionRepairViolation::TransitionInvalid)?;
+    let repair_batch = ExecutionBatch {
+        id: facts.repair_batch_id.clone(),
+        run_id: run.id.clone(),
+        maker_worker_id: facts.historical_maker_worker_id.clone(),
+        status: ExecutionBatchStatus::Active,
+        settled_outcome_ids: Vec::new(),
+        replacement: None,
+    };
+    repaired_run.active_batch_id = Some(repair_batch.id.clone());
+    repaired_run.batch_outcome_count = 0;
+    validate_feature_run(&repaired_run)
+        .map_err(|_| VerificationAdmissionRepairViolation::TransitionInvalid)?;
+
+    Ok(VerificationAdmissionRepairTransition {
+        request: request.clone(),
+        facts: facts.clone(),
+        previous_phase: run.phase,
+        released_verifier,
+        repair_batch,
+        repaired_run,
+        resulting_run_revision: actual_run_revision
+            .checked_add(1)
+            .ok_or(VerificationAdmissionRepairViolation::RevisionMismatch)?,
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -293,7 +763,11 @@ pub enum RunContractViolation {
     RestartPlanMismatch,
     RestartReasonMismatch,
     RestartBudgetContractCompatible,
-    RestartStaleSourceFreezeIneligible,
+    RestartPrematureSourceFreezeIneligible,
+    RestartInconsistentVerificationIneligible,
+    RestartCurrentVerificationHealthy,
+    RestartCurrentVerificationFactsInvalid,
+    RestartVerificationItemOwnershipConflict,
     RestartRunTerminal,
     BudgetHoldResolutionPlanMismatch,
     BudgetHoldResolutionNotBudgetHeld,
@@ -359,7 +833,9 @@ pub fn is_legal_phase_transition(
         ) | (
             FeatureRunPhase::Verification,
             FeatureRunPhase::Implementation,
-            PhaseTransitionCause::ProductFinding | PhaseTransitionCause::VerificationPassed
+            PhaseTransitionCause::ProductFinding
+                | PhaseTransitionCause::SourceInvalidated
+                | PhaseTransitionCause::VerificationPassed
         ) | (
             FeatureRunPhase::Verification,
             FeatureRunPhase::SourceFrozen,
@@ -747,31 +1223,38 @@ pub fn retire_incompatible_feature_run(
     })
 }
 
-pub fn retire_stale_source_freeze_feature_run(
+pub fn retire_premature_source_freeze_feature_run(
     run: &FeatureRun,
     request: &FeatureRunRestartRequest,
-    facts: &StaleSourceFreezeRestartFacts,
-) -> Result<StaleSourceFreezeRestartTransition, RunContractViolation> {
+    facts: &PrematureSourceFreezeRestartFacts,
+) -> Result<PrematureSourceFreezeRestartTransition, RunContractViolation> {
     validate_feature_run(run)?;
-    if request.reason != FeatureRunRestartReason::StaleSourceFreeze {
+    if request.reason != FeatureRunRestartReason::PrematureSourceFreeze {
         return Err(RunContractViolation::RestartReasonMismatch);
     }
     if request.plan_id.trim().is_empty()
         || facts.freeze_id.trim().is_empty()
         || facts.frozen_source_revision.trim().is_empty()
         || facts.frozen_source_digest.trim().is_empty()
-        || facts.current_source_revision.trim().is_empty()
-        || facts.current_source_digest.trim().is_empty()
-        || facts.routed_outcome_ids.is_empty()
+        || facts.open_outcome_ids.is_empty()
         || facts
-            .routed_outcome_ids
+            .open_outcome_ids
             .iter()
             .any(|id| id.trim().is_empty())
         || facts
-            .routed_outcome_ids
+            .open_outcome_ids
             .iter()
             .enumerate()
-            .any(|(index, id)| facts.routed_outcome_ids[..index].contains(id))
+            .any(|(index, id)| facts.open_outcome_ids[..index].contains(id))
+        || facts
+            .released_outcome_ids
+            .iter()
+            .any(|id| id.trim().is_empty() || !facts.open_outcome_ids.contains(id))
+        || facts
+            .released_outcome_ids
+            .iter()
+            .enumerate()
+            .any(|(index, id)| facts.released_outcome_ids[..index].contains(id))
     {
         return Err(RunContractViolation::EmptyIdentity);
     }
@@ -781,10 +1264,11 @@ pub fn retire_stale_source_freeze_feature_run(
     if run.status != FeatureRunStatus::Active
         || run.phase != FeatureRunPhase::SourceFrozen
         || run.source_revision.as_deref() != Some(facts.frozen_source_revision.as_str())
-        || (facts.frozen_source_revision == facts.current_source_revision
-            && facts.frozen_source_digest == facts.current_source_digest)
+        || facts.verification_admission_count != 0
+        || facts.verification_attempt_count != 0
+        || facts.verification_receipt_count != 0
     {
-        return Err(RunContractViolation::RestartStaleSourceFreezeIneligible);
+        return Err(RunContractViolation::RestartPrematureSourceFreezeIneligible);
     }
 
     let previous_phase = run.phase;
@@ -795,7 +1279,7 @@ pub fn retire_stale_source_freeze_feature_run(
         &PhaseTransition {
             to: FeatureRunPhase::Cancelled,
             cause: PhaseTransitionCause::PolicyCancelled,
-            reference: format!("stale_source_freeze:{}", facts.freeze_id),
+            reference: format!("premature_source_freeze:{}", facts.freeze_id),
             owner: None,
         },
     )?;
@@ -803,7 +1287,7 @@ pub fn retire_stale_source_freeze_feature_run(
     retired_run.batch_outcome_count = 0;
     validate_feature_run(&retired_run)?;
 
-    Ok(StaleSourceFreezeRestartTransition {
+    Ok(PrematureSourceFreezeRestartTransition {
         request: request.clone(),
         facts: facts.clone(),
         disposition: FeatureRunRestartDisposition::Retired,
@@ -811,6 +1295,123 @@ pub fn retire_stale_source_freeze_feature_run(
         batch_id,
         released_role_owners,
         retired_run,
+    })
+}
+
+pub fn retire_inconsistent_verification_feature_run(
+    run: &FeatureRun,
+    request: &FeatureRunRestartRequest,
+    facts: &InconsistentVerificationRetirementFacts,
+) -> Result<InconsistentVerificationRetirementTransition, RunContractViolation> {
+    validate_feature_run(run)?;
+    if request.reason != FeatureRunRestartReason::InconsistentVerification {
+        return Err(RunContractViolation::RestartReasonMismatch);
+    }
+    if request.plan_id.trim().is_empty()
+        || facts.invalidation_id.trim().is_empty()
+        || facts.preserved_history.identity_digest.trim().is_empty()
+        || facts
+            .active_verification_reservation_ids
+            .iter()
+            .any(|id| id.trim().is_empty())
+        || facts
+            .active_verification_reservation_ids
+            .iter()
+            .enumerate()
+            .any(|(index, id)| facts.active_verification_reservation_ids[..index].contains(id))
+    {
+        return Err(RunContractViolation::EmptyIdentity);
+    }
+    if request.plan_id != run.plan_id {
+        return Err(RunContractViolation::RestartPlanMismatch);
+    }
+    if run.status != FeatureRunStatus::Active || run.phase != FeatureRunPhase::Verification {
+        return Err(RunContractViolation::RestartInconsistentVerificationIneligible);
+    }
+    if classify_current_verification(&facts.diagnosis.facts) != facts.diagnosis {
+        return Err(RunContractViolation::RestartCurrentVerificationFactsInvalid);
+    }
+    let inconsistency = facts
+        .diagnosis
+        .inconsistency
+        .ok_or(RunContractViolation::RestartCurrentVerificationHealthy)?;
+    if facts.diagnosis.status != CurrentVerificationInvariantStatus::Inconsistent {
+        return Err(RunContractViolation::RestartCurrentVerificationHealthy);
+    }
+    let current = &facts.diagnosis.facts;
+    if current.plan_id != run.plan_id
+        || current.run_id != run.id
+        || run.source_revision.as_deref() != Some(current.run_source_revision.as_str())
+    {
+        return Err(RunContractViolation::RestartCurrentVerificationFactsInvalid);
+    }
+    let verifier = owner_for_role(run, RunRole::Verifier)
+        .ok_or(RunContractViolation::RestartCurrentVerificationFactsInvalid)?;
+    if verifier.worker_id != current.verifier_worker_id
+        || verifier.lease_generation != current.verifier_lease_generation
+    {
+        return Err(RunContractViolation::RestartCurrentVerificationFactsInvalid);
+    }
+    if current.verification_item.as_ref().is_some_and(|item| {
+        !matches!(
+            item.status,
+            CurrentVerificationItemLeaseStatus::Picked
+                | CurrentVerificationItemLeaseStatus::Running
+        ) || item.worker_id.as_deref() != Some(verifier.worker_id.as_str())
+    }) {
+        return Err(RunContractViolation::RestartVerificationItemOwnershipConflict);
+    }
+    match (run.active_batch_id.as_deref(), facts.batch.as_ref()) {
+        (None, None) => {}
+        (Some(id), Some(batch)) if id == batch.id && !batch.id.trim().is_empty() => {}
+        _ => return Err(RunContractViolation::RestartCurrentVerificationFactsInvalid),
+    }
+    let mut retired_run = apply_phase_transition(
+        run,
+        &PhaseTransition {
+            to: FeatureRunPhase::Cancelled,
+            cause: PhaseTransitionCause::PolicyCancelled,
+            reference: format!(
+                "inconsistent_verification:{}:{}",
+                current.freeze_id,
+                inconsistency.as_str()
+            ),
+            owner: None,
+        },
+    )?;
+    retired_run.active_batch_id = None;
+    retired_run.batch_outcome_count = 0;
+    validate_feature_run(&retired_run)?;
+    let batch_effect = facts.batch.as_ref().map(|batch| InconsistentVerificationBatchEffect {
+        id: batch.id.clone(),
+        previous_status: batch.status,
+        disposition: if batch.status == ExecutionBatchStatus::Ended {
+            InconsistentVerificationBatchDisposition::PreservedEnded
+        } else {
+            InconsistentVerificationBatchDisposition::Ended
+        },
+    });
+    Ok(InconsistentVerificationRetirementTransition {
+        request: request.clone(),
+        facts: facts.clone(),
+        disposition: FeatureRunRestartDisposition::Retired,
+        previous_phase: run.phase,
+        batch_effect,
+        released_role_owners: run.role_owners.clone(),
+        released_verification_reservation_ids: facts
+            .active_verification_reservation_ids
+            .clone(),
+        released_verification_item_id: current
+            .verification_item
+            .as_ref()
+            .map(|item| item.id.clone()),
+        invalidated_freeze_id: current.freeze_id.clone(),
+        retired_run,
+        resulting_run_revision: current
+            .run_revision
+            .checked_add(1)
+            .ok_or(RunContractViolation::RestartCurrentVerificationFactsInvalid)?,
+        successor_run_id: None,
     })
 }
 

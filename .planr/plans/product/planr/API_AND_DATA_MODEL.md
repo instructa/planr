@@ -41,9 +41,84 @@ The pure admission input contains mode, consumed, reserved, remaining, protected
 
 `planr run resolve-budget-hold --plan <id>`, MCP `planr_run_resolve_budget_hold`, and `POST /v1/plans/<id>/run/resolve-budget-hold` reuse `planr.feature_run_budget_hold_resolution.v2`. Resolution is explicit, plan-scoped, idempotent, and restores only the exact prior phase after the application transaction revalidates the compatible immutable contract, snapshot integrity, active reservation deadlines, phase, role owner, and lease generation. It rejects incompatible contracts with the restart action and keeps capability holds, corrupt state, expired deadlines, missing reservations, unrepaired ceilings, and owner mismatches held.
 
-### Stale Source-Freeze Restart
+### Premature Source-Freeze Restart
 
-`planr run restart --plan <id> --reason stale-source-freeze` and MCP `planr_run_restart` reuse `planr.feature_run_restart.v1`. Eligibility is closed: the run is active and source-frozen, its active freeze differs from current source, the plan has no verification item, and at least one code outcome is stranded in picked/running state. The atomic result policy-cancels the run, releases runtime ownership, preserves the old freeze and history, and routes the exact stranded outcomes to ready. Repeating the same request returns `already_retired`. A later ordinary pick creates the distinct successor run; no restart surface creates or rebinds a freeze.
+`planr --json run restart --plan <id> --reason premature-source-freeze` and MCP `planr_run_restart` reuse `planr.feature_run_restart.v1`. Eligibility is closed: the run is active/source-frozen with an active immutable freeze, at least one open ordinary outcome, and zero verifier admissions, Evidence attempts, or receipts for that freeze. Facts carry the exact open ordinary IDs and active leased subset. The optimistic atomic result policy-cancels the run, ends its batch and runtime roles, returns only that leased subset to ready, preserves ready/pending work and freeze/history, and creates no successor. Repeating the request returns `already_retired`; a later ordinary pick alone creates a distinct successor.
+
+### Inconsistent Verification Restart
+
+`planr --json run restart --plan <id> --reason inconsistent-verification`, MCP
+`planr_run_restart`, and `POST /v1/plans/<id>/run/restart` consume one
+`planr.feature_run_restart.v1` application result. The current invariant compares the active
+Verification run/plan/revision and freeze, verifier worker/generation, zero-or-one current item,
+persisted admission identity, and admitted/sealed run-index digest. Exact equality is healthy;
+absence or inequality is one closed inconsistency. One immediate optimistic transaction invalidates
+but preserves the freeze, ends or preserves-ended the referenced batch, releases exact roles,
+Verification reservations, and only an exact verifier-owned item, preserves Evidence/history
+identity digest and count, emits one typed event, and creates no successor. Repetition returns
+`already_retired`; ordinary pick alone owns later successor creation.
+
+### Binding Evidence Run Index v2
+
+`planr.evidence.run-index.v2` seals source, policy, scope, and ordered runs. Each run binds one
+`obligation_id`, one canonical target, sorted non-empty unique `requirement_ids`, capability
+instance/manifest identity, environment, execution contract, and fixture disclosure. For each
+obligation, the run subsets must be disjoint and their exact union must equal the authoritative
+observation IDs; each selected requirement must carry the sealed target. One run never spans
+obligations. `planr.evidence.execution-binding.v2` persists that seal/subset identity for attempt,
+receipt, retry, independence, and reuse validation. Run-index result status is execution summary,
+not coverage.
+
+### Verification Admission Repair
+
+`planr.feature_run_verification_admission_repair.v1` is one explicit optimistic request over
+`plan_id`, `run_id`, `freeze_id`, `run_revision`, a closed pre-receipt `reason`, and conditional
+`run_index_digest`. `readiness-blocked` and `run-index-seal-failed` are pre-seal reasons and require
+the digest to be absent. `sealed-run-rejected` and `capability-admission-failed` are post-seal,
+pre-receipt reasons and require the exact digest persisted at verification admission. A failed
+readiness lease transaction rolls back before a durable capability hold and diagnostic persist the
+exact pre-seal request; Planr never commits an unusable verifier lease to manufacture repair
+context. The atomic repair invalidates the freeze, releases verifier ownership and any present
+verification-item lease, restores the original maker at the next generation, creates one repair
+batch, emits one repair event, and returns nullable `verification_item_id` plus canonical execution
+state. It writes no Evidence attempt, receipt, coverage verdict, or ProductFinding.
+
+The sole CLI form is `planr --json run repair-verification-admission --plan <plan-id> --run
+<run-id> --freeze <freeze-id> --revision <n> --reason <reason> [--run-index-digest <digest>]`.
+MCP `planr_run_repair_verification_admission`, `POST
+/v1/plans/<plan-id>/run/repair-verification-admission`, readiness diagnostics, and work packets
+only parse or project that same application request. Item-keyed pick release has no repair flag or
+alias and remains ordinary verifier release only.
+
+### Post-Receipt ProductFinding Repair
+
+`ProductRepairSettlementRecord` is item-independent: `invalidation_id`, `run_id`,
+`responsible_maker_id`, `selective_obligation_ids`, settlement evidence, and `source_freeze_id` are
+its complete durable shape. Repair routing, `repair_work_packet_value`, settlement, idempotent
+replay, selective-replay handoff, and verifier release resolve the existing optional plan-path
+verification projection at the application boundary and project nullable `verification_item_id`.
+Only `Some(item_id)` is updated; `null` performs no item write. CLI, MCP, and HTTP remain transports
+over that same application value. This post-receipt lifecycle creates no receipt and does not reuse
+the pre-receipt admission-repair contract.
+
+### FeatureRun Verification Settlement
+
+Satisfied unwaived plan coverage settles one active Verification FeatureRun by exact `run_id`,
+verifier worker/lease generation, active `freeze_id`, and accepted trusted receipt lineage whose
+source binding equals the freeze. The existing coverage response projects one
+`feature_run_verification_settlement` with nullable `item_id` and `log_id`, resulting phase, next
+ordinary item, and next action. One picked/running verification item is closed/logged atomically;
+absence performs zero item/log writes; any ready unleased verification item rejects the transaction.
+
+Binding `planr plan final-review` is create-or-show. It creates a gate only from the post-settlement
+SourceFrozen run with that same intact freeze and exactly matching satisfied coverage. It also
+requires SourceFrozen before returning or reopening an existing non-Accepted gate. An existing
+Accepted gate on the Complete run returns `created=false` only after its stored binding still equals
+the current intact freeze and exact satisfied receipt lineage. Verification-item status is not
+queried.
+Terminal `planr.verification-exhaustion.v1` likewise projects nullable `item`: trusted
+attempt/receipt persistence, budget reconciliation, FeatureRun cancellation, and verifier release
+always commit together, while failure log/item mutation occurs only for a present active projection.
 
 ## Core Tables
 
@@ -107,6 +182,7 @@ Item work types:
 - code
 - review
 - fix
+- docs
 - test
 - shell
 - release

@@ -39,6 +39,33 @@ Planr needs fast deterministic tests around graph correctness, plan parsing, MCP
 - REQ-QA-031: Invalid frontmatter records parse error without rewriting file.
 - REQ-QA-032: Unknown frontmatter fields are preserved.
 
+### Binding Evidence Multi-Target Execution And Repair
+
+- REQ-QA-EVIDENCE-001: A repeatable two-target obligation seals two v2 runs whose sorted requirement subsets are disjoint and form the exact authoritative union.
+- REQ-QA-EVIDENCE-002: Missing, extra, duplicate, wrong-target, or cross-subset execution/result/retry/independence input fails before trusted persistence.
+- REQ-QA-EVIDENCE-003: Multi-target one-shot fails readiness before launch or allowance claim.
+- REQ-QA-EVIDENCE-004: Host capture and process execution consume the same sealed subset while canonical coverage alone combines per-requirement receipts.
+- REQ-QA-EVIDENCE-005: One invariant covers itemless/item-backed pre-receipt repair equivalence, pre-seal absent-digest and post-seal exact-digest validation, stale optimistic rollback/proven idempotence, original-maker next generations, the public CLI projection, durable post-rollback readiness hold, and zero Evidence attempt/receipt/coverage/ProductFinding writes.
+- REQ-QA-EVIDENCE-006: No executable v1, first-observation, all-target-equality, item-keyed `pick release --repair`, item-required pre-receipt owner, compatibility, fallback, alias, or migration owner remains.
+- REQ-QA-EVIDENCE-007: Itemless satisfied exact-source plan coverage settles Verification to
+  SourceFrozen with zero item/log writes and nullable event fields; one active item closes/logs in
+  the same transaction; ready-unleased rejects without partial mutation.
+- REQ-QA-EVIDENCE-008: Binding final review creates and returns non-Accepted gates only from
+  SourceFrozen when satisfied accepted receipt/source binding equals the intact freeze, rejects the
+  Verification-phase fail-open, and re-shows the same Accepted gate from Complete with
+  `created=false` only after that stored exact binding still matches.
+- REQ-QA-EVIDENCE-009: Terminal one-shot exhaustion atomically commits attempt/receipt plus run
+  cancellation itemlessly, optionally fails/logs one active item, and rejects ready-unleased state.
+- REQ-QA-EVIDENCE-010: One invariant covers itemless/item-backed post-receipt ProductFinding
+  routing, maker packet, settlement, idempotent replay, selective-replay handoff, and conditional
+  verifier-item release. It proves matching run/freeze/batch/maker/obligation results, null item
+  projection with zero item writes, item-independent durable settlement, and zero new receipts.
+- REQ-QA-EVIDENCE-011: A separate HARDEN contract admits exactly one existing-file invariant named
+  `inconsistent_verification_restart_retires_atomically_and_successor_starts_only_on_ordinary_pick`.
+  It proves healthy rejection, every current admission inequality, atomic freeze/batch/role/
+  reservation/optional-item effects, preserved Evidence/history identity, idempotent retry, zero
+  retirement successor, and later ordinary-pick-only successor creation.
+
 ## Integration Tests
 
 ### CLI
