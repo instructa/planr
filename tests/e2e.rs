@@ -2259,99 +2259,6 @@ fn add_evidence_obligation_value(dir: &Path, db: &Path, id: &str, obligation: &V
 }
 
 
-fn run_evidence_value(
-    dir: &Path,
-    db: &Path,
-    obligation_id: &str,
-    capability_instance_id: &str,
-    target: Value,
-) -> Value {
-    run_evidence_value_with_code(dir, db, obligation_id, capability_instance_id, target, 0)
-}
-
-fn run_evidence_value_with_code(
-    dir: &Path,
-    db: &Path,
-    obligation_id: &str,
-    capability_instance_id: &str,
-    target: Value,
-    expected_code: i32,
-) -> Value {
-    run_evidence_value_with_env_code(
-        dir,
-        db,
-        obligation_id,
-        capability_instance_id,
-        target,
-        None,
-        expected_code,
-    )
-}
-
-fn run_evidence_value_with_env_code(
-    dir: &Path,
-    db: &Path,
-    obligation_id: &str,
-    capability_instance_id: &str,
-    target: Value,
-    env: Option<Value>,
-    expected_code: i32,
-) -> Value {
-    run_evidence_value_with_env_fixture_code(
-        dir,
-        db,
-        obligation_id,
-        capability_instance_id,
-        target,
-        env,
-        None,
-        expected_code,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn run_evidence_value_with_env_fixture_code(
-    dir: &Path,
-    db: &Path,
-    obligation_id: &str,
-    capability_instance_id: &str,
-    target: Value,
-    env: Option<Value>,
-    fixture_disclosure: Option<Value>,
-    expected_code: i32,
-) -> Value {
-    let path = dir.join(format!("{obligation_id}.run.json"));
-    let mut input = json!({
-        "obligation_id": obligation_id,
-        "capability_instance_id": capability_instance_id,
-        "target": target,
-    });
-    if let Some(env) = env {
-        input["env"] = env;
-    }
-    if let Some(fixture_disclosure) = fixture_disclosure {
-        input["fixture_disclosure"] = fixture_disclosure;
-    }
-    fs::write(&path, serde_json::to_vec_pretty(&input).unwrap()).unwrap();
-    single_json_document(
-        &planr()
-            .current_dir(dir)
-            .args([
-                "--db",
-                db.to_str().unwrap(),
-                "--json",
-                "evidence",
-                "run",
-                "--input",
-                path.to_str().unwrap(),
-            ])
-            .assert()
-            .code(expected_code)
-            .get_output()
-            .stdout,
-    )
-}
-
 fn assert_unavailable_run_identity(
     run: &Value,
     expected_instance: &Value,
@@ -3311,6 +3218,24 @@ fn evidence_run_enforces_frozen_source_before_receipt_commit() {
     let db_dir = tempdir().unwrap();
     let db = db_dir.path().join("planr.sqlite");
     write_evidence_policy_fixture(dir.path());
+    let manifest_digest = rewrite_evidence_runner_manifest(dir.path(), |manifest| {
+        manifest["availability_probe"]["execution"]["args"] = json!([
+            "-c",
+            "if [ -n \"${PLANR_EVIDENCE_TARGET_JSON:-}\" ]; then mkdir -p .planr/evidence/runs .planr/evidence/attempts .planr/evidence/receipts .planr/evidence/coverage; printf runtime > .planr/planr.sqlite; printf runtime > .planr/evidence/runs/runtime.txt; printf runtime > .planr/evidence/attempts/runtime.txt; printf runtime > .planr/evidence/receipts/runtime.txt; printf runtime > .planr/evidence/coverage/runtime.txt; if [ -f trigger-source-mutation ]; then printf mutated > product-source.txt; fi; fi; printf '{\"status\":\"ok\"}'"
+        ]);
+        manifest["adapter_digest"] = json!(process_adapter_digest(
+            &manifest["availability_probe"]["execution"],
+            vec![]
+        ));
+    });
+    let manifest: Value = serde_json::from_slice(
+        &fs::read(dir.path().join(".planr/evidence/adapters/runner.manifest.json")).unwrap(),
+    ).unwrap();
+    rewrite_evidence_policy_fixture(dir.path(), |policy| {
+        policy["adapter_registrations"][0]["manifest_digest"] = json!(manifest_digest);
+        policy["adapter_registrations"][0]["execution_contract"] =
+            manifest["availability_probe"]["execution"].clone();
+    });
     init_evidence_project(dir.path(), &db, "Evidence Frozen Source Boundary");
     init_git_repo(dir.path());
 
@@ -3348,7 +3273,6 @@ fn evidence_run_enforces_frozen_source_before_receipt_commit() {
                 && instance["manifest_id"] == "verifier-generic-adapter"
         })
         .expect("available generic adapter instance");
-    let instance_id = instance["id"].as_str().unwrap().to_string();
     let environment = instance["capability"]["environment"].clone();
 
     let mut obligation = evidence_obligation_for(
@@ -3370,14 +3294,23 @@ fn evidence_run_enforces_frozen_source_before_receipt_commit() {
     );
     add_evidence_obligation_value(dir.path(), &db, "pob-frozen-source-boundary", &obligation);
 
-    let runtime_write_run = run_evidence_value_with_env_code(
-        dir.path(),
-        &db,
-        "pob-frozen-source-boundary",
-        &instance_id,
-        json!({"kind": "process", "uri": "local://health"}),
-        Some(json!({"PLANR_E2E_WRITE_PLANR_RUNTIME": "1"})),
-        0,
+    let sealed_run = || {
+        let readiness = single_json_document(
+            &planr().current_dir(dir.path()).args([
+                "--db", db.to_str().unwrap(), "--json", "evidence", "readiness",
+                "--scope", "obligation", "--id", "pob-frozen-source-boundary",
+            ]).assert().success().get_output().stdout,
+        );
+        assert_evidence_envelope(&readiness, "evidence.readiness", true);
+        assert_eq!(readiness["object"]["status"], "passed");
+        dir.path().join(readiness["object"]["run_index"]["repository_path"].as_str().unwrap())
+    };
+    let runtime_write_path = sealed_run();
+    let runtime_write_run = single_json_document(
+        &planr().current_dir(dir.path()).args([
+            "--db", db.to_str().unwrap(), "--json", "evidence", "run", "--input",
+            runtime_write_path.to_str().unwrap(),
+        ]).assert().success().get_output().stdout,
     );
     assert_evidence_envelope(&runtime_write_run, "evidence.run", true);
     assert_eq!(runtime_write_run["object"]["verdict"], "passed");
@@ -3387,18 +3320,8 @@ fn evidence_run_enforces_frozen_source_before_receipt_commit() {
         "allowed Planr runtime writes must not invalidate the canonical source digest"
     );
 
-    let source_mutation_path = dir.path().join("frozen-source-mutation.run.json");
-    fs::write(
-        &source_mutation_path,
-        serde_json::to_vec_pretty(&json!({
-            "obligation_id": "pob-frozen-source-boundary",
-            "capability_instance_id": instance_id,
-            "target": {"kind": "process", "uri": "local://health"},
-            "env": {"PLANR_E2E_MUTATE_SOURCE": "1"},
-        }))
-        .unwrap(),
-    )
-    .unwrap();
+    fs::write(dir.path().join("trigger-source-mutation"), "mutate\n").unwrap();
+    let source_mutation_path = sealed_run();
     let source_mutation = single_json_document(
         &planr()
             .current_dir(dir.path())
@@ -3435,32 +3358,9 @@ fn evidence_run_enforces_frozen_source_before_receipt_commit() {
         json!(["stale_source"])
     );
 
+    fs::remove_file(dir.path().join("trigger-source-mutation")).unwrap();
     fs::remove_file(dir.path().join("product-source.txt")).unwrap();
-    let readiness_after_fix = single_json_document(
-        &planr()
-            .current_dir(dir.path())
-            .args([
-                "--db",
-                db.to_str().unwrap(),
-                "--json",
-                "evidence",
-                "readiness",
-                "--scope",
-                "obligation",
-                "--id",
-                "pob-frozen-source-boundary",
-            ])
-            .assert()
-            .success()
-            .get_output()
-            .stdout,
-    );
-    assert_evidence_envelope(&readiness_after_fix, "evidence.readiness", true);
-    let run_index_path = dir.path().join(
-        readiness_after_fix["object"]["run_index"]["repository_path"]
-            .as_str()
-            .unwrap(),
-    );
+    let run_index_path = sealed_run();
     let mut tampered_run_index: Value =
         serde_json::from_slice(&fs::read(&run_index_path).unwrap()).unwrap();
     assert!(tampered_run_index["source"]["tree_digest"].is_string());
@@ -3523,7 +3423,7 @@ fn evidence_run_enforces_frozen_source_before_receipt_commit() {
     assert_evidence_envelope(&selective_replay, "evidence.run", true);
     assert_eq!(
         selective_replay["object"]["schema_version"],
-        "planr.evidence.run-index.result.v1"
+        "planr.evidence.run-index.result.v2"
     );
     assert_eq!(selective_replay["object"]["verdict"], "passed");
     assert_eq!(
@@ -3533,10 +3433,19 @@ fn evidence_run_enforces_frozen_source_before_receipt_commit() {
             .len(),
         1
     );
+    assert_eq!(selective_replay["object"]["results"][0]["reused"], true);
+    assert_eq!(
+        selective_replay["object"]["results"][0]["attempt"]["id"],
+        runtime_write_run["object"]["results"][0]["attempt"]["id"]
+    );
+    assert_eq!(
+        selective_replay["object"]["results"][0]["receipt"]["id"],
+        runtime_write_run["object"]["results"][0]["receipt"]["id"]
+    );
     assert_eq!(
         evidence_attempt_receipt_counts(&db, "pob-frozen-source-boundary"),
-        (3, 2),
-        "maker fix plus readiness/source snapshot should allow selective replay to create exactly one new receipt"
+        (2, 1),
+        "maker fix plus exact readiness/source binding should reuse the prior trusted result"
     );
     let reused = single_json_document(
         &planr()
@@ -3559,20 +3468,10 @@ fn evidence_run_enforces_frozen_source_before_receipt_commit() {
     assert!(reused["object"]["results"][0]["reuse_key"].is_string());
     assert_eq!(
         evidence_attempt_receipt_counts(&db, "pob-frozen-source-boundary"),
-        (3, 2),
+        (2, 1),
         "an exact hermetic key hit must not execute or persist duplicate evidence"
     );
-    let pre_commit_race_path = dir.path().join("frozen-source-pre-commit-race.run.json");
-    fs::write(
-        &pre_commit_race_path,
-        serde_json::to_vec_pretty(&json!({
-            "obligation_id": "pob-frozen-source-boundary",
-            "capability_instance_id": instance_id,
-            "target": {"kind": "process", "uri": "local://health"},
-        }))
-        .unwrap(),
-    )
-    .unwrap();
+    let pre_commit_race_path = sealed_run();
     let pre_commit_race = single_json_document(
         &planr()
             .current_dir(dir.path())
@@ -3602,7 +3501,7 @@ fn evidence_run_enforces_frozen_source_before_receipt_commit() {
     );
     assert_eq!(
         evidence_attempt_receipt_counts(&db, "pob-frozen-source-boundary"),
-        (4, 2),
+        (3, 1),
         "pre-commit source mutation must roll back staged trusted rows and persist only a failed attempt"
     );
     let pre_commit_attempt =
