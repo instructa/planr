@@ -16017,8 +16017,8 @@ fn codex_stop_hook_enforces_active_goal_with_bounded_canonical_gaps() {
     fs::write(
         &build_path,
         format!(
-            "{}\n# Build Plan\n\n## Scope Decision\n\nStop guard.\n\n## Verification\n\nEvidence coverage.\n\n## Acceptance Criteria\n\n- Evidence must prove the plan.\n\n## Steps\n\n### Ship\n\nClose implementation.\n",
-            &text[..frontmatter_end]
+            "{}\ncriteria:\n  - id: crit-stop-missing\n    title: Stop hook browser evidence\n---\n\n# Build Plan\n\n## Scope Decision\n\nStop guard.\n\n## Verification\n\nEvidence coverage.\n\n## Acceptance Criteria\n\n- Evidence must prove the plan.\n\n## Steps\n\n### Ship\n\nClose implementation.\n",
+            &text[..frontmatter_end - 5]
         ),
     )
     .unwrap();
@@ -16292,8 +16292,13 @@ VALUES ('pln-stop-other', 'p-stop-other', 'build', 'other.md', 'Other Stop Plan'
         if index > 0 {
             let mut moved_obligation = obligation.clone();
             moved_obligation["id"] = json!(format!("pob-stop-moved-{index}"));
-            moved_obligation["criterion_id"] = json!(format!("crit-stop-moved-{index}"));
             moved_obligation["title"] = json!(format!("stop hook moved browser evidence {index}"));
+            moved_obligation["supersedes"] = json!(if index == 1 {
+                "pob-stop-missing".to_string()
+            } else {
+                format!("pob-stop-moved-{}", index - 1)
+            });
+            moved_obligation["observations"][0]["id"] = json!(format!("obs-stop-moved-{index}"));
             add_evidence_obligation_value(
                 dir.path(),
                 &db,
@@ -16310,8 +16315,9 @@ VALUES ('pln-stop-other', 'p-stop-other', 'build', 'other.md', 'Other Stop Plan'
     }
     let mut exhausted_obligation = obligation.clone();
     exhausted_obligation["id"] = json!("pob-stop-moved-exhausted");
-    exhausted_obligation["criterion_id"] = json!("crit-stop-moved-exhausted");
     exhausted_obligation["title"] = json!("stop hook exhausted browser evidence");
+    exhausted_obligation["supersedes"] = json!("pob-stop-moved-5");
+    exhausted_obligation["observations"][0]["id"] = json!("obs-stop-moved-exhausted");
     add_evidence_obligation_value(
         dir.path(),
         &db,
