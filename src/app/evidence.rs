@@ -2635,8 +2635,7 @@ impl App {
         self.conn
             .execute_batch("BEGIN IMMEDIATE; SAVEPOINT admit_host_capture")?;
         let admission_result = (|| -> Result<()> {
-            let current_obligation =
-                self.validate_host_capture_admission_authority(&authority)?;
+            let current_obligation = self.validate_host_capture_admission_authority(&authority)?;
             if serde_json::to_value(current_obligation)? != serde_json::to_value(&obligation)? {
                 return Err(EvidenceCommandError::conflict(
                     "host capture admission obligation changed before commit",
@@ -2801,17 +2800,15 @@ impl App {
         }
         let run_revision = u64::try_from(admission.run_revision)
             .context("pending host capture run revision is invalid")?;
-        self.validate_host_capture_admission_authority(
-            &HostCaptureAdmissionAuthorityContext {
-                project_id: &admission.project_id,
-                plan_id: &admission.plan_id,
-                run_id: &admission.run_id,
-                freeze_id: &admission.freeze_id,
-                run_revision,
-                obligation_id: &admission.obligation_id,
-                lease,
-            },
-        )?;
+        self.validate_host_capture_admission_authority(&HostCaptureAdmissionAuthorityContext {
+            project_id: &admission.project_id,
+            plan_id: &admission.plan_id,
+            run_id: &admission.run_id,
+            freeze_id: &admission.freeze_id,
+            run_revision,
+            obligation_id: &admission.obligation_id,
+            lease,
+        })?;
         Ok(())
     }
 
