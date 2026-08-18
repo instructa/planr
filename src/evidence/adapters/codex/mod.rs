@@ -159,18 +159,40 @@ fn classify_codex_capture(capture: HostCaptureEvaluation) -> Result<CodexCapture
 pub(crate) fn enable_chrome_browser_client(
     capture: HostCaptureEvaluation,
 ) -> Result<CodexCaptureAdapter> {
-    enable_chrome_browser_client_with_planr_observation(capture, false)
+    enable_chrome_browser_client_at_trust_boundary(
+        capture,
+        ChromeBrowserClientTrustBoundary::UntrustedExternal,
+    )
 }
 
 pub(crate) fn enable_chrome_browser_client_from_planr_observed_execution(
     capture: HostCaptureEvaluation,
 ) -> Result<CodexCaptureAdapter> {
-    enable_chrome_browser_client_with_planr_observation(capture, true)
+    enable_chrome_browser_client_at_trust_boundary(
+        capture,
+        ChromeBrowserClientTrustBoundary::PlanrObservedExecution,
+    )
 }
 
-fn enable_chrome_browser_client_with_planr_observation(
+pub(crate) fn enable_chrome_browser_client_from_verifier_admission(
     capture: HostCaptureEvaluation,
-    planr_observed_execution: bool,
+) -> Result<CodexCaptureAdapter> {
+    enable_chrome_browser_client_at_trust_boundary(
+        capture,
+        ChromeBrowserClientTrustBoundary::VerifierAdmission,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum ChromeBrowserClientTrustBoundary {
+    UntrustedExternal,
+    PlanrObservedExecution,
+    VerifierAdmission,
+}
+
+fn enable_chrome_browser_client_at_trust_boundary(
+    capture: HostCaptureEvaluation,
+    trust_boundary: ChromeBrowserClientTrustBoundary,
 ) -> Result<CodexCaptureAdapter> {
     if capture.final_status.as_str() != "available" {
         return Ok(disabled(
@@ -186,7 +208,10 @@ fn enable_chrome_browser_client_with_planr_observation(
             .missing_fields
             .iter()
             .any(|field| field == "host_version")
-        || !planr_observed_execution
+        || matches!(
+            trust_boundary,
+            ChromeBrowserClientTrustBoundary::UntrustedExternal
+        )
         || !capture
             .artifact_refs
             .iter()
@@ -194,13 +219,19 @@ fn enable_chrome_browser_client_with_planr_observation(
     {
         return Ok(disabled(
             capture,
-            "Chrome browser-client capture is not backed by a Planr-observed host execution with required host version, CDP final event, and artifact binding",
+            "Chrome browser-client capture is not backed by a trusted Planr execution or verifier-admission boundary with required host version, CDP final event, and artifact binding",
         ));
     }
 
     let manifest = chrome_browser_client_manifest(&capture)?;
     let (bound_instance_value, bound_instance) = bind_instance_to_manifest(&capture, &manifest)?;
-    let receipt = chrome_browser_client_receipt(&capture, &bound_instance, &bound_instance_value)?;
+    let receipt_contract_vector = match trust_boundary {
+        ChromeBrowserClientTrustBoundary::PlanrObservedExecution => Some(
+            chrome_browser_client_receipt(&capture, &bound_instance, &bound_instance_value)?,
+        ),
+        ChromeBrowserClientTrustBoundary::VerifierAdmission => None,
+        ChromeBrowserClientTrustBoundary::UntrustedExternal => unreachable!(),
+    };
     let matrix_entry = host_surface_matrix_entry(&capture);
     Ok(CodexCaptureAdapter {
         experiment_id: capture.experiment_id,
@@ -213,7 +244,7 @@ fn enable_chrome_browser_client_with_planr_observation(
         reason: "native Chrome browser-client produced a final CDP Runtime.evaluate/DOM observation with content-bound artifact and provenance".to_string(),
         manifest: Some(manifest),
         instance: Some(bound_instance_value),
-        receipt_contract_vector: Some(receipt),
+        receipt_contract_vector,
     })
 }
 

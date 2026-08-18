@@ -121,6 +121,16 @@ struct ValidatedRunIndexEntry {
     instance: VerificationCapabilityInstance,
 }
 
+struct HostCaptureAdmissionRequest {
+    plan_id: String,
+    run_id: String,
+    freeze_id: String,
+    run_revision: u64,
+    obligation_id: String,
+    import_root: String,
+    experiment_id: String,
+}
+
 fn is_hermetic_reuse_candidate(
     manifest: &VerificationCapabilityManifest,
     target: &TargetBinding,
@@ -2386,6 +2396,318 @@ impl App {
 
     pub(crate) fn evidence_host_capture_import_value(&self, value: Value) -> Result<Value> {
         self.evidence_host_capture_import_value_with_observed_run(value, None, None)
+    }
+
+    pub(crate) fn evidence_host_capture_admit_value(&self, value: Value) -> Result<Value> {
+        reject_trusted_receipt_input(&value)?;
+        let object = value.as_object().ok_or_else(|| {
+            EvidenceCommandError::bad_request("host capture admission input must be an object")
+        })?;
+        let allowed = BTreeSet::from([
+            "schema_version",
+            "plan_id",
+            "run_id",
+            "freeze_id",
+            "run_revision",
+            "obligation_id",
+            "import_root",
+            "experiment_id",
+        ]);
+        let unknown = object
+            .keys()
+            .filter(|key| !allowed.contains(key.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !unknown.is_empty() {
+            return Err(EvidenceCommandError::bad_request(format!(
+                "host capture admission input has unknown fields: {}",
+                unknown.join(",")
+            ))
+            .into());
+        }
+        if host_capture_admission_string_field(&value, "schema_version")?
+            != "planr.evidence.host_capture.admission.v1"
+        {
+            return Err(EvidenceCommandError::bad_request(
+                "host capture admission schema_version must be planr.evidence.host_capture.admission.v1",
+            )
+            .into());
+        }
+        let experiment_id = match value.get("experiment_id") {
+            Some(value) => value
+                .as_str()
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    EvidenceCommandError::bad_request(
+                        "host capture admission experiment_id must be a non-empty string",
+                    )
+                })?
+                .to_string(),
+            None => "exp-chrome-browser-client".to_string(),
+        };
+        if experiment_id != "exp-chrome-browser-client" {
+            return Err(EvidenceCommandError::bad_request(
+                "only exp-chrome-browser-client host captures can be admitted",
+            )
+            .into());
+        }
+        let request = HostCaptureAdmissionRequest {
+            plan_id: host_capture_admission_string_field(&value, "plan_id")?,
+            run_id: host_capture_admission_string_field(&value, "run_id")?,
+            freeze_id: host_capture_admission_string_field(&value, "freeze_id")?,
+            run_revision: value
+                .get("run_revision")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| {
+                    EvidenceCommandError::bad_request(
+                        "host capture admission run_revision must be a non-negative integer",
+                    )
+                })?,
+            obligation_id: host_capture_admission_string_field(&value, "obligation_id")?,
+            import_root: host_capture_admission_string_field(&value, "import_root")?,
+            experiment_id,
+        };
+        let project = self.default_project()?;
+        let lease = self
+            .resolve_feature_run_evidence_lease(&project.id, &request.plan_id)?
+            .ok_or_else(|| {
+                EvidenceCommandError::conflict(
+                    "host capture admission requires an active verifier lease",
+                )
+            })?;
+        let obligation = self.validate_host_capture_admission_authority(
+            &project.id,
+            &request,
+            &lease,
+        )?;
+
+        let import_root = resolve_evidence_input_path(&self.root, &request.import_root);
+        let canonical_import_root = import_root.canonicalize().with_context(|| {
+            format!(
+                "canonicalizing host capture admission root {}",
+                import_root.display()
+            )
+        })?;
+        let validated = validate_external_host_capture(
+            &self.root,
+            &canonical_import_root,
+            HOST_CAPTURE_VALIDATOR_TIMEOUT_MS,
+        )?;
+        let captures = crate::evidence::adapters::host::evaluate_phase1_host_fixture(
+            &validated.root,
+        )
+        .map_err(|error| {
+            EvidenceCommandError::bad_request(format!(
+                "validated host capture bundle failed strict Evidence parsing: {error}"
+            ))
+        })?;
+        let capture = captures
+            .into_iter()
+            .find(|capture| capture.experiment_id == request.experiment_id)
+            .ok_or_else(|| {
+                EvidenceCommandError::bad_request(format!(
+                    "validated host capture bundle is missing {}",
+                    request.experiment_id
+                ))
+            })?;
+        let adapter = crate::evidence::adapters::codex::enable_chrome_browser_client_from_verifier_admission(
+            capture.clone(),
+        )?;
+        if !adapter.trusted_adapter_enabled {
+            return Err(EvidenceCommandError::bad_request(format!(
+                "host capture candidate is not admissible: {}",
+                adapter.reason
+            ))
+            .into());
+        }
+        if adapter.receipt_contract_vector.is_some() {
+            bail!("host capture admission adapter must not construct a trusted receipt");
+        }
+        let manifest = adapter
+            .manifest
+            .ok_or_else(|| anyhow!("admitted host capture candidate is missing its manifest"))?;
+        let instance: VerificationCapabilityInstance = serde_json::from_value(
+            adapter
+                .instance
+                .ok_or_else(|| anyhow!("admitted host capture candidate is missing its instance"))?,
+        )?;
+        ensure_capability_manifest_instance_identity(&manifest, &instance)?;
+        let [(target_value, _)] = canonical_target_partitions(&obligation.observations)?
+            .try_into()
+            .map_err(|_: Vec<_>| {
+                EvidenceCommandError::bad_request(
+                    "host capture admission requires exactly one canonical target subset",
+                )
+            })?;
+        let target: TargetBinding = serde_json::from_value(target_value)?;
+        let fixture_disclosure = FixtureDisclosure {
+            fixtures_used: false,
+            mocks_used: false,
+            fixture_refs: None,
+            mock_refs: None,
+        };
+        ensure_host_import_bindings(
+            &obligation,
+            &instance,
+            &target,
+            &instance.environment,
+            &fixture_disclosure,
+        )?;
+        ensure_host_capture_target_matches(&target, &capture.final_event_payload)?;
+        for observation in &obligation.observations {
+            ensure_expected_predicate_matches_capture(
+                &observation.expected,
+                &capture.final_event_payload,
+            )?;
+        }
+        let valid_until = ensure_host_capture_fresh(&instance)?;
+        let (sealed_run_index, execution_binding) =
+            self.build_host_capture_candidate_run_index(&obligation, &manifest, &instance)?;
+        let sealed_run_index_digest =
+            string_field(&sealed_run_index, "run_index_digest")?;
+        let pending = host_capture_admission::PendingHostCaptureAdmission {
+            sealed_run_index_digest: sealed_run_index_digest.clone(),
+            project_id: project.id.clone(),
+            plan_id: request.plan_id.clone(),
+            run_id: request.run_id.clone(),
+            freeze_id: request.freeze_id.clone(),
+            run_revision: i64::try_from(request.run_revision)
+                .context("host capture admission run_revision exceeds SQLite INTEGER")?,
+            verifier_lease_generation: i64::try_from(lease.lease_generation)
+                .context("host capture admission lease_generation exceeds SQLite INTEGER")?,
+            obligation_id: request.obligation_id.clone(),
+            execution_binding: execution_binding.clone(),
+            manifest: serde_json::to_value(&manifest)?,
+            instance: serde_json::to_value(&instance)?,
+            normalized_capture_digest: validated.normalized_root_digest.clone(),
+            valid_until: valid_until.clone(),
+            status: "pending".to_string(),
+        };
+
+        self.conn
+            .execute_batch("BEGIN IMMEDIATE; SAVEPOINT admit_host_capture")?;
+        let admission_result = (|| -> Result<()> {
+            let current_obligation = self.validate_host_capture_admission_authority(
+                &project.id,
+                &request,
+                &lease,
+            )?;
+            if serde_json::to_value(current_obligation)? != serde_json::to_value(&obligation)? {
+                return Err(EvidenceCommandError::conflict(
+                    "host capture admission obligation changed before commit",
+                )
+                .into());
+            }
+            host_capture_admission::insert_pending(&self.conn, &pending)?;
+            let (validated_digest, validated_entries) =
+                self.validate_pending_host_capture_run_index(&sealed_run_index)?;
+            let [validated_entry] = validated_entries.as_slice() else {
+                bail!("host capture admission sealed index must contain exactly one run");
+            };
+            if validated_digest != sealed_run_index_digest
+                || validated_entry.execution_binding != execution_binding
+                || validated_entry.instance.id != instance.id
+            {
+                bail!("host capture admission changed during atomic validation");
+            }
+            Ok(())
+        })();
+        match admission_result {
+            Ok(()) => self
+                .conn
+                .execute_batch("RELEASE admit_host_capture; COMMIT")?,
+            Err(error) => {
+                let _ = self.conn.execute_batch(
+                    "ROLLBACK TO admit_host_capture; RELEASE admit_host_capture; ROLLBACK",
+                );
+                return Err(error);
+            }
+        }
+
+        let import_root = canonical_import_root.to_string_lossy().to_string();
+        let import_input = json!({
+            "schema_version": "planr.evidence.host_capture.import.v1",
+            "run_index": sealed_run_index.clone(),
+            "run_index_entry": 0,
+            "import_root": import_root,
+            "experiment_id": request.experiment_id,
+        });
+        Ok(json!({
+            "schema_version": "planr.evidence.host_capture.admission.v1",
+            "verdict": "valid",
+            "status": "pending",
+            "plan_id": request.plan_id,
+            "run_id": request.run_id,
+            "freeze_id": request.freeze_id,
+            "run_revision": request.run_revision,
+            "verifier_lease_generation": lease.lease_generation,
+            "obligation_id": request.obligation_id,
+            "run_index_digest": sealed_run_index_digest,
+            "run_index_entry": 0,
+            "normalized_capture_digest": validated.normalized_root_digest,
+            "valid_until": valid_until,
+            "sealed_run_index": sealed_run_index,
+            "import_input": import_input,
+        }))
+    }
+
+    fn validate_host_capture_admission_authority(
+        &self,
+        project_id: &str,
+        request: &HostCaptureAdmissionRequest,
+        lease: &super::feature_run_evidence::CanonicalFeatureRunEvidenceLease,
+    ) -> Result<ProofObligation> {
+        self.validate_feature_run_evidence_lease(&self.conn, lease)?;
+        if lease.project_id != project_id
+            || lease.plan_id != request.plan_id
+            || lease.run_id != request.run_id
+            || lease.freeze_id != request.freeze_id
+        {
+            return Err(EvidenceCommandError::conflict(
+                "host capture admission does not match the active verifier lease",
+            )
+            .into());
+        }
+        let repository = ExecutionRunRepository::new(&self.conn);
+        let persisted = repository.feature_run(&request.run_id)?;
+        if persisted.project_id != project_id
+            || persisted.run.plan_id != request.plan_id
+            || persisted.revision != request.run_revision
+        {
+            return Err(EvidenceCommandError::conflict(
+                "host capture admission does not match the active FeatureRun revision",
+            )
+            .into());
+        }
+        if self.plan_evidence_authority(&request.plan_id)?
+            != super::proof::PlanEvidenceAuthority::BindingActive
+        {
+            return Err(EvidenceCommandError::conflict(
+                "host capture admission requires current binding Evidence authority",
+            )
+            .into());
+        }
+        let active = authoritative_obligation_bindings_for_scope(
+            &self.conn,
+            project_id,
+            "obligation",
+            &request.obligation_id,
+        )
+        .map_err(|error| anyhow!("{error}"))?;
+        if active.len() != 1 || active[0].id != request.obligation_id {
+            return Err(EvidenceCommandError::conflict(
+                "host capture admission obligation is not the authoritative active binding",
+            )
+            .into());
+        }
+        let obligation = self.load_proof_obligation(&request.obligation_id)?;
+        if !obligation.binding || obligation.plan_id.as_str() != request.plan_id {
+            return Err(EvidenceCommandError::conflict(
+                "host capture admission obligation does not bind the active plan",
+            )
+            .into());
+        }
+        Ok(obligation)
     }
 
     pub(crate) fn evidence_host_capture_run_value(&self, value: Value) -> Result<Value> {
@@ -5114,6 +5436,20 @@ fn string_field(value: &Value, field: &'static str) -> Result<String> {
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .ok_or_else(|| anyhow!("missing required Evidence field: {field}"))
+}
+
+fn host_capture_admission_string_field(value: &Value, field: &'static str) -> Result<String> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| {
+            EvidenceCommandError::bad_request(format!(
+                "host capture admission {field} must be a non-empty string"
+            ))
+            .into()
+        })
 }
 
 fn string_ref_field<'a>(value: &'a Value, field: &'static str) -> Result<&'a str> {

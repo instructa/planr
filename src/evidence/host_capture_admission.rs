@@ -43,6 +43,9 @@ impl PendingHostCaptureAdmission {
 }
 
 pub(crate) fn insert_pending(conn: &Connection, value: &PendingHostCaptureAdmission) -> Result<()> {
+    if conn.is_autocommit() {
+        bail!("host capture admission insert requires an active transaction");
+    }
     value.validate_pending()?;
     let admitted_at = OffsetDateTime::now_utc().format(&Rfc3339)?;
     let changed = conn.execute(
