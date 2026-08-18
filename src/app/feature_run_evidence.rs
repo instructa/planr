@@ -4209,13 +4209,47 @@ allow_overwrite = true
     fn plan_readiness_freezes_then_returns_the_exact_verification_pick_repair() {
         let root = tempfile::tempdir().unwrap();
         write_budget_policy(root.path());
+        write_ready_evidence_policy(root.path());
+        let plan_path = root.path().join("plan-a.md");
+        std::fs::write(
+            &plan_path,
+            crate::planpack::build_plan_body("Plan", "product-plan", "phase ready"),
+        )
+        .unwrap();
         initialize_git(root.path());
         let app = test_app(root.path().to_path_buf());
+        app.conn
+            .execute(
+                "UPDATE plans SET path = ?1 WHERE id = 'plan-a'",
+                [plan_path.to_string_lossy().as_ref()],
+            )
+            .unwrap();
         add_outcome(&app, "item-readiness-ordering-repair");
+        add_verification_item(&app, "verification-phase");
+        app.conn
+            .execute(
+                "UPDATE items SET plan_path = ?1 WHERE id IN ('item-readiness-ordering-repair', 'verification-phase')",
+                [plan_path.to_string_lossy().as_ref()],
+            )
+            .unwrap();
+        app.evidence_migration_value(
+            json!({"schema_version":"planr.evidence.migration.v1","plan_id":"plan-a","obligations":[{
+                "id":"pob-phase-ready","schema_version":"evidence.contract.v1","criterion_id":"criterion-phase-ready","plan_id":"plan-a","item_id":"verification-phase","title":"ready process","binding":true,"observations":[{
+                    "id":"obs-phase-ready","type":"com.example.ready.status","subject":"ready process","expected":{"status":"ready"},"target":{"kind":"process","uri":"local://ready"},"payload_schema":{"schema_ref":"com.example.ready.status@v1"}
+                }],"fixture_policy":{},"freshness_policy":{},"assurance_policy":{"retry_aggregation":"all_applicable_pass"}
+            }]}),
+            true,
+        )
+        .unwrap();
         let run = app
             .ensure_outcome_feature_run("item-readiness-ordering-repair")
             .unwrap()
             .unwrap();
+        app.close_item_value(
+            "item-readiness-ordering-repair",
+            "ordinary outcome settled before readiness-owned freeze",
+        )
+        .unwrap();
 
         let error = app
             .evidence_readiness_value(crate::cli::EvidenceCoverageScope::Plan, "plan-a")
