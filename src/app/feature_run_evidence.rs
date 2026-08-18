@@ -3636,8 +3636,11 @@ allow_overwrite = true
             .ensure_outcome_feature_run("item-phase")
             .unwrap()
             .unwrap();
-        app.close_item_value("item-phase", "initial ordinary outcome settled before source freeze")
-            .unwrap();
+        app.close_item_value(
+            "item-phase",
+            "initial ordinary outcome settled before source freeze",
+        )
+        .unwrap();
         app.conn
             .execute(
                 "UPDATE feature_run_role_leases SET worker_id = 'maker-other' WHERE run_id = ?1 AND role = 'maker' AND released_at IS NULL",
@@ -3781,8 +3784,11 @@ allow_overwrite = true
                 .to_string()
                 .contains("binding_evidence_requires_verification")
         );
-        app.close_item_value("item-freeze", "initial ordinary outcome settled before source freeze")
-            .expect("close ordinary outcome");
+        app.close_item_value(
+            "item-freeze",
+            "initial ordinary outcome settled before source freeze",
+        )
+        .expect("close ordinary outcome");
         app.freeze_feature_run_source_value("plan-a")
             .expect("freeze")
             .expect("feature run");
