@@ -24337,7 +24337,7 @@ fn materiality_settlement_rolls_back_after_review_gate_failure() {
     init_materiality_git(dir.path());
     fs::create_dir_all(dir.path().join("src/app")).unwrap();
     fs::write(
-        dir.path().join("src/app/http.rs"),
+        dir.path().join("src/app/concurrent.rs"),
         "fn initial() {}\nfn rollback_route() {}\n",
     )
     .unwrap();
@@ -24422,6 +24422,19 @@ fn concurrent_unplanned_settlement_creates_one_log_and_no_review_rows() {
     )
     .unwrap();
     let item = create_test_item(dir.path(), &db, "Concurrent item", "duplicate gate race");
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "item",
+            "update",
+            &item,
+            "--work-type",
+            "code",
+        ])
+        .assert()
+        .success();
 
     let bin = assert_cmd::cargo::cargo_bin("planr");
     let mut children = Vec::new();
@@ -24439,7 +24452,7 @@ fn concurrent_unplanned_settlement_creates_one_log_and_no_review_rows() {
                     "--summary",
                     "changed API route",
                     "--files",
-                    "src/app/http.rs",
+                    "src/app/concurrent.rs",
                     "--cmd",
                     "cargo test concurrent",
                 ])
@@ -24449,6 +24462,7 @@ fn concurrent_unplanned_settlement_creates_one_log_and_no_review_rows() {
                 .unwrap(),
         );
     }
+    let mut settlements = Vec::new();
     for child in children {
         let output = child.wait_with_output().unwrap();
         assert!(
@@ -24457,7 +24471,26 @@ fn concurrent_unplanned_settlement_creates_one_log_and_no_review_rows() {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
+        settlements.push(serde_json::from_slice::<Value>(&output.stdout).unwrap());
     }
+    assert_eq!(
+        settlements
+            .iter()
+            .filter(|value| value["work_packet"]["transition"] == "legacy_unplanned")
+            .count(),
+        1
+    );
+    assert_eq!(
+        settlements
+            .iter()
+            .filter(|value| value["work_packet"]["transition"] == "already_settled"
+                && value["work_packet"]["disposition"] == "already_settled")
+            .count(),
+        1
+    );
+    let first_log_id = settlements[0]["log_id"].as_str().unwrap();
+    assert!(!first_log_id.is_empty());
+    assert_eq!(settlements[1]["log_id"].as_str(), Some(first_log_id));
 
     let conn = Connection::open(&db).unwrap();
     let log_count: i64 = conn
@@ -24483,8 +24516,22 @@ fn concurrent_unplanned_settlement_creates_one_log_and_no_review_rows() {
         .unwrap();
     assert_eq!(log_count, 1);
     assert_eq!(review_count, 0);
-    assert_eq!(decision_count, 2);
+    assert_eq!(decision_count, 1);
     assert_eq!(item_status(&db, &item), "closed");
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM feature_runs", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM execution_run_outcomes",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+        0
+    );
 }
 
 #[test]
