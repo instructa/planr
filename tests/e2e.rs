@@ -2320,6 +2320,9 @@ fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_m
         "sha256:7777777777777777777777777777777777777777777777777777777777777777",
     );
     obligation["fixture_policy"]["fixtures_allowed"] = json!(true);
+    let obligation = bind_obligation_to_authored_criterion(
+        obligation, "pln-evidence-public", "criterion-evidence-public",
+    );
     add_evidence_obligation_value(dir.path(), &db, "pob-host-capture", &obligation);
 
     let self_authored_root = tempdir().unwrap();
@@ -4829,6 +4832,9 @@ fn evidence_run_enforces_frozen_source_before_receipt_commit() {
     );
     obligation["observations"][0]["payload_schema"] =
         json!({"schema_ref": "schema://com.example.health.status"});
+    let obligation = bind_obligation_to_authored_criterion(
+        obligation, "pln-evidence-public", "criterion-evidence-public",
+    );
     add_evidence_obligation_value(dir.path(), &db, "pob-frozen-source-boundary", &obligation);
 
     let runtime_write_run = run_evidence_value_with_env_code(
@@ -5330,6 +5336,9 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
         json!({"kind": "process", "id": "runtime-local"}),
         json!(["target_change", "policy_change", "adapter_schema_change"]),
         obligation_runtime_config_digest,
+    );
+    let obligation = bind_obligation_to_authored_criterion(
+        obligation, "pln-evidence-public", "criterion-evidence-public",
     );
     let cli_add = add_evidence_obligation_value(dir.path(), &db, "pob-public-run", &obligation);
     assert_evidence_envelope(&cli_add, "evidence.migrate", true);
@@ -7365,18 +7374,43 @@ fn evidence_process_adapter_semantic_mismatch_does_not_satisfy_coverage() {
         json!(["target_change", "policy_change", "adapter_schema_change"]),
         "sha256:9999999999999999999999999999999999999999999999999999999999999999",
     );
+    let obligation = bind_obligation_to_authored_criterion(
+        obligation, "pln-evidence-public", "criterion-evidence-public",
+    );
+    let plan_path = dir.path()
+        .join(".planr/plans/build/evidence-public-fixture.plan.md")
+        .to_string_lossy()
+        .to_string();
+    let project_id: String = Connection::open(&db)
+        .unwrap()
+        .query_row("SELECT id FROM projects LIMIT 1", [], |row| row.get(0))
+        .unwrap();
+    let conn = Connection::open(&db).unwrap();
+    for (id, work_type) in [
+        ("item-semantic-maker", "code"),
+        ("item-semantic-verifier", "verification"),
+    ] {
+        conn.execute(
+            "INSERT INTO items(id, project_id, title, description, status, work_type, plan_path, created_at, updated_at) VALUES (?1, ?2, ?1, 'semantic mismatch fixture', 'ready', ?3, ?4, datetime('now'), datetime('now'))",
+            rusqlite::params![id, project_id, work_type, plan_path],
+        )
+        .unwrap();
+    }
+    drop(conn);
+    let mut obligation = obligation;
+    obligation["item_id"] = json!("item-semantic-verifier");
+    obligation["observations"][0]["payload_schema"] =
+        json!({"schema_ref": "schema://com.example.health.status"});
     add_evidence_obligation_value(dir.path(), &db, "pob-semantic-mismatch", &obligation);
-
-    let run_input = json!({
-        "obligation_id": "pob-semantic-mismatch",
-        "capability_instance_id": instance_id,
-        "target": {"kind": "process", "uri": "local://health"},
-    });
-    let run_path = dir.path().join("semantic-mismatch-run.json");
-    fs::write(&run_path, serde_json::to_vec_pretty(&run_input).unwrap()).unwrap();
+    let maker = single_json_document(&planr().current_dir(dir.path()).env("PLANR_WORKER_ID", "semantic-maker").args(["--db", db.to_str().unwrap(), "--json", "pick", "--plan", "pln-evidence-public", "--work-type", "code"]).assert().success().get_output().stdout);
+    assert_eq!(maker["item"]["id"], "item-semantic-maker");
+    single_json_document(&planr().current_dir(dir.path()).env("PLANR_WORKER_ID", "semantic-maker").args(["--db", db.to_str().unwrap(), "--json", "done", "item-semantic-maker", "--summary", "semantic fixture", "--cmd", "true", "--next"]).assert().success().get_output().stdout);
+    let verifier = single_json_document(&planr().current_dir(dir.path()).env("PLANR_WORKER_ID", "semantic-verifier").args(["--db", db.to_str().unwrap(), "--json", "pick", "--plan", "pln-evidence-public", "--work-type", "verification"]).assert().success().get_output().stdout);
+    let run_path = verifier["work_packet"]["sealed_run_index"]["repository_path"].as_str().unwrap();
     let run = single_json_document(
         &planr()
             .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", "semantic-verifier")
             .args([
                 "--db",
                 db.to_str().unwrap(),
@@ -7384,7 +7418,7 @@ fn evidence_process_adapter_semantic_mismatch_does_not_satisfy_coverage() {
                 "evidence",
                 "run",
                 "--input",
-                run_path.to_str().unwrap(),
+                run_path,
             ])
             .assert()
             .code(2)
@@ -7393,34 +7427,35 @@ fn evidence_process_adapter_semantic_mismatch_does_not_satisfy_coverage() {
     );
     assert_evidence_envelope(&run, "evidence.run", true);
     assert_eq!(run["object"]["verdict"], "failed");
-    assert_eq!(run["object"]["attempt"]["status"], "failed");
+    let result = &run["object"]["results"][0];
+    assert_eq!(result["attempt"]["status"], "failed");
     assert_eq!(
-        run["object"]["attempt"]["raw_result"]["ordinary_observation_error"],
+        result["attempt"]["raw_result"]["ordinary_observation_error"],
         json!(
             "ordinary process actual does not satisfy expected predicate for obs-pob-semantic-mismatch"
         )
     );
     assert_eq!(
-        run["object"]["attempt"]["raw_result"]["planr_adapter_gap_reasons"],
+        result["attempt"]["raw_result"]["planr_adapter_gap_reasons"],
         json!(["target_mismatch"])
     );
     let semantic_actual: Value = serde_json::from_str(
-        run["object"]["receipt"]["observations"][0]["actual"]["stdout_excerpt"]
+        result["receipt"]["observations"][0]["actual"]["stdout_excerpt"]
             .as_str()
             .unwrap(),
     )
     .unwrap();
     assert_eq!(semantic_actual, json!({"status": "ok"}));
     assert_eq!(
-        run["object"]["receipt"]["observations"][0]["predicate"],
+        result["receipt"]["observations"][0]["predicate"],
         json!({"status": "missing"})
     );
     assert_eq!(
-        run["object"]["receipt"]["observations"][0]["outcome"],
+        result["receipt"]["observations"][0]["outcome"],
         "failed"
     );
     assert_eq!(
-        run["object"]["receipt"]["proof_gaps"],
+        result["receipt"]["proof_gaps"],
         json!(["target_mismatch"])
     );
 
@@ -7527,6 +7562,9 @@ fn evidence_process_adapter_schema_invalid_stdout_is_verifier_failed() {
         json!({"kind": "process", "id": "runtime-local"}),
         json!(["target_change", "policy_change", "adapter_schema_change"]),
         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    );
+    let obligation = bind_obligation_to_authored_criterion(
+        obligation, "pln-evidence-public", "criterion-evidence-public",
     );
     add_evidence_obligation_value(dir.path(), &db, "pob-schema-invalid-stdout", &obligation);
 
