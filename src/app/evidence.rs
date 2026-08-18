@@ -134,6 +134,16 @@ struct HostCaptureAdmissionRequest {
     experiment_id: String,
 }
 
+struct HostCaptureAdmissionAuthorityContext<'a> {
+    project_id: &'a str,
+    plan_id: &'a str,
+    run_id: &'a str,
+    freeze_id: &'a str,
+    run_revision: u64,
+    obligation_id: &'a str,
+    lease: &'a super::feature_run_evidence::CanonicalFeatureRunEvidenceLease,
+}
+
 fn is_hermetic_reuse_candidate(
     manifest: &VerificationCapabilityManifest,
     target: &TargetBinding,
@@ -2513,15 +2523,16 @@ impl App {
                     "host capture admission requires an active verifier lease",
                 )
             })?;
-        let obligation = self.validate_host_capture_admission_authority(
-            &project.id,
-            &request.plan_id,
-            &request.run_id,
-            &request.freeze_id,
-            request.run_revision,
-            &request.obligation_id,
-            &lease,
-        )?;
+        let authority = HostCaptureAdmissionAuthorityContext {
+            project_id: &project.id,
+            plan_id: &request.plan_id,
+            run_id: &request.run_id,
+            freeze_id: &request.freeze_id,
+            run_revision: request.run_revision,
+            obligation_id: &request.obligation_id,
+            lease: &lease,
+        };
+        let obligation = self.validate_host_capture_admission_authority(&authority)?;
 
         let import_root = resolve_evidence_input_path(&self.root, &request.import_root);
         let canonical_import_root = import_root.canonicalize().with_context(|| {
@@ -2624,15 +2635,8 @@ impl App {
         self.conn
             .execute_batch("BEGIN IMMEDIATE; SAVEPOINT admit_host_capture")?;
         let admission_result = (|| -> Result<()> {
-            let current_obligation = self.validate_host_capture_admission_authority(
-                &project.id,
-                &request.plan_id,
-                &request.run_id,
-                &request.freeze_id,
-                request.run_revision,
-                &request.obligation_id,
-                &lease,
-            )?;
+            let current_obligation =
+                self.validate_host_capture_admission_authority(&authority)?;
             if serde_json::to_value(current_obligation)? != serde_json::to_value(&obligation)? {
                 return Err(EvidenceCommandError::conflict(
                     "host capture admission obligation changed before commit",
@@ -2727,19 +2731,13 @@ impl App {
 
     fn validate_host_capture_admission_authority(
         &self,
-        project_id: &str,
-        plan_id: &str,
-        run_id: &str,
-        freeze_id: &str,
-        run_revision: u64,
-        obligation_id: &str,
-        lease: &super::feature_run_evidence::CanonicalFeatureRunEvidenceLease,
+        authority: &HostCaptureAdmissionAuthorityContext<'_>,
     ) -> Result<ProofObligation> {
-        self.validate_feature_run_evidence_lease(&self.conn, lease)?;
-        if lease.project_id != project_id
-            || lease.plan_id != plan_id
-            || lease.run_id != run_id
-            || lease.freeze_id != freeze_id
+        self.validate_feature_run_evidence_lease(&self.conn, authority.lease)?;
+        if authority.lease.project_id != authority.project_id
+            || authority.lease.plan_id != authority.plan_id
+            || authority.lease.run_id != authority.run_id
+            || authority.lease.freeze_id != authority.freeze_id
         {
             return Err(EvidenceCommandError::conflict(
                 "host capture admission does not match the active verifier lease",
@@ -2747,17 +2745,17 @@ impl App {
             .into());
         }
         let repository = ExecutionRunRepository::new(&self.conn);
-        let persisted = repository.feature_run(run_id)?;
-        if persisted.project_id != project_id
-            || persisted.run.plan_id != plan_id
-            || persisted.revision != run_revision
+        let persisted = repository.feature_run(authority.run_id)?;
+        if persisted.project_id != authority.project_id
+            || persisted.run.plan_id != authority.plan_id
+            || persisted.revision != authority.run_revision
         {
             return Err(EvidenceCommandError::conflict(
                 "host capture admission does not match the active FeatureRun revision",
             )
             .into());
         }
-        if self.plan_evidence_authority(plan_id)?
+        if self.plan_evidence_authority(authority.plan_id)?
             != super::proof::PlanEvidenceAuthority::BindingActive
         {
             return Err(EvidenceCommandError::conflict(
@@ -2767,19 +2765,19 @@ impl App {
         }
         let active = authoritative_obligation_bindings_for_scope(
             &self.conn,
-            project_id,
+            authority.project_id,
             "obligation",
-            obligation_id,
+            authority.obligation_id,
         )
         .map_err(|error| anyhow!("{error}"))?;
-        if active.len() != 1 || active[0].id != obligation_id {
+        if active.len() != 1 || active[0].id != authority.obligation_id {
             return Err(EvidenceCommandError::conflict(
                 "host capture admission obligation is not the authoritative active binding",
             )
             .into());
         }
-        let obligation = self.load_proof_obligation(obligation_id)?;
-        if !obligation.binding || obligation.plan_id.as_str() != plan_id {
+        let obligation = self.load_proof_obligation(authority.obligation_id)?;
+        if !obligation.binding || obligation.plan_id.as_str() != authority.plan_id {
             return Err(EvidenceCommandError::conflict(
                 "host capture admission obligation does not bind the active plan",
             )
@@ -2804,13 +2802,15 @@ impl App {
         let run_revision = u64::try_from(admission.run_revision)
             .context("pending host capture run revision is invalid")?;
         self.validate_host_capture_admission_authority(
-            &admission.project_id,
-            &admission.plan_id,
-            &admission.run_id,
-            &admission.freeze_id,
-            run_revision,
-            &admission.obligation_id,
-            lease,
+            &HostCaptureAdmissionAuthorityContext {
+                project_id: &admission.project_id,
+                plan_id: &admission.plan_id,
+                run_id: &admission.run_id,
+                freeze_id: &admission.freeze_id,
+                run_revision,
+                obligation_id: &admission.obligation_id,
+                lease,
+            },
         )?;
         Ok(())
     }
