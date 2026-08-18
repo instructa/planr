@@ -2895,10 +2895,18 @@ impl App {
                 coverage,
             ));
         }
-        match self.ensure_plan_coverage_matches_source_freeze(project_id, plan_id, freeze, &coverage) {
+        match self
+            .ensure_plan_coverage_matches_source_freeze(project_id, plan_id, freeze, &coverage)
+        {
             Ok(()) => Ok(CurrentPlanCoverageForSourceFreeze::Satisfied(coverage)),
-            Err(error) if error.downcast_ref::<CoverageSourceFreezeMismatch>().is_some() => {
-                Ok(CurrentPlanCoverageForSourceFreeze::NeedsVerification(coverage))
+            Err(error)
+                if error
+                    .downcast_ref::<CoverageSourceFreezeMismatch>()
+                    .is_some() =>
+            {
+                Ok(CurrentPlanCoverageForSourceFreeze::NeedsVerification(
+                    coverage,
+                ))
             }
             Err(error) => Err(error),
         }

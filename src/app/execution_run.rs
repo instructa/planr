@@ -1782,7 +1782,10 @@ mod tests {
         .expect("fixture build plan");
         let plan_path = plan_path.to_string_lossy().to_string();
         app.conn
-            .execute("UPDATE plans SET path = ?1 WHERE id = 'plan-a'", [&plan_path])
+            .execute(
+                "UPDATE plans SET path = ?1 WHERE id = 'plan-a'",
+                [&plan_path],
+            )
             .expect("fixture plan path");
         app.conn
             .execute(
@@ -1829,8 +1832,12 @@ mod tests {
         if app.get_item(closed_item_id).expect("fixture item").status
             != crate::model::ItemStatus::Closed
         {
-            app.close_item_core(closed_item_id, "canonical fixture ordinary outcome closed", false)
-                .expect("closed fixture ordinary outcome");
+            app.close_item_core(
+                closed_item_id,
+                "canonical fixture ordinary outcome closed",
+                false,
+            )
+            .expect("closed fixture ordinary outcome");
         }
     }
 
@@ -1951,10 +1958,7 @@ mod tests {
         initialize_test_git(root.path());
         let app = test_app_at(root.path().to_path_buf());
         add_outcome(&app, "item-risk-final");
-        prepare_fixture_binding(
-            &app,
-            Some(("pob-risk-plan-wide", None, "risk-plan-wide")),
-        );
+        prepare_fixture_binding(&app, Some(("pob-risk-plan-wide", None, "risk-plan-wide")));
         app.outcome_work_packet("item-risk-final")
             .expect("maker packet");
         let settled = app
@@ -2473,11 +2477,7 @@ mod tests {
         let gate_error = app
             .ensure_final_product_review_gate_value("plan-a")
             .expect_err("late binding must block final-review admission");
-        assert!(
-            gate_error
-                .to_string()
-                == "final_product_review_source_freeze_stale:plan-a"
-        );
+        assert!(gate_error.to_string() == "final_product_review_source_freeze_stale:plan-a");
         assert!(
             repository
                 .review_gates_for_run(run_id, false)

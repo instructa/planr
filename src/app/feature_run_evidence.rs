@@ -4286,8 +4286,17 @@ allow_overwrite = true
         initialize_git(root.path());
         let app = test_app(root.path().to_path_buf());
         let plan_path = root.path().join("plan-a.md");
-        std::fs::write(&plan_path, crate::planpack::build_plan_body("Plan", "product-plan", "ready")).unwrap();
-        app.conn.execute("UPDATE plans SET path = ?1 WHERE id = 'plan-a'", [plan_path.to_string_lossy().as_ref()]).unwrap();
+        std::fs::write(
+            &plan_path,
+            crate::planpack::build_plan_body("Plan", "product-plan", "ready"),
+        )
+        .unwrap();
+        app.conn
+            .execute(
+                "UPDATE plans SET path = ?1 WHERE id = 'plan-a'",
+                [plan_path.to_string_lossy().as_ref()],
+            )
+            .unwrap();
         add_outcome(&app, "item-happy-path");
         add_verification_outcome(&app, "item-happy-path-verifier");
         app.conn.execute("UPDATE items SET plan_path = ?1 WHERE id IN ('item-happy-path', 'item-happy-path-verifier')", [plan_path.to_string_lossy().as_ref()]).unwrap();
@@ -4303,7 +4312,11 @@ allow_overwrite = true
             .ensure_outcome_feature_run("item-happy-path")
             .unwrap()
             .unwrap();
-        app.close_item_value("item-happy-path", "ordinary outcome settled before readiness").unwrap();
+        app.close_item_value(
+            "item-happy-path",
+            "ordinary outcome settled before readiness",
+        )
+        .unwrap();
         app.conn
             .execute(
                 "UPDATE feature_run_role_leases SET worker_id = 'maker-other' WHERE run_id = ?1 AND role = 'maker' AND released_at IS NULL",
@@ -6332,7 +6345,10 @@ allow_overwrite = true
         let repair = app.repair_work_packet_value("plan-a").unwrap().unwrap();
         assert_eq!(repair["work_packet"]["kind"], "outcome");
         assert_eq!(repair["work_packet"]["mode"], "product_finding_repair");
-        assert_eq!(repair["work_packet"]["repair_id"], "invalidation-historical");
+        assert_eq!(
+            repair["work_packet"]["repair_id"],
+            "invalidation-historical"
+        );
         assert_eq!(repair["work_packet"]["responsible_maker_id"], worker_id());
         assert!(repair["work_packet"]["verification_item_id"].is_null());
         assert_eq!(
@@ -7344,10 +7360,7 @@ allow_overwrite = true
             settlement["next_ordinary_item_id"],
             "item-after-verification"
         );
-        assert_eq!(
-            settlement["next_action"],
-            "planr pick --plan plan-a --json"
-        );
+        assert_eq!(settlement["next_action"], "planr pick --plan plan-a --json");
 
         let repository = ExecutionRunRepository::new(&app.conn);
         let run = repository
