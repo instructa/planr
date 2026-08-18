@@ -3636,11 +3636,7 @@ allow_overwrite = true
             .ensure_outcome_feature_run("item-phase")
             .unwrap()
             .unwrap();
-        app.conn
-            .execute(
-                "UPDATE items SET status = 'closed', worker_id = NULL WHERE id = 'item-phase'",
-                [],
-            )
+        app.close_item_value("item-phase", "initial ordinary outcome settled before source freeze")
             .unwrap();
         app.conn
             .execute(
@@ -3785,6 +3781,8 @@ allow_overwrite = true
                 .to_string()
                 .contains("binding_evidence_requires_verification")
         );
+        app.close_item_value("item-freeze", "initial ordinary outcome settled before source freeze")
+            .expect("close ordinary outcome");
         app.freeze_feature_run_source_value("plan-a")
             .expect("freeze")
             .expect("feature run");
