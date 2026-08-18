@@ -60,7 +60,7 @@
     "effect": "4.0.0-beta.98",
     "eslint": "9.39.5",
     "eslint-config-next": "16.2.10",
-    "postcss": "8.5.19",
+    "postcss": "8.5.23",
     "sharp": "0.35.3",
     "tailwindcss": "4.3.3",
     "typescript": "6.0.3",
