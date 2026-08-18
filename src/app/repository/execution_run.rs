@@ -4299,8 +4299,8 @@ DROP TABLE feature_run_product_repair_settlements;
 DROP TABLE feature_run_source_freezes;
 DROP TABLE execution_run_outcomes;
 DROP TABLE feature_run_role_leases;
-DROP TABLE execution_batches;
 DROP TABLE feature_runs;
+DROP TABLE execution_batches;
 UPDATE meta SET value = '1' WHERE key = 'schema_version';
 INSERT INTO items(id, project_id, title, description, status, work_type, priority, created_at, updated_at) VALUES
   ('legacy-review', 'project-a', 'Legacy review', 'historical', 'closed', 'review', 0, datetime('now'), datetime('now')),
