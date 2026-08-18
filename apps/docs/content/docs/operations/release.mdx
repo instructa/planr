@@ -21,13 +21,16 @@ Versions must use `x.y.z`, optionally followed by `-alpha.N`, `-beta.N`, or `-rc
 
 The publication script requires clean `main` to contain the already prepared
 and reviewed Cargo, npm, Codex, Claude, Cursor, lockfile, and generated-reference
-versions. It refreshes pnpm's installed workspace metadata from the frozen
-lockfile, strictly checks references, rebuilds without allowing source drift,
-and validates the receipt against Planr-owned route
-evidence and the explicitly supplied external suite/database; recomputes and
-gates the stored comparison; runs Rust, deterministic release-gate, package,
-and security checks; then creates and pushes only the annotated Git tag for the
-reviewed commit. Every check runs before the first tag or push.
+versions. It validates the changelog and predecessor tag, exact manifest
+versions, the authenticated green CI promotion receipt, and human approval for
+the exact SHA and version. When stable-release policy requires evaluation, it
+also validates the explicitly supplied external evaluation inputs. Only then
+does it create the annotated tag and push the reviewed `HEAD` and tag.
+
+The publication script does not refresh pnpm metadata, regenerate references,
+rebuild the candidate, or replay Rust, package, or security suites. Those checks
+belong to candidate preparation, exact-SHA CI, and the documented local
+maintainer preflight before publication approval.
 
 Public CI exercises only the synthetic, key-free release-gate contract. It does
 not receive provider credentials or execute the private maintainer benchmark.

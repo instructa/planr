@@ -1714,7 +1714,7 @@ Commands:
   capability          List or show registered verification capabilities
   run                 Run a registered process capability against a stored obligation
   import              Validate and persist an artifact import without creating trusted receipts
-  host-capture        Validate and persist a fresh external Codex host capture as trusted Evidence
+  host-capture        Admit and import a verifier-bound external host capture as trusted Evidence
   attempts            List or show process attempts
   receipts            List or show trusted receipts
   coverage            Evaluate and persist coverage for an Evidence scope
@@ -1876,13 +1876,13 @@ Options:
 #### `planr evidence host-capture`
 
 ```text
-Validate and persist a fresh external Codex host capture as trusted Evidence
+Admit and import a verifier-bound external host capture as trusted Evidence
 
 Usage: planr evidence host-capture [OPTIONS] <COMMAND>
 
 Commands:
+  admit
   import
-  run
   help    Print this message or the help of the given subcommand(s)
 
 Options:
@@ -1890,6 +1890,19 @@ Options:
       --json      Emit JSON output
       --no-color  Disable color in human output
   -h, --help      Print help
+```
+
+##### `planr evidence host-capture admit`
+
+```text
+Usage: planr evidence host-capture admit [OPTIONS] --input <INPUT>
+
+Options:
+      --db <DB>        Path to Planr SQLite database
+      --input <INPUT>  JSON file containing a planr.evidence.host_capture.admission.v1 payload
+      --json           Emit JSON output
+      --no-color       Disable color in human output
+  -h, --help           Print help
 ```
 
 ##### `planr evidence host-capture import`
@@ -1900,19 +1913,6 @@ Usage: planr evidence host-capture import [OPTIONS] --input <INPUT>
 Options:
       --db <DB>        Path to Planr SQLite database
       --input <INPUT>  JSON file containing a planr.evidence.host_capture.import.v1 payload
-      --json           Emit JSON output
-      --no-color       Disable color in human output
-  -h, --help           Print help
-```
-
-##### `planr evidence host-capture run`
-
-```text
-Usage: planr evidence host-capture run [OPTIONS] --input <INPUT>
-
-Options:
-      --db <DB>        Path to Planr SQLite database
-      --input <INPUT>  JSON file containing a planr.evidence.host_capture.run.v1 payload
       --json           Emit JSON output
       --no-color       Disable color in human output
   -h, --help           Print help

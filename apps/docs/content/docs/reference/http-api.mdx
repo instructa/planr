@@ -34,7 +34,7 @@ Start the server with `planr serve --port 7526`. It binds only `127.0.0.1`; ther
 | POST | `/v1/items/{id}/log`, `/v1/items/{id}/close`, `/v1/items/{id}/reviews` |
 | GET | `/v1/plans/{id}/audit`, `/v1/plans/{id}/final-product-review` |
 | POST | `/v1/plans/{id}/final-product-review` |
-| POST | `/v1/plans/{id}/run/restart`, `/v1/plans/{id}/run/resolve-budget-hold` |
+| POST | `/v1/plans/{id}/run/restart`, `/v1/plans/{id}/run/resolve-budget-hold`, `/v1/plans/{id}/run/repair-verification-admission` |
 | POST | `/v1/items/{id}/approval/request`, `/v1/items/{id}/approval/approve`, `/v1/items/{id}/approval/deny` |
 | GET | `/v1/approvals?open=true` |
 | GET, POST | `/v1/items/{id}/review-evidence` |
@@ -49,7 +49,7 @@ Start the server with `planr serve --port 7526`. It binds only `127.0.0.1`; ther
 | POST | `/v1/evidence/import` |
 | POST | `/v1/evidence/migrate` |
 | GET | `/v1/evidence/classifications` |
-| POST | `/v1/evidence/host-capture/import`, `/v1/evidence/host-capture/run` |
+| POST | `/v1/evidence/host-capture/admit`, `/v1/evidence/host-capture/import` |
 | GET | `/v1/evidence/attempts`, `/v1/evidence/attempts/{id}` |
 | GET | `/v1/evidence/receipts`, `/v1/evidence/receipts/{id}` |
 | POST | `/v1/evidence/coverage`, `/v1/evidence/explain` |
@@ -57,6 +57,16 @@ Start the server with `planr serve --port 7526`. It binds only `127.0.0.1`; ther
 | POST | `/v1/review-gates/{id}/close` |
 | POST | `/v1/review-gates/{id}/findings/resolve` |
 | POST | `/v1/recover/sweep`, `/v1/policy/admit` |
+
+Host capture is a two-step transaction. `POST /v1/evidence/host-capture/admit`
+accepts an exact `planr.evidence.host_capture.admission.v1` object and returns a
+sealed `import_input`. Send that returned object unchanged to
+`POST /v1/evidence/host-capture/import`; the import endpoint accepts only the
+exact `planr.evidence.host_capture.import.v1` pending input.
+
+`POST /v1/plans/{id}/run/repair-verification-admission` accepts the exact
+`plan_id`, `run_id`, `freeze_id`, `run_revision`, `reason`, and optional
+`run_index_digest` fields. The body `plan_id` must match the route `{id}`.
 
 ## Context, artifacts, events, and search
 

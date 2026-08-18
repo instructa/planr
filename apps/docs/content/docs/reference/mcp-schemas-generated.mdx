@@ -1277,16 +1277,54 @@ Import an untrusted validated artifact proposal without allowing trusted receipt
 }
 ```
 
-## `planr_evidence_host_capture_import`
+## `planr_evidence_host_capture_admit`
 
-Validate and persist a fresh external Codex host capture as trusted Evidence
+Admit one verifier-bound external host capture and return its sealed pending import input
 
 ```json
 {
   "additionalProperties": false,
   "properties": {
     "input": {
-      "description": "planr.evidence.host_capture.import.v1 payload with obligation_id and import_root",
+      "additionalProperties": false,
+      "description": "Exact planr.evidence.host_capture.admission.v1 payload",
+      "properties": {
+        "experiment_id": {
+          "type": "string"
+        },
+        "freeze_id": {
+          "type": "string"
+        },
+        "import_root": {
+          "type": "string"
+        },
+        "obligation_id": {
+          "type": "string"
+        },
+        "plan_id": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "run_revision": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "schema_version": {
+          "const": "planr.evidence.host_capture.admission.v1",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "plan_id",
+        "run_id",
+        "freeze_id",
+        "run_revision",
+        "obligation_id",
+        "import_root"
+      ],
       "type": "object"
     }
   },
@@ -1297,16 +1335,43 @@ Validate and persist a fresh external Codex host capture as trusted Evidence
 }
 ```
 
-## `planr_evidence_host_capture_run`
+## `planr_evidence_host_capture_import`
 
-Run a policy-registered host capture helper and persist Planr-observed Evidence
+Import exactly one pending verifier-admitted host capture as trusted Evidence
 
 ```json
 {
   "additionalProperties": false,
   "properties": {
     "input": {
-      "description": "planr.evidence.host_capture.run.v1 payload with obligation_id and manifest_id",
+      "additionalProperties": false,
+      "description": "Exact planr.evidence.host_capture.import.v1 object returned by host-capture admission",
+      "properties": {
+        "experiment_id": {
+          "type": "string"
+        },
+        "import_root": {
+          "type": "string"
+        },
+        "run_index": {
+          "description": "Exact sealed planr.evidence.run-index.v2 object returned by admission",
+          "type": "object"
+        },
+        "run_index_entry": {
+          "const": 0,
+          "type": "integer"
+        },
+        "schema_version": {
+          "const": "planr.evidence.host_capture.import.v1",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "run_index",
+        "run_index_entry",
+        "import_root"
+      ],
       "type": "object"
     }
   },
