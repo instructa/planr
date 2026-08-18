@@ -1,4 +1,4 @@
-use super::model::{
+use crate::evidence::model::{
     NamespacedIdentifier, PayloadSchemaBinding, Sha256Digest, VerificationCapabilityManifest,
 };
 use crate::canonical_json::sha256_json_digest;

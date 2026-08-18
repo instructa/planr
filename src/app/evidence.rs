@@ -1,3 +1,6 @@
+mod builtins;
+mod host_capture_admission;
+
 use super::App;
 use super::repository::execution_run::{
     ExecutionRunRepository, FindingStatus, ReviewGateKind, ReviewGateStatus,
@@ -24,20 +27,19 @@ use crate::evidence::{
         evaluate_item_criterion_coverages, evaluate_obligation_coverage, evaluate_plan_coverage,
         evaluate_plan_criterion_coverages,
     },
-    builtins::BuiltInEvidenceCatalog,
     execution::{
         ConfiguredProcessRunInput, TrustedEvidencePersistenceInput, ensure_process_adapter_digest,
         persist_trusted_evidence_atomically, resolve_process_run,
         run_configured_process_adapter_guarded, run_repository_snapshot_pre_commit_test_hook,
         select_execution_binding_subset,
     },
-    host_capture_admission,
     parse_validated_artifact_import,
     policy::{
         capture_repository_snapshot, load_repository_observation_schema,
         parse_evidence_policy_yaml, parse_trusted_receipt_binding,
     },
 };
+use builtins::BuiltInEvidenceCatalog;
 use crate::execution::{BoundedProcessInput, CancellationToken, run_bounded_process};
 use crate::execution_run::{
     ExecutionBatch, ExecutionBatchStatus, FeatureRunPhase, PhaseTransition, PhaseTransitionCause,
