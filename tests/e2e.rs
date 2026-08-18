@@ -4043,18 +4043,24 @@ fn add_evidence_obligation_with_environment(
     policy_digest: &str,
     environment: Value,
 ) {
-    let obligation = evidence_obligation_for(
-        id,
-        policy_digest,
-        "com.example.health.status",
-        "public evidence health",
-        json!({"status": "ok"}),
-        json!({"kind": "process", "uri": "local://health"}),
-        environment.clone(),
-        json!({"kind": "process", "id": "runtime-local"}),
-        json!(["target_change", "policy_change", "adapter_schema_change"]),
-        "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+    let mut obligation = bind_obligation_to_authored_criterion(
+        evidence_obligation_for(
+            id,
+            policy_digest,
+            "com.example.health.status",
+            "public evidence health",
+            json!({"status": "ok"}),
+            json!({"kind": "process", "uri": "local://health"}),
+            environment.clone(),
+            json!({"kind": "process", "id": "runtime-local"}),
+            json!(["target_change", "policy_change", "adapter_schema_change"]),
+            "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+        ),
+        "pln-evidence-public",
+        "criterion-evidence-public",
     );
+    obligation["observations"][0]["payload_schema"] =
+        json!({"schema_ref": "schema://com.example.health.status"});
     add_evidence_obligation_value(dir, db, id, &obligation);
 }
 
@@ -4071,17 +4077,32 @@ fn capability_instance_environment(db: &Path, instance_id: &str) -> Value {
 }
 
 fn run_evidence_manifest(dir: &Path, db: &Path, obligation_id: &str) -> Value {
-    let path = dir.join(format!("{obligation_id}.run.json"));
-    fs::write(
-        &path,
-        serde_json::to_vec_pretty(&json!({
-            "obligation_id": obligation_id,
-            "manifest_id": "verifier-generic-adapter",
-            "target": {"kind": "process", "uri": "local://health"}
-        }))
-        .unwrap(),
-    )
-    .unwrap();
+    let readiness = single_json_document(
+        &planr()
+            .current_dir(dir)
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "readiness",
+                "--scope",
+                "obligation",
+                "--id",
+                obligation_id,
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    assert_evidence_envelope(&readiness, "evidence.readiness", true);
+    assert_eq!(readiness["object"]["status"], "passed");
+    let path = dir.join(
+        readiness["object"]["run_index"]["repository_path"]
+            .as_str()
+            .unwrap(),
+    );
     single_json_document(
         &planr()
             .current_dir(dir)
@@ -4401,18 +4422,7 @@ fn evidence_doctor_reports_degraded_states_and_matches_run_resolution() {
         "pob-unavailable",
         unavailable["policy"]["digest"].as_str().unwrap(),
     );
-    let unavailable_run_path = unavailable_dir.path().join("pob-unavailable.run.json");
-    fs::write(
-        &unavailable_run_path,
-        serde_json::to_vec_pretty(&json!({
-            "obligation_id": "pob-unavailable",
-            "manifest_id": "verifier-generic-adapter",
-            "target": {"kind": "process", "uri": "local://health"}
-        }))
-        .unwrap(),
-    )
-    .unwrap();
-    let unavailable_run = single_json_document(
+    let unavailable_readiness = single_json_document(
         &planr()
             .current_dir(unavailable_dir.path())
             .args([
@@ -4420,24 +4430,23 @@ fn evidence_doctor_reports_degraded_states_and_matches_run_resolution() {
                 unavailable_db.to_str().unwrap(),
                 "--json",
                 "evidence",
-                "run",
-                "--input",
-                unavailable_run_path.to_str().unwrap(),
+                "readiness",
+                "--scope",
+                "obligation",
+                "--id",
+                "pob-unavailable",
             ])
             .assert()
             .failure()
-            .code(1)
+            .code(3)
             .get_output()
             .stdout,
     );
-    assert_evidence_envelope(&unavailable_run, "evidence.run", false);
-    assert!(
-        unavailable_run["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("capability instance is not available"),
-        "{unavailable_run}"
-    );
+    assert_evidence_envelope(&unavailable_readiness, "evidence.readiness", true);
+    assert_eq!(unavailable_readiness["object"]["status"], "blocked");
+    assert_eq!(unavailable_readiness["object"]["gaps"][0]["code"], "ProbeUnavailable");
+    assert_eq!(unavailable_readiness["object"]["gaps"][0]["obligation_id"], "pob-unavailable");
+    assert_eq!(unavailable_readiness["object"]["registry"]["diagnostics"][0]["code"], "ProbeUnavailable");
 
     let degraded_dir = tempdir().unwrap();
     let degraded_db_dir = tempdir().unwrap();
@@ -4511,7 +4520,7 @@ fn evidence_doctor_reports_degraded_states_and_matches_run_resolution() {
         run_evidence_manifest(expired_dir.path(), &expired_db, "pob-recovered-expired");
     assert_evidence_envelope(&expired_run, "evidence.run", true);
     assert_eq!(
-        expired_run["object"]["attempt"]["capability_instance_id"],
+        expired_run["object"]["results"][0]["attempt"]["capability_instance_id"],
         expired_instance
     );
 
@@ -4554,7 +4563,7 @@ fn evidence_doctor_reports_degraded_states_and_matches_run_resolution() {
         run_evidence_manifest(mismatch_dir.path(), &mismatch_db, "pob-recovered-mismatch");
     assert_evidence_envelope(&mismatch_run, "evidence.run", true);
     assert_eq!(
-        mismatch_run["object"]["attempt"]["capability_instance_id"],
+        mismatch_run["object"]["results"][0]["attempt"]["capability_instance_id"],
         mismatch_instance
     );
 
@@ -4608,7 +4617,7 @@ fn evidence_doctor_reports_degraded_states_and_matches_run_resolution() {
     );
     assert_evidence_envelope(&environment_run, "evidence.run", true);
     assert_eq!(
-        environment_run["object"]["attempt"]["capability_instance_id"],
+        environment_run["object"]["results"][0]["attempt"]["capability_instance_id"],
         environment_instance
     );
 
@@ -4651,53 +4660,34 @@ fn evidence_doctor_reports_degraded_states_and_matches_run_resolution() {
         first["policy"]["digest"].as_str().unwrap(),
         capability_instance_environment(&registration_db, "vcap-seeded-registration-mismatch"),
     );
-    let stale_registration_run_path = registration_dir
-        .path()
-        .join("pob-registration-mismatch-stale.run.json");
-    fs::write(
-        &stale_registration_run_path,
-        serde_json::to_vec_pretty(&json!({
-            "obligation_id": "pob-registration-mismatch",
-            "capability_instance_id": "vcap-seeded-registration-mismatch",
-            "target": {"kind": "process", "uri": "local://health"}
-        }))
-        .unwrap(),
-    )
-    .unwrap();
-    let stale_registration_run = single_json_document(
-        &planr()
-            .current_dir(registration_dir.path())
-            .args([
-                "--db",
-                registration_db.to_str().unwrap(),
-                "--json",
-                "evidence",
-                "run",
-                "--input",
-                stale_registration_run_path.to_str().unwrap(),
-            ])
-            .assert()
-            .failure()
-            .code(1)
-            .get_output()
-            .stdout,
+    let mut registration_recovered = bind_obligation_to_authored_criterion(
+        evidence_obligation_for(
+            "pob-registration-recovered",
+            first["policy"]["digest"].as_str().unwrap(),
+            "com.example.health.status",
+            "public evidence health",
+            json!({"status": "ok"}),
+            json!({"kind": "process", "uri": "local://health"}),
+            capability_instance_environment(&registration_db, registration_instance),
+            json!({"kind": "process", "id": "runtime-local"}),
+            json!(["target_change", "policy_change", "adapter_schema_change"]),
+            "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+        ),
+        "pln-evidence-public",
+        "criterion-evidence-public",
     );
-    assert_evidence_envelope(&stale_registration_run, "evidence.run", false);
-    assert!(
-        {
-            let message = stale_registration_run["error"]["message"].as_str().unwrap();
-            message.contains("capability instance does not match registered adapter")
-                || message.contains("does not match persisted registration")
-                || message.contains("manifest")
-        },
-        "unexpected registration mismatch run error: {stale_registration_run}"
+    registration_recovered["observations"][0]["payload_schema"] =
+        json!({"schema_ref": "schema://com.example.health.status"});
+    let registration_recovered = superseding_obligation(
+        registration_recovered,
+        "pob-registration-recovered",
+        "pob-registration-mismatch",
     );
-    add_evidence_obligation_with_environment(
+    add_evidence_obligation_value(
         registration_dir.path(),
         &registration_db,
         "pob-registration-recovered",
-        first["policy"]["digest"].as_str().unwrap(),
-        capability_instance_environment(&registration_db, registration_instance),
+        &registration_recovered,
     );
     let registration_run = run_evidence_manifest(
         registration_dir.path(),
@@ -4706,7 +4696,7 @@ fn evidence_doctor_reports_degraded_states_and_matches_run_resolution() {
     );
     assert_evidence_envelope(&registration_run, "evidence.run", true);
     assert_eq!(
-        registration_run["object"]["attempt"]["capability_instance_id"],
+        registration_run["object"]["results"][0]["attempt"]["capability_instance_id"],
         registration_instance
     );
 }
