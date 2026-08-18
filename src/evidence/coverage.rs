@@ -230,7 +230,10 @@ pub fn authoritative_plan_obligation_binding_identities(
     project_id: &str,
     plan_id: &str,
 ) -> Result<Vec<AuthoritativeObligationBindingIdentity>, EvidenceDomainError> {
-    let sql = authoritative_binding_selection_sql("id, criterion_id", "WHERE project_id = ?1 AND plan_id = ?2");
+    let sql = authoritative_binding_selection_sql(
+        "id, criterion_id",
+        "WHERE project_id = ?1 AND plan_id = ?2",
+    );
     let mut statement = conn
         .prepare(&sql)
         .map_err(|err| EvidenceDomainError::Digest(err.to_string()))?;
@@ -1048,7 +1051,8 @@ fn authoritative_obligation_bindings_by_clause(
     where_clause: &str,
     scope_id: &str,
 ) -> Result<Vec<AuthoritativeObligationBindingRow>, EvidenceDomainError> {
-    let sql = authoritative_binding_selection_sql("id, observation_requirements_json", where_clause);
+    let sql =
+        authoritative_binding_selection_sql("id, observation_requirements_json", where_clause);
     let mut statement = conn
         .prepare(&sql)
         .map_err(|err| EvidenceDomainError::Digest(err.to_string()))?;
