@@ -28,7 +28,7 @@ use crate::evidence::{
         ConfiguredProcessRunInput, TrustedEvidencePersistenceInput, ensure_process_adapter_digest,
         persist_trusted_evidence_atomically, resolve_process_run,
         run_configured_process_adapter_guarded, run_repository_snapshot_pre_commit_test_hook,
-        run_resolved_process, select_execution_binding_subset,
+        select_execution_binding_subset,
     },
     host_capture_admission,
     parse_validated_artifact_import,
@@ -52,7 +52,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
-    time::{Duration, Instant},
+    time::Duration,
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -1858,16 +1858,15 @@ impl App {
         Ok(resolved)
     }
 
-    fn host_capture_execution_subset(
+    fn pending_host_capture_execution_subset(
         &self,
         value: &Value,
-        resolver: RunIndexCapabilityResolver,
     ) -> Result<(String, Value, Value, VerificationCapabilityInstance)> {
         let run_index = value.get("run_index").ok_or_else(|| {
             EvidenceCommandError::bad_request("host capture requires a sealed run_index")
         })?;
         let (run_index_digest, validated_entries) =
-            self.validate_sealed_run_index_with_resolver(run_index, resolver)?;
+            self.validate_pending_host_capture_run_index(run_index)?;
         let entry = value
             .get("run_index_entry")
             .and_then(Value::as_u64)
@@ -2397,18 +2396,6 @@ impl App {
         }))
     }
 
-    pub(crate) fn evidence_pending_host_capture_import_value(
-        &self,
-        value: Value,
-    ) -> Result<Value> {
-        self.evidence_host_capture_import_value_with_observed_run(
-            value,
-            None,
-            None,
-            RunIndexCapabilityResolver::PendingHostCapture,
-        )
-    }
-
     pub(crate) fn evidence_host_capture_admit_value(&self, value: Value) -> Result<Value> {
         reject_trusted_receipt_input(&value)?;
         let object = value.as_object().ok_or_else(|| {
@@ -2534,9 +2521,6 @@ impl App {
                 adapter.reason
             ))
             .into());
-        }
-        if adapter.receipt_contract_vector.is_some() {
-            bail!("host capture admission adapter must not construct a trusted receipt");
         }
         let manifest = adapter
             .manifest
@@ -2736,13 +2720,8 @@ impl App {
     fn validate_pending_host_capture_import_authority(
         &self,
         admission: &host_capture_admission::PendingHostCaptureAdmission,
-        lease: Option<&super::feature_run_evidence::CanonicalFeatureRunEvidenceLease>,
+        lease: &super::feature_run_evidence::CanonicalFeatureRunEvidenceLease,
     ) -> Result<()> {
-        let lease = lease.ok_or_else(|| {
-            EvidenceCommandError::conflict(
-                "pending host capture import requires an active verifier lease",
-            )
-        })?;
         let lease_generation = i64::try_from(lease.lease_generation)
             .context("host capture verifier lease generation exceeds SQLite INTEGER")?;
         if admission.verifier_lease_generation != lease_generation {
@@ -2765,85 +2744,7 @@ impl App {
         Ok(())
     }
 
-    pub(crate) fn evidence_host_capture_run_value(&self, value: Value) -> Result<Value> {
-        reject_trusted_receipt_input(&value)?;
-        let object = value.as_object().ok_or_else(|| {
-            EvidenceCommandError::bad_request("host capture run input must be a JSON object")
-        })?;
-        let allowed = BTreeSet::from([
-            "schema_version",
-            "run_index",
-            "run_index_entry",
-            "manifest_id",
-            "experiment_id",
-        ]);
-        let unknown = object
-            .keys()
-            .filter(|key| !allowed.contains(key.as_str()))
-            .cloned()
-            .collect::<Vec<_>>();
-        if !unknown.is_empty() {
-            return Err(EvidenceCommandError::bad_request(format!(
-                "host capture run input has unknown fields: {}",
-                unknown.join(",")
-            ))
-            .into());
-        }
-        let schema_version = string_field(&value, "schema_version")?;
-        if schema_version != "planr.evidence.host_capture.run.v1" {
-            return Err(EvidenceCommandError::bad_request(format!(
-                "unsupported host capture run schema_version: {schema_version}"
-            ))
-            .into());
-        }
-        let (_, run_input, _, sealed_instance) = self.host_capture_execution_subset(
-            &value,
-            RunIndexCapabilityResolver::LiveRegistry,
-        )?;
-        let obligation_id = string_field(&run_input, "obligation_id")?;
-        if string_field(&value, "manifest_id")? != sealed_instance.manifest_id.as_str() {
-            return Err(EvidenceCommandError::bad_request(
-                "host capture manifest_id does not match the sealed capability",
-            )
-            .into());
-        }
-        let project = self.default_project()?;
-        let obligation = self.load_proof_obligation(&obligation_id)?;
-        let lease =
-            self.resolve_feature_run_evidence_lease(&project.id, obligation.plan_id.as_str())?;
-        let workflow_started_at = Instant::now();
-        let observed_run =
-            run_planr_observed_host_capture(self, &value, &obligation_id, |_timeout_ms| {
-                if let Some(lease) = lease.as_ref() {
-                    self.validate_feature_run_evidence_lease(&self.conn, lease)?;
-                }
-                Ok(true)
-            })?;
-        let workflow_timeout_ms = observed_run.workflow_timeout_ms;
-        let mut import_input = json!({
-            "schema_version": "planr.evidence.host_capture.import.v1",
-            "run_index": value["run_index"].clone(),
-            "run_index_entry": value["run_index_entry"].clone(),
-            "import_root": observed_run.import_root.to_string_lossy(),
-        });
-        if let Some(experiment_id) = value.get("experiment_id").cloned() {
-            import_input["experiment_id"] = experiment_id;
-        }
-        self.evidence_host_capture_import_value_with_observed_run(
-            import_input,
-            Some(observed_run),
-            Some((workflow_started_at, workflow_timeout_ms)),
-            RunIndexCapabilityResolver::LiveRegistry,
-        )
-    }
-
-    fn evidence_host_capture_import_value_with_observed_run(
-        &self,
-        value: Value,
-        observed_run: Option<ObservedHostCaptureRun>,
-        workflow_deadline: Option<(Instant, u64)>,
-        resolver: RunIndexCapabilityResolver,
-    ) -> Result<Value> {
+    pub(crate) fn evidence_pending_host_capture_import_value(&self, value: Value) -> Result<Value> {
         reject_trusted_receipt_input(&value)?;
         let object = value.as_object().ok_or_else(|| {
             EvidenceCommandError::bad_request("host capture import input must be a JSON object")
@@ -2875,26 +2776,18 @@ impl App {
             .into());
         }
         let (run_index_digest, run_input, execution_binding, sealed_instance) =
-            self.host_capture_execution_subset(&value, resolver)?;
-        let pending_admission = match resolver {
-            RunIndexCapabilityResolver::LiveRegistry => None,
-            RunIndexCapabilityResolver::PendingHostCapture => Some(
-                host_capture_admission::load_pending(&self.conn, &run_index_digest)?.ok_or_else(
-                    || EvidenceCommandError::conflict("host capture admission is not pending"),
-                )?,
-            ),
-        };
+            self.pending_host_capture_execution_subset(&value)?;
+        let pending_admission = host_capture_admission::load_pending(&self.conn, &run_index_digest)?
+            .ok_or_else(|| EvidenceCommandError::conflict("host capture admission is not pending"))?;
         let obligation_id = string_field(&run_input, "obligation_id")?;
         let project = self.default_project()?;
         let obligation = self.load_proof_obligation(&obligation_id)?;
         let (obligation, target) =
             select_execution_binding_subset(obligation, &run_input, &execution_binding)
                 .map_err(|error| EvidenceCommandError::bad_request(error.to_string()))?;
-        let lease =
-            self.resolve_feature_run_evidence_lease(&project.id, obligation.plan_id.as_str())?;
-        if let Some(admission) = pending_admission.as_ref() {
-            self.validate_pending_host_capture_import_authority(admission, lease.as_ref())?;
-        }
+        let lease = self.resolve_feature_run_evidence_lease(&project.id, obligation.plan_id.as_str())?
+            .ok_or_else(|| EvidenceCommandError::conflict("pending host capture import requires an active verifier lease"))?;
+        self.validate_pending_host_capture_import_authority(&pending_admission, &lease)?;
         (|| -> Result<Value> {
             let import_root =
                 resolve_evidence_input_path(&self.root, &string_field(&value, "import_root")?);
@@ -2909,13 +2802,7 @@ impl App {
             .into());
             }
 
-            let validator_timeout_ms = workflow_deadline
-                .map(|(started, timeout_ms)| {
-                    timeout_ms.saturating_sub(started.elapsed().as_millis() as u64)
-                })
-                .unwrap_or(HOST_CAPTURE_VALIDATOR_TIMEOUT_MS);
-            let validated =
-                validate_external_host_capture(&self.root, &import_root, validator_timeout_ms)?;
+            let validated = validate_external_host_capture(&self.root, &import_root, HOST_CAPTURE_VALIDATOR_TIMEOUT_MS)?;
             let captures =
                 crate::evidence::adapters::host::evaluate_phase1_host_fixture(&validated.root)
                     .map_err(|error| {
@@ -2931,13 +2818,7 @@ impl App {
                         "validated host capture bundle is missing {experiment_id}"
                     ))
                 })?;
-            let adapter = if observed_run.is_some() {
-                crate::evidence::adapters::codex::enable_chrome_browser_client_from_planr_observed_execution(capture.clone())?
-            } else if pending_admission.is_some() {
-                crate::evidence::adapters::codex::enable_chrome_browser_client_from_verifier_admission(capture.clone())?
-            } else {
-                crate::evidence::adapters::codex::enable_chrome_browser_client(capture.clone())?
-            };
+            let adapter = crate::evidence::adapters::codex::enable_chrome_browser_client_from_verifier_admission(capture.clone())?;
             if !adapter.trusted_adapter_enabled {
                 return Err(EvidenceCommandError::bad_request(format!(
                     "host capture is not enabled: {}",
@@ -2951,52 +2832,10 @@ impl App {
             let captured_instance_value = adapter
                 .instance
                 .ok_or_else(|| anyhow!("enabled host capture missing instance"))?;
-            let captured_instance: VerificationCapabilityInstance =
-                serde_json::from_value(captured_instance_value.clone())?;
-            if let Some(run) = observed_run.as_ref() {
-                for observation in &obligation.observations {
-                    ensure_host_capture_run_manifest_supports_observation(run, observation)?;
-                }
-                if run.producer_instance.manifest_id != sealed_instance.manifest_id
-                    || run.producer_instance.manifest_digest != sealed_instance.manifest_digest
-                {
-                    return Err(EvidenceCommandError::bad_request(
-                        "observed host capture capability does not match the sealed capability",
-                    )
-                    .into());
-                }
-            } else if let Some(admission) = pending_admission.as_ref() {
-                if adapter.receipt_contract_vector.is_some() {
-                    bail!("pending host capture import adapter must not construct a trusted receipt");
-                }
-                if validated.normalized_root_digest != admission.normalized_capture_digest
-                    || serde_json::to_value(&captured_manifest)? != admission.manifest
-                    || captured_instance_value != admission.instance
-                    || serde_json::to_value(&sealed_instance)? != admission.instance
-                {
-                    return Err(EvidenceCommandError::conflict(
-                        "validated host capture does not match its pending admission",
-                    )
-                    .into());
-                }
-            } else if captured_instance.id != sealed_instance.id
-                || captured_instance.manifest_id != sealed_instance.manifest_id
-                || captured_instance.manifest_digest != sealed_instance.manifest_digest
-                || captured_manifest.id != sealed_instance.manifest_id
-            {
-                return Err(EvidenceCommandError::bad_request(
-                    "imported host capture capability does not match the sealed capability",
-                )
-                .into());
+            if (validated.normalized_root_digest.as_str(), serde_json::to_value(&captured_manifest)?, captured_instance_value, serde_json::to_value(&sealed_instance)?) != (pending_admission.normalized_capture_digest.as_str(), pending_admission.manifest.clone(), pending_admission.instance.clone(), pending_admission.instance.clone()) {
+                return Err(EvidenceCommandError::conflict("validated host capture does not match its pending admission").into());
             }
-            let evidence_manifest = pending_admission
-                .as_ref()
-                .map(|admission| serde_json::from_value(admission.manifest.clone()))
-                .transpose()?
-                .map_or_else(
-                    || self.load_capability_manifest(sealed_instance.id.as_str()),
-                    Ok,
-                )?;
+            let evidence_manifest: VerificationCapabilityManifest = serde_json::from_value(pending_admission.manifest.clone())?;
             let evidence_instance = sealed_instance;
             let evidence_instance_value = serde_json::to_value(&evidence_instance)?;
             let environment: EnvironmentBinding = serde_json::from_value(
@@ -3006,15 +2845,7 @@ impl App {
                     )
                 })?,
             )?;
-            let fixture_disclosure = observed_run
-                .as_ref()
-                .map(|run| run.fixture_disclosure.clone())
-                .unwrap_or(FixtureDisclosure {
-                    fixtures_used: false,
-                    mocks_used: false,
-                    fixture_refs: None,
-                    mock_refs: None,
-                });
+            let fixture_disclosure = FixtureDisclosure { fixtures_used: false, mocks_used: false, fixture_refs: None, mock_refs: None };
             ensure_host_import_bindings(
                 &obligation,
                 &evidence_instance,
@@ -3030,10 +2861,7 @@ impl App {
                 )?;
             }
             let valid_until = ensure_host_capture_fresh(&evidence_instance)?;
-            if pending_admission
-                .as_ref()
-                .is_some_and(|admission| admission.valid_until != valid_until)
-            {
+            if pending_admission.valid_until != valid_until {
                 return Err(EvidenceCommandError::conflict(
                     "pending host capture admission expiry changed during import",
                 )
@@ -3060,66 +2888,13 @@ impl App {
                 "summary": validated.summary,
                 "capture": capture.final_event_payload,
                 "execution_binding": execution_binding,
-                "planr_observed_execution": observed_run.as_ref().map(|run| json!({
-                    "manifest_id": run.producer_instance.manifest_id.as_str(),
-                    "manifest_digest": run.producer_instance.manifest_digest.as_str(),
-                    "instance_id": run.producer_instance.id.as_str(),
-                    "provenance_source": run.provenance_source.as_str(),
-                    "supported_observation_types": run.supported_observation_types,
-                    "supported_artifacts": run.supported_artifacts,
-                    "argv": run.argv,
-                    "exit_code": run.exit_code,
-                    "stdout_digest": run.stdout_digest.as_str(),
-                    "stderr_digest": run.stderr_digest.as_str(),
-                    "stdout_excerpt": run.stdout_excerpt.as_str(),
-                    "stderr_excerpt": run.stderr_excerpt.as_str(),
-                    "adapter_binding": run.adapter_binding.clone(),
-                    "producer_fixture_disclosure_digest": run.fixture_disclosure_digest.as_str(),
-                    "producer_fixture_disclosure": run.fixture_disclosure.clone(),
-                })),
             });
             let raw_result_digest = crate::canonical_json::sha256_json_digest(&raw_result)?;
-            let resolved_command = if let Some(run) = observed_run.as_ref() {
-                json!({
-                    "kind": "host_capture_run",
-                    "manifest_id": run.producer_instance.manifest_id.as_str(),
-                    "manifest_digest": run.producer_instance.manifest_digest.as_str(),
-                    "instance_id": run.producer_instance.id.as_str(),
-                    "provenance_source": run.provenance_source.as_str(),
-                    "supported_observation_types": run.supported_observation_types,
-                    "supported_artifacts": run.supported_artifacts,
-                    "argv": run.argv,
-                    "command": run.resolved_command.clone(),
-                    "adapter_binding": run.adapter_binding.clone(),
-                    "producer_fixture_disclosure_digest": run.fixture_disclosure_digest.as_str(),
-                    "validator": {
-                        "path": validated.validator_path.to_string_lossy(),
-                        "digest": validated.validator_digest.as_str(),
-                        "args": [
-                            "capture",
-                            "--out-dir",
-                            validated.root.to_string_lossy(),
-                            "--import-fixture-root",
-                            import_root.to_string_lossy()
-                        ],
-                    },
-                })
-            } else {
-                json!({
-                    "kind": "host_capture_import",
-                    "validator": {
-                        "path": validated.validator_path.to_string_lossy(),
-                        "digest": validated.validator_digest.as_str(),
-                    },
-                    "args": [
-                        "capture",
-                        "--out-dir",
-                        validated.root.to_string_lossy(),
-                        "--import-fixture-root",
-                        import_root.to_string_lossy()
-                    ],
-                })
-            };
+            let resolved_command = json!({
+                "kind": "host_capture_import",
+                "validator": {"path": validated.validator_path.to_string_lossy(), "digest": validated.validator_digest.as_str()},
+                "args": ["capture", "--out-dir", validated.root.to_string_lossy(), "--import-fixture-root", import_root.to_string_lossy()],
+            });
             let artifact = capture
                 .artifact_refs
                 .iter()
@@ -3171,17 +2946,7 @@ impl App {
                 "validated_capture_root_digest": validated.normalized_root_digest,
                 "raw_digest": capture.raw_digest,
                 "provenance_digest": capture.provenance_digest,
-                    "artifact_digest": artifact.digest,
-                "producer_capability": observed_run.as_ref().map(|run| json!({
-                    "manifest_id": run.producer_instance.manifest_id.as_str(),
-                    "manifest_digest": run.producer_instance.manifest_digest.as_str(),
-                    "instance_id": run.producer_instance.id.as_str(),
-                    "provenance_source": run.provenance_source.as_str(),
-                    "supported_observation_types": run.supported_observation_types,
-                    "supported_artifacts": run.supported_artifacts,
-                    "adapter_binding": run.adapter_binding.clone(),
-                    "producer_fixture_disclosure_digest": run.fixture_disclosure_digest.as_str(),
-                })),
+                "artifact_digest": artifact.digest,
                 "execution_binding": execution_binding,
                 "fixture_disclosure": fixture_disclosure,
             }))?;
@@ -3194,15 +2959,8 @@ impl App {
                 target: target.clone(),
                 environment: environment.clone(),
                 vantage_point: VantagePoint {
-                    kind: if observed_run.is_some() {
-                        "host_capture_run".to_string()
-                    } else {
-                        "host_capture_import".to_string()
-                    },
-                    identity: observed_run
-                        .as_ref()
-                        .map(|run| format!("planr/{}", run.producer_instance.manifest_id.as_str()))
-                        .unwrap_or_else(|| "codex/chrome-browser-client".to_string()),
+                    kind: "host_capture_import".to_string(),
+                    identity: "codex/chrome-browser-client".to_string(),
                 },
                 capability: CapabilityBinding {
                     manifest_id: evidence_instance.manifest_id.clone(),
@@ -3212,10 +2970,7 @@ impl App {
                         .map_err(|error| anyhow!(error))?,
                 },
                 provenance: TrustedProvenance {
-                    source: observed_run
-                        .as_ref()
-                        .map(|run| run.provenance_source)
-                        .unwrap_or(crate::evidence::ProvenanceSourceKind::VerifiedHostEvent),
+                    source: ProvenanceSourceKind::VerifiedHostEvent,
                     assigned_by: "planr".to_string(),
                     execution_id: attempt_id.clone(),
                     tool_call_id: None,
@@ -3268,11 +3023,7 @@ impl App {
                 fixture_disclosure: fixture_disclosure.clone(),
                 permissions: evidence_instance.permissions.clone(),
                 sandbox: SandboxState {
-                    mode: if observed_run.is_some() {
-                        "host_capture_run".to_string()
-                    } else {
-                        "host_capture_import".to_string()
-                    },
+                    mode: "host_capture_import".to_string(),
                     limits: SandboxLimits {
                         timeout_ms: 30000,
                         stdout_bytes: 1048576,
@@ -3294,15 +3045,8 @@ impl App {
             let persistence = persist_trusted_evidence_atomically(
                 &self.conn,
                 |conn| {
-                    if let Some(admission) = pending_admission.as_ref() {
-                        host_capture_admission::require_exact_pending(conn, admission)?;
-                        self.validate_pending_host_capture_import_authority(
-                            admission,
-                            lease.as_ref(),
-                        )?;
-                    } else if let Some(lease) = lease.as_ref() {
-                        self.validate_feature_run_evidence_lease(conn, lease)?;
-                    }
+                    host_capture_admission::require_exact_pending(conn, &pending_admission)?;
+                    self.validate_pending_host_capture_import_authority(&pending_admission, &lease)?;
                     registry.store_verified_host_capture_instance_with_expiry(
                         conn,
                         evidence_manifest.clone(),
@@ -3326,28 +3070,19 @@ impl App {
                             "stale_source: repository changed before trusted host-capture receipt commit"
                         );
                     }
-                    if let Some(lease) = lease.as_ref() {
-                        self.validate_feature_run_evidence_lease(conn, lease)?;
+                    self.validate_feature_run_evidence_lease(conn, &lease)?;
+                    host_capture_admission::require_exact_pending(conn, &pending_admission)?;
+                    self.validate_pending_host_capture_import_authority(&pending_admission, &lease)?;
+                    let (current_digest, current_entries) =
+                        self.validate_pending_host_capture_run_index(&value["run_index"])?;
+                    let [current_entry] = current_entries.as_slice() else { bail!("pending host capture import requires exactly one sealed run"); };
+                    if current_digest != run_index_digest
+                        || current_entry.execution_binding != execution_binding
+                        || current_entry.instance.id != evidence_instance.id
+                    {
+                        bail!("pending host capture admission changed before commit");
                     }
-                    if let Some(admission) = pending_admission.as_ref() {
-                        host_capture_admission::require_exact_pending(conn, admission)?;
-                        self.validate_pending_host_capture_import_authority(
-                            admission,
-                            lease.as_ref(),
-                        )?;
-                        let (current_digest, current_entries) =
-                            self.validate_pending_host_capture_run_index(&value["run_index"])?;
-                        let [current_entry] = current_entries.as_slice() else {
-                            bail!("pending host capture import requires exactly one sealed run");
-                        };
-                        if current_digest != run_index_digest
-                            || current_entry.execution_binding != execution_binding
-                            || current_entry.instance.id != evidence_instance.id
-                        {
-                            bail!("pending host capture admission changed before commit");
-                        }
-                        host_capture_admission::mark_promoted(conn, admission)?;
-                    }
+                    host_capture_admission::mark_promoted(conn, &pending_admission)?;
                     Ok(())
                 },
                 TrustedEvidencePersistenceInput {
@@ -4701,26 +4436,6 @@ struct ValidatedHostCapture {
     _tempdir: HostCaptureTempDir,
 }
 
-struct ObservedHostCaptureRun {
-    import_root: PathBuf,
-    provenance_source: ProvenanceSourceKind,
-    producer_instance: VerificationCapabilityInstance,
-    supported_observation_types: Vec<String>,
-    supported_artifacts: Vec<String>,
-    fixture_disclosure: FixtureDisclosure,
-    fixture_disclosure_digest: String,
-    adapter_binding: Value,
-    resolved_command: Value,
-    argv: Vec<String>,
-    stdout_digest: String,
-    stderr_digest: String,
-    exit_code: i32,
-    stdout_excerpt: String,
-    stderr_excerpt: String,
-    workflow_timeout_ms: u64,
-    _tempdir: HostCaptureTempDir,
-}
-
 struct HostCaptureTempDir {
     path: PathBuf,
 }
@@ -4866,428 +4581,6 @@ fn resolve_path_executable(program: &str) -> Result<PathBuf> {
         .into_iter()
         .find(|candidate| candidate.is_file())
         .ok_or_else(|| anyhow!("{program} executable is not available on PATH"))
-}
-
-fn run_planr_observed_host_capture(
-    app: &App,
-    value: &Value,
-    obligation_id: &str,
-    before_run: impl FnOnce(u64) -> Result<bool>,
-) -> Result<ObservedHostCaptureRun> {
-    let manifest_id = string_field(value, "manifest_id")?;
-    let obligation_suffix = short_digest(&crate::canonical_json::sha256_prefixed_bytes(
-        obligation_id.as_bytes(),
-    ));
-    let document = app.evidence_policy_document()?.ok_or_else(|| {
-        EvidenceCommandError::bad_request(".planr/evidence.yaml is required for host capture run")
-    })?;
-    let registry = app.evidence_registry_from_policy(&document)?;
-    if !registry.diagnostics().is_empty() {
-        return Err(EvidenceCommandError::bad_request(
-            "host capture run requires a valid Evidence capability registry",
-        )
-        .into());
-    }
-    let capability = registry
-        .capabilities()
-        .find(|capability| capability.manifest.id.as_str() == manifest_id)
-        .ok_or_else(|| {
-            EvidenceCommandError::bad_request(format!(
-                "host capture run manifest is not registered: {manifest_id}"
-            ))
-        })?;
-    if capability.manifest.provenance_path != ProvenanceSourceKind::PlanrObservedExecution {
-        return Err(EvidenceCommandError::bad_request(
-            "host capture run manifest must declare planr_observed_execution provenance",
-        )
-        .into());
-    }
-    if !capability
-        .manifest
-        .supported_surfaces
-        .iter()
-        .any(|surface| surface == "host-capture-run")
-    {
-        return Err(EvidenceCommandError::bad_request(
-            "host capture run manifest must support host-capture-run surface",
-        )
-        .into());
-    }
-    let execution = capability
-        .repository_execution_contract
-        .as_ref()
-        .unwrap_or(&capability.manifest.availability_probe.execution);
-    if !before_run(execution.timeout_ms)? {
-        bail!("host_capture_budget_hold");
-    }
-
-    let tempdir = HostCaptureTempDir::create()?;
-    let import_root = tempdir.path().join("capture");
-    let env = BTreeMap::from([(
-        "PLANR_HOST_CAPTURE_OUT_DIR".to_string(),
-        import_root.to_string_lossy().to_string(),
-    )]);
-    let resolved = resolve_process_run(&app.root, execution, &env).map_err(|error| {
-        EvidenceCommandError::bad_request(format!(
-            "host capture run helper resolution failed: {error}"
-        ))
-    })?;
-    let adapter_binding = ensure_host_capture_run_adapter_digest(
-        &resolved,
-        execution,
-        &capability.manifest.adapter_digest,
-    )?;
-    let cancellation = CancellationToken::new();
-    let output = run_resolved_process(&resolved, execution, &cancellation)
-        .with_context(|| format!("running host capture manifest {manifest_id}"))?;
-    if output.timed_out {
-        return Err(EvidenceCommandError::bad_request("host capture run helper timed out").into());
-    }
-    if output.interrupted {
-        return Err(
-            EvidenceCommandError::bad_request("host capture run helper was interrupted").into(),
-        );
-    }
-    let exit_code = output.exit_code.unwrap_or(-1);
-    if exit_code != 0 {
-        return Err(EvidenceCommandError::bad_request(format!(
-            "host capture run helper failed with exit code {exit_code}: {}",
-            output.stderr_excerpt
-        ))
-        .into());
-    }
-    if !import_root.join("external-capture-envelope.json").is_file() {
-        return Err(EvidenceCommandError::bad_request(
-            "host capture run helper did not produce external-capture-envelope.json",
-        )
-        .into());
-    }
-    let (fixture_disclosure, fixture_disclosure_digest) = read_host_capture_run_fixture_disclosure(
-        &import_root,
-        &manifest_id,
-        capability
-            .manifest
-            .supported_artifacts
-            .iter()
-            .any(|artifact| artifact == "host-capture-fixture-copy"),
-    )?;
-    let producer_instance_value = json!({
-        "id": format!("host-capture-run-{}-{}", manifest_id, obligation_suffix),
-        "schema_version": "evidence.contract.v1",
-        "manifest_id": capability.manifest.id.as_str(),
-        "manifest_digest": capability.manifest_digest,
-        "host": "planr",
-        "surface": "host-capture-run",
-        "host_version": env!("CARGO_PKG_VERSION"),
-        "adapter_version": capability.manifest.version,
-        "environment": {
-            "kind": "planr-host-capture-run",
-            "id": format!("env-{}", manifest_id),
-            "digest": crate::canonical_json::sha256_json_digest(&json!({
-                "kind": "planr-host-capture-run",
-                "id": format!("env-{}", manifest_id),
-            }))?,
-        },
-        "permissions": capability.manifest.permissions,
-        "availability": {
-            "status": "available",
-            "reason": "policy-registered host capture helper executed successfully under Planr",
-        },
-        "probe_result": {
-            "probe_execution_id": format!("probe-{}-{}", manifest_id, obligation_suffix),
-            "outcome": "passed",
-            "observed_at": timestamp()?,
-            "checks": [{
-                "name": "policy-registered-host-capture-run",
-                "outcome": "passed",
-                "detail": "registered helper exited 0 and produced a strict host capture bundle",
-            }],
-        },
-        "observed_payload_contract": {
-            "schema_ref": execution.payload_schema.schema_ref,
-            "observation_types": capability.manifest.supported_observations.iter().map(|schema| schema.observation_type.as_str()).collect::<Vec<_>>(),
-        },
-        "limitations": capability.manifest.blind_spots,
-        "captured_at": timestamp()?,
-    });
-    let producer_instance: VerificationCapabilityInstance =
-        serde_json::from_value(producer_instance_value.clone())
-            .context("building host capture run producer capability instance")?;
-
-    Ok(ObservedHostCaptureRun {
-        import_root,
-        provenance_source: capability.manifest.provenance_path,
-        producer_instance,
-        supported_observation_types: capability
-            .manifest
-            .supported_observations
-            .iter()
-            .map(|schema| schema.observation_type.as_str().to_string())
-            .collect(),
-        supported_artifacts: capability.manifest.supported_artifacts.clone(),
-        fixture_disclosure,
-        fixture_disclosure_digest,
-        adapter_binding,
-        resolved_command: resolved.command_identity,
-        argv: output.argv,
-        stdout_digest: output.stdout_digest,
-        stderr_digest: output.stderr_digest,
-        exit_code,
-        stdout_excerpt: output.stdout_excerpt,
-        stderr_excerpt: output.stderr_excerpt,
-        workflow_timeout_ms: execution.timeout_ms,
-        _tempdir: tempdir,
-    })
-}
-
-fn ensure_host_capture_run_manifest_supports_observation(
-    run: &ObservedHostCaptureRun,
-    observation: &crate::evidence::model::ObservationRequirement,
-) -> Result<()> {
-    let observation_type = observation.observation_type.as_str();
-    if !run
-        .supported_observation_types
-        .iter()
-        .any(|supported| supported == observation_type)
-    {
-        return Err(EvidenceCommandError::bad_request(format!(
-            "host capture run manifest {} does not support observation type {}",
-            run.producer_instance.manifest_id.as_str(),
-            observation_type
-        ))
-        .into());
-    }
-    if !run
-        .supported_artifacts
-        .iter()
-        .any(|artifact| artifact == "cdp-json-result")
-    {
-        return Err(EvidenceCommandError::bad_request(format!(
-            "host capture run manifest {} does not support cdp-json-result artifacts",
-            run.producer_instance.manifest_id.as_str()
-        ))
-        .into());
-    }
-    Ok(())
-}
-
-fn ensure_host_capture_run_adapter_digest(
-    resolved: &crate::evidence::execution::ResolvedProcessRun,
-    execution: &ProcessExecutionContract,
-    registered_digest: &Sha256Digest,
-) -> Result<Value> {
-    if execution.args.is_empty() {
-        return Err(EvidenceCommandError::bad_request(
-            "host capture run execution must name a helper file as its first argument",
-        )
-        .into());
-    }
-    let helper = resolved.file_argument_identity(0).map_err(|error| {
-        EvidenceCommandError::bad_request(format!(
-            "host capture run helper identity failed: {error}"
-        ))
-    })?;
-    let binding = json!({
-        "schema_version": "planr.host_capture_run.adapter_binding.v1",
-        "execution_contract": execution,
-        "helper": helper,
-    });
-    let actual_digest = crate::canonical_json::sha256_json_digest(&binding)?;
-    if actual_digest != registered_digest.as_str() {
-        return Err(EvidenceCommandError::bad_request(format!(
-            "host capture run adapter_digest drift: manifest declares {}, actual helper/config digest is {}",
-            registered_digest.as_str(),
-            actual_digest
-        ))
-        .into());
-    }
-    Ok(json!({
-        "digest": actual_digest,
-        "binding": binding,
-    }))
-}
-
-fn read_host_capture_run_fixture_disclosure(
-    import_root: &Path,
-    manifest_id: &str,
-    requires_fixture_disclosure: bool,
-) -> Result<(FixtureDisclosure, String)> {
-    let disclosure_path = import_root.join("producer-disclosure.json");
-    if !disclosure_path.is_file() {
-        return Err(EvidenceCommandError::bad_request(
-            "host capture run helper did not produce producer-disclosure.json",
-        )
-        .into());
-    }
-    let disclosure_bytes = fs::read(&disclosure_path)
-        .with_context(|| format!("reading {}", disclosure_path.display()))?;
-    let disclosure_digest = crate::canonical_json::sha256_prefixed_bytes(&disclosure_bytes);
-    let value: Value =
-        serde_json::from_slice(&disclosure_bytes).context("parsing producer-disclosure.json")?;
-    let object = value.as_object().ok_or_else(|| {
-        EvidenceCommandError::bad_request("producer-disclosure.json must be a JSON object")
-    })?;
-    let allowed = BTreeSet::from([
-        "schema_version",
-        "producer_manifest_id",
-        "fixtures_used",
-        "mocks_used",
-        "fixture_refs",
-        "mock_refs",
-    ]);
-    let unknown = object
-        .keys()
-        .filter(|key| !allowed.contains(key.as_str()))
-        .cloned()
-        .collect::<Vec<_>>();
-    if !unknown.is_empty() {
-        return Err(EvidenceCommandError::bad_request(format!(
-            "producer-disclosure.json has unknown fields: {}",
-            unknown.join(",")
-        ))
-        .into());
-    }
-    if string_field(&value, "schema_version")?
-        != "planr.evidence.host_capture.producer_disclosure.v1"
-    {
-        return Err(EvidenceCommandError::bad_request(
-            "unsupported producer-disclosure.json schema_version",
-        )
-        .into());
-    }
-    if string_field(&value, "producer_manifest_id")? != manifest_id {
-        return Err(EvidenceCommandError::bad_request(
-            "producer-disclosure.json manifest id does not match executed helper",
-        )
-        .into());
-    }
-    let fixtures_used = value
-        .get("fixtures_used")
-        .and_then(Value::as_bool)
-        .ok_or_else(|| EvidenceCommandError::bad_request("fixtures_used must be a boolean"))?;
-    let mocks_used = value
-        .get("mocks_used")
-        .and_then(Value::as_bool)
-        .ok_or_else(|| EvidenceCommandError::bad_request("mocks_used must be a boolean"))?;
-    let fixture_refs = disclosure_ref_strings(import_root, &value, "fixture_refs")?;
-    let mock_refs = disclosure_ref_strings(import_root, &value, "mock_refs")?;
-    if requires_fixture_disclosure && !fixtures_used {
-        return Err(EvidenceCommandError::bad_request(
-            "host capture run manifest declares fixture-copy production but disclosed fixtures_used=false",
-        )
-        .into());
-    }
-    if fixtures_used && fixture_refs.as_ref().is_none_or(Vec::is_empty) {
-        return Err(EvidenceCommandError::bad_request(
-            "producer fixture disclosure must name fixture refs when fixtures are used",
-        )
-        .into());
-    }
-    if mocks_used && mock_refs.as_ref().is_none_or(Vec::is_empty) {
-        return Err(EvidenceCommandError::bad_request(
-            "producer fixture disclosure must name mock refs when mocks are used",
-        )
-        .into());
-    }
-    Ok((
-        FixtureDisclosure {
-            fixtures_used,
-            mocks_used,
-            fixture_refs,
-            mock_refs,
-        },
-        disclosure_digest,
-    ))
-}
-
-fn disclosure_ref_strings(
-    import_root: &Path,
-    value: &Value,
-    field: &str,
-) -> Result<Option<Vec<String>>> {
-    let Some(refs) = value.get(field) else {
-        return Ok(None);
-    };
-    let refs = refs.as_array().ok_or_else(|| {
-        EvidenceCommandError::bad_request(format!("producer disclosure {field} must be an array"))
-    })?;
-    let mut normalized = Vec::with_capacity(refs.len());
-    for reference in refs {
-        let object = reference.as_object().ok_or_else(|| {
-            EvidenceCommandError::bad_request(format!(
-                "producer disclosure {field} entries must be objects"
-            ))
-        })?;
-        let allowed = BTreeSet::from(["kind", "path", "digest"]);
-        let unknown = object
-            .keys()
-            .filter(|key| !allowed.contains(key.as_str()))
-            .cloned()
-            .collect::<Vec<_>>();
-        if !unknown.is_empty() {
-            return Err(EvidenceCommandError::bad_request(format!(
-                "producer disclosure {field} entry has unknown fields: {}",
-                unknown.join(",")
-            ))
-            .into());
-        }
-        let kind = string_field(reference, "kind")?;
-        let path = string_field(reference, "path")?;
-        let expected_digest = string_field(reference, "digest")?;
-        let actual_digest = digest_contained_file(import_root, &path)?;
-        if actual_digest != expected_digest {
-            return Err(EvidenceCommandError::bad_request(format!(
-                "producer disclosure digest mismatch for {path}: expected {expected_digest}, actual {actual_digest}"
-            ))
-            .into());
-        }
-        normalized.push(format!("{kind}:{path}@{actual_digest}"));
-    }
-    Ok(Some(normalized))
-}
-
-fn digest_contained_file(root: &Path, relative: &str) -> Result<String> {
-    digest_file_under_root(root, relative, "producer disclosure path")
-}
-
-fn digest_file_under_root(root: &Path, relative: &str, label: &str) -> Result<String> {
-    validate_relative_file_path(relative, label)?;
-    let canonical_root = root
-        .canonicalize()
-        .with_context(|| format!("canonicalizing {}", root.display()))?;
-    let candidate = canonical_root.join(relative);
-    let canonical = candidate
-        .canonicalize()
-        .with_context(|| format!("canonicalizing {}", candidate.display()))?;
-    if !canonical.starts_with(&canonical_root) {
-        return Err(EvidenceCommandError::bad_request(format!("{label} escapes root")).into());
-    }
-    let bytes = fs::read(&canonical).with_context(|| format!("reading {}", canonical.display()))?;
-    Ok(crate::canonical_json::sha256_prefixed_bytes(&bytes))
-}
-
-fn validate_relative_file_path(relative: &str, label: &str) -> Result<()> {
-    if relative.is_empty() {
-        return Err(EvidenceCommandError::bad_request(format!("{label} must be non-empty")).into());
-    }
-    let path = Path::new(relative);
-    if path.is_absolute() {
-        return Err(EvidenceCommandError::bad_request(format!("{label} must be relative")).into());
-    }
-    for component in path.components() {
-        match component {
-            std::path::Component::Normal(_) | std::path::Component::CurDir => {}
-            std::path::Component::ParentDir
-            | std::path::Component::RootDir
-            | std::path::Component::Prefix(_) => {
-                return Err(EvidenceCommandError::bad_request(format!(
-                    "{label} must stay within root"
-                ))
-                .into());
-            }
-        }
-    }
-    Ok(())
 }
 
 fn host_capability_harness_path() -> Result<PathBuf> {

@@ -1,19 +1,14 @@
 #![allow(dead_code)]
 
-use super::host::{
-    HostCaptureEvaluation, capability_instance_digest, evaluate_phase1_host_fixture,
-};
+use super::host::{HostCaptureEvaluation, evaluate_phase1_host_fixture};
 use crate::canonical_json::sha256_json_digest;
 use crate::evidence::model::{
-    ArtifactRef, AttemptStatus, CapabilityBinding, EvidenceId, FixtureDisclosure, GapReason,
-    NamespacedIdentifier, ObservationResult, ProvenanceSourceKind, RawResultRef, SandboxLimits,
-    SandboxState, SchemaVersion, Sha256Digest, SourceBinding, TargetBinding, TrustedProvenance,
-    TrustedReceiptInput, VantagePoint, VerificationCapabilityManifest, build_trusted_receipt,
+    NamespacedIdentifier, SchemaVersion, Sha256Digest, VerificationCapabilityManifest,
 };
 use crate::evidence::registry::CapabilityRegistry;
 use anyhow::{Context, Result};
 use rusqlite::Connection;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
@@ -32,7 +27,6 @@ pub(crate) struct CodexCaptureAdapter {
     pub reason: String,
     pub manifest: Option<VerificationCapabilityManifest>,
     pub instance: Option<Value>,
-    pub receipt_contract_vector: Option<Value>,
 }
 
 pub(crate) fn evaluate_codex_phase1_fixture(root: &Path) -> Result<Vec<CodexCaptureAdapter>> {
@@ -165,15 +159,6 @@ pub(crate) fn enable_chrome_browser_client(
     )
 }
 
-pub(crate) fn enable_chrome_browser_client_from_planr_observed_execution(
-    capture: HostCaptureEvaluation,
-) -> Result<CodexCaptureAdapter> {
-    enable_chrome_browser_client_at_trust_boundary(
-        capture,
-        ChromeBrowserClientTrustBoundary::PlanrObservedExecution,
-    )
-}
-
 pub(crate) fn enable_chrome_browser_client_from_verifier_admission(
     capture: HostCaptureEvaluation,
 ) -> Result<CodexCaptureAdapter> {
@@ -186,7 +171,6 @@ pub(crate) fn enable_chrome_browser_client_from_verifier_admission(
 #[derive(Clone, Copy)]
 enum ChromeBrowserClientTrustBoundary {
     UntrustedExternal,
-    PlanrObservedExecution,
     VerifierAdmission,
 }
 
@@ -224,14 +208,7 @@ fn enable_chrome_browser_client_at_trust_boundary(
     }
 
     let manifest = chrome_browser_client_manifest(&capture)?;
-    let (bound_instance_value, bound_instance) = bind_instance_to_manifest(&capture, &manifest)?;
-    let receipt_contract_vector = match trust_boundary {
-        ChromeBrowserClientTrustBoundary::PlanrObservedExecution => Some(
-            chrome_browser_client_receipt(&capture, &bound_instance, &bound_instance_value)?,
-        ),
-        ChromeBrowserClientTrustBoundary::VerifierAdmission => None,
-        ChromeBrowserClientTrustBoundary::UntrustedExternal => unreachable!(),
-    };
+    let bound_instance_value = bind_instance_to_manifest(&capture, &manifest)?;
     let matrix_entry = host_surface_matrix_entry(&capture);
     Ok(CodexCaptureAdapter {
         experiment_id: capture.experiment_id,
@@ -244,7 +221,6 @@ fn enable_chrome_browser_client_at_trust_boundary(
         reason: "native Chrome browser-client produced a final CDP Runtime.evaluate/DOM observation with content-bound artifact and provenance".to_string(),
         manifest: Some(manifest),
         instance: Some(bound_instance_value),
-        receipt_contract_vector,
     })
 }
 
@@ -260,7 +236,6 @@ fn disabled(capture: HostCaptureEvaluation, reason: impl Into<String>) -> CodexC
         reason: reason.into(),
         manifest: None,
         instance: None,
-        receipt_contract_vector: None,
     }
 }
 
@@ -340,147 +315,14 @@ fn chrome_browser_client_manifest(
     serde_json::from_value(value).context("building Chrome browser-client manifest")
 }
 
-fn bind_instance_to_manifest(
-    capture: &HostCaptureEvaluation,
-    manifest: &VerificationCapabilityManifest,
-) -> Result<(
-    Value,
-    crate::evidence::model::VerificationCapabilityInstance,
-)> {
+fn bind_instance_to_manifest(capture: &HostCaptureEvaluation, manifest: &VerificationCapabilityManifest) -> Result<Value> {
     let manifest_value = serde_json::to_value(manifest).context("serializing host manifest")?;
     let manifest_digest = sha256_json_digest(&manifest_value)?;
     let mut instance_value = capture.instance_value.clone();
     instance_value["manifest_id"] = json!("host-chrome-browser-client-manifest");
     instance_value["manifest_digest"] = json!(manifest_digest);
-    let instance = serde_json::from_value(instance_value.clone())
-        .context("binding Chrome browser-client instance to manifest")?;
-    Ok((instance_value, instance))
-}
-
-fn chrome_browser_client_receipt(
-    capture: &HostCaptureEvaluation,
-    instance: &crate::evidence::model::VerificationCapabilityInstance,
-    instance_value: &Value,
-) -> Result<Value> {
-    let artifact = capture
-        .artifact_refs
-        .iter()
-        .find(|artifact| artifact.kind == "cdp-json-result")
-        .context("Chrome browser-client capture missing CDP artifact")?;
-    let observation_type = observation_type(capture)?;
-    let instance_digest = capability_instance_digest(instance_value)?;
-    let target_digest =
-        Sha256Digest::parse(capture.raw_digest.clone()).map_err(|error| anyhow::anyhow!(error))?;
-    let environment = capture.instance.environment.clone();
-    let config_digest = sha256_json_digest(&json!({
-        "phase1_payload_contract": "host-capability-raw/1.0.0",
-        "raw_digest": capture.raw_digest,
-        "provenance_digest": capture.provenance_digest,
-        "artifact_digest": artifact.digest,
-        "enabled_surface": CODEX_CHROME_BROWSER_CLIENT_SURFACE
-    }))?;
-    let receipt = build_trusted_receipt(TrustedReceiptInput {
-        id: EvidenceId::parse("receipt-host-exp-chrome-browser-client")
-            .map_err(|error| anyhow::anyhow!(error))?,
-        criterion_id: EvidenceId::parse("criterion-host-exp-chrome-browser-client")
-            .map_err(|error| anyhow::anyhow!(error))?,
-        obligation_id: EvidenceId::parse("obligation-host-exp-chrome-browser-client")
-            .map_err(|error| anyhow::anyhow!(error))?,
-        source: SourceBinding {
-            revision: "phase1-fixture-v1".to_string(),
-            tree_digest: Sha256Digest::parse(capture.provenance_digest.clone())
-                .map_err(|error| anyhow::anyhow!(error))?,
-            dirty: false,
-        },
-        target: TargetBinding {
-            kind: "host-capability-capture".to_string(),
-            uri: Some(
-                "fixture://host-capabilities/v1/observed/exp-chrome-browser-client.json"
-                    .to_string(),
-            ),
-            digest: Some(target_digest),
-            deployment_id: None,
-        },
-        environment,
-        vantage_point: VantagePoint {
-            kind: "codex-host".to_string(),
-            identity: "codex/chrome-browser-client".to_string(),
-        },
-        capability: CapabilityBinding {
-            manifest_id: instance.manifest_id.clone(),
-            manifest_digest: instance.manifest_digest.clone(),
-            instance_id: instance.id.clone(),
-            instance_digest: Sha256Digest::parse(instance_digest)
-                .map_err(|error| anyhow::anyhow!(error))?,
-        },
-        provenance: TrustedProvenance {
-            source: ProvenanceSourceKind::VerifiedHostEvent,
-            assigned_by: "planr".to_string(),
-            execution_id: "probe-exp-chrome-browser-client".to_string(),
-            tool_call_id: None,
-        },
-        observations: vec![ObservationResult {
-            requirement_id: EvidenceId::parse("req-host-exp-chrome-browser-client")
-                .map_err(|error| anyhow::anyhow!(error))?,
-            observation_type,
-            outcome: AttemptStatus::Passed,
-            predicate: map_from_value(json!({
-                "surface": CODEX_CHROME_BROWSER_CLIENT_SURFACE,
-                "tool_name": "browser-client.mjs chrome Runtime.evaluate",
-                "event_source": "browser-client:chrome",
-                "final_status": "available"
-            }))?,
-            actual: map_from_value(json!({
-                "final_event": capture.final_event_payload,
-                "artifact_digest": artifact.digest,
-                "availability_reason": capture.availability_reason
-            }))?,
-        }],
-        attempt_ids: vec![
-            EvidenceId::parse("probe-exp-chrome-browser-client")
-                .map_err(|error| anyhow::anyhow!(error))?,
-        ],
-        retry_history: Vec::new(),
-        artifacts: vec![ArtifactRef {
-            id: EvidenceId::parse(artifact.id.clone()).map_err(|error| anyhow::anyhow!(error))?,
-            kind: artifact.kind.clone(),
-            digest: Sha256Digest::parse(artifact.digest.clone())
-                .map_err(|error| anyhow::anyhow!(error))?,
-            uri: Some(format!("fixture://host-capabilities/v1/{}", artifact.path)),
-            extra: Map::new(),
-        }],
-        raw_result: RawResultRef {
-            kind: "host-capability-observed-raw".to_string(),
-            digest: Sha256Digest::parse(capture.raw_digest.clone())
-                .map_err(|error| anyhow::anyhow!(error))?,
-            artifact_id: None,
-            extra: Map::new(),
-        },
-        config_digest: Sha256Digest::parse(config_digest)
-            .map_err(|error| anyhow::anyhow!(error))?,
-        fixture_disclosure: FixtureDisclosure {
-            fixtures_used: true,
-            mocks_used: false,
-            fixture_refs: Some(vec![
-                "tests/fixtures/evidence/host-capabilities/v1".to_string(),
-            ]),
-            mock_refs: None,
-        },
-        permissions: instance.permissions.clone(),
-        sandbox: SandboxState {
-            mode: "browser-client-chrome".to_string(),
-            limits: SandboxLimits {
-                timeout_ms: 30000,
-                stdout_bytes: 1048576,
-                stderr_bytes: 1048576,
-            },
-        },
-        proof_gaps: Vec::<GapReason>::new(),
-        started_at: capture.instance.captured_at.clone(),
-        ended_at: capture.instance.captured_at.clone(),
-    })
-    .map_err(|error| anyhow::anyhow!(error))?;
-    serde_json::to_value(receipt).context("serializing Chrome browser-client receipt")
+    serde_json::from_value::<crate::evidence::model::VerificationCapabilityInstance>(instance_value.clone()).context("binding Chrome browser-client instance to manifest")?;
+    Ok(instance_value)
 }
 
 struct EmbeddedPhase1Fixture {
@@ -747,13 +589,6 @@ fn observation_type(capture: &HostCaptureEvaluation) -> Result<NamespacedIdentif
         .first()
         .cloned()
         .context("host capability instance has no observation types")
-}
-
-fn map_from_value(value: Value) -> Result<Map<String, Value>> {
-    value
-        .as_object()
-        .cloned()
-        .context("expected object for receipt map")
 }
 
 pub(crate) fn default_phase1_fixture_root() -> PathBuf {
