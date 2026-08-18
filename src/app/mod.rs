@@ -13,6 +13,7 @@ mod audit_evidence;
 mod commands;
 mod eval_surface;
 mod evidence;
+mod execution_review_gate;
 mod execution_run;
 mod execution_state;
 mod feature_run_evidence;
