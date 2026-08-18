@@ -3381,14 +3381,22 @@ mod tests {
     fn configured_process_run_records_fail_timeout_cancel_and_output_bounds() {
         let conn = conn();
         let root = tempdir().unwrap();
-        for (idx, (args, timeout, cancel, expected)) in [
-            (vec!["-c", "exit 2"], 5000, false, AttemptStatus::Failed),
-            (vec!["-c", "sleep 1"], 20, false, AttemptStatus::TimedOut),
+        for (idx, (args, timeout, cancel, expected, expected_gap)) in [
+            (vec!["-c", "exit 2"], 5000, false, AttemptStatus::Failed, None),
+            (
+                vec!["-c", "exit 126"],
+                5000,
+                false,
+                AttemptStatus::Failed,
+                Some(GapReason::PermissionDenied),
+            ),
+            (vec!["-c", "sleep 1"], 20, false, AttemptStatus::TimedOut, None),
             (
                 vec!["-c", "printf too-long"],
                 5000,
                 false,
                 AttemptStatus::Unavailable,
+                None,
             ),
         ]
         .into_iter()
@@ -3413,6 +3421,9 @@ mod tests {
             )
             .unwrap();
             assert_eq!(output.attempt.status, expected);
+            if let Some(expected_gap) = expected_gap {
+                assert_eq!(output.receipt_value["proof_gaps"], json!([expected_gap.as_str()]));
+            }
             if expected == AttemptStatus::Unavailable {
                 assert_ne!(
                     output.attempt.stdout_digest.as_str(),
