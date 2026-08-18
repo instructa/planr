@@ -56,7 +56,6 @@ struct EvaluationScope {
 #[derive(Debug, Clone)]
 pub struct AuthoritativeObligationBindingRow {
     pub id: String,
-    pub criterion_id: String,
     pub observations: Vec<ObservationRequirement>,
 }
 
@@ -224,24 +223,6 @@ pub fn authoritative_obligation_bindings_for_scope(
         _ => return Err(EvidenceDomainError::InvalidTrustedBinding("coverage.scope")),
     };
     authoritative_obligation_bindings_by_clause(conn, project_id, where_clause, scope_id)
-}
-
-/// Load authoritative active obligation rows for a prevalidated scope clause.
-///
-/// The Evidence coverage domain owns active-row selection. The clause remains
-/// internal to callers in this module except for the closed public scope entry
-/// point above; application completeness consumes the plan-scoped typed rows.
-pub fn authoritative_plan_obligation_bindings(
-    conn: &Connection,
-    project_id: &str,
-    plan_id: &str,
-) -> Result<Vec<AuthoritativeObligationBindingRow>, EvidenceDomainError> {
-    authoritative_obligation_bindings_by_clause(
-        conn,
-        project_id,
-        "WHERE project_id = ?1 AND plan_id = ?2",
-        plan_id,
-    )
 }
 
 pub fn authoritative_plan_obligation_binding_identities(
@@ -1067,10 +1048,7 @@ fn authoritative_obligation_bindings_by_clause(
     where_clause: &str,
     scope_id: &str,
 ) -> Result<Vec<AuthoritativeObligationBindingRow>, EvidenceDomainError> {
-    let sql = authoritative_binding_selection_sql(
-        "id, criterion_id, observation_requirements_json",
-        where_clause,
-    );
+    let sql = authoritative_binding_selection_sql("id, observation_requirements_json", where_clause);
     let mut statement = conn
         .prepare(&sql)
         .map_err(|err| EvidenceDomainError::Digest(err.to_string()))?;
@@ -1078,10 +1056,9 @@ fn authoritative_obligation_bindings_by_clause(
         .query_map(params![project_id, scope_id], |row| {
             Ok(AuthoritativeObligationBindingRow {
                 id: row.get(0)?,
-                criterion_id: row.get(1)?,
-                observations: serde_json::from_str(&row.get::<_, String>(2)?).map_err(|error| {
+                observations: serde_json::from_str(&row.get::<_, String>(1)?).map_err(|error| {
                     rusqlite::Error::FromSqlConversionFailure(
-                        2,
+                        1,
                         rusqlite::types::Type::Text,
                         Box::new(error),
                     )
