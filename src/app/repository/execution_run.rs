@@ -4288,6 +4288,10 @@ mod tests {
         ensure_schema(&conn).expect("create representative v1 base");
         conn.execute_batch(
             r#"
+DROP TABLE final_review_source_bindings;
+DROP TABLE feature_run_verification_admission_repair_settlements;
+DROP TABLE feature_run_product_repair_settlements;
+DROP TABLE feature_run_one_shot_claims;
 DROP TABLE feature_run_evidence_invalidations;
 DROP TABLE review_findings;
 DROP TABLE review_attempts;
@@ -4295,7 +4299,6 @@ DROP TABLE review_gates;
 DROP TABLE feature_run_budget_reservations;
 DROP TABLE feature_run_budget_observations;
 DROP TABLE feature_run_budget_contracts;
-DROP TABLE feature_run_product_repair_settlements;
 DROP TABLE feature_run_source_freezes;
 DROP TABLE execution_run_outcomes;
 DROP TABLE feature_run_role_leases;
