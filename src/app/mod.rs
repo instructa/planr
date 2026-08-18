@@ -24,6 +24,7 @@ mod grok;
 mod hooks;
 mod http;
 mod http_evidence;
+mod http_stream;
 mod inspection;
 mod lease;
 mod mcp;
