@@ -16608,6 +16608,11 @@ fn pick_peek_reads_the_packet_without_leasing() {
         rusqlite::params![plan_path.to_string_lossy(), item],
     )
     .unwrap();
+    planr()
+        .current_dir(dir.path())
+        .args(["--db", &db_arg, "item", "update", &item, "--work-type", "code"])
+        .assert()
+        .success();
     let events_before: i64 = conn
         .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
         .unwrap();
