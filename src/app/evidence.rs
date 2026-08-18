@@ -1861,11 +1861,13 @@ impl App {
     fn host_capture_execution_subset(
         &self,
         value: &Value,
-    ) -> Result<(Value, Value, VerificationCapabilityInstance)> {
+        resolver: RunIndexCapabilityResolver,
+    ) -> Result<(String, Value, Value, VerificationCapabilityInstance)> {
         let run_index = value.get("run_index").ok_or_else(|| {
             EvidenceCommandError::bad_request("host capture requires a sealed run_index")
         })?;
-        let (_, validated_entries) = self.validate_sealed_run_index(run_index)?;
+        let (run_index_digest, validated_entries) =
+            self.validate_sealed_run_index_with_resolver(run_index, resolver)?;
         let entry = value
             .get("run_index_entry")
             .and_then(Value::as_u64)
@@ -1892,6 +1894,7 @@ impl App {
             )
         })?;
         Ok((
+            run_index_digest,
             run_input,
             validated.execution_binding.clone(),
             validated.instance.clone(),
@@ -2395,7 +2398,24 @@ impl App {
     }
 
     pub(crate) fn evidence_host_capture_import_value(&self, value: Value) -> Result<Value> {
-        self.evidence_host_capture_import_value_with_observed_run(value, None, None)
+        self.evidence_host_capture_import_value_with_observed_run(
+            value,
+            None,
+            None,
+            RunIndexCapabilityResolver::LiveRegistry,
+        )
+    }
+
+    pub(crate) fn evidence_pending_host_capture_import_value(
+        &self,
+        value: Value,
+    ) -> Result<Value> {
+        self.evidence_host_capture_import_value_with_observed_run(
+            value,
+            None,
+            None,
+            RunIndexCapabilityResolver::PendingHostCapture,
+        )
     }
 
     pub(crate) fn evidence_host_capture_admit_value(&self, value: Value) -> Result<Value> {
@@ -2477,7 +2497,11 @@ impl App {
             })?;
         let obligation = self.validate_host_capture_admission_authority(
             &project.id,
-            &request,
+            &request.plan_id,
+            &request.run_id,
+            &request.freeze_id,
+            request.run_revision,
+            &request.obligation_id,
             &lease,
         )?;
 
@@ -2589,7 +2613,11 @@ impl App {
         let admission_result = (|| -> Result<()> {
             let current_obligation = self.validate_host_capture_admission_authority(
                 &project.id,
-                &request,
+                &request.plan_id,
+                &request.run_id,
+                &request.freeze_id,
+                request.run_revision,
+                &request.obligation_id,
                 &lease,
             )?;
             if serde_json::to_value(current_obligation)? != serde_json::to_value(&obligation)? {
@@ -2654,14 +2682,18 @@ impl App {
     fn validate_host_capture_admission_authority(
         &self,
         project_id: &str,
-        request: &HostCaptureAdmissionRequest,
+        plan_id: &str,
+        run_id: &str,
+        freeze_id: &str,
+        run_revision: u64,
+        obligation_id: &str,
         lease: &super::feature_run_evidence::CanonicalFeatureRunEvidenceLease,
     ) -> Result<ProofObligation> {
         self.validate_feature_run_evidence_lease(&self.conn, lease)?;
         if lease.project_id != project_id
-            || lease.plan_id != request.plan_id
-            || lease.run_id != request.run_id
-            || lease.freeze_id != request.freeze_id
+            || lease.plan_id != plan_id
+            || lease.run_id != run_id
+            || lease.freeze_id != freeze_id
         {
             return Err(EvidenceCommandError::conflict(
                 "host capture admission does not match the active verifier lease",
@@ -2669,17 +2701,17 @@ impl App {
             .into());
         }
         let repository = ExecutionRunRepository::new(&self.conn);
-        let persisted = repository.feature_run(&request.run_id)?;
+        let persisted = repository.feature_run(run_id)?;
         if persisted.project_id != project_id
-            || persisted.run.plan_id != request.plan_id
-            || persisted.revision != request.run_revision
+            || persisted.run.plan_id != plan_id
+            || persisted.revision != run_revision
         {
             return Err(EvidenceCommandError::conflict(
                 "host capture admission does not match the active FeatureRun revision",
             )
             .into());
         }
-        if self.plan_evidence_authority(&request.plan_id)?
+        if self.plan_evidence_authority(plan_id)?
             != super::proof::PlanEvidenceAuthority::BindingActive
         {
             return Err(EvidenceCommandError::conflict(
@@ -2691,23 +2723,55 @@ impl App {
             &self.conn,
             project_id,
             "obligation",
-            &request.obligation_id,
+            obligation_id,
         )
         .map_err(|error| anyhow!("{error}"))?;
-        if active.len() != 1 || active[0].id != request.obligation_id {
+        if active.len() != 1 || active[0].id != obligation_id {
             return Err(EvidenceCommandError::conflict(
                 "host capture admission obligation is not the authoritative active binding",
             )
             .into());
         }
-        let obligation = self.load_proof_obligation(&request.obligation_id)?;
-        if !obligation.binding || obligation.plan_id.as_str() != request.plan_id {
+        let obligation = self.load_proof_obligation(obligation_id)?;
+        if !obligation.binding || obligation.plan_id.as_str() != plan_id {
             return Err(EvidenceCommandError::conflict(
                 "host capture admission obligation does not bind the active plan",
             )
             .into());
         }
         Ok(obligation)
+    }
+
+    fn validate_pending_host_capture_import_authority(
+        &self,
+        admission: &host_capture_admission::PendingHostCaptureAdmission,
+        lease: Option<&super::feature_run_evidence::CanonicalFeatureRunEvidenceLease>,
+    ) -> Result<()> {
+        let lease = lease.ok_or_else(|| {
+            EvidenceCommandError::conflict(
+                "pending host capture import requires an active verifier lease",
+            )
+        })?;
+        let lease_generation = i64::try_from(lease.lease_generation)
+            .context("host capture verifier lease generation exceeds SQLite INTEGER")?;
+        if admission.verifier_lease_generation != lease_generation {
+            return Err(EvidenceCommandError::conflict(
+                "pending host capture admission does not match the active verifier lease generation",
+            )
+            .into());
+        }
+        let run_revision = u64::try_from(admission.run_revision)
+            .context("pending host capture run revision is invalid")?;
+        self.validate_host_capture_admission_authority(
+            &admission.project_id,
+            &admission.plan_id,
+            &admission.run_id,
+            &admission.freeze_id,
+            run_revision,
+            &admission.obligation_id,
+            lease,
+        )?;
+        Ok(())
     }
 
     pub(crate) fn evidence_host_capture_run_value(&self, value: Value) -> Result<Value> {
@@ -2741,7 +2805,10 @@ impl App {
             ))
             .into());
         }
-        let (run_input, _, sealed_instance) = self.host_capture_execution_subset(&value)?;
+        let (_, run_input, _, sealed_instance) = self.host_capture_execution_subset(
+            &value,
+            RunIndexCapabilityResolver::LiveRegistry,
+        )?;
         let obligation_id = string_field(&run_input, "obligation_id")?;
         if string_field(&value, "manifest_id")? != sealed_instance.manifest_id.as_str() {
             return Err(EvidenceCommandError::bad_request(
@@ -2775,6 +2842,7 @@ impl App {
             import_input,
             Some(observed_run),
             Some((workflow_started_at, workflow_timeout_ms)),
+            RunIndexCapabilityResolver::LiveRegistry,
         )
     }
 
@@ -2783,6 +2851,7 @@ impl App {
         value: Value,
         observed_run: Option<ObservedHostCaptureRun>,
         workflow_deadline: Option<(Instant, u64)>,
+        resolver: RunIndexCapabilityResolver,
     ) -> Result<Value> {
         reject_trusted_receipt_input(&value)?;
         let object = value.as_object().ok_or_else(|| {
@@ -2814,8 +2883,16 @@ impl App {
             ))
             .into());
         }
-        let (run_input, execution_binding, sealed_instance) =
-            self.host_capture_execution_subset(&value)?;
+        let (run_index_digest, run_input, execution_binding, sealed_instance) =
+            self.host_capture_execution_subset(&value, resolver)?;
+        let pending_admission = match resolver {
+            RunIndexCapabilityResolver::LiveRegistry => None,
+            RunIndexCapabilityResolver::PendingHostCapture => Some(
+                host_capture_admission::load_pending(&self.conn, &run_index_digest)?.ok_or_else(
+                    || EvidenceCommandError::conflict("host capture admission is not pending"),
+                )?,
+            ),
+        };
         let obligation_id = string_field(&run_input, "obligation_id")?;
         let project = self.default_project()?;
         let obligation = self.load_proof_obligation(&obligation_id)?;
@@ -2824,6 +2901,9 @@ impl App {
                 .map_err(|error| EvidenceCommandError::bad_request(error.to_string()))?;
         let lease =
             self.resolve_feature_run_evidence_lease(&project.id, obligation.plan_id.as_str())?;
+        if let Some(admission) = pending_admission.as_ref() {
+            self.validate_pending_host_capture_import_authority(admission, lease.as_ref())?;
+        }
         (|| -> Result<Value> {
             let import_root =
                 resolve_evidence_input_path(&self.root, &string_field(&value, "import_root")?);
@@ -2862,6 +2942,8 @@ impl App {
                 })?;
             let adapter = if observed_run.is_some() {
                 crate::evidence::adapters::codex::enable_chrome_browser_client_from_planr_observed_execution(capture.clone())?
+            } else if pending_admission.is_some() {
+                crate::evidence::adapters::codex::enable_chrome_browser_client_from_verifier_admission(capture.clone())?
             } else {
                 crate::evidence::adapters::codex::enable_chrome_browser_client(capture.clone())?
             };
@@ -2879,7 +2961,7 @@ impl App {
                 .instance
                 .ok_or_else(|| anyhow!("enabled host capture missing instance"))?;
             let captured_instance: VerificationCapabilityInstance =
-                serde_json::from_value(captured_instance_value)?;
+                serde_json::from_value(captured_instance_value.clone())?;
             if let Some(run) = observed_run.as_ref() {
                 for observation in &obligation.observations {
                     ensure_host_capture_run_manifest_supports_observation(run, observation)?;
@@ -2889,6 +2971,20 @@ impl App {
                 {
                     return Err(EvidenceCommandError::bad_request(
                         "observed host capture capability does not match the sealed capability",
+                    )
+                    .into());
+                }
+            } else if let Some(admission) = pending_admission.as_ref() {
+                if adapter.receipt_contract_vector.is_some() {
+                    bail!("pending host capture import adapter must not construct a trusted receipt");
+                }
+                if validated.normalized_root_digest != admission.normalized_capture_digest
+                    || serde_json::to_value(&captured_manifest)? != admission.manifest
+                    || captured_instance_value != admission.instance
+                    || serde_json::to_value(&sealed_instance)? != admission.instance
+                {
+                    return Err(EvidenceCommandError::conflict(
+                        "validated host capture does not match its pending admission",
                     )
                     .into());
                 }
@@ -2902,7 +2998,14 @@ impl App {
                 )
                 .into());
             }
-            let evidence_manifest = self.load_capability_manifest(sealed_instance.id.as_str())?;
+            let evidence_manifest = pending_admission
+                .as_ref()
+                .map(|admission| serde_json::from_value(admission.manifest.clone()))
+                .transpose()?
+                .map_or_else(
+                    || self.load_capability_manifest(sealed_instance.id.as_str()),
+                    Ok,
+                )?;
             let evidence_instance = sealed_instance;
             let evidence_instance_value = serde_json::to_value(&evidence_instance)?;
             let environment: EnvironmentBinding = serde_json::from_value(
@@ -2936,6 +3039,15 @@ impl App {
                 )?;
             }
             let valid_until = ensure_host_capture_fresh(&evidence_instance)?;
+            if pending_admission
+                .as_ref()
+                .is_some_and(|admission| admission.valid_until != valid_until)
+            {
+                return Err(EvidenceCommandError::conflict(
+                    "pending host capture admission expiry changed during import",
+                )
+                .into());
+            }
 
             let started_at = evidence_instance.captured_at.clone();
             let ended_at = evidence_instance.captured_at.clone();
@@ -3191,7 +3303,13 @@ impl App {
             let persistence = persist_trusted_evidence_atomically(
                 &self.conn,
                 |conn| {
-                    if let Some(lease) = lease.as_ref() {
+                    if let Some(admission) = pending_admission.as_ref() {
+                        host_capture_admission::require_exact_pending(conn, admission)?;
+                        self.validate_pending_host_capture_import_authority(
+                            admission,
+                            lease.as_ref(),
+                        )?;
+                    } else if let Some(lease) = lease.as_ref() {
                         self.validate_feature_run_evidence_lease(conn, lease)?;
                     }
                     registry.store_verified_host_capture_instance_with_expiry(
@@ -3219,6 +3337,25 @@ impl App {
                     }
                     if let Some(lease) = lease.as_ref() {
                         self.validate_feature_run_evidence_lease(conn, lease)?;
+                    }
+                    if let Some(admission) = pending_admission.as_ref() {
+                        host_capture_admission::require_exact_pending(conn, admission)?;
+                        self.validate_pending_host_capture_import_authority(
+                            admission,
+                            lease.as_ref(),
+                        )?;
+                        let (current_digest, current_entries) =
+                            self.validate_pending_host_capture_run_index(&value["run_index"])?;
+                        let [current_entry] = current_entries.as_slice() else {
+                            bail!("pending host capture import requires exactly one sealed run");
+                        };
+                        if current_digest != run_index_digest
+                            || current_entry.execution_binding != execution_binding
+                            || current_entry.instance.id != evidence_instance.id
+                        {
+                            bail!("pending host capture admission changed before commit");
+                        }
+                        host_capture_admission::mark_promoted(conn, admission)?;
                     }
                     Ok(())
                 },

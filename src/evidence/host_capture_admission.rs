@@ -4,7 +4,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct PendingHostCaptureAdmission {
     pub sealed_run_index_digest: String,
     pub project_id: String,
@@ -60,8 +60,27 @@ pub(crate) fn load_pending(conn: &Connection, digest: &str) -> Result<Option<Pen
     conn.query_row("SELECT sealed_run_index_digest,project_id,plan_id,run_id,freeze_id,run_revision,verifier_lease_generation,obligation_id,execution_binding_json,manifest_json,instance_json,normalized_capture_digest,valid_until,status FROM host_capture_admissions WHERE sealed_run_index_digest=?1 AND status='pending'", params![digest], |row| Ok(PendingHostCaptureAdmission { sealed_run_index_digest: row.get(0)?, project_id: row.get(1)?, plan_id: row.get(2)?, run_id: row.get(3)?, freeze_id: row.get(4)?, run_revision: row.get(5)?, verifier_lease_generation: row.get(6)?, obligation_id: row.get(7)?, execution_binding: serde_json::from_str(&row.get::<_,String>(8)?).map_err(|e| rusqlite::Error::FromSqlConversionFailure(8,rusqlite::types::Type::Text,Box::new(e)))?, manifest: serde_json::from_str(&row.get::<_,String>(9)?).map_err(|e| rusqlite::Error::FromSqlConversionFailure(9,rusqlite::types::Type::Text,Box::new(e)))?, instance: serde_json::from_str(&row.get::<_,String>(10)?).map_err(|e| rusqlite::Error::FromSqlConversionFailure(10,rusqlite::types::Type::Text,Box::new(e)))?, normalized_capture_digest: row.get(11)?, valid_until: row.get(12)?, status: row.get(13)? })).optional().map_err(Into::into)
 }
 
-pub(crate) fn mark_promoted(conn: &Connection, digest: &str) -> Result<()> {
+pub(crate) fn require_exact_pending(
+    conn: &Connection,
+    expected: &PendingHostCaptureAdmission,
+) -> Result<()> {
+    let current = load_pending(conn, &expected.sealed_run_index_digest)?
+        .ok_or_else(|| anyhow!("host capture admission is not pending"))?;
+    if current != *expected {
+        bail!("pending host capture admission changed");
+    }
+    Ok(())
+}
+
+pub(crate) fn mark_promoted(
+    conn: &Connection,
+    expected: &PendingHostCaptureAdmission,
+) -> Result<()> {
+    if conn.is_autocommit() {
+        bail!("host capture admission promotion requires an active transaction");
+    }
+    require_exact_pending(conn, expected)?;
     let now = OffsetDateTime::now_utc().format(&Rfc3339)?;
-    if conn.execute("UPDATE host_capture_admissions SET status='promoted', promoted_at=?2 WHERE sealed_run_index_digest=?1 AND status='pending'", params![digest, now])? != 1 { bail!("host capture admission is not pending"); }
+    if conn.execute("UPDATE host_capture_admissions SET status='promoted', promoted_at=?2 WHERE sealed_run_index_digest=?1 AND status='pending'", params![expected.sealed_run_index_digest, now])? != 1 { bail!("host capture admission is not pending"); }
     Ok(())
 }
