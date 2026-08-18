@@ -322,8 +322,11 @@ fn bind_instance_to_manifest(capture: &HostCaptureEvaluation, manifest: &Verific
     instance_value["manifest_id"] = json!("host-chrome-browser-client-manifest");
     instance_value["manifest_digest"] = json!(manifest_digest);
     instance_value["adapter_version"] = json!(manifest.version);
-    serde_json::from_value::<crate::evidence::model::VerificationCapabilityInstance>(instance_value.clone()).context("binding Chrome browser-client instance to manifest")?;
-    Ok(instance_value)
+    let instance = serde_json::from_value::<
+        crate::evidence::model::VerificationCapabilityInstance,
+    >(instance_value)
+    .context("binding Chrome browser-client instance to manifest")?;
+    serde_json::to_value(&instance).context("serializing canonical Chrome browser-client instance")
 }
 
 struct EmbeddedPhase1Fixture {
