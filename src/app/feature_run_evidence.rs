@@ -6326,7 +6326,28 @@ allow_overwrite = true
                 .to_string()
                 .contains("forced historical reconciliation failure")
         );
-        assert!(app.repair_work_packet_value("plan-a").is_err());
+        let repair = app.repair_work_packet_value("plan-a").unwrap().unwrap();
+        assert_eq!(repair["work_packet"]["kind"], "outcome");
+        assert_eq!(repair["work_packet"]["mode"], "product_finding_repair");
+        assert_eq!(repair["work_packet"]["repair_id"], "invalidation-historical");
+        assert_eq!(repair["work_packet"]["responsible_maker_id"], worker_id());
+        assert!(repair["work_packet"]["verification_item_id"].is_null());
+        assert_eq!(
+            repair["work_packet"]["selective_replay_obligation_ids"],
+            json!(["pob-settle"])
+        );
+        assert_eq!(
+            repair["work_packet"]["execution_state"]["phase"],
+            "implementation"
+        );
+        assert_eq!(
+            repair["work_packet"]["execution_state"]["reason_code"],
+            "implementation_in_progress"
+        );
+        assert_eq!(
+            repair["work_packet"]["execution_state"]["next_action"],
+            "settle_next_outcome"
+        );
         let events: i64 = app
             .conn
             .query_row(
