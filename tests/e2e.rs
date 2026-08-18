@@ -2971,6 +2971,15 @@ fn bind_obligation_to_authored_criterion(
 
 #[test]
 fn evidence_doctor_reports_degraded_states_and_matches_run_resolution() {
+    let repository_probe = |doctor: &Value| {
+        doctor["policy"]["registry"]["probes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|probe| probe["manifest_id"] == "verifier-generic-adapter")
+            .expect("generic repository adapter probe")
+            .clone()
+    };
     let missing_dir = tempdir().unwrap();
     let missing_db_dir = tempdir().unwrap();
     let missing_db = missing_db_dir.path().join("planr.sqlite");
@@ -3044,7 +3053,7 @@ fn evidence_doctor_reports_degraded_states_and_matches_run_resolution() {
     assert_eq!(unavailable["status"], "warning");
     assert_eq!(unavailable["policy"]["state"], "unavailable");
     assert_eq!(
-        unavailable["policy"]["registry"]["probes"][0]["availability_status"],
+        repository_probe(&unavailable)["availability_status"],
         "unavailable"
     );
     add_evidence_obligation(
@@ -3099,7 +3108,7 @@ fn evidence_doctor_reports_degraded_states_and_matches_run_resolution() {
     assert_eq!(degraded["status"], "warning");
     assert_eq!(degraded["policy"]["state"], "degraded");
     assert_eq!(
-        degraded["policy"]["registry"]["probes"][0]["availability_status"],
+        repository_probe(&degraded)["availability_status"],
         "probe_failed"
     );
 
@@ -3111,7 +3120,8 @@ fn evidence_doctor_reports_degraded_states_and_matches_run_resolution() {
     let first = doctor_evidence(seed_dir.path(), &seed_db);
     assert_eq!(first["status"], "ok");
     assert_eq!(first["policy"]["state"], "ready");
-    let first_instance = first["policy"]["registry"]["probes"][0]["instance_id"]
+    let first_probe = repository_probe(&first);
+    let first_instance = first_probe["instance_id"]
         .as_str()
         .unwrap()
         .to_string();
@@ -3130,15 +3140,11 @@ fn evidence_doctor_reports_degraded_states_and_matches_run_resolution() {
         Some("2020-01-01T00:00:00Z"),
     );
     let expired_recovery = doctor_evidence(expired_dir.path(), &expired_db);
+    let expired_probe = repository_probe(&expired_recovery);
     assert_eq!(expired_recovery["status"], "warning");
     assert_eq!(expired_recovery["policy"]["state"], "recovered");
-    assert_eq!(
-        expired_recovery["policy"]["registry"]["probes"][0]["resolution"],
-        "reprobed_expired"
-    );
-    let expired_instance = expired_recovery["policy"]["registry"]["probes"][0]["instance_id"]
-        .as_str()
-        .unwrap();
+    assert_eq!(expired_probe["resolution"], "reprobed_expired");
+    let expired_instance = expired_probe["instance_id"].as_str().unwrap();
     assert_ne!(expired_instance, first_instance);
     add_evidence_obligation_with_environment(
         expired_dir.path(),
@@ -3173,15 +3179,14 @@ fn evidence_doctor_reports_degraded_states_and_matches_run_resolution() {
         None,
     );
     let mismatch_recovery = doctor_evidence(mismatch_dir.path(), &mismatch_db);
+    let mismatch_probe = repository_probe(&mismatch_recovery);
     assert_eq!(mismatch_recovery["status"], "warning");
     assert_eq!(mismatch_recovery["policy"]["state"], "recovered");
     assert_eq!(
-        mismatch_recovery["policy"]["registry"]["probes"][0]["resolution"],
+        mismatch_probe["resolution"],
         "reprobed_runtime_mismatch"
     );
-    let mismatch_instance = mismatch_recovery["policy"]["registry"]["probes"][0]["instance_id"]
-        .as_str()
-        .unwrap();
+    let mismatch_instance = mismatch_probe["instance_id"].as_str().unwrap();
     assert_ne!(mismatch_instance, first_instance);
     add_evidence_obligation_with_environment(
         mismatch_dir.path(),
@@ -3224,16 +3229,14 @@ fn evidence_doctor_reports_degraded_states_and_matches_run_resolution() {
         },
     );
     let environment_recovery = doctor_evidence(environment_dir.path(), &environment_db);
+    let environment_probe = repository_probe(&environment_recovery);
     assert_eq!(environment_recovery["status"], "warning");
     assert_eq!(environment_recovery["policy"]["state"], "recovered");
     assert_eq!(
-        environment_recovery["policy"]["registry"]["probes"][0]["resolution"],
+        environment_probe["resolution"],
         "reprobed_environment_mismatch"
     );
-    let environment_instance =
-        environment_recovery["policy"]["registry"]["probes"][0]["instance_id"]
-            .as_str()
-            .unwrap();
+    let environment_instance = environment_probe["instance_id"].as_str().unwrap();
     add_evidence_obligation_with_environment(
         environment_dir.path(),
         &environment_db,
@@ -3274,16 +3277,14 @@ fn evidence_doctor_reports_degraded_states_and_matches_run_resolution() {
         },
     );
     let registration_doctor = doctor_evidence(registration_dir.path(), &registration_db);
+    let registration_probe = repository_probe(&registration_doctor);
     assert_eq!(registration_doctor["status"], "warning");
     assert_eq!(registration_doctor["policy"]["state"], "recovered");
     assert_eq!(
-        registration_doctor["policy"]["registry"]["probes"][0]["resolution"],
+        registration_probe["resolution"],
         "reprobed_registration_mismatch"
     );
-    let registration_instance =
-        registration_doctor["policy"]["registry"]["probes"][0]["instance_id"]
-            .as_str()
-            .unwrap();
+    let registration_instance = registration_probe["instance_id"].as_str().unwrap();
     add_evidence_obligation_with_environment(
         registration_dir.path(),
         &registration_db,
