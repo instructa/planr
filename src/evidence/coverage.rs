@@ -60,6 +60,14 @@ pub struct AuthoritativeObligationBindingRow {
     pub observations: Vec<ObservationRequirement>,
 }
 
+/// The canonical active binding identity selected by the Evidence coverage
+/// domain. Completeness consumers need this identity but never observations.
+#[derive(Debug, Clone)]
+pub struct AuthoritativeObligationBindingIdentity {
+    pub id: String,
+    pub criterion_id: String,
+}
+
 #[derive(Debug, Clone)]
 struct ObligationRow {
     id: String,
@@ -234,6 +242,27 @@ pub fn authoritative_plan_obligation_bindings(
         "WHERE project_id = ?1 AND plan_id = ?2",
         plan_id,
     )
+}
+
+pub fn authoritative_plan_obligation_binding_identities(
+    conn: &Connection,
+    project_id: &str,
+    plan_id: &str,
+) -> Result<Vec<AuthoritativeObligationBindingIdentity>, EvidenceDomainError> {
+    let sql = authoritative_binding_selection_sql("id, criterion_id", "WHERE project_id = ?1 AND plan_id = ?2");
+    let mut statement = conn
+        .prepare(&sql)
+        .map_err(|err| EvidenceDomainError::Digest(err.to_string()))?;
+    statement
+        .query_map(params![project_id, plan_id], |row| {
+            Ok(AuthoritativeObligationBindingIdentity {
+                id: row.get(0)?,
+                criterion_id: row.get(1)?,
+            })
+        })
+        .map_err(|err| EvidenceDomainError::Digest(err.to_string()))?
+        .map(|row| row.map_err(|err| EvidenceDomainError::Digest(err.to_string())))
+        .collect()
 }
 
 pub fn evaluate_criterion_coverage(
@@ -1038,18 +1067,9 @@ fn authoritative_obligation_bindings_by_clause(
     where_clause: &str,
     scope_id: &str,
 ) -> Result<Vec<AuthoritativeObligationBindingRow>, EvidenceDomainError> {
-    let sql = format!(
-        "SELECT id, criterion_id, observation_requirements_json
-         FROM proof_obligations
-         {where_clause}
-           AND binding = 1
-           AND NOT EXISTS (
-             SELECT 1
-             FROM proof_obligations AS superseding
-             WHERE superseding.supersedes_obligation_id = proof_obligations.id
-               AND superseding.project_id = proof_obligations.project_id
-           )
-         ORDER BY plan_id, item_id, criterion_id, obligation_version, id"
+    let sql = authoritative_binding_selection_sql(
+        "id, criterion_id, observation_requirements_json",
+        where_clause,
     );
     let mut statement = conn
         .prepare(&sql)
@@ -1071,6 +1091,22 @@ fn authoritative_obligation_bindings_by_clause(
         .map_err(|err| EvidenceDomainError::Digest(err.to_string()))?
         .map(|row| row.map_err(|err| EvidenceDomainError::Digest(err.to_string())))
         .collect::<Result<Vec<_>, _>>()
+}
+
+fn authoritative_binding_selection_sql(columns: &str, where_clause: &str) -> String {
+    format!(
+        "SELECT {columns}
+         FROM proof_obligations
+         {where_clause}
+           AND binding = 1
+           AND NOT EXISTS (
+             SELECT 1
+             FROM proof_obligations AS superseding
+             WHERE superseding.supersedes_obligation_id = proof_obligations.id
+               AND superseding.project_id = proof_obligations.project_id
+           )
+         ORDER BY plan_id, item_id, criterion_id, obligation_version, id"
+    )
 }
 
 fn load_authoritative_criterion_obligation_ids(

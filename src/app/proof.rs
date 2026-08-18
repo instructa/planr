@@ -1,7 +1,7 @@
 use super::App;
 use super::proof_coverage::proof_status_from_coverages;
 use crate::evidence::coverage::{
-    authoritative_obligation_ids_for_scope, authoritative_plan_obligation_bindings,
+    authoritative_obligation_ids_for_scope, authoritative_plan_obligation_binding_identities,
     canonical_evaluation_error_proof,
 };
 use crate::planpack::{BuildPlanCriterion, build_plan_criteria, parse_plan_metadata};
@@ -34,7 +34,7 @@ impl App {
     ) -> Result<PlanEvidenceAuthorityEvaluation> {
         let project = self.default_project()?;
         let active_bindings =
-            authoritative_plan_obligation_bindings(&self.conn, &project.id, plan_id)
+            authoritative_plan_obligation_binding_identities(&self.conn, &project.id, plan_id)
                 .map_err(|error| anyhow!(error))?
                 .into_iter()
                 .map(|row| (row.id, row.criterion_id))
