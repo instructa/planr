@@ -67,6 +67,24 @@ CREATE TABLE IF NOT EXISTS verification_capability_instances(
   FOREIGN KEY(manifest_digest) REFERENCES verification_capability_manifests(manifest_digest),
   UNIQUE(manifest_id, manifest_version, probe_execution_id)
 );
+CREATE TABLE IF NOT EXISTS host_capture_admissions(
+  sealed_run_index_digest TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  plan_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  freeze_id TEXT NOT NULL,
+  run_revision INTEGER NOT NULL,
+  verifier_lease_generation INTEGER NOT NULL,
+  obligation_id TEXT NOT NULL,
+  execution_binding_json TEXT NOT NULL,
+  manifest_json TEXT NOT NULL,
+  instance_json TEXT NOT NULL,
+  normalized_capture_digest TEXT NOT NULL,
+  valid_until TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('pending','promoted')),
+  admitted_at TEXT NOT NULL,
+  promoted_at TEXT
+);
 CREATE TABLE IF NOT EXISTS evidence_attempts(
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL,
