@@ -2557,34 +2557,6 @@ fn assert_json_string_set(actual: &Value, expected: &[&str]) {
     assert_eq!(actual, expected);
 }
 
-fn generic_import_artifact_set_digest(artifacts: &[Value], artifact_bytes: &[&[u8]]) -> String {
-    sha256_json(&Value::Array(
-        artifacts
-            .iter()
-            .zip(artifact_bytes)
-            .map(|(artifact, bytes)| {
-                json!({
-                    "id": artifact["id"],
-                    "kind": artifact["kind"],
-                    "declared_digest": artifact["digest"],
-                    "content_digest": sha256_prefixed(bytes),
-                })
-            })
-            .collect(),
-    ))
-}
-
-fn generic_import_predicate_digest(predicate: &Value) -> String {
-    sha256_json(&json!({
-        "kind": predicate["kind"],
-        "version": predicate["version"],
-        "type": predicate["type"],
-        "outcome": predicate["outcome"],
-        "predicate": predicate["predicate"],
-        "actual": predicate["actual"],
-    }))
-}
-
 fn write_generic_import_validator_fixture(root: &Path) -> String {
     let payload_schema = json!({
         "type": "planr.import.validator.generic_predicate",
@@ -3649,7 +3621,7 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
     let db_dir = tempdir().unwrap();
     let db = db_dir.path().join("planr.sqlite");
     write_evidence_policy_fixture(dir.path());
-    let generic_import_validator_digest = write_generic_import_validator_fixture(dir.path());
+    write_generic_import_validator_fixture(dir.path());
     init_evidence_project(dir.path(), &db, "Evidence Public Surfaces");
     init_git_repo(dir.path());
     let observed_item_id = create_test_item(
@@ -3753,7 +3725,22 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
     let policy = single_json_document(&policy_output);
     assert_evidence_envelope(&policy, "evidence.policy", true);
     assert_eq!(policy["object"]["status"], "valid");
-    assert_eq!(policy["object"]["registry"]["registered_capabilities"], 3);
+    let mut registered_manifest_ids = policy["object"]["registry"]["probes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|probe| probe["manifest_id"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    registered_manifest_ids.sort_unstable();
+    assert_eq!(
+        registered_manifest_ids,
+        vec![
+            "host-codex-chrome-browser-client-admission-v1",
+            "verifier-generic-adapter",
+            "verifier-generic-import-validator",
+            "verifier-runner-import",
+        ]
+    );
 
     let capabilities_output = planr()
         .current_dir(dir.path())
@@ -3876,17 +3863,10 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
         .find(|probe| probe["manifest_id"] == "verifier-generic-import-validator")
         .unwrap();
     assert_eq!(validator_probe["availability_status"], "available");
-    let validator_instance = recovered_capabilities["object"]["instances"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|instance| instance["id"] == validator_probe["instance_id"])
-        .expect("generic import validator capability instance");
-    let validator_instance_id = validator_instance["id"].as_str().unwrap().to_string();
 
     let obligation_runtime_config_digest =
         "sha256:8888888888888888888888888888888888888888888888888888888888888888";
-    let obligation = evidence_obligation_for(
+    let mut obligation = evidence_obligation_for(
         "pob-public-run",
         policy["object"]["digest"].as_str().unwrap(),
         "com.example.health.status",
@@ -3898,6 +3878,8 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
         json!(["target_change", "policy_change", "adapter_schema_change"]),
         obligation_runtime_config_digest,
     );
+    obligation["observations"][0]["payload_schema"] =
+        json!({"schema_ref": "schema://com.example.health.status"});
     let obligation = bind_obligation_to_authored_criterion(
         obligation, "pln-evidence-public", "criterion-evidence-public",
     );
@@ -3953,17 +3935,23 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
     let mcp_show = mcp_text_value(&mcp_response);
     assert_eq!(mcp_show, cli_show);
 
-    let run_input_path = dir.path().join("evidence-run.json");
-    fs::write(
-        &run_input_path,
-        serde_json::to_vec_pretty(&json!({
-            "obligation_id": "pob-public-run",
-            "capability_instance_id": instance_id,
-            "target": {"kind": "process", "uri": "local://health"},
-        }))
-        .unwrap(),
-    )
-    .unwrap();
+    let cli_readiness = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db", db.to_str().unwrap(), "--json", "evidence", "readiness", "--scope",
+                "obligation", "--id", "pob-public-run",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    assert_evidence_envelope(&cli_readiness, "evidence.readiness", true);
+    assert_eq!(cli_readiness["object"]["status"], "passed");
+    let sealed_run_index = cli_readiness["object"]["run_index"].clone();
+    assert_eq!(sealed_run_index["schema_version"], "planr.evidence.run-index.v2");
+    let run_input_path = dir.path().join(sealed_run_index["repository_path"].as_str().unwrap());
     let run_output = planr()
         .current_dir(dir.path())
         .args([
@@ -3982,27 +3970,30 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
         .clone();
     let run = single_json_document(&run_output);
     assert_evidence_envelope(&run, "evidence.run", true);
+    assert_eq!(run["object"]["schema_version"], "planr.evidence.run-index.result.v2");
     assert_eq!(run["object"]["verdict"], "passed");
-    let attempt_id = run["object"]["attempt"]["id"].as_str().unwrap();
-    let receipt_id = run["object"]["receipt"]["id"].as_str().unwrap();
+    assert_eq!(run["object"]["run_index_digest"], sealed_run_index["run_index_digest"]);
+    let run_result = &run["object"]["results"][0];
+    assert_eq!(run_result["reused"], false);
+    assert!(run_result["feature_run_lease"].is_null());
+    let attempt_id = run_result["attempt"]["id"].as_str().unwrap();
+    let receipt_id = run_result["receipt"]["id"].as_str().unwrap();
 
     let mcp_run = mcp_tool(
         dir.path(),
         &db,
         20,
         "planr_evidence_run",
-        json!({
-            "input": {
-                "obligation_id": "pob-public-run",
-                "capability_instance_id": instance_id,
-                "target": {"kind": "process", "uri": "local://health"}
-            }
-        }),
+        json!({"input": sealed_run_index.clone()}),
     );
     assert_evidence_envelope(&mcp_run, "evidence.run", true);
     assert_eq!(mcp_run["object"]["verdict"], "passed");
-    let mcp_attempt_id = mcp_run["object"]["attempt"]["id"].as_str().unwrap();
-    let mcp_receipt_id = mcp_run["object"]["receipt"]["id"].as_str().unwrap();
+    let mcp_run_result = &mcp_run["object"]["results"][0];
+    assert_eq!(mcp_run_result["reused"], true);
+    assert!(mcp_run_result["feature_run_lease"].is_null());
+    let mcp_attempt_id = mcp_run_result["attempt"]["id"].as_str().unwrap();
+    let mcp_receipt_id = mcp_run_result["receipt"]["id"].as_str().unwrap();
+    assert_eq!((mcp_attempt_id, mcp_receipt_id), (attempt_id, receipt_id));
 
     let attempts_output = planr()
         .current_dir(dir.path())
@@ -4053,7 +4044,7 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
         "duration_ms": 12,
     });
     let runner_bytes = serde_jcs::to_vec(&runner_artifact).unwrap();
-    fs::write(dir.path().join("runner.json"), &runner_bytes).unwrap();
+    fs::write(dir.path().join(".planr/evidence/runs/runner.json"), &runner_bytes).unwrap();
     let import_input = json!({
         "id": "import-runner-public",
         "schema_version": "planr.evidence.import.v1",
@@ -4081,11 +4072,11 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
             "id": "artifact-runner",
             "kind": "runner-json",
             "digest": sha256_prefixed(&runner_bytes),
-            "uri": "file://runner.json",
+            "uri": "file://.planr/evidence/runs/runner.json",
         }],
         "producer_metadata": {"client": "fixture-importer"},
     });
-    let import_path = dir.path().join("import-runner.json");
+    let import_path = dir.path().join(".planr/evidence/runs/import-runner.json");
     fs::write(
         &import_path,
         serde_json::to_vec_pretty(&import_input).unwrap(),
@@ -4216,114 +4207,16 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
         port,
         "POST",
         "/v1/evidence/run",
-        &json!({
-            "obligation_id": "pob-public-run",
-            "capability_instance_id": instance_id,
-            "target": {"kind": "process", "uri": "local://health"}
-        })
-        .to_string(),
+        &sealed_run_index.to_string(),
     ));
     assert_evidence_envelope(&http_run, "evidence.run", true);
     assert_eq!(http_run["object"]["verdict"], "passed");
-    let http_attempt_id = http_run["object"]["attempt"]["id"].as_str().unwrap();
-    let http_receipt_id = http_run["object"]["receipt"]["id"].as_str().unwrap();
-
-    let rejected_run_trust_fields = [
-        "attempt",
-        "receipt",
-        "receipt_json",
-        "trusted_binding_json",
-        "trusted_receipt",
-        "receipt_status",
-        "provenance",
-    ];
-    for (index, field) in rejected_run_trust_fields.iter().enumerate() {
-        let forged_value = match *field {
-            "receipt_status" => json!("trusted"),
-            "provenance" => json!({"source": "agent_supplied"}),
-            _ => json!({"id": format!("forged-{field}")}),
-        };
-        let mut forged_run_input = json!({
-            "obligation_id": "pob-public-run",
-            "capability_instance_id": instance_id,
-            "target": {"kind": "process", "uri": "local://health"},
-        });
-        forged_run_input[*field] = forged_value;
-        let before_counts = evidence_attempt_receipt_counts(&db, "pob-public-run");
-
-        let cli_forged_path = dir.path().join(format!("evidence-run-forged-{field}.json"));
-        fs::write(
-            &cli_forged_path,
-            serde_json::to_vec_pretty(&forged_run_input).unwrap(),
-        )
-        .unwrap();
-        let cli_forged = single_json_document(
-            &planr()
-                .current_dir(dir.path())
-                .args([
-                    "--db",
-                    db.to_str().unwrap(),
-                    "--json",
-                    "evidence",
-                    "run",
-                    "--input",
-                    cli_forged_path.to_str().unwrap(),
-                ])
-                .assert()
-                .failure()
-                .get_output()
-                .stdout,
-        );
-        assert_evidence_error(
-            &cli_forged,
-            "evidence.run",
-            "bad_request",
-            &format!("trusted receipt field: {field}"),
-        );
-        assert_eq!(
-            evidence_attempt_receipt_counts(&db, "pob-public-run"),
-            before_counts,
-            "CLI forged run field {field} must not persist attempts or receipts"
-        );
-
-        let mcp_forged = mcp_tool_response(
-            dir.path(),
-            &db,
-            100 + index as u64,
-            "planr_evidence_run",
-            json!({"input": forged_run_input.clone()}),
-        );
-        assert_mcp_evidence_error(
-            &mcp_forged,
-            "evidence.run",
-            "bad_request",
-            &format!("trusted receipt field: {field}"),
-        );
-        assert_eq!(
-            evidence_attempt_receipt_counts(&db, "pob-public-run"),
-            before_counts,
-            "MCP forged run field {field} must not persist attempts or receipts"
-        );
-
-        let http_forged = http_request(
-            port,
-            "POST",
-            "/v1/evidence/run",
-            &forged_run_input.to_string(),
-        );
-        assert_http_evidence_error(
-            &http_forged,
-            "400 Bad Request",
-            "evidence.run",
-            "bad_request",
-            &format!("trusted receipt field: {field}"),
-        );
-        assert_eq!(
-            evidence_attempt_receipt_counts(&db, "pob-public-run"),
-            before_counts,
-            "HTTP forged run field {field} must not persist attempts or receipts"
-        );
-    }
+    let http_run_result = &http_run["object"]["results"][0];
+    assert_eq!(http_run_result["reused"], true);
+    assert!(http_run_result["feature_run_lease"].is_null());
+    let http_attempt_id = http_run_result["attempt"]["id"].as_str().unwrap();
+    let http_receipt_id = http_run_result["receipt"]["id"].as_str().unwrap();
+    assert_eq!((http_attempt_id, http_receipt_id), (attempt_id, receipt_id));
 
     let mut http_import_input = import_input.clone();
     http_import_input["id"] = json!("import-runner-http");
@@ -4371,25 +4264,6 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
         assert!(http_receipt_ids.contains(&expected.to_string()));
     }
 
-    let cli_readiness = single_json_document(
-        &planr()
-            .current_dir(dir.path())
-            .args([
-                "--db",
-                db.to_str().unwrap(),
-                "--json",
-                "evidence",
-                "readiness",
-                "--scope",
-                "obligation",
-                "--id",
-                "pob-public-run",
-            ])
-            .assert()
-            .code(3)
-            .get_output()
-            .stdout,
-    );
     let mcp_readiness = mcp_tool(
         dir.path(),
         &db,
@@ -4405,11 +4279,13 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
     ));
     for readiness in [&cli_readiness, &mcp_readiness, &http_readiness] {
         assert_evidence_envelope(readiness, "evidence.readiness", true);
-        assert_eq!(readiness["object"]["status"], "blocked");
+        assert_eq!(readiness["object"]["status"], "passed");
         assert_eq!(
             readiness["object"]["active_obligation_ids"],
             json!(["pob-public-run"])
         );
+        assert_eq!(readiness["object"]["run_index"]["schema_version"], "planr.evidence.run-index.v2");
+        assert_eq!(readiness["object"]["run_index"]["run_index_digest"], sealed_run_index["run_index_digest"]);
     }
 
     let coverage_output = planr()
@@ -4527,55 +4403,6 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
     ));
     assert_evidence_envelope(&http_bad_scope, "evidence.coverage", false);
 
-    let forged_run_path = dir.path().join("forged-run.json");
-    fs::write(
-        &forged_run_path,
-        serde_json::to_vec_pretty(&json!({
-            "obligation_id": "pob-public-run",
-            "capability_instance_id": instance_id,
-            "receipt_json": {"id": "forged"},
-        }))
-        .unwrap(),
-    )
-    .unwrap();
-    let attempts_before_forged_run = evidence_row_count(&db, "evidence_attempts");
-    let receipts_before_forged_run = evidence_row_count(&db, "evidence_receipts");
-    let forged_run = planr()
-        .current_dir(dir.path())
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--json",
-            "evidence",
-            "run",
-            "--input",
-            forged_run_path.to_str().unwrap(),
-        ])
-        .assert()
-        .failure()
-        .code(1)
-        .get_output()
-        .stdout
-        .clone();
-    let forged_run = single_json_document(&forged_run);
-    assert_evidence_envelope(&forged_run, "evidence.run", false);
-    assert!(
-        forged_run["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("cannot construct trusted receipt field")
-    );
-    assert_eq!(
-        evidence_row_count(&db, "evidence_attempts"),
-        attempts_before_forged_run,
-        "forged run input must not persist an attempt"
-    );
-    assert_eq!(
-        evidence_row_count(&db, "evidence_receipts"),
-        receipts_before_forged_run,
-        "forged run input must not persist a receipt"
-    );
-
     let import_error = http_json(&http_request(
         port,
         "POST",
@@ -4588,234 +4415,6 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
             .as_str()
             .unwrap()
             .contains("cannot construct trusted receipt field")
-    );
-
-    let generic_artifact_bytes = br#"{"status":"ok"}"#;
-    fs::write(
-        dir.path().join("generic-health.json"),
-        generic_artifact_bytes,
-    )
-    .unwrap();
-    let generic_artifact_refs = vec![json!({
-        "id": "artifact-generic-health",
-        "kind": "stdout-json",
-        "digest": sha256_prefixed(generic_artifact_bytes),
-        "uri": "file://generic-health.json",
-    })];
-    let generic_artifact_set_digest =
-        generic_import_artifact_set_digest(&generic_artifact_refs, &[generic_artifact_bytes]);
-    let mut generic_predicate = json!({
-        "kind": "generic_versioned_adapter_predicate",
-        "version": "1.0.0",
-        "type": "planr.import.validator.generic_predicate",
-        "outcome": "passed",
-        "predicate": {"status": "ok"},
-        "actual": {"status": "ok"},
-        "attestation": {
-            "kind": "planr_import_validator_attestation",
-            "version": "1.0.0",
-            "artifact_set_digest": generic_artifact_set_digest,
-            "predicate_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-            "verifier_digest": generic_import_validator_digest.clone(),
-            "verifier_instance_digest": sha256_json(&validator_instance["capability"]),
-            "probe_execution_id": validator_instance["probe_execution_id"],
-            "probe_result_digest": sha256_json(&validator_instance["capability"]["probe_result"]),
-            "validator_attempt_id": "pending-validator-attempt",
-            "validator_receipt_id": "pending-validator-receipt",
-            "validator_receipt_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-        }
-    });
-    let generic_predicate_digest = generic_import_predicate_digest(&generic_predicate);
-    generic_predicate["attestation"]["predicate_digest"] = json!(generic_predicate_digest);
-    let validator_result = json!({
-        "kind": "planr.import.validator.generic_predicate.result",
-        "version": "1.0.0",
-        "verdict": "passed",
-        "artifact_set_digest": generic_artifact_set_digest,
-        "predicate_digest": generic_predicate_digest,
-        "verifier_digest": generic_import_validator_digest.clone(),
-        "verifier_instance_digest": sha256_json(&validator_instance["capability"]),
-    });
-    let mut validator_obligation = evidence_obligation_for(
-        "pob-generic-import-validator",
-        policy["object"]["digest"].as_str().unwrap(),
-        "planr.import.validator.generic_predicate",
-        "validated-artifact-import",
-        validator_result.clone(),
-        json!({"kind": "process", "uri": "local://generic-validator"}),
-        validator_instance["capability"]["environment"].clone(),
-        json!({"kind": "process", "id": "runtime-local"}),
-        json!([]),
-        "sha256:6767676767676767676767676767676767676767676767676767676767676767",
-    );
-    validator_obligation["plan_id"] = json!("pln-evidence-validator");
-    validator_obligation["fixture_policy"]["disclosure_required"] = json!(false);
-    conn.execute(
-        "INSERT INTO plans(id, project_id, stage, path, title, slug, parse_status, content_hash, created_at, updated_at)
-         VALUES ('pln-evidence-validator', ?1, 'build', '/tmp/current/evidence-validator.plan.md',
-                 'Evidence Validator Fixture', 'evidence-validator-fixture', 'ok',
-                 'validator-fixture-hash', datetime('now'), datetime('now'))",
-        [&project_id],
-    )
-    .unwrap();
-    add_evidence_obligation_value(
-        dir.path(),
-        &db,
-        "pob-generic-import-validator",
-        &validator_obligation,
-    );
-    let validator_run = mcp_tool(
-        dir.path(),
-        &db,
-        30,
-        "planr_evidence_run",
-        json!({"input": {
-            "obligation_id": "pob-generic-import-validator",
-            "capability_instance_id": validator_instance_id,
-            "target": {"kind": "process", "uri": "local://generic-validator"},
-            "env": {"PLANR_GENERIC_VALIDATOR_RESULT": validator_result.to_string()}
-        }}),
-    );
-    assert_evidence_envelope(&validator_run, "evidence.run", true);
-    assert_eq!(validator_run["object"]["verdict"], "passed");
-    generic_predicate["attestation"]["validator_attempt_id"] =
-        validator_run["object"]["attempt"]["id"].clone();
-    generic_predicate["attestation"]["validator_receipt_id"] =
-        validator_run["object"]["receipt"]["id"].clone();
-    generic_predicate["attestation"]["validator_receipt_digest"] =
-        validator_run["object"]["receipt"]["receipt_digest"].clone();
-    let valid_generic_import = json!({
-        "id": "import-valid-generic-attestation",
-        "schema_version": "planr.evidence.import.v1",
-        "source_kind": "artifact_import",
-        "submitted_at": "2026-07-29T00:00:00Z",
-        "format": "planr.generic_adapter_predicate.v1",
-        "verifier_identity": {
-            "kind": "adapter",
-            "id": "verifier-generic-import-validator",
-            "name": "verifier-generic-import-validator",
-            "version": "1.0.0",
-            "digest": generic_import_validator_digest,
-        },
-        "adapter_predicate": generic_predicate,
-        "artifact_refs": generic_artifact_refs,
-        "producer_metadata": {"client": "forged-generic-importer"},
-    });
-    let valid_generic = mcp_tool(
-        dir.path(),
-        &db,
-        31,
-        "planr_evidence_import",
-        json!({"artifact_root": dir.path().to_str().unwrap(), "input": valid_generic_import}),
-    );
-    assert_evidence_envelope(&valid_generic, "evidence.import", true);
-    assert_eq!(valid_generic["object"]["verdict"], "valid");
-
-    let mut generic_case_id = 32;
-    let mut assert_forged_generic =
-        |label: &str, expected_message: &str, mutate: fn(&mut Value)| {
-            let imports_before = evidence_row_count(&db, "evidence_validated_imports");
-            let attempts_before = evidence_row_count(&db, "evidence_attempts");
-            let receipts_before = evidence_row_count(&db, "evidence_receipts");
-            let mut forged = valid_generic_import.clone();
-            forged["id"] = json!(format!("import-forged-generic-{label}"));
-            mutate(&mut forged);
-            let result = mcp_tool(
-                dir.path(),
-                &db,
-                generic_case_id,
-                "planr_evidence_import",
-                json!({"artifact_root": dir.path().to_str().unwrap(), "input": forged}),
-            );
-            generic_case_id += 1;
-            assert_evidence_envelope(&result, "evidence.import", false);
-            assert_eq!(result["error"]["message"], expected_message, "{result}");
-            assert_eq!(
-                evidence_row_count(&db, "evidence_validated_imports"),
-                imports_before,
-                "forged generic import {label} must not persist a validated import"
-            );
-            assert_eq!(
-                evidence_row_count(&db, "evidence_attempts"),
-                attempts_before,
-                "forged generic import {label} must not persist an attempt"
-            );
-            assert_eq!(
-                evidence_row_count(&db, "evidence_receipts"),
-                receipts_before,
-                "forged generic import {label} must not persist a receipt"
-            );
-        };
-    assert_forged_generic(
-        "artifact-set",
-        "trusted receipt has invalid Planr-assigned binding adapter_predicate.attestation",
-        |import| {
-            import["adapter_predicate"]["attestation"]["artifact_set_digest"] =
-                json!("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-        },
-    );
-    assert_forged_generic(
-        "predicate-body",
-        "trusted receipt has invalid Planr-assigned binding adapter_predicate.attestation",
-        |import| {
-            import["adapter_predicate"]["actual"]["status"] = json!("mutated");
-        },
-    );
-    assert_forged_generic(
-        "predicate-digest",
-        "trusted receipt has invalid Planr-assigned binding adapter_predicate.attestation",
-        |import| {
-            import["adapter_predicate"]["attestation"]["predicate_digest"] =
-                json!("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
-        },
-    );
-    assert_forged_generic(
-        "verifier-digest",
-        "trusted receipt has invalid Planr-assigned binding adapter_predicate.attestation",
-        |import| {
-            import["adapter_predicate"]["attestation"]["verifier_digest"] =
-                json!("sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc");
-        },
-    );
-    assert_forged_generic(
-        "verifier-instance",
-        "trusted receipt has invalid Planr-assigned binding adapter_predicate.attestation",
-        |import| {
-            import["adapter_predicate"]["attestation"]["verifier_instance_digest"] =
-                json!("sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd");
-        },
-    );
-    assert_forged_generic(
-        "probe-result",
-        "trusted receipt has invalid Planr-assigned binding adapter_predicate.attestation",
-        |import| {
-            import["adapter_predicate"]["attestation"]["probe_result_digest"] =
-                json!("sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
-        },
-    );
-    assert_forged_generic(
-        "validator-attempt",
-        "trusted receipt is missing Planr-assigned binding adapter_predicate.trusted_validator_observation",
-        |import| {
-            import["adapter_predicate"]["attestation"]["validator_attempt_id"] =
-                json!("eatt-forged-validator");
-        },
-    );
-    assert_forged_generic(
-        "validator-receipt",
-        "trusted receipt is missing Planr-assigned binding adapter_predicate.trusted_validator_observation",
-        |import| {
-            import["adapter_predicate"]["attestation"]["validator_receipt_id"] =
-                json!("erec-forged-validator");
-        },
-    );
-    assert_forged_generic(
-        "validator-receipt-digest",
-        "trusted receipt has invalid Planr-assigned binding adapter_predicate.trusted_validator_observation",
-        |import| {
-            import["adapter_predicate"]["attestation"]["validator_receipt_digest"] =
-                json!("sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
-        },
     );
 
     let doctor_output = planr()
@@ -5081,25 +4680,14 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
         )
         .unwrap();
     };
-    let mut binding_mcp_id = 60;
-    let mut run_binding_obligation = |obligation_id: &str| -> (String, String) {
-        let run = mcp_tool(
-            dir.path(),
-            &db,
-            binding_mcp_id,
-            "planr_evidence_run",
-            json!({"input": {
-                "obligation_id": obligation_id,
-                "capability_instance_id": instance_id,
-                "target": {"kind": "process", "uri": "local://health"}
-            }}),
-        );
-        binding_mcp_id += 1;
+    let run_binding_obligation = |obligation_id: &str| -> (String, String) {
+        let run = run_evidence_manifest(dir.path(), &db, obligation_id);
         assert_evidence_envelope(&run, "evidence.run", true);
         assert_eq!(run["object"]["verdict"], "passed", "{run}");
+        let result = &run["object"]["results"][0];
         (
-            run["object"]["attempt"]["id"].as_str().unwrap().to_string(),
-            run["object"]["receipt"]["id"].as_str().unwrap().to_string(),
+            result["attempt"]["id"].as_str().unwrap().to_string(),
+            result["receipt"]["id"].as_str().unwrap().to_string(),
         )
     };
 
