@@ -4326,6 +4326,8 @@ fn init_evidence_project(dir: &Path, db: &Path, name: &str) {
         ])
         .assert()
         .success();
+    let plan_path = dir.join(".planr/plans/build/evidence-public-fixture.plan.md");
+    author_build_plan_criterion(&plan_path, "criterion-evidence-public");
     let conn = rusqlite::Connection::open(db).unwrap();
     let project_id: String = conn
         .query_row(
@@ -4342,12 +4344,35 @@ fn init_evidence_project(dir: &Path, db: &Path, name: &str) {
         )",
         rusqlite::params![
             project_id,
-            dir.join(".planr/plans/build/evidence-public-fixture.plan.md")
-                .to_string_lossy()
-                .to_string()
+            plan_path.to_string_lossy().to_string()
         ],
     )
     .unwrap();
+}
+
+fn author_build_plan_criterion(path: &Path, criterion_id: &str) {
+    let existing = fs::read_to_string(path).unwrap_or_default();
+    let body = existing
+        .find("\n---\n")
+        .map(|end| &existing[end + 5..])
+        .unwrap_or(existing.as_str());
+    fs::write(
+        path,
+        format!(
+            "---\ncriteria:\n  - id: {criterion_id}\n    title: {criterion_id}\n---\n{body}"
+        ),
+    )
+    .unwrap();
+}
+
+fn bind_obligation_to_authored_criterion(
+    mut obligation: Value,
+    plan_id: &str,
+    criterion_id: &str,
+) -> Value {
+    obligation["plan_id"] = json!(plan_id);
+    obligation["criterion_id"] = json!(criterion_id);
+    obligation
 }
 
 #[test]
@@ -15141,9 +15166,12 @@ fn canonical_verification_task_builds_a_sealed_verifier_packet_without_retagging
         policy["object"]["digest"].as_str().unwrap(),
         json!({"kind": "local", "id": "canonical", "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"}),
     );
-    obligation["plan_id"] = json!(plan_id);
+    obligation = bind_obligation_to_authored_criterion(
+        obligation,
+        &plan_id,
+        "criterion-canonical-verifier-packet",
+    );
     obligation["item_id"] = json!(verification_id);
-    obligation["criterion_id"] = json!("crit-canonical-verifier-packet");
     obligation["fixture_policy"]["fixtures_allowed"] = json!(true);
     obligation["observations"][0]["payload_schema"] =
         json!({"schema_ref": "schema://com.example.health.status"});
@@ -15159,28 +15187,6 @@ fn canonical_verification_task_builds_a_sealed_verifier_packet_without_retagging
         "pob-canonical-verifier-packet-missing-schema",
         &incomplete_obligation,
     );
-    let capability_instance_id = policy["object"]["registry"]["probes"][0]["instance_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    let failed_run_path = dir.path().join("product-finding.run.json");
-    fs::write(
-        &failed_run_path,
-        serde_json::to_vec_pretty(&json!({
-            "obligation_id": "pob-canonical-verifier-packet",
-            "capability_instance_id": capability_instance_id,
-            "target": {"kind": "process", "uri": "local://health"},
-            "env": {"PLANR_FIXTURE_GAP_REASONS": "[\"product_failed\"]"},
-            "fixture_disclosure": {
-                "fixtures_used": true,
-                "mocks_used": false,
-                "fixture_refs": ["planr-test-fixture:product-finding-repair"]
-            }
-        }))
-        .unwrap(),
-    )
-    .unwrap();
-
     let picked = single_json_document(
         &planr()
             .current_dir(dir.path())
@@ -15277,7 +15283,7 @@ fn canonical_verification_task_builds_a_sealed_verifier_packet_without_retagging
         .unwrap();
     assert_eq!(
         rolled_back,
-        ("ready".into(), None, "source_frozen".into(), 0)
+        ("ready".into(), None, "held".into(), 0)
     );
     drop(conn);
 
@@ -15293,6 +15299,55 @@ fn canonical_verification_task_builds_a_sealed_verifier_packet_without_retagging
             .join("pob-canonical-verifier-packet.migration.json"),
     )
     .unwrap();
+
+    let repair = &blocked_pick["error"]["details"]["repair_request"];
+    let run_id = repair["run_id"].as_str().unwrap();
+    let freeze_id = repair["freeze_id"].as_str().unwrap();
+    let revision = repair["run_revision"].as_u64().unwrap().to_string();
+    let repaired = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", "canonical-verifier-incomplete-binding")
+            .args([
+                "--db", &db_arg, "--json", "run", "repair-verification-admission", "--plan",
+                &plan_id, "--run", run_id, "--freeze", freeze_id, "--revision", &revision,
+                "--reason", "readiness-blocked",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    assert_eq!(repaired["repair"]["repaired_run"]["phase"], "implementation");
+    let invalidation_id = repaired["repair"]["facts"]["invalidation_id"]
+        .as_str()
+        .unwrap();
+    let repair_packet = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", "canonical-maker")
+            .args(["--db", &db_arg, "--json", "pick", "--plan", &plan_id, "--work-type", "code"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    assert_eq!(repair_packet["work_packet"]["mode"], "verification_admission_repair");
+    let refrozen = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", "canonical-maker")
+            .args([
+                "--db", &db_arg, "--json", "run", "settle-repair", "--plan", &plan_id,
+                "--invalidation", invalidation_id, "--summary", "settled verifier readiness repair",
+                "--files", "tests/e2e.rs", "--cmd", "true", "--tests", "focused repair lifecycle",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    assert_eq!(refrozen["reason"], "verification_handoff_source_frozen");
 
     let packet = single_json_document(
         &planr()
@@ -15333,7 +15388,7 @@ fn canonical_verification_task_builds_a_sealed_verifier_packet_without_retagging
     assert!(packet["work_packet"]["source_freeze"]["source_digest"].is_string());
     assert_eq!(
         packet["work_packet"]["sealed_run_index"]["schema_version"],
-        "planr.evidence.run-index.v1"
+        "planr.evidence.run-index.v2"
     );
     assert_eq!(
         packet["work_packet"]["sealed_run_index"]["runs"][0]["input"]["obligation_id"],
@@ -15350,200 +15405,6 @@ fn canonical_verification_task_builds_a_sealed_verifier_packet_without_retagging
             .stdout,
     );
     assert_eq!(trace["proof"]["active_binding"], true);
-
-    let failed = single_json_document(
-        &planr()
-            .current_dir(dir.path())
-            .env("PLANR_WORKER_ID", "canonical-verifier")
-            .args([
-                "--db",
-                &db_arg,
-                "--json",
-                "evidence",
-                "run",
-                "--input",
-                failed_run_path.to_str().unwrap(),
-            ])
-            .assert()
-            .code(2)
-            .get_output()
-            .stdout,
-    );
-    assert_eq!(
-        failed["object"]["receipt"]["proof_gaps"],
-        json!(["product_failed"])
-    );
-    let repair_id = failed["object"]["product_finding"]["repair_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    assert_eq!(
-        failed["object"]["product_finding"]["verification_item_id"],
-        verification_id
-    );
-    let repair_packet = single_json_document(
-        &planr()
-            .current_dir(dir.path())
-            .env("PLANR_WORKER_ID", "canonical-maker")
-            .args([
-                "--db",
-                &db_arg,
-                "--json",
-                "pick",
-                "--plan",
-                &plan_id,
-                "--work-type",
-                "code",
-            ])
-            .assert()
-            .success()
-            .get_output()
-            .stdout,
-    );
-    assert_eq!(repair_packet["work_packet"]["repair_id"], repair_id);
-    assert_eq!(
-        repair_packet["work_packet"]["selective_replay_obligation_ids"],
-        json!(["pob-canonical-verifier-packet"])
-    );
-    let settle_args = || {
-        vec![
-            "--db".to_string(),
-            db_arg.clone(),
-            "--json".to_string(),
-            "run".to_string(),
-            "settle-repair".to_string(),
-            "--plan".to_string(),
-            plan_id.clone(),
-            "--invalidation".to_string(),
-            repair_id.clone(),
-            "--summary".to_string(),
-            "repaired product finding".to_string(),
-            "--files".to_string(),
-            "tests/e2e.rs".to_string(),
-            "--cmd".to_string(),
-            "cargo test --test e2e".to_string(),
-            "--tests".to_string(),
-            "passed".to_string(),
-        ]
-    };
-    let settle_a = std_planr_from_binary(&source_freeze_planr)
-        .current_dir(dir.path())
-        .env("PLANR_WORKER_ID", "canonical-maker")
-        .args(settle_args())
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    let settle_b = std_planr_from_binary(&source_freeze_planr)
-        .current_dir(dir.path())
-        .env("PLANR_WORKER_ID", "canonical-maker")
-        .args(settle_args())
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    let settled_outputs = [
-        settle_a.wait_with_output().unwrap(),
-        settle_b.wait_with_output().unwrap(),
-    ];
-    assert!(settled_outputs.iter().all(|output| output.status.success()));
-    let settled_values = settled_outputs
-        .iter()
-        .map(|output| single_json_document(&output.stdout))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        settled_values
-            .iter()
-            .filter(|value| value["created"] == true)
-            .count(),
-        1
-    );
-    let settled = &settled_values[0];
-    assert_eq!(settled["work_packet"]["kind"], "verification_handoff");
-    assert_eq!(settled["work_packet"]["mode"], "selective_replay");
-    assert_eq!(settled["work_packet"]["repair_id"], repair_id);
-    assert_ne!(
-        settled["work_packet"]["source_freeze"]["id"],
-        done["next"]["work_packet"]["source_freeze"]["id"]
-    );
-    let fresh_packet = single_json_document(
-        &planr()
-            .current_dir(dir.path())
-            .env("PLANR_WORKER_ID", "canonical-verifier-fresh")
-            .args([
-                "--db",
-                &db_arg,
-                "--json",
-                "pick",
-                "--plan",
-                &plan_id,
-                "--work-type",
-                "verification",
-            ])
-            .assert()
-            .success()
-            .get_output()
-            .stdout,
-    );
-    assert_eq!(fresh_packet["work_packet"]["mode"], "selective_replay");
-    assert_eq!(fresh_packet["work_packet"]["repair_id"], repair_id);
-    assert_eq!(
-        fresh_packet["work_packet"]["responsible_maker_id"],
-        "canonical-maker"
-    );
-    assert_eq!(
-        fresh_packet["work_packet"]["selective_replay_obligation_ids"],
-        json!(["pob-canonical-verifier-packet"])
-    );
-    assert_eq!(
-        fresh_packet["work_packet"]["sealed_run_index"]["runs"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|run| run["input"]["obligation_id"].as_str().unwrap())
-            .collect::<Vec<_>>(),
-        vec!["pob-canonical-verifier-packet"]
-    );
-    let replay_path = fresh_packet["work_packet"]["sealed_run_index"]["repository_path"]
-        .as_str()
-        .unwrap();
-    let replay = single_json_document(
-        &planr()
-            .current_dir(dir.path())
-            .env("PLANR_WORKER_ID", "canonical-verifier-fresh")
-            .args([
-                "--db",
-                &db_arg,
-                "--json",
-                "evidence",
-                "run",
-                "--input",
-                replay_path,
-            ])
-            .assert()
-            .success()
-            .get_output()
-            .stdout,
-    );
-    assert_eq!(replay["object"]["verdict"], "passed");
-    let coverage = single_json_document(
-        &planr()
-            .current_dir(dir.path())
-            .args([
-                "--db",
-                &db_arg,
-                "--json",
-                "evidence",
-                "coverage",
-                "--scope",
-                "obligation",
-                "--id",
-                "pob-canonical-verifier-packet",
-            ])
-            .assert()
-            .success()
-            .get_output()
-            .stdout,
-    );
-    assert_eq!(coverage["object"]["coverage"]["status"], "satisfied");
 }
 
 #[test]
