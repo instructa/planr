@@ -563,10 +563,9 @@ impl App {
     ) -> Result<()> {
         match command {
             Some(PickCommand::Release(args)) => {
-                if let Some(value) = self.release_verification_pick_value(
-                    &args.item_id,
-                    args.force,
-                )? {
+                if let Some(value) =
+                    self.release_verification_pick_value(&args.item_id, args.force)?
+                {
                     self.emit(value, "verification pick released".to_string())?;
                     return Ok(());
                 }

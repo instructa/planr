@@ -377,7 +377,10 @@ pub fn classify_current_verification(
     } else if facts.admission.is_none() {
         Some(CurrentVerificationInconsistency::MissingAdmission)
     } else {
-        let admission = facts.admission.as_ref().expect("admission presence checked");
+        let admission = facts
+            .admission
+            .as_ref()
+            .expect("admission presence checked");
         if admission.plan_id != facts.plan_id {
             Some(CurrentVerificationInconsistency::AdmissionPlanMismatch)
         } else if admission.run_id != facts.run_id {
@@ -477,9 +480,7 @@ pub fn resolve_evidence_invalidation_kind(
         | "verification_admission_repair:sealed-run-rejected"
         | "verification_admission_repair:capability-admission-failed" => {
             if finding_id.is_some() || !affected_evidence_ids.is_empty() {
-                return Err(
-                    EvidenceInvalidationKindViolation::VerificationAdmissionShapeInvalid,
-                );
+                return Err(EvidenceInvalidationKindViolation::VerificationAdmissionShapeInvalid);
             }
             Ok(Some(EvidenceInvalidationKind::VerificationAdmission))
         }
@@ -1237,10 +1238,7 @@ pub fn retire_premature_source_freeze_feature_run(
         || facts.frozen_source_revision.trim().is_empty()
         || facts.frozen_source_digest.trim().is_empty()
         || facts.open_outcome_ids.is_empty()
-        || facts
-            .open_outcome_ids
-            .iter()
-            .any(|id| id.trim().is_empty())
+        || facts.open_outcome_ids.iter().any(|id| id.trim().is_empty())
         || facts
             .open_outcome_ids
             .iter()
@@ -1382,15 +1380,18 @@ pub fn retire_inconsistent_verification_feature_run(
     retired_run.active_batch_id = None;
     retired_run.batch_outcome_count = 0;
     validate_feature_run(&retired_run)?;
-    let batch_effect = facts.batch.as_ref().map(|batch| InconsistentVerificationBatchEffect {
-        id: batch.id.clone(),
-        previous_status: batch.status,
-        disposition: if batch.status == ExecutionBatchStatus::Ended {
-            InconsistentVerificationBatchDisposition::PreservedEnded
-        } else {
-            InconsistentVerificationBatchDisposition::Ended
-        },
-    });
+    let batch_effect = facts
+        .batch
+        .as_ref()
+        .map(|batch| InconsistentVerificationBatchEffect {
+            id: batch.id.clone(),
+            previous_status: batch.status,
+            disposition: if batch.status == ExecutionBatchStatus::Ended {
+                InconsistentVerificationBatchDisposition::PreservedEnded
+            } else {
+                InconsistentVerificationBatchDisposition::Ended
+            },
+        });
     Ok(InconsistentVerificationRetirementTransition {
         request: request.clone(),
         facts: facts.clone(),
@@ -1398,9 +1399,7 @@ pub fn retire_inconsistent_verification_feature_run(
         previous_phase: run.phase,
         batch_effect,
         released_role_owners: run.role_owners.clone(),
-        released_verification_reservation_ids: facts
-            .active_verification_reservation_ids
-            .clone(),
+        released_verification_reservation_ids: facts.active_verification_reservation_ids.clone(),
         released_verification_item_id: current
             .verification_item
             .as_ref()

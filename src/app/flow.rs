@@ -543,9 +543,14 @@ impl App {
                         escalation: escalation.clone(),
                     },
                 )?;
-                let log_id = Some(self.latest_completion_log_id(input.item_id)?.ok_or_else(|| {
-                    anyhow!("already_settled_outcome_completion_log_missing:{}", input.item_id)
-                })?);
+                let log_id = Some(self.latest_completion_log_id(input.item_id)?.ok_or_else(
+                    || {
+                        anyhow!(
+                            "already_settled_outcome_completion_log_missing:{}",
+                            input.item_id
+                        )
+                    },
+                )?);
                 (outcome_settlement, log_id)
             } else {
                 let materiality = self.settlement_materiality(
@@ -571,14 +576,13 @@ impl App {
                 } else {
                     None
                 };
-                let outcome_settlement = self.settle_feature_run_outcome(
-                    super::execution_run::OutcomeSettlement {
+                let outcome_settlement =
+                    self.settle_feature_run_outcome(super::execution_run::OutcomeSettlement {
                         item_id: input.item_id,
                         summary: input.summary,
                         materiality: &materiality,
                         escalation,
-                    },
-                )?;
+                    })?;
                 (outcome_settlement, log_id)
             };
             let already_settled = outcome_settlement.disposition
@@ -996,14 +1000,13 @@ impl App {
                 {
                     bail!("injected_failure: after completion log");
                 }
-                let outcome_settlement = self.settle_feature_run_outcome(
-                    super::execution_run::OutcomeSettlement {
+                let outcome_settlement =
+                    self.settle_feature_run_outcome(super::execution_run::OutcomeSettlement {
                         item_id: &item_id,
                         summary: &args.summary,
                         materiality: &materiality,
                         escalation: escalation.clone(),
-                    },
-                )?;
+                    })?;
                 (outcome_settlement, log_id)
             };
             let already_settled = outcome_settlement.disposition

@@ -29,18 +29,63 @@ fn planr() -> Command {
 }
 
 #[test]
-fn inconsistent_verification_restart_retires_atomically_and_successor_starts_only_on_ordinary_pick() {
+fn inconsistent_verification_restart_retires_atomically_and_successor_starts_only_on_ordinary_pick()
+{
     let dir = tempdir().unwrap();
     let db = dir.path().join("inconsistent-verification.sqlite");
     let db_arg = db.to_str().unwrap().to_string();
-    planr().current_dir(dir.path()).args(["--db", &db_arg, "project", "init", "Inconsistent verification"]).assert().success();
-    let product = single_json_document(&planr().current_dir(dir.path()).args(["--db", &db_arg, "--json", "plan", "new", "Inconsistent verification plan"]).assert().success().get_output().stdout);
-    let build = single_json_document(&planr().current_dir(dir.path()).args(["--db", &db_arg, "--json", "plan", "split", product["plan"]["id"].as_str().unwrap(), "--slice", "Inconsistent verification build"]).assert().success().get_output().stdout);
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "project",
+            "init",
+            "Inconsistent verification",
+        ])
+        .assert()
+        .success();
+    let product = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                &db_arg,
+                "--json",
+                "plan",
+                "new",
+                "Inconsistent verification plan",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    let build = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                &db_arg,
+                "--json",
+                "plan",
+                "split",
+                product["plan"]["id"].as_str().unwrap(),
+                "--slice",
+                "Inconsistent verification build",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
     let plan_id = build["plan"]["id"].as_str().unwrap().to_string();
     let plan_path = build["plan"]["path"].as_str().unwrap().to_string();
     let criterion_id = "criterion-inconsistent-verification-build";
     let conn = Connection::open(&db).unwrap();
-    let project_id: String = conn.query_row("SELECT id FROM projects LIMIT 1", [], |row| row.get(0)).unwrap();
+    let project_id: String = conn
+        .query_row("SELECT id FROM projects LIMIT 1", [], |row| row.get(0))
+        .unwrap();
     let contract = test_unbounded_feature_run_contract("run-inconsistent");
     conn.execute("INSERT INTO feature_runs(id, project_id, plan_id, status, phase, policy_digest, budget_contract_digest, source_revision, outcomes_settled, batch_outcome_count) VALUES ('run-inconsistent', ?1, ?2, 'active', 'verification', 'sha256:policy', ?3, 'source-current', 1, 1)", rusqlite::params![project_id, plan_id, contract.digest]).unwrap();
     insert_test_feature_run_contract(&conn, &contract);
@@ -57,29 +102,100 @@ fn inconsistent_verification_restart_retires_atomically_and_successor_starts_onl
     conn.execute("INSERT INTO events(project_id, item_id, worker_id, event_type, payload, timestamp) VALUES (?1, 'item-verification-current', 'verifier-current', 'feature_run_verification_admitted', ?2, datetime('now'))", rusqlite::params![project_id, admission.to_string()]).unwrap();
     drop(conn);
 
-    planr().current_dir(dir.path()).env("PLANR_WORKER_ID", "verifier-current").args(["--db", &db_arg, "--json", "run", "restart", "--plan", &plan_id, "--reason", "inconsistent-verification"]).assert().failure();
+    planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "verifier-current")
+        .args([
+            "--db",
+            &db_arg,
+            "--json",
+            "run",
+            "restart",
+            "--plan",
+            &plan_id,
+            "--reason",
+            "inconsistent-verification",
+        ])
+        .assert()
+        .failure();
     let conn = Connection::open(&db).unwrap();
     conn.execute("UPDATE events SET payload = json_set(payload, '$.run_revision', 99) WHERE event_type = 'feature_run_verification_admitted'", []).unwrap();
     drop(conn);
-    let retired = single_json_document(&planr().current_dir(dir.path()).env("PLANR_WORKER_ID", "verifier-current").args(["--db", &db_arg, "--json", "run", "restart", "--plan", &plan_id, "--reason", "inconsistent-verification"]).assert().success().get_output().stdout);
-    assert_eq!(retired["restart"]["facts"]["diagnosis"]["inconsistency"], "admission_revision_mismatch");
+    let retired = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", "verifier-current")
+            .args([
+                "--db",
+                &db_arg,
+                "--json",
+                "run",
+                "restart",
+                "--plan",
+                &plan_id,
+                "--reason",
+                "inconsistent-verification",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    assert_eq!(
+        retired["restart"]["facts"]["diagnosis"]["inconsistency"],
+        "admission_revision_mismatch"
+    );
     assert_eq!(retired["restart"]["batch_effect"]["disposition"], "ended");
-    assert_eq!(retired["restart"]["released_verification_reservation_ids"], json!(["reservation-inconsistent"]));
-    assert_eq!(retired["restart"]["released_verification_item_id"], "item-verification-current");
+    assert_eq!(
+        retired["restart"]["released_verification_reservation_ids"],
+        json!(["reservation-inconsistent"])
+    );
+    assert_eq!(
+        retired["restart"]["released_verification_item_id"],
+        "item-verification-current"
+    );
     assert!(retired["restart"]["successor_run_id"].is_null());
     let conn = Connection::open(&db).unwrap();
     let state: Value = serde_json::from_str(&conn.query_row("SELECT json_object('run',(SELECT status||':'||phase||':'||coalesce(active_batch_id,'null') FROM feature_runs WHERE id='run-inconsistent'),'batch',(SELECT status FROM execution_batches WHERE id='batch-inconsistent'),'freeze',(SELECT status FROM feature_run_source_freezes WHERE id='freeze-inconsistent'),'roles',(SELECT COUNT(*) FROM feature_run_role_leases WHERE run_id='run-inconsistent' AND released_at IS NULL),'reservation',(SELECT status FROM feature_run_budget_reservations WHERE id='reservation-inconsistent'),'item',(SELECT status||':'||coalesce(worker_id,'null') FROM items WHERE id='item-verification-current'),'outcomes',(SELECT COUNT(*) FROM execution_run_outcomes WHERE id='outcome-preserved'),'evidence',(SELECT COUNT(*) FROM proof_obligations WHERE id='pob-preserved'),'admissions',(SELECT COUNT(*) FROM events WHERE event_type='feature_run_verification_admitted'),'runs',(SELECT COUNT(*) FROM feature_runs))", [], |row| row.get::<_, String>(0)).unwrap()).unwrap();
-    assert_eq!(state, json!({"run":"cancelled:cancelled:null","batch":"ended","freeze":"invalidated","roles":0,"reservation":"released","item":"ready:null","outcomes":1,"evidence":1,"admissions":1,"runs":1}));
+    assert_eq!(
+        state,
+        json!({"run":"cancelled:cancelled:null","batch":"ended","freeze":"invalidated","roles":0,"reservation":"released","item":"ready:null","outcomes":1,"evidence":1,"admissions":1,"runs":1})
+    );
     drop(conn);
 
-    let successor = single_json_document(&planr().current_dir(dir.path()).env("PLANR_WORKER_ID", "ordinary-maker").args(["--db", &db_arg, "--json", "pick", "--plan", &plan_id, "--work-type", "code"]).assert().success().get_output().stdout);
+    let successor = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", "ordinary-maker")
+            .args([
+                "--db",
+                &db_arg,
+                "--json",
+                "pick",
+                "--plan",
+                &plan_id,
+                "--work-type",
+                "code",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
     assert_eq!(successor["work_packet"]["kind"], "outcome");
     assert_eq!(successor["item"]["id"], "item-successor");
     assert_eq!(successor["item"]["status"], "picked");
-    let successor_run_id = successor["work_packet"]["execution_state"]["feature_run"]["id"].as_str().expect("ordinary outcome pick must return a successor run id");
+    let successor_run_id = successor["work_packet"]["execution_state"]["feature_run"]["id"]
+        .as_str()
+        .expect("ordinary outcome pick must return a successor run id");
     assert_ne!(successor_run_id, "run-inconsistent");
     let conn = Connection::open(&db).unwrap();
-    assert_eq!(conn.query_row("SELECT COUNT(*) FROM feature_runs", [], |row| row.get::<_, i64>(0)).unwrap(), 2);
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM feature_runs", [], |row| row
+            .get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
 }
 
 #[test]
@@ -91,58 +207,200 @@ fn verification_admission_repair_settles_refreezes_and_replays_idempotently() {
     write_materiality_policy(dir.path());
     let run = |worker: &str, args: &[&str], succeeds: bool| -> Value {
         let mut command = planr();
-        command.current_dir(dir.path()).env("PLANR_WORKER_ID", worker).args(["--db", &db_arg, "--json"]).args(args);
+        command
+            .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", worker)
+            .args(["--db", &db_arg, "--json"])
+            .args(args);
         let assertion = command.assert();
-        let output = if succeeds { assertion.success() } else { assertion.failure() }.get_output().stdout.clone();
+        let output = if succeeds {
+            assertion.success()
+        } else {
+            assertion.failure()
+        }
+        .get_output()
+        .stdout
+        .clone();
         single_json_document(&output)
     };
-    run("fixture", &["project", "init", "Verification admission settlement"], true);
+    run(
+        "fixture",
+        &["project", "init", "Verification admission settlement"],
+        true,
+    );
     let plan_path = dir.path().join("verification-admission-settlement.plan.md");
     fs::write(&plan_path, "---\ncriteria:\n  - id: criterion-verification-admission-settlement\n    title: Verification admission settlement\n---\n# Verification admission settlement\n").unwrap();
     let conn = Connection::open(&db).unwrap();
-    let project_id: String = conn.query_row("SELECT id FROM projects LIMIT 1", [], |row| row.get(0)).unwrap();
+    let project_id: String = conn
+        .query_row("SELECT id FROM projects LIMIT 1", [], |row| row.get(0))
+        .unwrap();
     conn.execute("INSERT INTO plans(id, project_id, stage, path, title, slug, parse_status, content_hash, created_at, updated_at) VALUES ('plan-verification-admission-settlement', ?1, 'build', ?2, 'Verification admission settlement', 'verification-admission-settlement', 'ok', 'sha256:fixture', datetime('now'), datetime('now'))", rusqlite::params![project_id, plan_path.to_string_lossy()]).unwrap();
     conn.execute("INSERT INTO items(id, project_id, title, description, status, work_type, worker_id, plan_path, created_at, updated_at) VALUES ('item-verification-admission-build', ?1, 'Build', 'fixture outcome', 'picked', 'code', 'maker-verification-admission', ?2, datetime('now'), datetime('now'))", rusqlite::params![project_id, plan_path.to_string_lossy()]).unwrap();
     drop(conn);
-    let mut obligation = evidence_obligation("pob-verification-admission-settlement", "sha256:0000000000000000000000000000000000000000000000000000000000000000", json!({"kind":"local","id":"verification-admission-settlement"}));
+    let mut obligation = evidence_obligation(
+        "pob-verification-admission-settlement",
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        json!({"kind":"local","id":"verification-admission-settlement"}),
+    );
     obligation["plan_id"] = json!("plan-verification-admission-settlement");
     obligation["item_id"] = Value::Null;
     obligation["criterion_id"] = json!("criterion-verification-admission-settlement");
-    add_evidence_obligation_value(dir.path(), &db, "pob-verification-admission-settlement", &obligation);
+    add_evidence_obligation_value(
+        dir.path(),
+        &db,
+        "pob-verification-admission-settlement",
+        &obligation,
+    );
     init_git_repo(dir.path());
 
-    let done = run("maker-verification-admission", &["done", "item-verification-admission-build", "--summary", "built admission repair", "--cmd", "true", "--tests", "true", "--next"], true);
-    assert_eq!(done["next"]["work_packet"]["verification_item_id"], Value::Null);
-    let held = run("verifier-verification-admission", &["pick", "--plan", "plan-verification-admission-settlement", "--work-type", "verification"], false);
+    let done = run(
+        "maker-verification-admission",
+        &[
+            "done",
+            "item-verification-admission-build",
+            "--summary",
+            "built admission repair",
+            "--cmd",
+            "true",
+            "--tests",
+            "true",
+            "--next",
+        ],
+        true,
+    );
+    assert_eq!(
+        done["next"]["work_packet"]["verification_item_id"],
+        Value::Null
+    );
+    let held = run(
+        "verifier-verification-admission",
+        &[
+            "pick",
+            "--plan",
+            "plan-verification-admission-settlement",
+            "--work-type",
+            "verification",
+        ],
+        false,
+    );
     let details = &held["error"]["details"];
     let request = &details["repair_request"];
     assert_eq!(request["reason"], "readiness-blocked");
     assert!(request["run_index_digest"].is_null());
     assert_eq!(details["execution_state"]["phase"], "held");
-    assert_eq!(details["execution_state"]["verification_admission_repair"], *request);
-    assert!(details["execution_state"]["next_action"].as_str().unwrap().contains("run repair-verification-admission"));
-    assert!(!details.to_string().contains("selective_replay_obligation_ids"));
+    assert_eq!(
+        details["execution_state"]["verification_admission_repair"],
+        *request
+    );
+    assert!(
+        details["execution_state"]["next_action"]
+            .as_str()
+            .unwrap()
+            .contains("run repair-verification-admission")
+    );
+    assert!(
+        !details
+            .to_string()
+            .contains("selective_replay_obligation_ids")
+    );
     let run_id = request["run_id"].as_str().unwrap().to_string();
     let freeze_id = request["freeze_id"].as_str().unwrap().to_string();
     let revision = request["run_revision"].as_u64().unwrap().to_string();
-    let repaired = run("verifier-verification-admission", &["run", "repair-verification-admission", "--plan", "plan-verification-admission-settlement", "--run", &run_id, "--freeze", &freeze_id, "--revision", &revision, "--reason", "readiness-blocked"], true);
-    assert_eq!(repaired["repair"]["repaired_run"]["phase"], "implementation");
-    let invalidation_id = repaired["repair"]["facts"]["invalidation_id"].as_str().unwrap().to_string();
-    let repair_batch_id = repaired["repair"]["facts"]["repair_batch_id"].as_str().unwrap().to_string();
-    let packet = run("maker-verification-admission", &["pick", "--plan", "plan-verification-admission-settlement", "--work-type", "code"], true);
-    assert_eq!(packet["work_packet"]["mode"], "verification_admission_repair");
+    let repaired = run(
+        "verifier-verification-admission",
+        &[
+            "run",
+            "repair-verification-admission",
+            "--plan",
+            "plan-verification-admission-settlement",
+            "--run",
+            &run_id,
+            "--freeze",
+            &freeze_id,
+            "--revision",
+            &revision,
+            "--reason",
+            "readiness-blocked",
+        ],
+        true,
+    );
+    assert_eq!(
+        repaired["repair"]["repaired_run"]["phase"],
+        "implementation"
+    );
+    let invalidation_id = repaired["repair"]["facts"]["invalidation_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let repair_batch_id = repaired["repair"]["facts"]["repair_batch_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let packet = run(
+        "maker-verification-admission",
+        &[
+            "pick",
+            "--plan",
+            "plan-verification-admission-settlement",
+            "--work-type",
+            "code",
+        ],
+        true,
+    );
+    assert_eq!(
+        packet["work_packet"]["mode"],
+        "verification_admission_repair"
+    );
     assert_eq!(packet["work_packet"]["repair_id"], invalidation_id);
-    assert_eq!(packet["work_packet"]["execution_state"]["next_action"], "settle_verification_admission_repair");
-    assert!(packet["work_packet"].get("selective_replay_obligation_ids").is_none());
+    assert_eq!(
+        packet["work_packet"]["execution_state"]["next_action"],
+        "settle_verification_admission_repair"
+    );
+    assert!(
+        packet["work_packet"]
+            .get("selective_replay_obligation_ids")
+            .is_none()
+    );
 
-    let settle = || run("maker-verification-admission", &["run", "settle-repair", "--plan", "plan-verification-admission-settlement", "--invalidation", &invalidation_id, "--summary", "settled typed admission repair", "--files", "tests/e2e.rs", "--cmd", "cargo check --bin planr", "--tests", "focused invariant passed"], true);
+    let settle = || {
+        run(
+            "maker-verification-admission",
+            &[
+                "run",
+                "settle-repair",
+                "--plan",
+                "plan-verification-admission-settlement",
+                "--invalidation",
+                &invalidation_id,
+                "--summary",
+                "settled typed admission repair",
+                "--files",
+                "tests/e2e.rs",
+                "--cmd",
+                "cargo check --bin planr",
+                "--tests",
+                "focused invariant passed",
+            ],
+            true,
+        )
+    };
     let first = settle();
     assert_eq!(first["created"], true);
     assert_eq!(first["reason"], "verification_handoff_source_frozen");
     assert_eq!(first["item"], Value::Null);
     assert_eq!(first["work_packet"]["kind"], "verification_handoff");
     assert_eq!(first["work_packet"]["verification_item_id"], Value::Null);
-    for forbidden in ["mode", "repair_id", "responsible_maker_id", "selective_replay_obligation_ids"] { assert!(first["work_packet"].get(forbidden).is_none(), "{forbidden}: {first}"); }
+    for forbidden in [
+        "mode",
+        "repair_id",
+        "responsible_maker_id",
+        "selective_replay_obligation_ids",
+    ] {
+        assert!(
+            first["work_packet"].get(forbidden).is_none(),
+            "{forbidden}: {first}"
+        );
+    }
     let durable = || -> Value {
         let conn = Connection::open(&db).unwrap();
         let value: String = conn.query_row("SELECT json_object('phase',(SELECT phase FROM feature_runs WHERE id=?1),'active_batch',(SELECT active_batch_id FROM feature_runs WHERE id=?1),'batch_status',(SELECT status FROM execution_batches WHERE id=?2),'settlements',(SELECT COUNT(*) FROM feature_run_verification_admission_repair_settlements WHERE invalidation_id=?3),'settlement_events',(SELECT COUNT(*) FROM events WHERE event_type='feature_run_verification_admission_repair_settled'),'repair_events',(SELECT COUNT(*) FROM events WHERE event_type='feature_run_verification_admission_repaired'),'invalidations',(SELECT COUNT(*) FROM feature_run_evidence_invalidations WHERE run_id=?1),'freezes',(SELECT COUNT(*) FROM feature_run_source_freezes WHERE run_id=?1),'active_freezes',(SELECT COUNT(*) FROM feature_run_source_freezes WHERE run_id=?1 AND status='active'),'batches',(SELECT COUNT(*) FROM execution_batches WHERE run_id=?1),'reservations',(SELECT COUNT(*) FROM feature_run_budget_reservations WHERE run_id=?1),'observations',(SELECT COUNT(*) FROM feature_run_budget_observations WHERE run_id=?1))", rusqlite::params![run_id, repair_batch_id, invalidation_id], |row| row.get(0)).unwrap();
@@ -152,16 +410,50 @@ fn verification_admission_repair_settles_refreezes_and_replays_idempotently() {
     assert_eq!(after_first["phase"], "source_frozen");
     assert_eq!(after_first["active_batch"], repair_batch_id);
     assert_eq!(after_first["batch_status"], "ended");
-    assert_eq!((after_first["settlements"].clone(), after_first["settlement_events"].clone(), after_first["repair_events"].clone()), (json!(1), json!(1), json!(1)));
-    assert_eq!((after_first["invalidations"].clone(), after_first["freezes"].clone(), after_first["active_freezes"].clone()), (json!(1), json!(2), json!(1)));
+    assert_eq!(
+        (
+            after_first["settlements"].clone(),
+            after_first["settlement_events"].clone(),
+            after_first["repair_events"].clone()
+        ),
+        (json!(1), json!(1), json!(1))
+    );
+    assert_eq!(
+        (
+            after_first["invalidations"].clone(),
+            after_first["freezes"].clone(),
+            after_first["active_freezes"].clone()
+        ),
+        (json!(1), json!(2), json!(1))
+    );
     let replay = settle();
     assert_eq!(replay["created"], false);
-    assert_eq!(serde_json::to_vec(&replay["settlement"]).unwrap(), serde_json::to_vec(&first["settlement"]).unwrap());
-    assert_eq!(serde_json::to_vec(&replay["work_packet"]).unwrap(), serde_json::to_vec(&first["work_packet"]).unwrap());
+    assert_eq!(
+        serde_json::to_vec(&replay["settlement"]).unwrap(),
+        serde_json::to_vec(&first["settlement"]).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_vec(&replay["work_packet"]).unwrap(),
+        serde_json::to_vec(&first["work_packet"]).unwrap()
+    );
     assert_eq!(durable(), after_first);
-    let no_offer = run("maker-verification-admission", &["pick", "--plan", "plan-verification-admission-settlement", "--work-type", "code"], true);
+    let no_offer = run(
+        "maker-verification-admission",
+        &[
+            "pick",
+            "--plan",
+            "plan-verification-admission-settlement",
+            "--work-type",
+            "code",
+        ],
+        true,
+    );
     assert_eq!(no_offer["item"], Value::Null);
-    assert!(!no_offer.to_string().contains("verification_admission_repair"));
+    assert!(
+        !no_offer
+            .to_string()
+            .contains("verification_admission_repair")
+    );
     assert_eq!(durable(), after_first);
 }
 
@@ -22927,41 +23219,112 @@ fn already_settled_outcome_retry_reuses_settlement_and_freezes_source_once() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
     let db_arg = db.to_str().unwrap().to_string();
-    planr().current_dir(dir.path()).args(["--db", &db_arg, "project", "init", "Idempotent outcome retry"]).assert().success();
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            &db_arg,
+            "project",
+            "init",
+            "Idempotent outcome retry",
+        ])
+        .assert()
+        .success();
     let invoke = |args: &[&str]| -> Value {
-        single_json_document(&planr().current_dir(dir.path()).env("PLANR_WORKER_ID", "maker-idempotent-retry").args(["--db", &db_arg, "--json"]).args(args).assert().success().get_output().stdout)
+        single_json_document(
+            &planr()
+                .current_dir(dir.path())
+                .env("PLANR_WORKER_ID", "maker-idempotent-retry")
+                .args(["--db", &db_arg, "--json"])
+                .args(args)
+                .assert()
+                .success()
+                .get_output()
+                .stdout,
+        )
     };
     let product = invoke(&["plan", "new", "Idempotent retry product"]);
-    let build = invoke(&["plan", "split", product["plan"]["id"].as_str().unwrap(), "--slice", "Idempotent retry build"]);
+    let build = invoke(&[
+        "plan",
+        "split",
+        product["plan"]["id"].as_str().unwrap(),
+        "--slice",
+        "Idempotent retry build",
+    ]);
     let plan_id = build["plan"]["id"].as_str().unwrap().to_string();
     let plan_path = Path::new(build["plan"]["path"].as_str().unwrap());
     fs::write(plan_path, "---\nname: idempotent-retry-build\ncriteria:\n  - id: criterion-idempotent-retry\n    title: Retry freezes once\n---\n# Idempotent retry build\n\n## Scope Decision\n\nOne ordinary outcome.\n\n## Verification\n\nFocused public CLI proof.\n\n## Acceptance Criteria\n\nRetry reuses settlement.\n\n### TASK-001 (fix): Settle one outcome\n\nProve canonical retry.\n").unwrap();
     assert_eq!(invoke(&["plan", "check", &plan_id])["ok"], true);
     let map = invoke(&["map", "build", "--from", &plan_id]);
-    let item_id = map["created"][0]["id"].as_str().expect("map build must create the ordinary outcome").to_string();
+    let item_id = map["created"][0]["id"]
+        .as_str()
+        .expect("map build must create the ordinary outcome")
+        .to_string();
     let claimed_file = "retry-materiality.txt";
     fs::write(dir.path().join(claimed_file), "settled\n").unwrap();
     init_git_repo(dir.path());
     let binary = private_planr_binary(dir.path());
     let run = |args: &[&str]| -> Value {
-        single_json_document(&planr_from_binary(&binary).current_dir(dir.path()).env("PLANR_WORKER_ID", "maker-idempotent-retry").args(["--db", &db_arg, "--json"]).args(args).assert().success().get_output().stdout)
+        single_json_document(
+            &planr_from_binary(&binary)
+                .current_dir(dir.path())
+                .env("PLANR_WORKER_ID", "maker-idempotent-retry")
+                .args(["--db", &db_arg, "--json"])
+                .args(args)
+                .assert()
+                .success()
+                .get_output()
+                .stdout,
+        )
     };
     let picked = run(&["pick", "--plan", &plan_id, "--work-type", "fix"]);
     assert_eq!(picked["work_packet"]["kind"], "outcome");
     assert_eq!(picked["item"]["id"], item_id);
-    assert_eq!(picked["work_packet"]["execution_state"]["owner"]["worker_id"], "maker-idempotent-retry");
-    let done_args = ["done", item_id.as_str(), "--summary", "settled idempotent outcome", "--files", claimed_file, "--cmd", "true", "--tests", "true"];
+    assert_eq!(
+        picked["work_packet"]["execution_state"]["owner"]["worker_id"],
+        "maker-idempotent-retry"
+    );
+    let done_args = [
+        "done",
+        item_id.as_str(),
+        "--summary",
+        "settled idempotent outcome",
+        "--files",
+        claimed_file,
+        "--cmd",
+        "true",
+        "--tests",
+        "true",
+    ];
     let first = run(&done_args);
     assert_eq!(first["item"]["status"], "closed");
     assert_eq!(first["work_packet"]["transition"], "continue_batch");
-    let log_id = first["log_id"].as_str().expect("first settlement must return a completion log id").to_string();
-    let run_id = first["work_packet"]["run_id"].as_str().expect("first settlement must return a run id").to_string();
-    let batch_id = first["work_packet"]["batch_id"].as_str().expect("first settlement must return a batch id").to_string();
+    let log_id = first["log_id"]
+        .as_str()
+        .expect("first settlement must return a completion log id")
+        .to_string();
+    let run_id = first["work_packet"]["run_id"]
+        .as_str()
+        .expect("first settlement must return a run id")
+        .to_string();
+    let batch_id = first["work_packet"]["batch_id"]
+        .as_str()
+        .expect("first settlement must return a batch id")
+        .to_string();
     let persisted_materiality = first["materiality"].clone();
-    let settled_counters = (first["work_packet"]["execution_state"]["feature_run"]["outcomes_settled"].clone(), first["work_packet"]["batch_outcome_count"].clone());
-    assert_eq!(persisted_materiality["change_summary"]["files"], json!([claimed_file]));
+    let settled_counters = (
+        first["work_packet"]["execution_state"]["feature_run"]["outcomes_settled"].clone(),
+        first["work_packet"]["batch_outcome_count"].clone(),
+    );
+    assert_eq!(
+        persisted_materiality["change_summary"]["files"],
+        json!([claimed_file])
+    );
     assert_eq!(persisted_materiality["change_summary"]["changed_lines"], 0);
-    assert_eq!(first["work_packet"]["execution_state"]["feature_run"]["phase"], "implementation");
+    assert_eq!(
+        first["work_packet"]["execution_state"]["feature_run"]["phase"],
+        "implementation"
+    );
     let history = |conn: &Connection| -> Value {
         serde_json::from_str(&conn.query_row(
             "SELECT json_object('logs',(SELECT COUNT(*) FROM logs WHERE item_id=?1 AND kind='completion'),'outcomes',(SELECT COUNT(*) FROM execution_run_outcomes WHERE item_id=?1),'log_events',(SELECT COUNT(*) FROM events WHERE item_id=?1 AND event_type='log_created'),'close_events',(SELECT COUNT(*) FROM events WHERE item_id=?1 AND event_type='item_closed'),'materiality_events',(SELECT COUNT(*) FROM events WHERE item_id=?1 AND event_type='materiality_decided'),'budget_reservations',(SELECT COUNT(*) FROM feature_run_budget_reservations WHERE run_id=?2 AND boundary_key='implementation:'||?1 AND status='reconciled'),'budget_observations',(SELECT COUNT(*) FROM feature_run_budget_observations o JOIN feature_run_budget_reservations r ON r.id=o.reservation_id WHERE r.run_id=?2 AND r.boundary_key='implementation:'||?1),'outcome_row',(SELECT id||'|'||run_id||'|'||batch_id||'|'||item_id||'|'||ordinal||'|'||outcome_json FROM execution_run_outcomes WHERE item_id=?1),'log_id',(SELECT id FROM logs WHERE item_id=?1 AND kind='completion'))",
@@ -22977,21 +23340,85 @@ fn already_settled_outcome_retry_reuses_settlement_and_freezes_source_once() {
     assert_eq!(before["budget_reservations"], 1);
     assert_eq!(before["budget_observations"], 1);
     assert_eq!(before["log_id"], log_id);
-    assert_eq!(conn.query_row("SELECT phase FROM feature_runs WHERE id=?1", [&run_id], |row| row.get::<_, String>(0)).unwrap(), "implementation");
-    assert_eq!(conn.query_row("SELECT COUNT(*) FROM feature_run_source_freezes WHERE run_id=?1", [&run_id], |row| row.get::<_, i64>(0)).unwrap(), 0);
+    assert_eq!(
+        conn.query_row(
+            "SELECT phase FROM feature_runs WHERE id=?1",
+            [&run_id],
+            |row| row.get::<_, String>(0)
+        )
+        .unwrap(),
+        "implementation"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM feature_run_source_freezes WHERE run_id=?1",
+            [&run_id],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
     drop(conn);
-    fs::write(dir.path().join(claimed_file), "settled\nmutable worktree drift one\nmutable worktree drift two\n").unwrap();
-    let drift = StdCommand::new("git").arg("-C").arg(dir.path()).args(["diff", "--numstat", "--", claimed_file]).output().unwrap();
+    fs::write(
+        dir.path().join(claimed_file),
+        "settled\nmutable worktree drift one\nmutable worktree drift two\n",
+    )
+    .unwrap();
+    let drift = StdCommand::new("git")
+        .arg("-C")
+        .arg(dir.path())
+        .args(["diff", "--numstat", "--", claimed_file])
+        .output()
+        .unwrap();
     assert!(drift.status.success());
-    assert_eq!(String::from_utf8(drift.stdout).unwrap(), format!("2\t0\t{claimed_file}\n"));
+    assert_eq!(
+        String::from_utf8(drift.stdout).unwrap(),
+        format!("2\t0\t{claimed_file}\n")
+    );
     let conflict = single_json_document(
-        &planr_from_binary(&binary).current_dir(dir.path()).env("PLANR_WORKER_ID", "maker-idempotent-retry").args(["--db", &db_arg, "--json", "done", item_id.as_str(), "--summary", "conflicting retry summary", "--files", claimed_file, "--cmd", "true", "--tests", "true"]).assert().failure().get_output().stdout
+        &planr_from_binary(&binary)
+            .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", "maker-idempotent-retry")
+            .args([
+                "--db",
+                &db_arg,
+                "--json",
+                "done",
+                item_id.as_str(),
+                "--summary",
+                "conflicting retry summary",
+                "--files",
+                claimed_file,
+                "--cmd",
+                "true",
+                "--tests",
+                "true",
+            ])
+            .assert()
+            .failure()
+            .get_output()
+            .stdout,
     );
     assert_eq!(conflict["error"]["code"], "internal_error");
-    assert_eq!(conflict["error"]["message"], format!("already_settled_outcome_rejected:{run_id}:{item_id}:OutcomeSummaryMismatch"));
+    assert_eq!(
+        conflict["error"]["message"],
+        format!("already_settled_outcome_rejected:{run_id}:{item_id}:OutcomeSummaryMismatch")
+    );
     let conn = Connection::open(&db).unwrap();
-    assert_eq!(history(&conn), before, "conflicting retry must roll back before settlement mutation");
-    assert_eq!(conn.query_row("SELECT COUNT(*) FROM feature_run_source_freezes WHERE run_id=?1", [&run_id], |row| row.get::<_, i64>(0)).unwrap(), 0);
+    assert_eq!(
+        history(&conn),
+        before,
+        "conflicting retry must roll back before settlement mutation"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM feature_run_source_freezes WHERE run_id=?1",
+            [&run_id],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
     drop(conn);
     let mut retry_args = done_args.to_vec();
     retry_args.push("--next");
@@ -23002,20 +23429,59 @@ fn already_settled_outcome_retry_reuses_settlement_and_freezes_source_once() {
     assert_eq!(retry["work_packet"]["run_id"], run_id);
     assert_eq!(retry["work_packet"]["batch_id"], batch_id);
     assert_eq!(retry["materiality"], persisted_materiality);
-    assert_eq!((retry["work_packet"]["execution_state"]["feature_run"]["outcomes_settled"].clone(), retry["work_packet"]["batch_outcome_count"].clone()), settled_counters);
+    assert_eq!(
+        (
+            retry["work_packet"]["execution_state"]["feature_run"]["outcomes_settled"].clone(),
+            retry["work_packet"]["batch_outcome_count"].clone()
+        ),
+        settled_counters
+    );
     assert_eq!(retry["next"]["item"], Value::Null);
-    assert_eq!(retry["next"]["reason"], "nonbinding_final_review_handoff_source_frozen");
+    assert_eq!(
+        retry["next"]["reason"],
+        "nonbinding_final_review_handoff_source_frozen"
+    );
     assert_eq!(retry["next"]["work_packet"]["kind"], "final_review_handoff");
     let freeze = &retry["next"]["work_packet"]["source_freeze"];
-    let freeze_id = freeze["source_freeze"]["id"].as_str().expect("canonical handoff must return a non-null source freeze id");
-    assert!(freeze["source_freeze"]["source_revision"].as_str().is_some_and(|value| !value.is_empty()));
-    assert!(freeze["source_freeze"]["source_digest"].as_str().is_some_and(|value| value.starts_with("sha256:")));
+    let freeze_id = freeze["source_freeze"]["id"]
+        .as_str()
+        .expect("canonical handoff must return a non-null source freeze id");
+    assert!(
+        freeze["source_freeze"]["source_revision"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
+    assert!(
+        freeze["source_freeze"]["source_digest"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("sha256:"))
+    );
     assert_eq!(freeze["feature_run"]["phase"], "source_frozen");
     let conn = Connection::open(&db).unwrap();
-    assert_eq!(history(&conn), before, "retry must not mutate authoritative settlement history");
+    assert_eq!(
+        history(&conn),
+        before,
+        "retry must not mutate authoritative settlement history"
+    );
     assert_eq!(conn.query_row("SELECT COUNT(*) FROM feature_run_source_freezes WHERE run_id=?1 AND id=?2 AND status='active'", rusqlite::params![run_id, freeze_id], |row| row.get::<_, i64>(0)).unwrap(), 1);
-    assert_eq!(conn.query_row("SELECT status||':'||phase||':'||active_batch_id FROM feature_runs WHERE id=?1", [&run_id], |row| row.get::<_, String>(0)).unwrap(), format!("active:source_frozen:{batch_id}"));
-    assert_eq!(conn.query_row("SELECT status||':'||maker_worker_id FROM execution_batches WHERE id=?1", [&batch_id], |row| row.get::<_, String>(0)).unwrap(), "ended:maker-idempotent-retry");
+    assert_eq!(
+        conn.query_row(
+            "SELECT status||':'||phase||':'||active_batch_id FROM feature_runs WHERE id=?1",
+            [&run_id],
+            |row| row.get::<_, String>(0)
+        )
+        .unwrap(),
+        format!("active:source_frozen:{batch_id}")
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT status||':'||maker_worker_id FROM execution_batches WHERE id=?1",
+            [&batch_id],
+            |row| row.get::<_, String>(0)
+        )
+        .unwrap(),
+        "ended:maker-idempotent-retry"
+    );
 }
 
 #[test]
@@ -23024,7 +23490,13 @@ fn code_to_fix_continuation_leases_fix_without_premature_source_freeze() {
     let db = dir.path().join(".planr/planr.sqlite");
     planr()
         .current_dir(dir.path())
-        .args(["--db", db.to_str().unwrap(), "project", "init", "Code To Fix Continuation"])
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "project",
+            "init",
+            "Code To Fix Continuation",
+        ])
         .assert()
         .success();
     let plan_path = dir.path().join("code-to-fix.plan.md");
@@ -23112,7 +23584,11 @@ fn code_to_fix_continuation_leases_fix_without_premature_source_freeze() {
     assert_eq!(run["batch_outcome_count"], 1);
     let conn = Connection::open(&db).unwrap();
     let freezes: i64 = conn
-        .query_row("SELECT COUNT(*) FROM feature_run_source_freezes", [], |row| row.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM feature_run_source_freezes",
+            [],
+            |row| row.get(0),
+        )
         .unwrap();
     assert_eq!(freezes, 0);
 }
@@ -23121,8 +23597,11 @@ fn code_to_fix_continuation_leases_fix_without_premature_source_freeze() {
 fn itemless_verification_lifecycle_settles_admits_review_and_exhausts() {
     let invoke = |dir: &Path, db: &Path, worker: &str, args: &[&str], code: i32| {
         let mut command = planr();
-        command.current_dir(dir).env("PLANR_WORKER_ID", worker)
-            .args(["--db", db.to_str().unwrap(), "--json"]).args(args);
+        command
+            .current_dir(dir)
+            .env("PLANR_WORKER_ID", worker)
+            .args(["--db", db.to_str().unwrap(), "--json"])
+            .args(args);
         single_json_document(&command.assert().code(code).get_output().stdout)
     };
     let fixture = |one_shot: bool| {
@@ -23133,27 +23612,47 @@ fn itemless_verification_lifecycle_settles_admits_review_and_exhausts() {
         if one_shot {
             let manifest_digest = rewrite_evidence_runner_manifest(dir.path(), |manifest| {
                 manifest["repeatability"] = json!("non_repeatable_one_shot");
-                manifest["availability_probe"]["execution"]["args"] = json!(["-c", "if [ -z \"$PLANR_EVIDENCE_TARGET_JSON\" ]; then printf '{\"status\":\"ok\"}'; else printf 'not-json'; fi"]);
+                manifest["availability_probe"]["execution"]["args"] = json!([
+                    "-c",
+                    "if [ -z \"$PLANR_EVIDENCE_TARGET_JSON\" ]; then printf '{\"status\":\"ok\"}'; else printf 'not-json'; fi"
+                ]);
                 let execution = manifest["availability_probe"]["execution"].clone();
                 manifest["adapter_digest"] = json!(process_adapter_digest(&execution, vec![]));
             });
-            let manifest: Value = serde_json::from_slice(&fs::read(dir.path().join(".planr/evidence/adapters/runner.manifest.json")).unwrap()).unwrap();
+            let manifest: Value = serde_json::from_slice(
+                &fs::read(
+                    dir.path()
+                        .join(".planr/evidence/adapters/runner.manifest.json"),
+                )
+                .unwrap(),
+            )
+            .unwrap();
             rewrite_evidence_policy_fixture(dir.path(), |policy| {
                 policy["adapter_registrations"][0]["manifest_digest"] = json!(manifest_digest);
-                policy["adapter_registrations"][0]["execution_contract"] = manifest["availability_probe"]["execution"].clone();
+                policy["adapter_registrations"][0]["execution_contract"] =
+                    manifest["availability_probe"]["execution"].clone();
             });
         }
         init_evidence_project(dir.path(), &db, "Itemless Verification Lifecycle");
-        let plan_path = dir.path().join(".planr/plans/build/evidence-public-fixture.plan.md");
+        let plan_path = dir
+            .path()
+            .join(".planr/plans/build/evidence-public-fixture.plan.md");
         fs::create_dir_all(plan_path.parent().unwrap()).unwrap();
         fs::write(&plan_path, "---\ncriteria:\n  - id: crit-pob-itemless\n    title: Itemless lifecycle\n---\n# Itemless lifecycle\n").unwrap();
-        let mut obligation = evidence_obligation("pob-itemless", "unused", json!({"kind": "local", "id": "itemless"}));
-        obligation["observations"][0]["payload_schema"] = json!({"schema_ref": "schema://com.example.health.status"});
+        let mut obligation = evidence_obligation(
+            "pob-itemless",
+            "unused",
+            json!({"kind": "local", "id": "itemless"}),
+        );
+        obligation["observations"][0]["payload_schema"] =
+            json!({"schema_ref": "schema://com.example.health.status"});
         add_evidence_obligation_value(dir.path(), &db, "pob-itemless", &obligation);
         init_git_repo(dir.path());
         let source = evidence_source_binding(dir.path());
         let conn = Connection::open(&db).unwrap();
-        let project_id: String = conn.query_row("SELECT id FROM projects LIMIT 1", [], |row| row.get(0)).unwrap();
+        let project_id: String = conn
+            .query_row("SELECT id FROM projects LIMIT 1", [], |row| row.get(0))
+            .unwrap();
         let contract = test_unbounded_feature_run_contract("run-itemless");
         conn.execute("INSERT INTO feature_runs(id, project_id, plan_id, status, phase, policy_digest, source_revision, active_batch_id, outcomes_settled, batch_outcome_count, revision, budget_contract_digest) VALUES ('run-itemless', ?1, 'pln-evidence-public', 'active', 'source_frozen', 'sha256:policy', ?2, NULL, 1, 0, 0, ?3)", rusqlite::params![project_id, source["revision"].as_str().unwrap(), contract.digest]).unwrap();
         insert_test_feature_run_contract(&conn, &contract);
@@ -23164,45 +23663,206 @@ fn itemless_verification_lifecycle_settles_admits_review_and_exhausts() {
         (dir, db)
     };
     let (passing_dir, passing_db) = fixture(false);
-    let pick = invoke(passing_dir.path(), &passing_db, "verifier-itemless", &["pick", "--plan", "pln-evidence-public", "--work-type", "verification"], 0);
+    let pick = invoke(
+        passing_dir.path(),
+        &passing_db,
+        "verifier-itemless",
+        &[
+            "pick",
+            "--plan",
+            "pln-evidence-public",
+            "--work-type",
+            "verification",
+        ],
+        0,
+    );
     assert_eq!(pick["work_packet"]["item_id"], Value::Null);
-    assert_eq!(pick["work_packet"]["sealed_run_index"]["schema_version"], "planr.evidence.run-index.v2");
-    let run_path = pick["work_packet"]["sealed_run_index"]["repository_path"].as_str().unwrap();
-    assert_eq!(invoke(passing_dir.path(), &passing_db, "verifier-itemless", &["evidence", "run", "--input", run_path], 0)["object"]["verdict"], "passed");
+    assert_eq!(
+        pick["work_packet"]["sealed_run_index"]["schema_version"],
+        "planr.evidence.run-index.v2"
+    );
+    let run_path = pick["work_packet"]["sealed_run_index"]["repository_path"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        invoke(
+            passing_dir.path(),
+            &passing_db,
+            "verifier-itemless",
+            &["evidence", "run", "--input", run_path],
+            0
+        )["object"]["verdict"],
+        "passed"
+    );
     let conn = Connection::open(&passing_db).unwrap();
     conn.execute("INSERT INTO items(id, project_id, title, description, status, work_type, plan_path, created_at, updated_at) SELECT 'item-ready-unleased', project_id, 'Ready verifier', 'projection', 'ready', 'verification', path, datetime('now'), datetime('now') FROM plans WHERE id = 'pln-evidence-public'", []).unwrap();
     drop(conn);
-    let before = (evidence_row_count(&passing_db, "evidence_attempts"), evidence_row_count(&passing_db, "evidence_receipts"));
-    let blocked = invoke(passing_dir.path(), &passing_db, "verifier-itemless", &["evidence", "coverage", "--scope", "plan", "--id", "pln-evidence-public"], 1);
-    assert!(blocked["error"]["message"].as_str().unwrap().contains("verification_coverage_requires_verification_item_lease"));
-    assert_eq!(before, (evidence_row_count(&passing_db, "evidence_attempts"), evidence_row_count(&passing_db, "evidence_receipts")));
+    let before = (
+        evidence_row_count(&passing_db, "evidence_attempts"),
+        evidence_row_count(&passing_db, "evidence_receipts"),
+    );
+    let blocked = invoke(
+        passing_dir.path(),
+        &passing_db,
+        "verifier-itemless",
+        &[
+            "evidence",
+            "coverage",
+            "--scope",
+            "plan",
+            "--id",
+            "pln-evidence-public",
+        ],
+        1,
+    );
+    assert!(
+        blocked["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("verification_coverage_requires_verification_item_lease")
+    );
+    assert_eq!(
+        before,
+        (
+            evidence_row_count(&passing_db, "evidence_attempts"),
+            evidence_row_count(&passing_db, "evidence_receipts")
+        )
+    );
     let conn = Connection::open(&passing_db).unwrap();
     let blocked_state: (String, i64, i64) = conn.query_row("SELECT phase, (SELECT COUNT(*) FROM feature_run_role_leases WHERE run_id = feature_runs.id AND role = 'verifier' AND released_at IS NULL), (SELECT COUNT(*) FROM logs WHERE item_id = 'item-ready-unleased') FROM feature_runs WHERE id = 'run-itemless'", [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).unwrap();
     assert_eq!(blocked_state, ("verification".into(), 1, 0));
-    conn.execute("UPDATE items SET status = 'cancelled' WHERE id = 'item-ready-unleased'", []).unwrap();
+    conn.execute(
+        "UPDATE items SET status = 'cancelled' WHERE id = 'item-ready-unleased'",
+        [],
+    )
+    .unwrap();
     drop(conn);
-    let coverage = invoke(passing_dir.path(), &passing_db, "verifier-itemless", &["evidence", "coverage", "--scope", "plan", "--id", "pln-evidence-public"], 0);
+    let coverage = invoke(
+        passing_dir.path(),
+        &passing_db,
+        "verifier-itemless",
+        &[
+            "evidence",
+            "coverage",
+            "--scope",
+            "plan",
+            "--id",
+            "pln-evidence-public",
+        ],
+        0,
+    );
     let settlement = &coverage["object"]["feature_run_verification_settlement"];
-    assert_eq!((settlement["item_id"].clone(), settlement["log_id"].clone(), settlement["phase"].clone()), (Value::Null, Value::Null, json!("source_frozen")));
-    let review = invoke(passing_dir.path(), &passing_db, "reviewer-itemless", &["plan", "final-review", "pln-evidence-public"], 0);
-    assert_eq!(review["execution_state"]["review_source_binding"]["freeze_id"], "freeze-itemless");
-    assert_eq!(review["execution_state"]["feature_run"]["phase"], "source_frozen");
+    assert_eq!(
+        (
+            settlement["item_id"].clone(),
+            settlement["log_id"].clone(),
+            settlement["phase"].clone()
+        ),
+        (Value::Null, Value::Null, json!("source_frozen"))
+    );
+    let review = invoke(
+        passing_dir.path(),
+        &passing_db,
+        "reviewer-itemless",
+        &["plan", "final-review", "pln-evidence-public"],
+        0,
+    );
+    assert_eq!(
+        review["execution_state"]["review_source_binding"]["freeze_id"],
+        "freeze-itemless"
+    );
+    assert_eq!(
+        review["execution_state"]["feature_run"]["phase"],
+        "source_frozen"
+    );
     assert_eq!(review["created"], true);
-    let gate_id = review["execution_state"]["review_gate"]["id"].as_str().unwrap();
-    assert_eq!(invoke(passing_dir.path(), &passing_db, "reviewer-itemless", &["pick", "--plan", "pln-evidence-public", "--work-type", "review"], 0)["work_packet"]["execution_state"]["review_gate"]["id"], gate_id);
-    invoke(passing_dir.path(), &passing_db, "reviewer-itemless", &["review", "close", gate_id, "--verdict", "complete", "--reviewer", "reviewer-itemless"], 0);
-    let shown = invoke(passing_dir.path(), &passing_db, "reviewer-itemless", &["plan", "final-review", "pln-evidence-public"], 0);
+    let gate_id = review["execution_state"]["review_gate"]["id"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        invoke(
+            passing_dir.path(),
+            &passing_db,
+            "reviewer-itemless",
+            &[
+                "pick",
+                "--plan",
+                "pln-evidence-public",
+                "--work-type",
+                "review"
+            ],
+            0
+        )["work_packet"]["execution_state"]["review_gate"]["id"],
+        gate_id
+    );
+    invoke(
+        passing_dir.path(),
+        &passing_db,
+        "reviewer-itemless",
+        &[
+            "review",
+            "close",
+            gate_id,
+            "--verdict",
+            "complete",
+            "--reviewer",
+            "reviewer-itemless",
+        ],
+        0,
+    );
+    let shown = invoke(
+        passing_dir.path(),
+        &passing_db,
+        "reviewer-itemless",
+        &["plan", "final-review", "pln-evidence-public"],
+        0,
+    );
     assert_eq!(shown["created"], false);
     assert_eq!(shown["execution_state"]["review_gate"]["id"], gate_id);
-    assert_eq!(shown["execution_state"]["review_gate"]["status"], "accepted");
+    assert_eq!(
+        shown["execution_state"]["review_gate"]["status"],
+        "accepted"
+    );
     assert_eq!(shown["execution_state"]["feature_run"]["phase"], "complete");
     let (exhausted_dir, exhausted_db) = fixture(true);
-    let pick = invoke(exhausted_dir.path(), &exhausted_db, "verifier-itemless", &["pick", "--plan", "pln-evidence-public", "--work-type", "verification"], 0);
-    let run_path = pick["work_packet"]["sealed_run_index"]["repository_path"].as_str().unwrap();
-    let exhausted = invoke(exhausted_dir.path(), &exhausted_db, "verifier-itemless", &["evidence", "run", "--input", run_path], 2);
-    assert_eq!(exhausted["object"]["terminal_exhaustion"]["item"], Value::Null);
-    assert!(exhausted["object"]["results"][0]["attempt"]["id"].is_string() && exhausted["object"]["results"][0]["receipt"]["id"].is_string());
-    assert_eq!((evidence_row_count(&exhausted_db, "evidence_attempts"), evidence_row_count(&exhausted_db, "evidence_receipts")), (1, 1));
+    let pick = invoke(
+        exhausted_dir.path(),
+        &exhausted_db,
+        "verifier-itemless",
+        &[
+            "pick",
+            "--plan",
+            "pln-evidence-public",
+            "--work-type",
+            "verification",
+        ],
+        0,
+    );
+    let run_path = pick["work_packet"]["sealed_run_index"]["repository_path"]
+        .as_str()
+        .unwrap();
+    let exhausted = invoke(
+        exhausted_dir.path(),
+        &exhausted_db,
+        "verifier-itemless",
+        &["evidence", "run", "--input", run_path],
+        2,
+    );
+    assert_eq!(
+        exhausted["object"]["terminal_exhaustion"]["item"],
+        Value::Null
+    );
+    assert!(
+        exhausted["object"]["results"][0]["attempt"]["id"].is_string()
+            && exhausted["object"]["results"][0]["receipt"]["id"].is_string()
+    );
+    assert_eq!(
+        (
+            evidence_row_count(&exhausted_db, "evidence_attempts"),
+            evidence_row_count(&exhausted_db, "evidence_receipts")
+        ),
+        (1, 1)
+    );
     let conn = Connection::open(&exhausted_db).unwrap();
     let exhausted_state: (String, i64, i64) = conn.query_row("SELECT phase, (SELECT COUNT(*) FROM feature_run_role_leases WHERE run_id = feature_runs.id AND released_at IS NULL), (SELECT COUNT(*) FROM feature_run_budget_reservations WHERE run_id = feature_runs.id AND phase = 'verification' AND status = 'active') FROM feature_runs WHERE id = 'run-itemless'", [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).unwrap();
     assert_eq!(exhausted_state, ("cancelled".into(), 0, 0));

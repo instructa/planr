@@ -201,8 +201,12 @@ impl App {
                         .ok_or_else(|| anyhow!("missing plan id in run restart route"))?;
                     let reason = match body_json.get("reason").and_then(Value::as_str) {
                         Some("incompatible-budget") => FeatureRunRestartReason::IncompatibleBudget,
-                        Some("premature-source-freeze") => FeatureRunRestartReason::PrematureSourceFreeze,
-                        Some("inconsistent-verification") => FeatureRunRestartReason::InconsistentVerification,
+                        Some("premature-source-freeze") => {
+                            FeatureRunRestartReason::PrematureSourceFreeze
+                        }
+                        Some("inconsistent-verification") => {
+                            FeatureRunRestartReason::InconsistentVerification
+                        }
                         Some(value) => bail!("invalid restart reason: {value}"),
                         None => bail!("missing reason"),
                     };
@@ -220,8 +224,10 @@ impl App {
                     if p.starts_with("/v1/plans/")
                         && p.ends_with("/run/repair-verification-admission") =>
                 {
-                    let plan_id = path_plan_id(p, "run/repair-verification-admission")
-                        .ok_or_else(|| anyhow!("missing plan id in verification admission repair route"))?;
+                    let plan_id =
+                        path_plan_id(p, "run/repair-verification-admission").ok_or_else(|| {
+                            anyhow!("missing plan id in verification admission repair route")
+                        })?;
                     let request: VerificationAdmissionRepairRequest =
                         serde_json::from_value(body_json.clone())?;
                     if request.plan_id != plan_id {

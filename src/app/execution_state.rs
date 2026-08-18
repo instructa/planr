@@ -9,8 +9,8 @@ use super::repository::execution_run::{
 };
 use crate::execution_run::{
     CurrentVerificationDiagnosis, CurrentVerificationInvariantStatus, ExecutionBatch, FeatureRun,
-    FeatureRunBudgetContractCompatibility, FeatureRunHoldReason,
-    FeatureRunPhase, FeatureRunRestartDisposition, FeatureRunRestartReason, FeatureRunStatus,
+    FeatureRunBudgetContractCompatibility, FeatureRunHoldReason, FeatureRunPhase,
+    FeatureRunRestartDisposition, FeatureRunRestartReason, FeatureRunStatus,
     FeatureRunTerminalReason, PrematureSourceFreezeRestartFacts, RoleOwner, RunRole,
 };
 use crate::usage_policy::{
@@ -345,7 +345,9 @@ impl App {
         } else {
             self.current_verification_diagnosis(&persisted)?
                 .map(|snapshot| snapshot.diagnosis)
-                .filter(|diagnosis| diagnosis.status == CurrentVerificationInvariantStatus::Inconsistent)
+                .filter(|diagnosis| {
+                    diagnosis.status == CurrentVerificationInvariantStatus::Inconsistent
+                })
         };
         let restart = if compatibility.is_incompatible()
             && matches!(
@@ -406,12 +408,14 @@ impl App {
                         &persisted.run.plan_id,
                     )?
                     .filter(|transition| transition.retired_run.id == persisted.run.id)
-                    .map(|transition| CanonicalFeatureRunRestartDto::IncompatibleBudget {
-                        status: "retired",
-                        reason: transition.request.reason,
-                        incompatibility: transition.incompatibility,
-                        disposition: Some(transition.disposition),
-                    })
+                    .map(
+                        |transition| CanonicalFeatureRunRestartDto::IncompatibleBudget {
+                            status: "retired",
+                            reason: transition.request.reason,
+                            incompatibility: transition.incompatibility,
+                            disposition: Some(transition.disposition),
+                        },
+                    )
             }
         } else {
             None
@@ -562,9 +566,13 @@ impl App {
                     "restart_inconsistent_verification_feature_run",
                 ),
             }
-        } else if matches!(restart.as_ref(), Some(
-            CanonicalFeatureRunRestartDto::InconsistentVerification { status: "retired", .. }
-        )) {
+        } else if matches!(
+            restart.as_ref(),
+            Some(CanonicalFeatureRunRestartDto::InconsistentVerification {
+                status: "retired",
+                ..
+            })
+        ) {
             ("inconsistent_verification_retired", "none")
         } else if let Some(gate) = unmet_gate.as_ref() {
             (
@@ -669,14 +677,11 @@ impl App {
             repository
                 .active_source_freeze(&feature_run_id)?
                 .map(|freeze| {
-                    repository
-                        .latest_verification_readiness_diagnostic(&feature_run_id, &freeze.id)
+                    repository.latest_verification_readiness_diagnostic(&feature_run_id, &freeze.id)
                 })
                 .transpose()?
                 .flatten()
-                .filter(|diagnostic| {
-                    diagnostic.repair_request.run_revision == persisted.revision
-                })
+                .filter(|diagnostic| diagnostic.repair_request.run_revision == persisted.revision)
                 .map(|diagnostic| diagnostic.repair_request)
         } else {
             None
@@ -1228,7 +1233,11 @@ mod tests {
             .expect("changes-requested attempt");
 
         let open = app
-            .canonical_execution_state_value_at("run-projection", Some(gate_id), PROJECTED_AT_UNIX_MS)
+            .canonical_execution_state_value_at(
+                "run-projection",
+                Some(gate_id),
+                PROJECTED_AT_UNIX_MS,
+            )
             .expect("open finding projection");
         assert_eq!(open["reason_code"], "review_changes_requested");
         assert_eq!(open["next_action"], "resolve_review_findings");
@@ -1236,19 +1245,39 @@ mod tests {
         assert_eq!(open["findings"][0]["status"], "open");
 
         repository
-            .set_finding_status("finding-reprojection", FindingStatus::Open, FindingStatus::Resolved)
+            .set_finding_status(
+                "finding-reprojection",
+                FindingStatus::Open,
+                FindingStatus::Resolved,
+            )
             .expect("resolve finding");
         let resolved = app
-            .canonical_execution_state_value_at("run-projection", Some(gate_id), PROJECTED_AT_UNIX_MS)
+            .canonical_execution_state_value_at(
+                "run-projection",
+                Some(gate_id),
+                PROJECTED_AT_UNIX_MS,
+            )
             .expect("resolved finding projection");
 
-        assert_eq!(resolved["reason_code"], "review_finding_reverification_pending");
-        assert_eq!(resolved["unmet_gate"]["reason_code"], "review_finding_reverification_pending");
+        assert_eq!(
+            resolved["reason_code"],
+            "review_finding_reverification_pending"
+        );
+        assert_eq!(
+            resolved["unmet_gate"]["reason_code"],
+            "review_finding_reverification_pending"
+        );
         assert_eq!(resolved["next_action"], "lease_verification");
         assert_eq!(resolved["review_gate"]["id"], gate_id);
         assert_eq!(resolved["review_gate"]["status"], "changes_requested");
         assert_eq!(resolved["findings"][0]["status"], "resolved");
-        assert_eq!(repository.review_gate(gate_id).expect("persisted gate").status, ReviewGateStatus::ChangesRequested);
+        assert_eq!(
+            repository
+                .review_gate(gate_id)
+                .expect("persisted gate")
+                .status,
+            ReviewGateStatus::ChangesRequested
+        );
     }
 
     #[test]

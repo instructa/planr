@@ -1,20 +1,18 @@
+use crate::canonical_json::sha256_json_digest;
 use crate::execution_run::{
     CurrentVerificationAdmissionIdentity, CurrentVerificationInvariantFacts,
     CurrentVerificationItemLease, CurrentVerificationItemLeaseStatus, EvidenceInvalidationKind,
     ExecutionBatch, ExecutionBatchStatus, FeatureRun, FeatureRunBudgetContractCompatibility,
-    FeatureRunHoldReason, FeatureRunPhase, FeatureRunRestartDisposition, FeatureRunRestartTransition,
-    FeatureRunStatus, FeatureRunTerminalReason, MakerReplacement,
-    HistoryIdentitySet, InconsistentVerificationBatchFacts,
-    InconsistentVerificationRetirementTransition, MakerReplacementReason,
-    ORDINARY_IMPLEMENTATION_WORK_TYPE_NAMES,
-    PrematureSourceFreezeRestartTransition, RoleOwner, RunRole, owner_for_role,
-    VerificationAdmissionRepairRequest, VerificationAdmissionRepairTransition,
-    classify_current_verification, repair_verification_admission,
-    resolve_evidence_invalidation_kind,
+    FeatureRunHoldReason, FeatureRunPhase, FeatureRunRestartDisposition,
+    FeatureRunRestartTransition, FeatureRunStatus, FeatureRunTerminalReason, HistoryIdentitySet,
+    InconsistentVerificationBatchFacts, InconsistentVerificationRetirementTransition,
+    MakerReplacement, MakerReplacementReason, ORDINARY_IMPLEMENTATION_WORK_TYPE_NAMES,
+    PrematureSourceFreezeRestartTransition, RoleOwner, RunRole, VerificationAdmissionRepairRequest,
+    VerificationAdmissionRepairTransition, classify_current_verification, owner_for_role,
+    repair_verification_admission, resolve_evidence_invalidation_kind,
     retire_inconsistent_verification_feature_run, retire_premature_source_freeze_feature_run,
     validate_feature_run,
 };
-use crate::canonical_json::sha256_json_digest;
 use crate::usage_policy::{
     BudgetPhase, ExecutionBudget, FEATURE_RUN_BUDGET_CONTRACT_SCHEMA, FeatureRunBudgetContract,
     FeatureRunBudgetMode, MeteringMode, feature_run_budget_contract_digest,
@@ -351,9 +349,9 @@ impl<'conn> ExecutionRunRepository<'conn> {
             [run_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
-        let next_generation = generation
-            .checked_add(1)
-            .ok_or_else(|| anyhow!("verification_admission_repair_maker_generation_overflow:{run_id}"))?;
+        let next_generation = generation.checked_add(1).ok_or_else(|| {
+            anyhow!("verification_admission_repair_maker_generation_overflow:{run_id}")
+        })?;
         Ok((worker_id, next_generation))
     }
 
@@ -446,13 +444,17 @@ impl<'conn> ExecutionRunRepository<'conn> {
         if persisted.run.status != FeatureRunStatus::Active
             || persisted.run.phase != FeatureRunPhase::Verification
         {
-            bail!("current_verification_requires_active_verification:{}", persisted.run.id);
+            bail!(
+                "current_verification_requires_active_verification:{}",
+                persisted.run.id
+            );
         }
-        let run_source_revision = persisted
-            .run
-            .source_revision
-            .clone()
-            .ok_or_else(|| anyhow!("current_verification_missing_run_source:{}", persisted.run.id))?;
+        let run_source_revision = persisted.run.source_revision.clone().ok_or_else(|| {
+            anyhow!(
+                "current_verification_missing_run_source:{}",
+                persisted.run.id
+            )
+        })?;
         let freeze = self
             .active_source_freeze(&persisted.run.id)?
             .ok_or_else(|| anyhow!("current_verification_missing_freeze:{}", persisted.run.id))?;
@@ -472,7 +474,9 @@ impl<'conn> ExecutionRunRepository<'conn> {
                 verifier_worker_id: verifier.worker_id.clone(),
                 verifier_lease_generation: verifier.lease_generation,
                 verification_item,
-                admission: admission.as_ref().map(VerificationAdmissionRecord::current_identity),
+                admission: admission
+                    .as_ref()
+                    .map(VerificationAdmissionRecord::current_identity),
             },
             admission,
         })
@@ -495,9 +499,12 @@ impl<'conn> ExecutionRunRepository<'conn> {
             || current.run.phase != FeatureRunPhase::SourceFrozen
             || freeze.id != freeze_id
             || diagnostic.repair_request.run_revision
-                != expected_run_revision
-                    .checked_add(1)
-                    .ok_or_else(|| anyhow!("verification_readiness_hold_revision_overflow:{}", held_run.id))?
+                != expected_run_revision.checked_add(1).ok_or_else(|| {
+                    anyhow!(
+                        "verification_readiness_hold_revision_overflow:{}",
+                        held_run.id
+                    )
+                })?
             || diagnostic.repair_request.plan_id != current.run.plan_id
             || diagnostic.repair_request.run_id != current.run.id
             || diagnostic.repair_request.freeze_id != freeze.id
@@ -555,8 +562,7 @@ impl<'conn> ExecutionRunRepository<'conn> {
             .query_map([&request.run_id], |row| row.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         for payload in payloads {
-            let transition: VerificationAdmissionRepairTransition =
-                serde_json::from_str(&payload)?;
+            let transition: VerificationAdmissionRepairTransition = serde_json::from_str(&payload)?;
             if transition.request == *request {
                 return Ok(Some(transition));
             }
@@ -582,8 +588,7 @@ impl<'conn> ExecutionRunRepository<'conn> {
             .collect::<rusqlite::Result<Vec<_>>>()?;
         let mut matching_event_count = 0;
         for payload in event_payloads {
-            let candidate: VerificationAdmissionRepairTransition =
-                serde_json::from_str(&payload)?;
+            let candidate: VerificationAdmissionRepairTransition = serde_json::from_str(&payload)?;
             if candidate.request == transition.request {
                 matching_event_count += 1;
             }
@@ -616,7 +621,10 @@ impl<'conn> ExecutionRunRepository<'conn> {
             || matching_event_count != 1
             || invalidation_count != 1
         {
-            bail!("verification_admission_repair_idempotence_unproven:{}", transition.request.run_id);
+            bail!(
+                "verification_admission_repair_idempotence_unproven:{}",
+                transition.request.run_id
+            );
         }
         Ok(())
     }
@@ -631,15 +639,21 @@ impl<'conn> ExecutionRunRepository<'conn> {
         }
         require_nonempty("operator_worker_id", operator_worker_id)?;
         let current = self.feature_run(&transition.request.run_id)?;
-        let freeze = self
-            .active_source_freeze(&current.run.id)?
-            .ok_or_else(|| anyhow!("verification_admission_repair_missing_freeze:{}", current.run.id))?;
+        let freeze = self.active_source_freeze(&current.run.id)?.ok_or_else(|| {
+            anyhow!(
+                "verification_admission_repair_missing_freeze:{}",
+                current.run.id
+            )
+        })?;
         if current.revision != transition.request.run_revision
             || current.run.plan_id != transition.request.plan_id
             || freeze.id != transition.request.freeze_id
             || operator_worker_id != transition.facts.requester_worker_id
         {
-            bail!("verification_admission_repair_stale_identity:{}", current.run.id);
+            bail!(
+                "verification_admission_repair_stale_identity:{}",
+                current.run.id
+            );
         }
         let (_, attempt_count, receipt_count) = self.source_freeze_verification_activity(
             &current.project_id,
@@ -658,50 +672,93 @@ impl<'conn> ExecutionRunRepository<'conn> {
             params![current.run.id, freeze.id],
             |row| row.get(0),
         )?;
-        if attempt_count != 0 || receipt_count != 0 || one_shot_count != 0 || product_finding_count != 0 {
-            bail!("verification_admission_repair_not_pre_receipt:{}", current.run.id);
+        if attempt_count != 0
+            || receipt_count != 0
+            || one_shot_count != 0
+            || product_finding_count != 0
+        {
+            bail!(
+                "verification_admission_repair_not_pre_receipt:{}",
+                current.run.id
+            );
         }
-        let (maker_worker_id, maker_generation) = self.historical_maker_identity(&current.run.id)?;
+        let (maker_worker_id, maker_generation) =
+            self.historical_maker_identity(&current.run.id)?;
         let item = self.verification_item_projection(&current.run.plan_id)?;
         if maker_worker_id != transition.facts.historical_maker_worker_id
             || maker_generation != transition.facts.next_maker_lease_generation
             || item.as_ref().map(|item| item.id.as_str())
                 != transition.facts.verification_item_id.as_deref()
         {
-            bail!("verification_admission_repair_facts_changed:{}", current.run.id);
+            bail!(
+                "verification_admission_repair_facts_changed:{}",
+                current.run.id
+            );
         }
         if transition.request.reason.requires_run_index_digest() {
-            let verifier = owner_for_role(&current.run, RunRole::Verifier)
-                .ok_or_else(|| anyhow!("verification_admission_repair_missing_verifier:{}", current.run.id))?;
+            let verifier = owner_for_role(&current.run, RunRole::Verifier).ok_or_else(|| {
+                anyhow!(
+                    "verification_admission_repair_missing_verifier:{}",
+                    current.run.id
+                )
+            })?;
             if verifier.worker_id != operator_worker_id
                 || item.as_ref().is_some_and(|item| {
-                    !matches!(item.status, CurrentVerificationItemLeaseStatus::Picked | CurrentVerificationItemLeaseStatus::Running)
-                        || item.worker_id.as_deref() != Some(operator_worker_id)
+                    !matches!(
+                        item.status,
+                        CurrentVerificationItemLeaseStatus::Picked
+                            | CurrentVerificationItemLeaseStatus::Running
+                    ) || item.worker_id.as_deref() != Some(operator_worker_id)
                 })
             {
-                bail!("verification_admission_repair_wrong_owner:{}", current.run.id);
+                bail!(
+                    "verification_admission_repair_wrong_owner:{}",
+                    current.run.id
+                );
             }
             let admission = self
                 .latest_verification_admission(&current.run.id, &freeze.id)?
-                .ok_or_else(|| anyhow!("verification_admission_repair_seal_missing:{}", current.run.id))?;
-            if admission.run_index_digest != transition.request.run_index_digest.as_deref().unwrap_or_default()
+                .ok_or_else(|| {
+                    anyhow!(
+                        "verification_admission_repair_seal_missing:{}",
+                        current.run.id
+                    )
+                })?;
+            if admission.run_index_digest
+                != transition
+                    .request
+                    .run_index_digest
+                    .as_deref()
+                    .unwrap_or_default()
                 || admission.run_revision != current.revision
                 || admission.verifier_worker_id != operator_worker_id
                 || admission.verification_item_id != transition.facts.verification_item_id
             {
-                bail!("verification_admission_repair_seal_mismatch:{}", current.run.id);
+                bail!(
+                    "verification_admission_repair_seal_mismatch:{}",
+                    current.run.id
+                );
             }
         } else {
             let diagnostic = self
                 .latest_verification_readiness_diagnostic(&current.run.id, &freeze.id)?
-                .ok_or_else(|| anyhow!("verification_admission_repair_diagnostic_missing:{}", current.run.id))?;
+                .ok_or_else(|| {
+                    anyhow!(
+                        "verification_admission_repair_diagnostic_missing:{}",
+                        current.run.id
+                    )
+                })?;
             if diagnostic.repair_request != transition.request
                 || diagnostic.verifier_worker_id != operator_worker_id
                 || item.as_ref().is_some_and(|item| {
-                    item.status != CurrentVerificationItemLeaseStatus::Ready || item.worker_id.is_some()
+                    item.status != CurrentVerificationItemLeaseStatus::Ready
+                        || item.worker_id.is_some()
                 })
             {
-                bail!("verification_admission_repair_diagnostic_mismatch:{}", current.run.id);
+                bail!(
+                    "verification_admission_repair_diagnostic_mismatch:{}",
+                    current.run.id
+                );
             }
         }
         let recomputed = repair_verification_admission(
@@ -712,7 +769,10 @@ impl<'conn> ExecutionRunRepository<'conn> {
         )
         .map_err(|violation| anyhow!("verification_admission_repair_rejected:{violation:?}"))?;
         if recomputed != *transition {
-            bail!("verification_admission_repair_transition_stale:{}", current.run.id);
+            bail!(
+                "verification_admission_repair_transition_stale:{}",
+                current.run.id
+            );
         }
         invalidate_source_in(
             self.conn,
@@ -747,7 +807,10 @@ impl<'conn> ExecutionRunRepository<'conn> {
                     params![item.id, operator_worker_id],
                 )?;
                 if changed != 1 {
-                    bail!("verification_admission_repair_item_release_failed:{}", item.id);
+                    bail!(
+                        "verification_admission_repair_item_release_failed:{}",
+                        item.id
+                    );
                 }
             }
         }
@@ -786,10 +849,7 @@ impl<'conn> ExecutionRunRepository<'conn> {
             .map_err(Into::into)
     }
 
-    pub(crate) fn active_ordinary_outcome_lease_ids(
-        &self,
-        plan_id: &str,
-    ) -> Result<Vec<String>> {
+    pub(crate) fn active_ordinary_outcome_lease_ids(&self, plan_id: &str) -> Result<Vec<String>> {
         let mut statement = self.conn.prepare(
             "SELECT items.id FROM items JOIN plans ON plans.path = items.plan_path
              WHERE plans.id = ?1 AND items.work_type IN (?2, ?3, ?4, ?5)
@@ -853,11 +913,7 @@ impl<'conn> ExecutionRunRepository<'conn> {
             ],
             |row| row.get::<_, u64>(0),
         )?;
-        Ok((
-            role_admissions + one_shot_admissions,
-            attempts,
-            receipts,
-        ))
+        Ok((role_admissions + one_shot_admissions, attempts, receipts))
     }
 
     pub(crate) fn create_feature_run(
@@ -1033,20 +1089,22 @@ impl<'conn> ExecutionRunRepository<'conn> {
         }
         let freeze = repository
             .active_source_freeze(&current.run.id)?
-            .ok_or_else(|| anyhow!("feature_run_premature_source_freeze_missing:{}", current.run.id))?;
+            .ok_or_else(|| {
+                anyhow!(
+                    "feature_run_premature_source_freeze_missing:{}",
+                    current.run.id
+                )
+            })?;
         let open_outcome_ids = repository.open_ordinary_outcome_ids(&current.run.plan_id)?;
         let released_outcome_ids =
             repository.active_ordinary_outcome_lease_ids(&current.run.plan_id)?;
-        let (
-            verification_admission_count,
-            verification_attempt_count,
-            verification_receipt_count,
-        ) = repository.source_freeze_verification_activity(
-            &current.project_id,
-            &current.run.plan_id,
-            &current.run.id,
-            &freeze,
-        )?;
+        let (verification_admission_count, verification_attempt_count, verification_receipt_count) =
+            repository.source_freeze_verification_activity(
+                &current.project_id,
+                &current.run.plan_id,
+                &current.run.id,
+                &freeze,
+            )?;
         if freeze.id != transition.facts.freeze_id
             || freeze.source_revision != transition.facts.frozen_source_revision
             || freeze.source_digest != transition.facts.frozen_source_digest
@@ -1056,7 +1114,10 @@ impl<'conn> ExecutionRunRepository<'conn> {
             || verification_attempt_count != transition.facts.verification_attempt_count
             || verification_receipt_count != transition.facts.verification_receipt_count
         {
-            bail!("feature_run_premature_source_freeze_facts_changed:{}", current.run.id);
+            bail!(
+                "feature_run_premature_source_freeze_facts_changed:{}",
+                current.run.id
+            );
         }
         let recomputed = retire_premature_source_freeze_feature_run(
             &current.run,
@@ -1293,7 +1354,10 @@ impl<'conn> ExecutionRunRepository<'conn> {
             || persisted_after.revision != transition.resulting_run_revision
             || freeze_after.status != SourceFreezeStatus::Invalidated
         {
-            bail!("feature_run_restart_atomic_postcondition_failed:{}", current.run.id);
+            bail!(
+                "feature_run_restart_atomic_postcondition_failed:{}",
+                current.run.id
+            );
         }
         tx.commit()?;
         self.feature_run(&transition.retired_run.id)
@@ -2768,7 +2832,10 @@ impl<'conn> ExecutionRunRepository<'conn> {
             ("invalidation_id", settlement.invalidation_id.as_str()),
             ("run_id", settlement.run_id.as_str()),
             ("repair_batch_id", settlement.repair_batch_id.as_str()),
-            ("responsible_maker_id", settlement.responsible_maker_id.as_str()),
+            (
+                "responsible_maker_id",
+                settlement.responsible_maker_id.as_str(),
+            ),
             ("source_freeze_id", settlement.source_freeze_id.as_str()),
             ("source_revision", settlement.source_revision.as_str()),
             ("source_digest", settlement.source_digest.as_str()),
@@ -2797,8 +2864,7 @@ impl<'conn> ExecutionRunRepository<'conn> {
         if current.revision != expected_run_revision
             || current.run.phase != FeatureRunPhase::Implementation
             || current.run.status != FeatureRunStatus::Active
-            || current.run.active_batch_id.as_deref()
-                != Some(settlement.repair_batch_id.as_str())
+            || current.run.active_batch_id.as_deref() != Some(settlement.repair_batch_id.as_str())
             || current.run.batch_outcome_count != 0
             || current.run.role_owners.len() != 1
             || owner_for_role(&current.run, RunRole::Maker)
@@ -2849,8 +2915,7 @@ impl<'conn> ExecutionRunRepository<'conn> {
         let item = self.verification_item_projection(&current.run.plan_id)?;
         if item.as_ref().map(|item| item.id.as_str()) != expected_verification_item_id
             || item.as_ref().is_some_and(|item| {
-                item.status != CurrentVerificationItemLeaseStatus::Ready
-                    || item.worker_id.is_some()
+                item.status != CurrentVerificationItemLeaseStatus::Ready || item.worker_id.is_some()
             })
         {
             bail!(
@@ -2874,8 +2939,7 @@ impl<'conn> ExecutionRunRepository<'conn> {
             || frozen_run.plan_id != current.run.plan_id
             || frozen_run.phase != FeatureRunPhase::SourceFrozen
             || frozen_run.status != FeatureRunStatus::Active
-            || frozen_run.active_batch_id.as_deref()
-                != Some(settlement.repair_batch_id.as_str())
+            || frozen_run.active_batch_id.as_deref() != Some(settlement.repair_batch_id.as_str())
             || frozen_run.source_revision.as_deref() != Some(freeze.source_revision.as_str())
             || !frozen_run.role_owners.is_empty()
         {
@@ -2955,10 +3019,8 @@ impl<'conn> ExecutionRunRepository<'conn> {
             || current.run.phase != FeatureRunPhase::SourceFrozen
             || current.run.status != FeatureRunStatus::Active
             || current.revision != settlement.ended_revision
-            || current.run.active_batch_id.as_deref()
-                != Some(settlement.repair_batch_id.as_str())
-            || current.run.source_revision.as_deref()
-                != Some(settlement.source_revision.as_str())
+            || current.run.active_batch_id.as_deref() != Some(settlement.repair_batch_id.as_str())
+            || current.run.source_revision.as_deref() != Some(settlement.source_revision.as_str())
             || !current.run.role_owners.is_empty()
             || batch.batch.run_id != current.run.id
             || batch.batch.maker_worker_id != settlement.responsible_maker_id

@@ -99,8 +99,7 @@ impl App {
         }
         if work_type.is_none_or(|value| {
             is_ordinary_implementation_work_type(&WorkType::from(value.to_string()))
-        })
-            && let Some(plan_id) = plan
+        }) && let Some(plan_id) = plan
             && let Some(packet) = self.repair_work_packet_value(plan_id)?
         {
             return Ok(packet);
@@ -234,7 +233,10 @@ impl App {
                 if !repair.contains(&ordinary_pick) {
                     repair.push(ordinary_pick);
                 }
-                format!("work_type `{}` is not an ordinary implementation outcome", item.work_type)
+                format!(
+                    "work_type `{}` is not an ordinary implementation outcome",
+                    item.work_type
+                )
             } else if let Some(required) =
                 filter.work_type.filter(|wt| *wt != item.work_type.as_str())
             {

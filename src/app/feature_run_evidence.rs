@@ -5,11 +5,10 @@ use super::evidence::CurrentPlanCoverageForSourceFreeze;
 use super::proof::PlanEvidenceAuthority;
 use super::repository::execution_run::{
     BudgetObservationRecord, BudgetReservationRecord, BudgetReservationStatus,
-    EvidenceInvalidationRecord, ExecutionRunRepository, FindingStatus, PersistedFeatureRun,
-    ProductRepairSettlementRecord, ReviewGateKind, ReviewGateRecord, ReviewGateStatus,
-    SourceFreezeRecord, SourceFreezeStatus, VerificationAdmissionRecord,
+    CurrentVerificationSnapshot, EvidenceInvalidationRecord, ExecutionRunRepository, FindingStatus,
+    PersistedFeatureRun, ProductRepairSettlementRecord, ReviewGateKind, ReviewGateRecord,
+    ReviewGateStatus, SourceFreezeRecord, SourceFreezeStatus, VerificationAdmissionRecord,
     VerificationAdmissionRepairSettlementRecord, VerificationReadinessDiagnosticRecord,
-    CurrentVerificationSnapshot,
 };
 use crate::cli::EvidenceCoverageScope;
 use crate::evidence::policy::capture_repository_snapshot;
@@ -17,18 +16,16 @@ use crate::execution_policy::{BudgetTaskAdmission, BudgetTaskHoldReason, admit_b
 use crate::execution_run::{
     CurrentVerificationDiagnosis, CurrentVerificationInvariantStatus,
     CurrentVerificationItemLeaseStatus, EvidenceInvalidationKind, ExecutionBatch,
-    ExecutionBatchStatus,
-    FeatureRunBudgetContractCompatibility, FeatureRunRestartDisposition,
-    FeatureRunRestartReason, FeatureRunRestartRequest, InconsistentVerificationBatchFacts,
-    InconsistentVerificationRetirementFacts,
+    ExecutionBatchStatus, FeatureRunBudgetContractCompatibility,
     FeatureRunBudgetHoldResolutionCause, FeatureRunBudgetHoldResolutionDisposition,
     FeatureRunBudgetHoldResolutionRequest, FeatureRunBudgetHoldResolutionTransition,
-    FeatureRunHoldReason, FeatureRunPhase, PhaseTransition, PhaseTransitionCause, RoleOwner,
+    FeatureRunHoldReason, FeatureRunPhase, FeatureRunRestartDisposition, FeatureRunRestartReason,
+    FeatureRunRestartRequest, InconsistentVerificationBatchFacts,
+    InconsistentVerificationRetirementFacts, PhaseTransition, PhaseTransitionCause, RoleOwner,
     RunRole, VerificationAdmissionRepairFacts, VerificationAdmissionRepairReason,
     VerificationAdmissionRepairRequest, apply_phase_transition, classify_current_verification,
     owner_for_role, repair_verification_admission, resolve_budget_held_feature_run,
-    resolve_evidence_invalidation_kind,
-    retire_inconsistent_verification_feature_run,
+    resolve_evidence_invalidation_kind, retire_inconsistent_verification_feature_run,
 };
 use crate::usage_policy::{
     BudgetAmounts, BudgetPhase, BudgetProvenance, BudgetSnapshot, ExecutionBudget,
@@ -217,7 +214,10 @@ impl App {
                     | CurrentVerificationItemLeaseStatus::Running
             ) || item.worker_id.as_deref() != Some(facts.verifier_worker_id.as_str())
         }) {
-            bail!("current_verification_item_ownership_conflict:{}", facts.run_id);
+            bail!(
+                "current_verification_item_ownership_conflict:{}",
+                facts.run_id
+            );
         }
         Ok(Some(CurrentVerificationDiagnosisSnapshot {
             diagnosis: classify_current_verification(&facts),
@@ -243,7 +243,9 @@ impl App {
         };
         let diagnosis = self
             .current_verification_diagnosis(&persisted)?
-            .ok_or_else(|| anyhow!("feature_run_inconsistent_verification_restart_ineligible:{plan_id}"))?
+            .ok_or_else(|| {
+                anyhow!("feature_run_inconsistent_verification_restart_ineligible:{plan_id}")
+            })?
             .diagnosis;
         if diagnosis.status != CurrentVerificationInvariantStatus::Inconsistent {
             bail!("feature_run_inconsistent_verification_restart_not_required:{plan_id}");
@@ -274,12 +276,9 @@ impl App {
             plan_id: plan_id.to_string(),
             reason: FeatureRunRestartReason::InconsistentVerification,
         };
-        let transition = retire_inconsistent_verification_feature_run(
-            &persisted.run,
-            &request,
-            &facts,
-        )
-        .map_err(|violation| anyhow!("feature_run_restart_rejected:{violation:?}"))?;
+        let transition =
+            retire_inconsistent_verification_feature_run(&persisted.run, &request, &facts)
+                .map_err(|violation| anyhow!("feature_run_restart_rejected:{violation:?}"))?;
         repository.retire_inconsistent_verification_feature_run(&transition, &worker_id())?;
         Ok(json!({"schema_version": "planr.feature_run_restart.v1",
             "restart": transition,
@@ -469,13 +468,25 @@ impl App {
             .active_feature_run_for_plan(&project.id, plan_id)?
             .ok_or_else(|| anyhow!("verification_readiness_hold_run_missing:{plan_id}"))?;
         if persisted.run.phase != FeatureRunPhase::SourceFrozen {
-            bail!("verification_readiness_hold_wrong_phase:{}:{:?}", persisted.run.id, persisted.run.phase);
+            bail!(
+                "verification_readiness_hold_wrong_phase:{}:{:?}",
+                persisted.run.id,
+                persisted.run.phase
+            );
         }
         let freeze = repository
             .active_source_freeze(&persisted.run.id)?
-            .ok_or_else(|| anyhow!("verification_readiness_hold_freeze_missing:{}", persisted.run.id))?;
+            .ok_or_else(|| {
+                anyhow!(
+                    "verification_readiness_hold_freeze_missing:{}",
+                    persisted.run.id
+                )
+            })?;
         if freeze.id != freeze_id {
-            bail!("verification_readiness_hold_freeze_changed:{}", persisted.run.id);
+            bail!(
+                "verification_readiness_hold_freeze_changed:{}",
+                persisted.run.id
+            );
         }
         let held = apply_phase_transition(
             &persisted.run,
@@ -491,10 +502,12 @@ impl App {
             plan_id: plan_id.to_string(),
             run_id: persisted.run.id.clone(),
             freeze_id: freeze.id.clone(),
-            run_revision: persisted
-                .revision
-                .checked_add(1)
-                .ok_or_else(|| anyhow!("verification_readiness_hold_revision_overflow:{}", persisted.run.id))?,
+            run_revision: persisted.revision.checked_add(1).ok_or_else(|| {
+                anyhow!(
+                    "verification_readiness_hold_revision_overflow:{}",
+                    persisted.run.id
+                )
+            })?,
             reason,
             run_index_digest: None,
         };
@@ -536,34 +549,61 @@ impl App {
             || persisted.run.plan_id != request.plan_id
             || persisted.revision != request.run_revision
         {
-            bail!("verification_admission_repair_stale_identity:{}", request.run_id);
+            bail!(
+                "verification_admission_repair_stale_identity:{}",
+                request.run_id
+            );
         }
         let freeze = repository
             .active_source_freeze(&request.run_id)?
-            .ok_or_else(|| anyhow!("verification_admission_repair_missing_freeze:{}", request.run_id))?;
+            .ok_or_else(|| {
+                anyhow!(
+                    "verification_admission_repair_missing_freeze:{}",
+                    request.run_id
+                )
+            })?;
         if freeze.id != request.freeze_id {
-            bail!("verification_admission_repair_stale_freeze:{}", request.freeze_id);
+            bail!(
+                "verification_admission_repair_stale_freeze:{}",
+                request.freeze_id
+            );
         }
         let requester_worker_id = worker_id();
         let admitted_run_index_digest = if request.reason.requires_run_index_digest() {
             let admission = repository
                 .latest_verification_admission(&request.run_id, &request.freeze_id)?
-                .ok_or_else(|| anyhow!("verification_admission_repair_seal_missing:{}", request.run_id))?;
+                .ok_or_else(|| {
+                    anyhow!(
+                        "verification_admission_repair_seal_missing:{}",
+                        request.run_id
+                    )
+                })?;
             if admission.run_revision != request.run_revision
                 || admission.verifier_worker_id != requester_worker_id
                 || Some(admission.run_index_digest.as_str()) != request.run_index_digest.as_deref()
             {
-                bail!("verification_admission_repair_seal_mismatch:{}", request.run_id);
+                bail!(
+                    "verification_admission_repair_seal_mismatch:{}",
+                    request.run_id
+                );
             }
             Some(admission.run_index_digest)
         } else {
             let diagnostic = repository
                 .latest_verification_readiness_diagnostic(&request.run_id, &request.freeze_id)?
-                .ok_or_else(|| anyhow!("verification_admission_repair_diagnostic_missing:{}", request.run_id))?;
+                .ok_or_else(|| {
+                    anyhow!(
+                        "verification_admission_repair_diagnostic_missing:{}",
+                        request.run_id
+                    )
+                })?;
             if diagnostic.repair_request != request
                 || diagnostic.verifier_worker_id != requester_worker_id
             {
-                bail!("verification_admission_repair_wrong_owner:{}", request.run_id);
+                bail!(
+                    "verification_admission_repair_wrong_owner:{}",
+                    request.run_id
+                );
             }
             None
         };
@@ -582,14 +622,13 @@ impl App {
             invalidation_id: short_id("invalidation"),
             repair_batch_id: short_id("batch"),
         };
-        let transition = repair_verification_admission(
-            &persisted.run,
-            persisted.revision,
-            &request,
-            &facts,
-        )
-        .map_err(|violation| anyhow!("verification_admission_repair_rejected:{violation:?}"))?;
-        self.conn.execute_batch("BEGIN IMMEDIATE; SAVEPOINT repair_verification_admission")?;
+        let transition =
+            repair_verification_admission(&persisted.run, persisted.revision, &request, &facts)
+                .map_err(|violation| {
+                    anyhow!("verification_admission_repair_rejected:{violation:?}")
+                })?;
+        self.conn
+            .execute_batch("BEGIN IMMEDIATE; SAVEPOINT repair_verification_admission")?;
         let result = (|| -> Result<()> {
             if persisted.run.phase == FeatureRunPhase::Verification {
                 self.reconcile_active_phase_wall(&persisted.run.id, BudgetPhase::Verification)?;
@@ -597,7 +636,9 @@ impl App {
             repository.persist_verification_admission_repair(&transition, &worker_id())
         })();
         match result {
-            Ok(()) => self.conn.execute_batch("RELEASE repair_verification_admission; COMMIT")?,
+            Ok(()) => self
+                .conn
+                .execute_batch("RELEASE repair_verification_admission; COMMIT")?,
             Err(error) => {
                 let _ = self.conn.execute_batch("ROLLBACK TO repair_verification_admission; RELEASE repair_verification_admission; ROLLBACK");
                 return Err(error);
@@ -1744,9 +1785,9 @@ impl App {
                     return Ok(None);
                 }
                 let replay_obligation_ids = match dispatch {
-                    RepairSettlementDispatchMode::ProductFinding => Some(
-                        self.product_repair_obligation_ids(&latest.affected_evidence_ids)?,
-                    ),
+                    RepairSettlementDispatchMode::ProductFinding => {
+                        Some(self.product_repair_obligation_ids(&latest.affected_evidence_ids)?)
+                    }
                     RepairSettlementDispatchMode::VerificationAdmission => None,
                 };
                 match self.admit_feature_run_budget(
@@ -1760,8 +1801,8 @@ impl App {
                     FeatureRunBudgetAdmission::Reserved(_) => {}
                 }
                 let plan = self.get_plan(plan_id)?;
-                let verification_item_id = self
-                    .ready_verification_item_for_plan_path(Some(plan.path.as_str()))?;
+                let verification_item_id =
+                    self.ready_verification_item_for_plan_path(Some(plan.path.as_str()))?;
                 let mut packet = json!({
                     "kind": "outcome",
                     "mode": match dispatch {
@@ -1844,18 +1885,18 @@ impl App {
             .ok_or_else(|| anyhow!("repair_settlement_invalidation_missing:{invalidation_id}"))?;
         match self
             .repair_settlement_dispatch(&invalidation)?
-            .ok_or_else(|| anyhow!("repair_settlement_invalidation_unsupported:{invalidation_id}"))?
-        {
-            RepairSettlementDispatchMode::ProductFinding => {
-                self.settle_product_finding_repair_value(
+            .ok_or_else(|| {
+                anyhow!("repair_settlement_invalidation_unsupported:{invalidation_id}")
+            })? {
+            RepairSettlementDispatchMode::ProductFinding => self
+                .settle_product_finding_repair_value(
                     plan_id,
                     invalidation_id,
                     summary,
                     files,
                     commands,
                     tests,
-                )
-            }
+                ),
             RepairSettlementDispatchMode::VerificationAdmission => self
                 .settle_verification_admission_repair_value(
                     plan_id,
@@ -1881,10 +1922,12 @@ impl App {
         let repository = ExecutionRunRepository::new(&self.conn);
         let persisted = repository
             .active_feature_run_for_plan(&project.id, plan_id)?
-            .ok_or_else(|| anyhow!("verification_admission_repair_settlement_run_missing:{plan_id}"))?;
+            .ok_or_else(|| {
+                anyhow!("verification_admission_repair_settlement_run_missing:{plan_id}")
+            })?;
         let plan = self.get_plan(plan_id)?;
-        if let Some(existing) = repository
-            .verification_admission_repair_settlement(&invalidation.id)?
+        if let Some(existing) =
+            repository.verification_admission_repair_settlement(&invalidation.id)?
         {
             repository.prove_verification_admission_repair_settlement(
                 invalidation,
@@ -1920,11 +1963,12 @@ impl App {
                 invalidation.id
             );
         }
-        let repair_batch_id = persisted
-            .run
-            .active_batch_id
-            .clone()
-            .ok_or_else(|| anyhow!("verification_admission_repair_batch_missing:{}", persisted.run.id))?;
+        let repair_batch_id = persisted.run.active_batch_id.clone().ok_or_else(|| {
+            anyhow!(
+                "verification_admission_repair_batch_missing:{}",
+                persisted.run.id
+            )
+        })?;
         let verification_item_id =
             self.ready_verification_item_for_plan_path(Some(plan.path.as_str()))?;
         let snapshot = capture_repository_snapshot(&self.root)
@@ -1946,9 +1990,7 @@ impl App {
             },
         )
         .map_err(|violation| {
-            anyhow!(
-                "verification_admission_repair_settlement_refreeze:{violation:?}"
-            )
+            anyhow!("verification_admission_repair_settlement_refreeze:{violation:?}")
         })?;
         let settlement = VerificationAdmissionRepairSettlementRecord {
             invalidation_id: invalidation.id.clone(),
@@ -1971,9 +2013,8 @@ impl App {
             source_revision: freeze.source_revision.clone(),
             source_digest: freeze.source_digest.clone(),
         };
-        self.conn.execute_batch(
-            "BEGIN IMMEDIATE; SAVEPOINT settle_verification_admission_repair",
-        )?;
+        self.conn
+            .execute_batch("BEGIN IMMEDIATE; SAVEPOINT settle_verification_admission_repair")?;
         let result = (|| -> Result<()> {
             self.reconcile_active_phase_wall(&persisted.run.id, BudgetPhase::Repair)?;
             repository.persist_verification_admission_repair_settlement(
@@ -1987,9 +2028,9 @@ impl App {
             )
         })();
         match result {
-            Ok(()) => self.conn.execute_batch(
-                "RELEASE settle_verification_admission_repair; COMMIT",
-            )?,
+            Ok(()) => self
+                .conn
+                .execute_batch("RELEASE settle_verification_admission_repair; COMMIT")?,
             Err(error) => {
                 let _ = self.conn.execute_batch(
                     "ROLLBACK TO settle_verification_admission_repair; RELEASE settle_verification_admission_repair; ROLLBACK",
@@ -2057,10 +2098,8 @@ impl App {
                 .unwrap_or(repository.source_freeze(&existing.source_freeze_id)?);
             let verifier_worker_id = owner_for_role(&persisted.run, RunRole::Verifier)
                 .map(|owner| owner.worker_id.as_str());
-            let verification_item_id = self.verification_item_for_plan_path(
-                Some(plan.path.as_str()),
-                verifier_worker_id,
-            )?;
+            let verification_item_id =
+                self.verification_item_for_plan_path(Some(plan.path.as_str()), verifier_worker_id)?;
             let mut handoff = self.canonical_verification_handoff_value(
                 plan_id,
                 verification_item_id,
@@ -2281,18 +2320,22 @@ impl App {
         }
         let current_verification = self.current_verification_diagnosis(&run)?;
         if let Some(snapshot) = current_verification.as_ref()
-            && let Some(hold) = self.inconsistent_verification_restart_hold_for_run(
-                &run,
-                &snapshot.diagnosis,
-            )?
+            && let Some(hold) =
+                self.inconsistent_verification_restart_hold_for_run(&run, &snapshot.diagnosis)?
         {
             return Ok(Some(hold));
         }
         let verification_item_id = match current_verification.as_ref() {
-            Some(snapshot) => snapshot.diagnosis.facts.verification_item
-                .as_ref().map(|item| item.id.clone()),
+            Some(snapshot) => snapshot
+                .diagnosis
+                .facts
+                .verification_item
+                .as_ref()
+                .map(|item| item.id.clone()),
             None => self.ready_or_owned_verification_item_for_plan_path(
-                Some(plan.path.as_str()), worker_id().as_str())?,
+                Some(plan.path.as_str()),
+                worker_id().as_str(),
+            )?,
         };
         if run.run.phase == FeatureRunPhase::SourceFrozen {
             let freeze = repository
@@ -2307,11 +2350,7 @@ impl App {
             }
             if self.plan_evidence_authority(plan_id)? == PlanEvidenceAuthority::BindingActive
                 && matches!(
-                    self.current_plan_coverage_for_source_freeze(
-                        &project.id,
-                        plan_id,
-                        &freeze,
-                    )?,
+                    self.current_plan_coverage_for_source_freeze(&project.id, plan_id, &freeze,)?,
                     CurrentPlanCoverageForSourceFreeze::Satisfied(_)
                 )
             {
@@ -2378,16 +2417,17 @@ impl App {
                 if let Some(item_id) = verification_item_id.as_deref() {
                     self.lease_verification_item(item_id, &verifier_worker_id)?;
                 }
-                let readiness = match self.evidence_readiness_value(EvidenceCoverageScope::Plan, plan_id) {
-                    Ok(readiness) => readiness,
-                    Err(error) => {
-                        preseal_failure = Some((
-                            VerificationAdmissionRepairReason::RunIndexSealFailed,
-                            json!({"message": error.to_string()}),
-                        ));
-                        return Err(error);
-                    }
-                };
+                let readiness =
+                    match self.evidence_readiness_value(EvidenceCoverageScope::Plan, plan_id) {
+                        Ok(readiness) => readiness,
+                        Err(error) => {
+                            preseal_failure = Some((
+                                VerificationAdmissionRepairReason::RunIndexSealFailed,
+                                json!({"message": error.to_string()}),
+                            ));
+                            return Err(error);
+                        }
+                    };
                 if readiness["status"] != "passed" {
                     preseal_failure = Some((
                         VerificationAdmissionRepairReason::ReadinessBlocked,
@@ -2453,7 +2493,9 @@ impl App {
             }
             let admitted = repository
                 .latest_verification_admission(&run.run.id, &freeze.id)?
-                .ok_or_else(|| anyhow!("verification_pick_admission_record_missing:{}", run.run.id))?;
+                .ok_or_else(|| {
+                    anyhow!("verification_pick_admission_record_missing:{}", run.run.id)
+                })?;
             let mut packet = json!({"kind": "verification", "execution_state": self.canonical_execution_state_value(&verification.id, None)?,
                 "item_id": verification_item_id, "source_freeze": freeze, "verification_lease": {"worker_id": verifier_worker_id, "generation": lease_generation}, "sealed_run_index": sealed_run_index});
             packet["verification_admission"] = serde_json::to_value(admitted)?;
@@ -2492,7 +2534,12 @@ impl App {
         let admission = current_verification
             .as_ref()
             .and_then(|snapshot| snapshot.admission.clone())
-            .ok_or_else(|| anyhow!("current_verification_diagnosis_missing_admission:{}", run.run.id))?;
+            .ok_or_else(|| {
+                anyhow!(
+                    "current_verification_diagnosis_missing_admission:{}",
+                    run.run.id
+                )
+            })?;
         let sealed_run_index = admission.sealed_run_index.clone();
         let repair = repository
             .product_repair_settlement_for_source_freeze(&run.run.id, &source_freeze.id)?;
@@ -3587,7 +3634,10 @@ allow_overwrite = true
             .unwrap()
             .unwrap();
         app.conn
-            .execute("UPDATE items SET status = 'closed', worker_id = NULL WHERE id = 'item-phase'", [])
+            .execute(
+                "UPDATE items SET status = 'closed', worker_id = NULL WHERE id = 'item-phase'",
+                [],
+            )
             .unwrap();
         app.conn
             .execute(
@@ -3876,37 +3926,74 @@ allow_overwrite = true
 
     #[test]
     fn verification_admission_repair_is_itemless_safe_seal_bound_and_atomic() {
-        let protected_counts = |app: &App| (
+        let protected_counts = |app: &App| {
+            (
             ["evidence_attempts", "evidence_receipts", "coverage_verdicts", "coverage_verdict_history", "review_findings"]
                 .map(|table| app.conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get::<_, u64>(0)).unwrap()),
             app.conn.query_row("SELECT COUNT(*) FROM feature_run_evidence_invalidations WHERE reason = 'product_finding'", [], |row| row.get::<_, u64>(0)).unwrap(),
-        );
-        for reason in [VerificationAdmissionRepairReason::ReadinessBlocked, VerificationAdmissionRepairReason::RunIndexSealFailed] {
+        )
+        };
+        for reason in [
+            VerificationAdmissionRepairReason::ReadinessBlocked,
+            VerificationAdmissionRepairReason::RunIndexSealFailed,
+        ] {
             assert!(!reason.requires_run_index_digest());
         }
-        for reason in [VerificationAdmissionRepairReason::SealedRunRejected, VerificationAdmissionRepairReason::CapabilityAdmissionFailed] {
+        for reason in [
+            VerificationAdmissionRepairReason::SealedRunRejected,
+            VerificationAdmissionRepairReason::CapabilityAdmissionFailed,
+        ] {
             assert!(reason.requires_run_index_digest());
         }
         let mut equivalent = Vec::new();
         for with_item in [false, true] {
             let (_root, app, run_id, freeze_id) = verification_fixture(with_item, true);
             let repository = ExecutionRunRepository::new(&app.conn);
-            let admitted = repository.latest_verification_admission(&run_id, &freeze_id).unwrap().unwrap();
+            let admitted = repository
+                .latest_verification_admission(&run_id, &freeze_id)
+                .unwrap()
+                .unwrap();
             let persisted = repository.feature_run(&run_id).unwrap();
             let request = VerificationAdmissionRepairRequest {
-                plan_id: "plan-a".into(), run_id: run_id.clone(), freeze_id: freeze_id.clone(),
+                plan_id: "plan-a".into(),
+                run_id: run_id.clone(),
+                freeze_id: freeze_id.clone(),
                 run_revision: persisted.revision,
-                reason: if with_item { VerificationAdmissionRepairReason::CapabilityAdmissionFailed } else { VerificationAdmissionRepairReason::SealedRunRejected },
+                reason: if with_item {
+                    VerificationAdmissionRepairReason::CapabilityAdmissionFailed
+                } else {
+                    VerificationAdmissionRepairReason::SealedRunRejected
+                },
                 run_index_digest: Some(admitted.run_index_digest),
             };
             let before = protected_counts(&app);
             if !with_item {
                 let stale = [
-                    { let mut value = request.clone(); value.plan_id = "plan-stale".into(); value },
-                    { let mut value = request.clone(); value.run_id = "run-stale".into(); value },
-                    { let mut value = request.clone(); value.freeze_id = "freeze-stale".into(); value },
-                    { let mut value = request.clone(); value.run_revision += 1; value },
-                    { let mut value = request.clone(); value.run_index_digest = Some("sha256:stale".into()); value },
+                    {
+                        let mut value = request.clone();
+                        value.plan_id = "plan-stale".into();
+                        value
+                    },
+                    {
+                        let mut value = request.clone();
+                        value.run_id = "run-stale".into();
+                        value
+                    },
+                    {
+                        let mut value = request.clone();
+                        value.freeze_id = "freeze-stale".into();
+                        value
+                    },
+                    {
+                        let mut value = request.clone();
+                        value.run_revision += 1;
+                        value
+                    },
+                    {
+                        let mut value = request.clone();
+                        value.run_index_digest = Some("sha256:stale".into());
+                        value
+                    },
                 ];
                 for candidate in stale {
                     assert!(app.repair_verification_admission_value(candidate).is_err());
@@ -3914,22 +4001,50 @@ allow_overwrite = true
                     assert_eq!(protected_counts(&app), before);
                 }
             }
-            let repaired = app.repair_verification_admission_value(request.clone()).unwrap();
+            let repaired = app
+                .repair_verification_admission_value(request.clone())
+                .unwrap();
             let repaired_revision = repository.feature_run(&run_id).unwrap().revision;
             let repeated = app.repair_verification_admission_value(request).unwrap();
             assert_eq!(repaired["repair"], repeated["repair"]);
-            assert_eq!(repository.feature_run(&run_id).unwrap().revision, repaired_revision);
-            let transition: crate::execution_run::VerificationAdmissionRepairTransition = serde_json::from_value(repaired["repair"].clone()).unwrap();
+            assert_eq!(
+                repository.feature_run(&run_id).unwrap().revision,
+                repaired_revision
+            );
+            let transition: crate::execution_run::VerificationAdmissionRepairTransition =
+                serde_json::from_value(repaired["repair"].clone()).unwrap();
             let current = repository.feature_run(&run_id).unwrap();
             let maker = owner_for_role(&current.run, RunRole::Maker).unwrap();
-            assert_eq!((maker.worker_id.as_str(), maker.lease_generation), ("maker-other", 2));
-            assert_eq!(repository.source_freeze(&freeze_id).unwrap().status, SourceFreezeStatus::Invalidated);
+            assert_eq!(
+                (maker.worker_id.as_str(), maker.lease_generation),
+                ("maker-other", 2)
+            );
+            assert_eq!(
+                repository.source_freeze(&freeze_id).unwrap().status,
+                SourceFreezeStatus::Invalidated
+            );
             assert_eq!(transition.facts.verification_item_id.is_some(), with_item);
-            assert_eq!(repository.verification_item_projection("plan-a").unwrap().is_some(), with_item);
-            assert_eq!(repository.batch(current.run.active_batch_id.as_deref().unwrap()).unwrap().batch.status, ExecutionBatchStatus::Active);
+            assert_eq!(
+                repository
+                    .verification_item_projection("plan-a")
+                    .unwrap()
+                    .is_some(),
+                with_item
+            );
+            assert_eq!(
+                repository
+                    .batch(current.run.active_batch_id.as_deref().unwrap())
+                    .unwrap()
+                    .batch
+                    .status,
+                ExecutionBatchStatus::Active
+            );
             assert!(owner_for_role(&current.run, RunRole::Verifier).is_none());
             let state = app.canonical_execution_state_value(&run_id, None).unwrap();
-            assert_eq!((state["phase"].clone(), state["next_action"].clone()), (json!("implementation"), json!("settle_next_outcome")));
+            assert_eq!(
+                (state["phase"].clone(), state["next_action"].clone()),
+                (json!("implementation"), json!("settle_next_outcome"))
+            );
             assert_eq!(protected_counts(&app), before);
             assert_eq!(app.conn.query_row("SELECT COUNT(*) FROM events WHERE event_type = 'feature_run_verification_admission_repaired'", [], |row| row.get::<_, u64>(0)).unwrap(), 1);
             equivalent.push(json!({"phase": state["phase"], "next": state["next_action"], "maker": maker.worker_id, "generation": maker.lease_generation, "batch": "active"}));
@@ -3939,23 +4054,54 @@ allow_overwrite = true
         let (_root, app, run_id, freeze_id) = verification_fixture(true, false);
         app.conn.execute("INSERT INTO proof_obligations(id, project_id, plan_id, item_id, criterion_id, obligation_version, title, binding, observation_requirements_json, fixture_policy_json, freshness_policy_json, assurance_policy_json, retry_aggregation, policy_digest, config_digest, source_digest, supersedes_obligation_id, created_at, obligation_shape) SELECT 'pob-readiness-conflict', project_id, plan_id, item_id, criterion_id, obligation_version + 1, title, binding, observation_requirements_json, fixture_policy_json, freshness_policy_json, assurance_policy_json, retry_aggregation, policy_digest, config_digest, source_digest, NULL, datetime('now'), obligation_shape FROM proof_obligations WHERE id = 'pob-phase-ready'", []).unwrap();
         let before = protected_counts(&app);
-        assert!(app.verification_work_packet_value("plan-a", false).unwrap_err().to_string().contains("verification_pick_readiness_blocked"));
+        assert!(
+            app.verification_work_packet_value("plan-a", false)
+                .unwrap_err()
+                .to_string()
+                .contains("verification_pick_readiness_blocked")
+        );
         let repository = ExecutionRunRepository::new(&app.conn);
         let held = repository.feature_run(&run_id).unwrap();
-        let diagnostic = repository.latest_verification_readiness_diagnostic(&run_id, &freeze_id).unwrap().unwrap();
-        assert_eq!((held.run.phase, held.run.hold_reason), (FeatureRunPhase::Held, Some(FeatureRunHoldReason::Capability)));
+        let diagnostic = repository
+            .latest_verification_readiness_diagnostic(&run_id, &freeze_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (held.run.phase, held.run.hold_reason),
+            (
+                FeatureRunPhase::Held,
+                Some(FeatureRunHoldReason::Capability)
+            )
+        );
         assert!(owner_for_role(&held.run, RunRole::Verifier).is_none());
-        let item = repository.verification_item_projection("plan-a").unwrap().unwrap();
-        assert_eq!((item.status, item.worker_id), (CurrentVerificationItemLeaseStatus::Ready, None));
-        assert_eq!(diagnostic.repair_request.reason, VerificationAdmissionRepairReason::ReadinessBlocked);
+        let item = repository
+            .verification_item_projection("plan-a")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (item.status, item.worker_id),
+            (CurrentVerificationItemLeaseStatus::Ready, None)
+        );
+        assert_eq!(
+            diagnostic.repair_request.reason,
+            VerificationAdmissionRepairReason::ReadinessBlocked
+        );
         assert!(diagnostic.repair_request.run_index_digest.is_none());
         let mut invalid = diagnostic.repair_request.clone();
         invalid.run_index_digest = Some("sha256:forbidden".into());
         assert!(app.repair_verification_admission_value(invalid).is_err());
         assert_eq!(repository.feature_run(&run_id).unwrap(), held);
-        let repaired = app.repair_verification_admission_value(diagnostic.repair_request).unwrap();
-        assert_eq!(repaired["repair"]["repaired_run"]["phase"], "implementation");
-        assert_eq!(repository.source_freeze(&freeze_id).unwrap().status, SourceFreezeStatus::Invalidated);
+        let repaired = app
+            .repair_verification_admission_value(diagnostic.repair_request)
+            .unwrap();
+        assert_eq!(
+            repaired["repair"]["repaired_run"]["phase"],
+            "implementation"
+        );
+        assert_eq!(
+            repository.source_freeze(&freeze_id).unwrap().status,
+            SourceFreezeStatus::Invalidated
+        );
         assert_eq!(protected_counts(&app), before);
     }
 
@@ -7086,7 +7232,11 @@ allow_overwrite = true
                 .unwrap()
                 .is_none()
         );
-        assert_eq!(snapshot(), before, "duplicate verification mutated settlement facts");
+        assert_eq!(
+            snapshot(),
+            before,
+            "duplicate verification mutated settlement facts"
+        );
     }
 
     #[test]
@@ -7913,14 +8063,28 @@ allow_overwrite = true
                 "UPDATE feature_run_role_leases SET worker_id = ?1 WHERE run_id = ?2 AND role = 'maker'",
                 params![worker_id(), run_id],
             ).unwrap();
-            let item_count: u64 = app.conn.query_row("SELECT COUNT(*) FROM items", [], |row| row.get(0)).unwrap();
-            let outcome_before: (String, Option<String>, String) = app.conn.query_row(
-                "SELECT status, worker_id, updated_at FROM items WHERE id = 'item-phase'", [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            ).unwrap();
-            let receipts_before: u64 = app.conn.query_row("SELECT COUNT(*) FROM evidence_receipts", [], |row| row.get(0)).unwrap();
+            let item_count: u64 = app
+                .conn
+                .query_row("SELECT COUNT(*) FROM items", [], |row| row.get(0))
+                .unwrap();
+            let outcome_before: (String, Option<String>, String) = app
+                .conn
+                .query_row(
+                    "SELECT status, worker_id, updated_at FROM items WHERE id = 'item-phase'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .unwrap();
+            let receipts_before: u64 = app
+                .conn
+                .query_row("SELECT COUNT(*) FROM evidence_receipts", [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
 
-            let routed = app.route_evidence_product_finding_value(&run_id, &freeze_id, "pob-phase-ready").unwrap();
+            let routed = app
+                .route_evidence_product_finding_value(&run_id, &freeze_id, "pob-phase-ready")
+                .unwrap();
             let repair_id = routed["repair_id"].as_str().unwrap();
             assert_eq!(repair_id, routed["invalidation"]["id"]);
             assert_eq!(routed["verification_item_id"].is_null(), !with_item);
@@ -7929,52 +8093,131 @@ allow_overwrite = true
             let repair_batch_id = repair_run.run.active_batch_id.clone().unwrap();
             let repair = app.repair_work_packet_value("plan-a").unwrap().unwrap();
             assert_eq!(repair["work_packet"]["repair_id"], repair_id);
-            assert_eq!(repair["work_packet"]["verification_item_id"].is_null(), !with_item);
+            assert_eq!(
+                repair["work_packet"]["verification_item_id"].is_null(),
+                !with_item
+            );
 
-            let refrozen = app.settle_product_finding_repair_value(
-                "plan-a", repair_id, "repair complete", &["src/app/feature_run_evidence.rs".into()],
-                &["focused invariant".into()], &["passed".into()],
-            ).unwrap();
+            let refrozen = app
+                .settle_product_finding_repair_value(
+                    "plan-a",
+                    repair_id,
+                    "repair complete",
+                    &["src/app/feature_run_evidence.rs".into()],
+                    &["focused invariant".into()],
+                    &["passed".into()],
+                )
+                .unwrap();
             assert_eq!(refrozen["work_packet"]["kind"], "verification_handoff");
             assert_eq!(refrozen["work_packet"]["mode"], "selective_replay");
-            assert_eq!(refrozen["work_packet"]["verification_item_id"].is_null(), !with_item);
-            assert_eq!(refrozen["work_packet"]["selective_replay_obligation_ids"], json!(["pob-phase-ready"]));
-            assert_eq!(refrozen["work_packet"]["execution_state"]["phase"], "source_frozen");
+            assert_eq!(
+                refrozen["work_packet"]["verification_item_id"].is_null(),
+                !with_item
+            );
+            assert_eq!(
+                refrozen["work_packet"]["selective_replay_obligation_ids"],
+                json!(["pob-phase-ready"])
+            );
+            assert_eq!(
+                refrozen["work_packet"]["execution_state"]["phase"],
+                "source_frozen"
+            );
 
-            let settlement = repository.product_repair_settlement(repair_id).unwrap().unwrap();
-            assert!(serde_json::to_value(&settlement).unwrap().get("verification_item_id").is_none());
+            let settlement = repository
+                .product_repair_settlement(repair_id)
+                .unwrap()
+                .unwrap();
+            assert!(
+                serde_json::to_value(&settlement)
+                    .unwrap()
+                    .get("verification_item_id")
+                    .is_none()
+            );
             assert_eq!(settlement.responsible_maker_id, worker_id());
             assert_eq!(settlement.selective_obligation_ids, ["pob-phase-ready"]);
-            let repeated = app.settle_product_finding_repair_value("plan-a", repair_id, "ignored", &[], &[], &[]).unwrap();
+            let repeated = app
+                .settle_product_finding_repair_value("plan-a", repair_id, "ignored", &[], &[], &[])
+                .unwrap();
             assert_eq!(repeated["created"], false);
-            assert_eq!(repeated["work_packet"]["verification_item_id"].is_null(), !with_item);
-            assert_eq!(repeated["work_packet"]["source_freeze"]["id"], settlement.source_freeze_id);
-            let selective = app.verification_work_packet_value("plan-a", true).unwrap().unwrap();
+            assert_eq!(
+                repeated["work_packet"]["verification_item_id"].is_null(),
+                !with_item
+            );
+            assert_eq!(
+                repeated["work_packet"]["source_freeze"]["id"],
+                settlement.source_freeze_id
+            );
+            let selective = app
+                .verification_work_packet_value("plan-a", true)
+                .unwrap()
+                .unwrap();
             assert_eq!(selective["work_packet"]["item_id"].is_null(), !with_item);
             assert_eq!(selective["work_packet"]["mode"], "selective_replay");
             assert_eq!(selective["work_packet"]["repair_id"], repair_id);
-            assert_eq!(selective["work_packet"]["selective_replay_obligation_ids"], json!(["pob-phase-ready"]));
+            assert_eq!(
+                selective["work_packet"]["selective_replay_obligation_ids"],
+                json!(["pob-phase-ready"])
+            );
 
             let settled_run = repository.feature_run(&run_id).unwrap();
             let ended_batch = repository.batch(&repair_batch_id).unwrap();
-            assert_eq!(repository.source_freeze(&freeze_id).unwrap().status, SourceFreezeStatus::Invalidated);
-            assert_eq!(repository.source_freeze(&settlement.source_freeze_id).unwrap().status, SourceFreezeStatus::Active);
+            assert_eq!(
+                repository.source_freeze(&freeze_id).unwrap().status,
+                SourceFreezeStatus::Invalidated
+            );
+            assert_eq!(
+                repository
+                    .source_freeze(&settlement.source_freeze_id)
+                    .unwrap()
+                    .status,
+                SourceFreezeStatus::Active
+            );
             assert_eq!(ended_batch.batch.status, ExecutionBatchStatus::Ended);
             assert_eq!(ended_batch.batch.maker_worker_id, worker_id());
-            assert_eq!(app.conn.query_row("SELECT COUNT(*) FROM items", [], |row| row.get::<_, u64>(0)).unwrap(), item_count);
-            assert_eq!(app.conn.query_row(
-                "SELECT status, worker_id, updated_at FROM items WHERE id = 'item-phase'", [],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, String>(2)?)),
-            ).unwrap(), outcome_before);
+            assert_eq!(
+                app.conn
+                    .query_row("SELECT COUNT(*) FROM items", [], |row| row.get::<_, u64>(0))
+                    .unwrap(),
+                item_count
+            );
+            assert_eq!(
+                app.conn
+                    .query_row(
+                        "SELECT status, worker_id, updated_at FROM items WHERE id = 'item-phase'",
+                        [],
+                        |row| Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, Option<String>>(1)?,
+                            row.get::<_, String>(2)?
+                        )),
+                    )
+                    .unwrap(),
+                outcome_before
+            );
             if with_item {
-                assert_eq!(app.conn.query_row(
-                    "SELECT status, worker_id FROM items WHERE id = 'verification-phase'", [],
-                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
-                ).unwrap(), ("ready".into(), None));
+                assert_eq!(
+                    app.conn
+                        .query_row(
+                            "SELECT status, worker_id FROM items WHERE id = 'verification-phase'",
+                            [],
+                            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+                        )
+                        .unwrap(),
+                    ("ready".into(), None)
+                );
             }
-            let receipts_after: u64 = app.conn.query_row("SELECT COUNT(*) FROM evidence_receipts", [], |row| row.get(0)).unwrap();
+            let receipts_after: u64 = app
+                .conn
+                .query_row("SELECT COUNT(*) FROM evidence_receipts", [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
             assert_eq!((receipts_before, receipts_after), (0, 0));
-            assert!(app.load_active_budget_reservation(&run_id, &format!("repair:{run_id}")).unwrap().is_none());
+            assert!(
+                app.load_active_budget_reservation(&run_id, &format!("repair:{run_id}"))
+                    .unwrap()
+                    .is_none()
+            );
             canonical_results.push(json!({
                 "phase": settled_run.run.phase,
                 "batch_count": settled_run.run.batch_outcome_count, "owners": settled_run.run.role_owners,

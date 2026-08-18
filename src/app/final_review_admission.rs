@@ -149,8 +149,7 @@ impl App {
                     anyhow!("final_product_review_source_binding_missing:{}", gate.id)
                 })?;
                 if stored != current
-                    || gate.source_revision.as_deref()
-                        != Some(stored.source_revision.as_str())
+                    || gate.source_revision.as_deref() != Some(stored.source_revision.as_str())
                 {
                     bail!("final_product_review_source_binding_stale:{}", gate.id);
                 }

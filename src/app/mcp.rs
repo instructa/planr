@@ -227,7 +227,9 @@ impl App {
                 let reason = match required_arg(&args, "reason")? {
                     "incompatible-budget" => FeatureRunRestartReason::IncompatibleBudget,
                     "premature-source-freeze" => FeatureRunRestartReason::PrematureSourceFreeze,
-                    "inconsistent-verification" => FeatureRunRestartReason::InconsistentVerification,
+                    "inconsistent-verification" => {
+                        FeatureRunRestartReason::InconsistentVerification
+                    }
                     value => bail!("invalid restart reason: {value}"),
                 };
                 Ok(mcp_json(self.restart_feature_run_value(

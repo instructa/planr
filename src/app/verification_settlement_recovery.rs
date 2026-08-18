@@ -6,8 +6,8 @@ use super::repository::execution_run::{
 use crate::evidence::coverage::evaluate_plan_coverage;
 use crate::evidence::policy::capture_repository_snapshot;
 use crate::execution_run::{
-    ExecutionBatch, ExecutionBatchStatus, FeatureRunPhase, PhaseTransition, PhaseTransitionCause,
-    ORDINARY_IMPLEMENTATION_WORK_TYPE_NAMES, RoleOwner, RunRole, apply_phase_transition,
+    ExecutionBatch, ExecutionBatchStatus, FeatureRunPhase, ORDINARY_IMPLEMENTATION_WORK_TYPE_NAMES,
+    PhaseTransition, PhaseTransitionCause, RoleOwner, RunRole, apply_phase_transition,
     is_ordinary_implementation_work_type,
 };
 use crate::model::WorkType;

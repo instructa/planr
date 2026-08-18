@@ -196,13 +196,10 @@ pub fn authoritative_obligation_bindings_for_scope(
     scope_id: &str,
 ) -> Result<Vec<AuthoritativeObligationBindingRow>, EvidenceDomainError> {
     if scope == "criterion" {
-        let canonical_ids = load_authoritative_criterion_obligation_ids(
-            conn,
-            project_id,
-            scope_id,
-        )?
-        .into_iter()
-        .collect::<BTreeSet<_>>();
+        let canonical_ids =
+            load_authoritative_criterion_obligation_ids(conn, project_id, scope_id)?
+                .into_iter()
+                .collect::<BTreeSet<_>>();
         return authoritative_obligation_bindings_by_clause(
             conn,
             project_id,

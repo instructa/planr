@@ -61,7 +61,9 @@ pub(crate) fn select_execution_binding_subset(
     run_input: &Value,
     execution_binding: &Value,
 ) -> Result<(ProofObligation, TargetBinding)> {
-    if execution_binding.get("schema_version").and_then(Value::as_str)
+    if execution_binding
+        .get("schema_version")
+        .and_then(Value::as_str)
         != Some("planr.evidence.execution-binding.v2")
     {
         bail!("sealed execution binding schema_version is invalid");
@@ -70,8 +72,7 @@ pub(crate) fn select_execution_binding_subset(
         .get("obligation_id")
         .and_then(Value::as_str)
         != Some(obligation.id.as_str())
-        || run_input.get("obligation_id").and_then(Value::as_str)
-            != Some(obligation.id.as_str())
+        || run_input.get("obligation_id").and_then(Value::as_str) != Some(obligation.id.as_str())
     {
         bail!("sealed execution binding obligation does not match run input");
     }

@@ -12,9 +12,9 @@ use crate::execution_run::{
     DEFAULT_BATCH_OUTCOME_CAP, ExecutionBatch, ExecutionBatchStatus, FeatureRun, FeatureRunPhase,
     FeatureRunRestartDisposition, FeatureRunRestartReason, FeatureRunRestartRequest,
     FeatureRunStatus, MakerReplacement, MakerReplacementReason, PhaseTransition,
-    PhaseTransitionCause, RoleOwner, RunRole, apply_phase_transition, pause_batch_for_risk_review,
-    PrematureSourceFreezeRestartFacts, VerificationAdmissionRepairReason,
-    VerificationAdmissionRepairRequest, is_ordinary_implementation_work_type, replace_batch_maker,
+    PhaseTransitionCause, PrematureSourceFreezeRestartFacts, RoleOwner, RunRole,
+    VerificationAdmissionRepairReason, VerificationAdmissionRepairRequest, apply_phase_transition,
+    is_ordinary_implementation_work_type, pause_batch_for_risk_review, replace_batch_maker,
     resume_batch_after_risk_review, retire_incompatible_feature_run,
     retire_premature_source_freeze_feature_run, roll_batch_for_same_maker,
 };
@@ -247,16 +247,15 @@ impl App {
                         VerificationAdmissionRepairReason::CapabilityAdmissionFailed
                     }
                 };
-                let value = self.repair_verification_admission_value(
-                    VerificationAdmissionRepairRequest {
+                let value =
+                    self.repair_verification_admission_value(VerificationAdmissionRepairRequest {
                         plan_id: args.plan,
                         run_id: args.run,
                         freeze_id: args.freeze,
                         run_revision: args.revision,
                         reason,
                         run_index_digest: args.run_index_digest,
-                    },
-                )?;
+                    })?;
                 self.emit(value, "verification admission repaired".to_string())
             }
             RunCommand::SettleRepair(args) => {
@@ -268,10 +267,7 @@ impl App {
                     &args.cmd,
                     &args.tests,
                 )?;
-                self.emit(
-                    value,
-                    "repair settled and source refrozen".to_string(),
-                )
+                self.emit(value, "repair settled and source refrozen".to_string())
             }
         }
     }
@@ -482,7 +478,9 @@ impl App {
                     Ok(json!({"schema_version": "planr.feature_run_restart.v1",
                         "restart": previous, "execution_state": execution_state}))
                 }
-                FeatureRunRestartReason::InconsistentVerification => unreachable!("dispatched above"),
+                FeatureRunRestartReason::InconsistentVerification => {
+                    unreachable!("dispatched above")
+                }
             };
         };
         let request = FeatureRunRestartRequest {
@@ -494,7 +492,9 @@ impl App {
                 let compatibility = repository.budget_contract_compatibility(&persisted.run.id)?;
                 let transition =
                     retire_incompatible_feature_run(&persisted.run, &request, compatibility)
-                        .map_err(|violation| anyhow!("feature_run_restart_rejected:{violation:?}"))?;
+                        .map_err(|violation| {
+                            anyhow!("feature_run_restart_rejected:{violation:?}")
+                        })?;
                 repository.retire_incompatible_feature_run(
                     &transition,
                     persisted.revision,
@@ -505,13 +505,16 @@ impl App {
             FeatureRunRestartReason::PrematureSourceFreeze => {
                 let facts = self
                     .premature_source_freeze_restart_facts(&persisted)?
-                    .ok_or_else(|| anyhow!("feature_run_premature_source_freeze_restart_not_required:{plan_id}"))?;
-                let transition = retire_premature_source_freeze_feature_run(
-                    &persisted.run,
-                    &request,
-                    &facts,
-                )
-                .map_err(|violation| anyhow!("feature_run_restart_rejected:{violation:?}"))?;
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "feature_run_premature_source_freeze_restart_not_required:{plan_id}"
+                        )
+                    })?;
+                let transition =
+                    retire_premature_source_freeze_feature_run(&persisted.run, &request, &facts)
+                        .map_err(|violation| {
+                            anyhow!("feature_run_restart_rejected:{violation:?}")
+                        })?;
                 repository.retire_premature_source_freeze_feature_run(
                     &transition,
                     persisted.revision,
@@ -542,23 +545,19 @@ impl App {
         let Some(freeze) = repository.active_source_freeze(&persisted.run.id)? else {
             return Ok(None);
         };
-        let open_outcome_ids =
-            repository.open_ordinary_outcome_ids(&persisted.run.plan_id)?;
+        let open_outcome_ids = repository.open_ordinary_outcome_ids(&persisted.run.plan_id)?;
         if open_outcome_ids.is_empty() {
             return Ok(None);
         }
         let released_outcome_ids =
             repository.active_ordinary_outcome_lease_ids(&persisted.run.plan_id)?;
-        let (
-            verification_admission_count,
-            verification_attempt_count,
-            verification_receipt_count,
-        ) = repository.source_freeze_verification_activity(
-            &persisted.project_id,
-            &persisted.run.plan_id,
-            &persisted.run.id,
-            &freeze,
-        )?;
+        let (verification_admission_count, verification_attempt_count, verification_receipt_count) =
+            repository.source_freeze_verification_activity(
+                &persisted.project_id,
+                &persisted.run.plan_id,
+                &persisted.run.id,
+                &freeze,
+            )?;
         if verification_admission_count != 0
             || verification_attempt_count != 0
             || verification_receipt_count != 0
@@ -694,9 +693,8 @@ impl App {
                 )
             })?;
         let item = self.get_item(input.item_id)?;
-        let reject = |violation| {
-            already_settled_outcome_error(&persisted.run.id, input.item_id, violation)
-        };
+        let reject =
+            |violation| already_settled_outcome_error(&persisted.run.id, input.item_id, violation);
         if persisted.run.phase != FeatureRunPhase::Implementation {
             return Err(reject(AlreadySettledOutcomeViolation::PhaseMismatch));
         }
@@ -743,7 +741,9 @@ impl App {
         if existing_outcome.ordinal == 0
             || existing_outcome.ordinal != persisted.run.batch_outcome_count
         {
-            return Err(reject(AlreadySettledOutcomeViolation::OutcomeOrdinalMismatch));
+            return Err(reject(
+                AlreadySettledOutcomeViolation::OutcomeOrdinalMismatch,
+            ));
         }
         let materiality = persisted_outcome_materiality(
             &existing_outcome.outcome,
@@ -767,7 +767,9 @@ impl App {
         let batch_index = usize::try_from(existing_outcome.ordinal - 1)
             .map_err(|_| reject(AlreadySettledOutcomeViolation::OutcomeOrdinalMismatch))?;
         if batch.batch.settled_outcome_ids.get(batch_index) != Some(&existing_outcome.id) {
-            return Err(reject(AlreadySettledOutcomeViolation::BatchMembershipMismatch));
+            return Err(reject(
+                AlreadySettledOutcomeViolation::BatchMembershipMismatch,
+            ));
         }
         let run_outcomes = repository.outcomes(&persisted.run.id)?;
         if u32::try_from(run_outcomes.len()).ok() != Some(persisted.run.outcomes_settled)
@@ -2515,10 +2517,7 @@ mod tests {
             .freeze_feature_run_source_value("plan-a")
             .expect("initial readiness freeze")
             .expect("active run");
-        let old_freeze_id = frozen["source_freeze"]["id"]
-            .as_str()
-            .unwrap()
-            .to_string();
+        let old_freeze_id = frozen["source_freeze"]["id"].as_str().unwrap().to_string();
         let repository = ExecutionRunRepository::new(&stale.conn);
         let old_freeze = repository
             .source_freeze(&old_freeze_id)
@@ -2533,9 +2532,18 @@ mod tests {
             retired["restart"]["facts"]["open_outcome_ids"],
             json!(["item-stale-source"])
         );
-        assert_eq!(retired["restart"]["facts"]["released_outcome_ids"], json!(["item-stale-source"]));
-        assert_eq!(retired["execution_state"]["feature_run"]["status"], "cancelled");
-        assert_eq!(retired["execution_state"]["feature_run"]["phase"], "cancelled");
+        assert_eq!(
+            retired["restart"]["facts"]["released_outcome_ids"],
+            json!(["item-stale-source"])
+        );
+        assert_eq!(
+            retired["execution_state"]["feature_run"]["status"],
+            "cancelled"
+        );
+        assert_eq!(
+            retired["execution_state"]["feature_run"]["phase"],
+            "cancelled"
+        );
         assert_eq!(
             retired["execution_state"]["feature_run"]["terminal_reason"],
             "policy_cancelled"
@@ -3378,58 +3386,90 @@ mod tests {
                 escalation: None,
             })
             .expect("settle ordinary outcome");
-        app.close_item_core("item-refreeze-retry", "settled refreeze retry fixture", false)
-            .expect("close ordinary outcome");
-        app
-            .freeze_feature_run_source_value("plan-a")
+        app.close_item_core(
+            "item-refreeze-retry",
+            "settled refreeze retry fixture",
+            false,
+        )
+        .expect("close ordinary outcome");
+        app.freeze_feature_run_source_value("plan-a")
             .expect("freeze")
             .expect("frozen run");
         let run_id = settled["run_id"].as_str().unwrap();
         let repository = ExecutionRunRepository::new(&app.conn);
         let old_freeze = repository.active_source_freeze(run_id).unwrap().unwrap();
         let gate = ReviewGateRecord {
-            id: "gate-refreeze-retry".into(), run_id: run_id.into(),
-            scope_kind: ReviewScopeKind::Plan, scope_id: "plan-a".into(),
-            kind: ReviewGateKind::FinalProduct, status: ReviewGateStatus::Pending,
-            required_risk: None, responsible_maker_id: worker_id(), latest_attempt: 0,
+            id: "gate-refreeze-retry".into(),
+            run_id: run_id.into(),
+            scope_kind: ReviewScopeKind::Plan,
+            scope_id: "plan-a".into(),
+            kind: ReviewGateKind::FinalProduct,
+            status: ReviewGateStatus::Pending,
+            required_risk: None,
+            responsible_maker_id: worker_id(),
+            latest_attempt: 0,
             source_revision: Some(old_freeze.source_revision.clone()),
         };
         repository.create_review_gate(&gate).unwrap();
         let finding = FindingRecord {
-            id: "finding-refreeze-retry".into(), gate_id: gate.id.clone(),
-            attempt_id: "attempt-refreeze-retry".into(), severity: "high".into(),
-            target: "plan-a".into(), owner_worker_id: worker_id(),
-            status: FindingStatus::Resolved, invalidated_evidence_ids: Vec::new(),
+            id: "finding-refreeze-retry".into(),
+            gate_id: gate.id.clone(),
+            attempt_id: "attempt-refreeze-retry".into(),
+            severity: "high".into(),
+            target: "plan-a".into(),
+            owner_worker_id: worker_id(),
+            status: FindingStatus::Resolved,
+            invalidated_evidence_ids: Vec::new(),
         };
-        repository.append_review_attempt(
-            &ReviewAttemptRecord {
-                id: finding.attempt_id.clone(), gate_id: gate.id.clone(), attempt_number: 1,
-                reviewer_worker_id: "reviewer-a".into(), reviewer_mode: "independent".into(),
-                verdict: ReviewVerdict::ChangesRequested,
-                source_revision: old_freeze.source_revision.clone(), artifacts: Vec::new(),
-            },
-            std::slice::from_ref(&finding), 0,
-        ).unwrap();
+        repository
+            .append_review_attempt(
+                &ReviewAttemptRecord {
+                    id: finding.attempt_id.clone(),
+                    gate_id: gate.id.clone(),
+                    attempt_number: 1,
+                    reviewer_worker_id: "reviewer-a".into(),
+                    reviewer_mode: "independent".into(),
+                    verdict: ReviewVerdict::ChangesRequested,
+                    source_revision: old_freeze.source_revision.clone(),
+                    artifacts: Vec::new(),
+                },
+                std::slice::from_ref(&finding),
+                0,
+            )
+            .unwrap();
         let gate_before = repository.review_gate(&gate.id).unwrap();
         let findings_before = repository.findings(&gate.id).unwrap();
         fs::write(root.path().join("plan-a.md"), "# Repaired source\n").unwrap();
         let frozen_run = repository.feature_run(run_id).unwrap();
-        app.reconcile_final_review_repair_source(&repository, &frozen_run, &gate_before).unwrap();
+        app.reconcile_final_review_repair_source(&repository, &frozen_run, &gate_before)
+            .unwrap();
         let replacement = repository.active_source_freeze(run_id).unwrap().unwrap();
         assert_ne!(replacement.id, old_freeze.id);
-        assert_eq!(repository.source_freeze(&old_freeze.id).unwrap().status, SourceFreezeStatus::Invalidated);
+        assert_eq!(
+            repository.source_freeze(&old_freeze.id).unwrap().status,
+            SourceFreezeStatus::Invalidated
+        );
         let after = repository.feature_run(run_id).unwrap();
         assert_eq!(after.run.phase, FeatureRunPhase::SourceFrozen);
-        assert_eq!(after.run.source_revision.as_deref(), Some(replacement.source_revision.as_str()));
+        assert_eq!(
+            after.run.source_revision.as_deref(),
+            Some(replacement.source_revision.as_str())
+        );
         assert_eq!(repository.review_gate(&gate.id).unwrap(), gate_before);
         assert_eq!(repository.findings(&gate.id).unwrap(), findings_before);
-        let freeze_counts = || app.conn.query_row(
+        let freeze_counts = || {
+            app.conn.query_row(
             "SELECT COUNT(*), SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) FROM feature_run_source_freezes WHERE run_id = ?1",
             [run_id], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
-        ).unwrap();
+        ).unwrap()
+        };
         assert_eq!(freeze_counts(), (2, 1));
-        app.reconcile_final_review_repair_source(&repository, &after, &gate_before).unwrap();
-        assert_eq!(repository.active_source_freeze(run_id).unwrap().unwrap(), replacement);
+        app.reconcile_final_review_repair_source(&repository, &after, &gate_before)
+            .unwrap();
+        assert_eq!(
+            repository.active_source_freeze(run_id).unwrap().unwrap(),
+            replacement
+        );
         assert_eq!(repository.feature_run(run_id).unwrap(), after);
         assert_eq!(freeze_counts(), (2, 1));
     }
