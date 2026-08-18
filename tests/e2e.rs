@@ -23497,7 +23497,11 @@ fn seed_transport_risk_handoff(root: &Path, db: &Path) -> (String, String) {
         .assert()
         .success();
     let plan_path = root.join("transport-handoff.plan.md");
-    fs::write(&plan_path, "# Transport Handoff\n").unwrap();
+    fs::write(
+        &plan_path,
+        "---\nname: transport-handoff\ncriteria:\n  - id: crit-transport\n    title: Transport verification\n---\n# Transport Handoff\n",
+    )
+    .unwrap();
     let conn = Connection::open(db).unwrap();
     let project_id: String = conn
         .query_row("SELECT id FROM projects LIMIT 1", [], |row| row.get(0))
@@ -23552,23 +23556,24 @@ fn seed_transport_risk_handoff(root: &Path, db: &Path) -> (String, String) {
         .as_str()
         .unwrap()
         .to_string();
-    let conn = Connection::open(db).unwrap();
-    conn.execute(
-        "INSERT INTO proof_obligations(
-           id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
-           binding, observation_requirements_json, fixture_policy_json,
-           freshness_policy_json, assurance_policy_json, policy_digest, config_digest,
-           source_digest, created_at, retry_aggregation, obligation_shape
-         ) VALUES ('pob-transport-handoff', ?1, 'plan-transport-handoff',
-           'item-transport-verification', 'crit-transport', 1, 'transport obligation', 1,
-           '[]', '{}', '{}', '{}',
-           'sha256:0000000000000000000000000000000000000000000000000000000000000000',
-           'sha256:0000000000000000000000000000000000000000000000000000000000000000',
-           NULL, datetime('now'), 'latest_applicable_pass', 'semantic_v1')",
-        [&project_id],
-    )
-    .unwrap();
-    drop(conn);
+    let mut obligation = bind_obligation_to_authored_criterion(
+        evidence_obligation_for(
+            "pob-transport-handoff",
+            "",
+            "com.example.health.status",
+            "transport obligation",
+            json!({"status": "ok"}),
+            json!({"kind": "process", "uri": "local://health"}),
+            Value::Null,
+            Value::Null,
+            json!([]),
+            "",
+        ),
+        "plan-transport-handoff",
+        "crit-transport",
+    );
+    obligation["item_id"] = json!("item-transport-verification");
+    add_evidence_obligation_value(root, db, "pob-transport-handoff", &obligation);
     planr()
         .current_dir(root)
         .env("PLANR_WORKER_ID", "reviewer-transport")
