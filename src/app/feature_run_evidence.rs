@@ -3684,7 +3684,7 @@ allow_overwrite = true
     ) -> (tempfile::TempDir, App, String, Value) {
         let root = tempfile::tempdir().unwrap();
         write_budget_policy(root.path());
-        let policy_digest = write_evidence_policy_with_probe(
+        write_evidence_policy_with_probe(
             root.path(),
             "non_repeatable_one_shot",
             shell_script,
@@ -3710,38 +3710,45 @@ allow_overwrite = true
         } else {
             test_app(root.path().to_path_buf())
         };
+        let plan_path = root.path().join("plan-a.md");
+        std::fs::write(
+            &plan_path,
+            crate::planpack::build_plan_body("Plan", "product-plan", "one-shot"),
+        )
+        .unwrap();
+        app.conn
+            .execute(
+                "UPDATE plans SET path = ?1 WHERE id = 'plan-a'",
+                [plan_path.to_string_lossy().as_ref()],
+            )
+            .unwrap();
         add_outcome(&app, "item-one-shot");
         add_verification_outcome(&app, "item-one-shot-verifier");
         app.conn
             .execute(
-                "INSERT INTO proof_obligations(
-                  id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
-                  binding, observation_requirements_json, fixture_policy_json, freshness_policy_json,
-                  assurance_policy_json, retry_aggregation, policy_digest, config_digest,
-                  source_digest, supersedes_obligation_id, created_at, obligation_shape
-                ) VALUES (
-                  'pob-one-shot', 'project-a', 'plan-a', 'item-one-shot', 'criterion-one-shot', 1,
-                  'one-shot process', 1, ?1, '{}', '{}', '{}', 'all_applicable_pass', ?2, ?2, ?2, NULL,
-                  datetime('now'), 'semantic_v1'
-                )",
-                params![
-                    json!([{
+                "UPDATE items SET plan_path = ?1 WHERE id IN ('item-one-shot', 'item-one-shot-verifier')",
+                [plan_path.to_string_lossy().as_ref()],
+            )
+            .unwrap();
+        app.evidence_migration_value(
+            json!({"schema_version":"planr.evidence.migration.v1","plan_id":"plan-a","obligations":[{
+                    "id":"pob-one-shot","schema_version":"evidence.contract.v1","criterion_id":"criterion-one-shot","plan_id":"plan-a","item_id":"item-one-shot-verifier","title":"one-shot process","binding":true,"observations":[{
                         "id": "obs-one-shot",
                         "type": "com.example.ready.status",
                         "subject": "one-shot process",
                         "expected": {"status": "ready"},
                         "target": {"kind": "process", "uri": "local://ready"},
                         "payload_schema": {"schema_ref": "com.example.ready.status@v1"}
-                    }])
-                    .to_string(),
-                    policy_digest,
-                ],
-            )
-            .unwrap();
+                    }],"fixture_policy":{},"freshness_policy":{},"assurance_policy":{"retry_aggregation":"all_applicable_pass"}}]}), true).unwrap();
         let run = app
             .ensure_outcome_feature_run("item-one-shot")
             .unwrap()
             .unwrap();
+        app.close_item_value(
+            "item-one-shot",
+            "initial ordinary outcome settled before one-shot readiness",
+        )
+        .unwrap();
         app.conn
             .execute(
                 "UPDATE feature_run_role_leases SET worker_id = 'maker-other' WHERE run_id = ?1 AND role = 'maker' AND released_at IS NULL",
