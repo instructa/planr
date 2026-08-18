@@ -17770,8 +17770,8 @@ fn complete_binding_single_owner_inventory_keeps_adapter_at_boundary() {
 
     let proof = fs::read_to_string(root.join("src/app/proof.rs")).unwrap();
     assert!(
-        proof.contains("authoritative_plan_obligation_bindings"),
-        "app/proof must consume the typed Evidence authority loader"
+        proof.contains("authoritative_plan_obligation_binding_identities("),
+        "app/proof must consume the typed Evidence identity loader"
     );
     assert!(
         !proof.contains("proof_obligations") && !proof.contains("rusqlite::params"),
@@ -17780,9 +17780,10 @@ fn complete_binding_single_owner_inventory_keeps_adapter_at_boundary() {
 
     let coverage = fs::read_to_string(root.join("src/evidence/coverage.rs")).unwrap();
     assert!(
-        coverage.contains("pub struct AuthoritativeObligationBindingRow")
-            && coverage.contains("pub fn authoritative_plan_obligation_bindings"),
-        "Evidence coverage must expose the authoritative-row loader"
+        coverage.contains("pub struct AuthoritativeObligationBindingIdentity")
+            && coverage.contains("pub fn authoritative_plan_obligation_binding_identities(")
+            && !coverage.contains("pub fn authoritative_plan_obligation_bindings("),
+        "Evidence coverage must expose only the identity authority loader for proof completeness"
     );
 
     for relative in [
@@ -17820,18 +17821,32 @@ fn complete_binding_single_owner_inventory_keeps_adapter_at_boundary() {
         "Planr skills must delegate identity and completeness to canonical owners"
     );
 
-    let manifest = fs::read_to_string(
+    let manifest: Value = serde_json::from_str(&fs::read_to_string(
         root.join(".planr/evidence/adapters/verifier-complete-binding-authority-v1.manifest.json"),
     )
+    .unwrap())
     .unwrap();
-    let policy = fs::read_to_string(root.join(".planr/evidence.yaml")).unwrap();
+    let policy: Value =
+        serde_json::from_str(&fs::read_to_string(root.join(".planr/evidence.yaml")).unwrap())
+            .unwrap();
+    let registration = policy["adapter_registrations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|registration| registration["manifest_id"] == "verifier-complete-binding-authority-v1")
+        .unwrap();
     let obsolete_adapter = ["scripts/verify-complete-binding-authority", ".mjs"].concat();
-    for current_contract in [&manifest, &policy] {
-        assert!(current_contract.contains("\"executable\": \"rustup\""));
-        assert!(current_contract.contains("\"cargo\""));
-        assert!(current_contract.contains("\"planr-complete-binding-authority\""));
-        assert!(!current_contract.contains("\"executable\": \"node\""));
-        assert!(!current_contract.contains(&obsolete_adapter));
+    for current_contract in [
+        &manifest["availability_probe"]["execution"],
+        &registration["execution_contract"],
+    ] {
+        assert_eq!(current_contract["executable"], "rustup");
+        let args = current_contract["args"].as_array().unwrap();
+        assert!(args.iter().any(|arg| arg == "cargo"));
+        assert!(args
+            .iter()
+            .any(|arg| arg == "planr-complete-binding-authority"));
+        assert!(!current_contract.to_string().contains(&obsolete_adapter));
     }
     assert!(
         !root.join(obsolete_adapter).exists(),
