@@ -2119,6 +2119,64 @@ fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_m
     assert_eq!(mcp_imported["object"]["verdict"], http_imported["object"]["verdict"]);
     assert_eq!(mcp_imported["object"]["receipt"]["provenance"]["source"], "verified_host_event");
     assert_eq!(mcp_persisted(), ("promoted".to_string(), 1, 1, 1));
+
+    let negative_dir = tempfile::tempdir_in(&canonical_temp_root).unwrap();
+    let negative_db_dir = tempdir().unwrap();
+    let negative_db = negative_db_dir.path().join("planr.sqlite");
+    write_evidence_policy_fixture(negative_dir.path());
+    init_evidence_project(negative_dir.path(), &negative_db, "Evidence Host Capture Negative Boundaries");
+    rewrite_evidence_policy_fixture(negative_dir.path(), |policy| {
+        policy["trust_policy"]["accepted_provenance"].as_array_mut().unwrap().push(json!("verified_host_event"));
+    });
+    let conn = Connection::open(&negative_db).unwrap();
+    conn.execute("INSERT INTO items(id,project_id,title,description,status,work_type,plan_path,created_at,updated_at) SELECT 'item-host-maker',project_id,'Host maker','settle host capture source','ready','code',path,datetime('now'),datetime('now') FROM plans WHERE id='pln-evidence-public' UNION ALL SELECT 'item-host-verifier',project_id,'Host verifier','verify host capture','ready','verification',path,datetime('now'),datetime('now') FROM plans WHERE id='pln-evidence-public'", []).unwrap();
+    drop(conn);
+    add_evidence_obligation_value(negative_dir.path(), &negative_db, "pob-host-capture", &obligation);
+    init_git_repo(negative_dir.path());
+    let negative_cli = |worker: &str, args: &[&str]| {
+        single_json_document(&planr().current_dir(negative_dir.path()).env("PLANR_WORKER_ID", worker).args(["--db", negative_db.to_str().unwrap(), "--json"]).args(args).assert().success().get_output().stdout)
+    };
+    assert_eq!(negative_cli("negative-maker", &["pick", "--plan", "pln-evidence-public", "--work-type", "code"])["item"]["id"], "item-host-maker");
+    negative_cli("negative-maker", &["done", "item-host-maker", "--summary", "negative host source settled", "--cmd", "true", "--next"]);
+    let negative_verifier = negative_cli("negative-verifier", &["pick", "--plan", "pln-evidence-public", "--work-type", "verification"]);
+    let negative_authority = &negative_verifier["work_packet"]["verification_admission"];
+    let reject = |command: &str, value: &Value| {
+        let path = negative_db_dir.path().join(format!("host-capture-{command}-rejected.json"));
+        fs::write(&path, serde_json::to_vec_pretty(value).unwrap()).unwrap();
+        single_json_document(&planr().current_dir(negative_dir.path()).env("PLANR_WORKER_ID", "negative-verifier").args(["--db", negative_db.to_str().unwrap(), "--json", "evidence", "host-capture", command, "--input", path.to_str().unwrap()]).assert().failure().code(1).get_output().stdout)
+    };
+    let state = || Connection::open(&negative_db).unwrap().query_row("SELECT (SELECT COUNT(*) FROM host_capture_admissions WHERE status='pending'),(SELECT COUNT(*) FROM verification_capability_instances WHERE id='host-exp-chrome-browser-client'),(SELECT COUNT(*) FROM evidence_attempts WHERE obligation_id='pob-host-capture'),(SELECT COUNT(*) FROM evidence_receipts WHERE obligation_id='pob-host-capture' AND receipt_json LIKE '%verified_host_event%')", [], |row| Ok((row.get::<_,i64>(0)?,row.get::<_,i64>(1)?,row.get::<_,i64>(2)?,row.get::<_,i64>(3)?))).unwrap();
+
+    let mismatch_root = tempfile::tempdir_in(&canonical_temp_root).unwrap();
+    let canonical_mismatch_root = mismatch_root.path().canonicalize().unwrap();
+    write_fresh_host_capture_envelope_with_producer(&canonical_mismatch_root, "planr-codex-host-capture", |raw| {
+        raw["events"][1]["payload"]["url"] = json!("https://wrong.example/");
+    });
+    let mismatch_request = json!({"schema_version":"planr.evidence.host_capture.admission.v1","plan_id":negative_authority["plan_id"],"run_id":negative_authority["run_id"],"freeze_id":negative_authority["freeze_id"],"run_revision":negative_authority["run_revision"],"obligation_id":"pob-host-capture","import_root":canonical_mismatch_root});
+    let mismatch = reject("admit", &mismatch_request);
+    assert_evidence_error(&mismatch, "evidence.host_capture.admit", "bad_request", "target uri does not match");
+    assert_eq!(state(), (0, 0, 0, 0));
+
+    let valid_root = tempfile::tempdir_in(&canonical_temp_root).unwrap();
+    let canonical_valid_root = valid_root.path().canonicalize().unwrap();
+    write_fresh_host_capture_envelope_with_producer(&canonical_valid_root, "planr-codex-host-capture", |_| {});
+    let valid_request = json!({"schema_version":"planr.evidence.host_capture.admission.v1","plan_id":negative_authority["plan_id"],"run_id":negative_authority["run_id"],"freeze_id":negative_authority["freeze_id"],"run_revision":negative_authority["run_revision"],"obligation_id":"pob-host-capture","import_root":canonical_valid_root});
+    let valid_path = negative_db_dir.path().join("host-capture-admit-valid.json");
+    fs::write(&valid_path, serde_json::to_vec_pretty(&valid_request).unwrap()).unwrap();
+    let negative_admitted = negative_cli("negative-verifier", &["evidence", "host-capture", "admit", "--input", valid_path.to_str().unwrap()]);
+    assert_evidence_envelope(&negative_admitted, "evidence.host_capture.admit", true);
+    assert_eq!(state(), (1, 0, 0, 0));
+
+    let mut tampered_input = negative_admitted["object"]["import_input"].clone();
+    tampered_input["run_index"]["runs"][0]["input"]["target"]["uri"] = json!("https://tampered.example/");
+    let tampered = reject("import", &tampered_input);
+    assert_evidence_error(&tampered, "evidence.host_capture.import", "conflict", "run-index seal is invalid");
+    assert_eq!(state(), (1, 0, 0, 0));
+
+    fs::write(negative_dir.path().join("source-drift.txt"), "source changed after admission\n").unwrap();
+    let stale = reject("import", &negative_admitted["object"]["import_input"]);
+    assert_evidence_error(&stale, "evidence.host_capture.import", "conflict", "run-index source is stale");
+    assert_eq!(state(), (1, 0, 0, 0));
 }
 struct StaticHttpServer {
     shutdown: mpsc::Sender<()>,
