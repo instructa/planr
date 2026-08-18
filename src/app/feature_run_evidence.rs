@@ -7299,7 +7299,7 @@ allow_overwrite = true
         app.conn
             .execute(
                 "INSERT INTO items(id, project_id, title, description, status, work_type, plan_path, created_at, updated_at)
-                 VALUES ('item-after-verification', 'project-a', 'classification', 'remaining code', 'pending', 'code', 'plan-a.md', datetime('now'), datetime('now'))",
+                 VALUES ('item-after-verification', 'project-a', 'classification', 'remaining code', 'pending', 'code', (SELECT path FROM plans WHERE id = 'plan-a'), datetime('now'), datetime('now'))",
                 [],
             )
             .unwrap();
@@ -7316,10 +7316,13 @@ allow_overwrite = true
             .unwrap();
         let settlement = &coverage["feature_run_verification_settlement"];
         assert_eq!(settlement["phase"], "implementation");
-        assert_eq!(settlement["next_code_item_id"], "item-after-verification");
+        assert_eq!(
+            settlement["next_ordinary_item_id"],
+            "item-after-verification"
+        );
         assert_eq!(
             settlement["next_action"],
-            "planr pick --plan plan-a --work-type code --json"
+            "planr pick --plan plan-a --json"
         );
 
         let repository = ExecutionRunRepository::new(&app.conn);
