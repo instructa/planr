@@ -57,19 +57,17 @@ pub(super) fn settlement_materiality_value(input: SettlementMaterialityInput<'_>
             tests: input.tests,
             explicit_review: input.explicit_review,
         }),
-        PolicyLoad::Missing => {
-            unavailable_policy_materiality(UnavailablePolicyMaterialityInput {
-                root: input.root,
-                item_id: input.item_id,
-                summary: input.summary,
-                files: input.files,
-                commands: input.commands,
-                tests: input.tests,
-                explicit_review: input.explicit_review,
-                reason: "missing",
-                diagnostics: None,
-            })
-        }
+        PolicyLoad::Missing => unavailable_policy_materiality(UnavailablePolicyMaterialityInput {
+            root: input.root,
+            item_id: input.item_id,
+            summary: input.summary,
+            files: input.files,
+            commands: input.commands,
+            tests: input.tests,
+            explicit_review: input.explicit_review,
+            reason: "missing",
+            diagnostics: None,
+        }),
         PolicyLoad::Invalid(diagnostics) => {
             unavailable_policy_materiality(UnavailablePolicyMaterialityInput {
                 root: input.root,
