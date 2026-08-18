@@ -321,6 +321,7 @@ fn bind_instance_to_manifest(capture: &HostCaptureEvaluation, manifest: &Verific
     let mut instance_value = capture.instance_value.clone();
     instance_value["manifest_id"] = json!("host-chrome-browser-client-manifest");
     instance_value["manifest_digest"] = json!(manifest_digest);
+    instance_value["adapter_version"] = json!(manifest.version);
     serde_json::from_value::<crate::evidence::model::VerificationCapabilityInstance>(instance_value.clone()).context("binding Chrome browser-client instance to manifest")?;
     Ok(instance_value)
 }
