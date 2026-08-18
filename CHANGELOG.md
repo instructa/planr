@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.10.0-alpha.8] - 2026-08-18
+
+### Changed
+
+- Seal binding-Evidence execution to exact per-target observation subsets and retain the immutable source, receipt, and review lineage through completion.
+- Make final product reviews create-or-show from the current accepted Evidence binding, including after a FeatureRun reaches completion.
+
+### Fixed
+
+- Recover premature source freezes, inconsistent verification admission, itemless verification settlement, and post-receipt ProductFinding repair through their sole typed lifecycle transitions.
+- Keep ordinary outcome settlement idempotent and preserve retry/materiality identity without compatibility ownership paths.
+
 ## [1.10.0-alpha.7] - 2026-08-15
 
 ### Changed
@@ -655,7 +667,8 @@ Initial Planr product release.
 - Tag-driven release pipeline with multi-target builds (darwin/linux, arm64/x86_64) and Homebrew tap automation.
 - Skill workflow documentation for Codex, Claude Code, Cursor, and MCP-only clients.
 
-[Unreleased]: https://github.com/instructa/planr/compare/v1.10.0-alpha.7...HEAD
+[Unreleased]: https://github.com/instructa/planr/compare/v1.10.0-alpha.8...HEAD
+[1.10.0-alpha.8]: https://github.com/instructa/planr/compare/v1.10.0-alpha.7...v1.10.0-alpha.8
 [1.10.0-alpha.7]: https://github.com/instructa/planr/compare/v1.10.0-alpha.6...v1.10.0-alpha.7
 [1.10.0-alpha.6]: https://github.com/instructa/planr/compare/v1.10.0-alpha.5...v1.10.0-alpha.6
 [1.10.0-alpha.5]: https://github.com/instructa/planr/compare/v1.10.0-alpha.4...v1.10.0-alpha.5

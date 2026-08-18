@@ -1,6 +1,6 @@
 ---
 title: Generated CLI Reference
-description: Complete compiled Planr 1.10.0-alpha.7 command and option help, checked against the repository binary.
+description: Complete compiled Planr 1.10.0-alpha.8 command and option help, checked against the repository binary.
 ---
 
 <Callout type="info" title="Generated executable contract">
@@ -930,8 +930,9 @@ Commands:
   batch
   restart
   resolve-budget-hold
+  repair-verification-admission
   settle-repair
-  help                 Print this message or the help of the given subcommand(s)
+  help                           Print this message or the help of the given subcommand(s)
 
 Options:
       --db <DB>   Path to Planr SQLite database
@@ -1005,7 +1006,7 @@ Options:
       --db <DB>          Path to Planr SQLite database
       --plan <PLAN>
       --json             Emit JSON output
-      --reason <REASON>  [possible values: incompatible-budget]
+      --reason <REASON>  [possible values: incompatible-budget, premature-source-freeze, inconsistent-verification]
       --no-color         Disable color in human output
   -h, --help             Print help
 ```
@@ -1021,6 +1022,34 @@ Options:
       --json         Emit JSON output
       --no-color     Disable color in human output
   -h, --help         Print help
+```
+
+#### `planr run repair-verification-admission`
+
+```text
+Usage: planr run repair-verification-admission [OPTIONS] --plan <PLAN> --run <RUN> --freeze <FREEZE> --revision <REVISION> --reason <REASON>
+
+Options:
+      --db <DB>
+          Path to Planr SQLite database
+      --plan <PLAN>
+
+      --json
+          Emit JSON output
+      --run <RUN>
+
+      --freeze <FREEZE>
+
+      --no-color
+          Disable color in human output
+      --revision <REVISION>
+
+      --reason <REASON>
+          [possible values: readiness-blocked, run-index-seal-failed, sealed-run-rejected, capability-admission-failed]
+      --run-index-digest <RUN_INDEX_DIGEST>
+
+  -h, --help
+          Print help
 ```
 
 #### `planr run settle-repair`
@@ -1074,12 +1103,11 @@ Arguments:
   <ITEM_ID>
 
 Options:
-      --db <DB>          Path to Planr SQLite database
+      --db <DB>   Path to Planr SQLite database
       --force
-      --json             Emit JSON output
-      --repair <REPAIR>  Route a verification admission blocker back to the recorded maker
-      --no-color         Disable color in human output
-  -h, --help             Print help
+      --json      Emit JSON output
+      --no-color  Disable color in human output
+  -h, --help      Print help
 ```
 
 #### `planr pick heartbeat`

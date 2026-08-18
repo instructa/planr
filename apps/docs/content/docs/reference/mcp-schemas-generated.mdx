@@ -1,6 +1,6 @@
 ---
 title: Generated MCP Tool Schemas
-description: Complete Planr 1.10.0-alpha.7 tools/list inventory with every property, type, description, required field, enum/default declaration, and additionalProperties rule.
+description: Complete Planr 1.10.0-alpha.8 tools/list inventory with every property, type, description, required field, enum/default declaration, and additionalProperties rule.
 ---
 
 <Callout type="info" title="Generated runtime contract">
@@ -276,7 +276,7 @@ Create or show the one plan-scoped final product review after outcome work and m
 
 ## `planr_run_restart`
 
-Retire one plan's active FeatureRun only when its immutable v2 budget contract is incompatible
+Retire one plan's active FeatureRun only for a typed incompatible-budget, premature-source-freeze, or inconsistent-verification lifecycle reason
 
 ```json
 {
@@ -289,7 +289,9 @@ Retire one plan's active FeatureRun only when its immutable v2 budget contract i
     "reason": {
       "description": "Typed restart reason",
       "enum": [
-        "incompatible-budget"
+        "incompatible-budget",
+        "premature-source-freeze",
+        "inconsistent-verification"
       ],
       "type": "string"
     }
@@ -317,6 +319,56 @@ Resume one compatible budget-held FeatureRun only after its persisted reservatio
   },
   "required": [
     "plan"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_run_repair_verification_admission`
+
+Atomically repair one exact pre-receipt verification admission failure without requiring a verification item
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "freeze_id": {
+      "description": "Exact active source-freeze id",
+      "type": "string"
+    },
+    "plan_id": {
+      "description": "Exact plan id",
+      "type": "string"
+    },
+    "reason": {
+      "description": "Closed pre-receipt repair reason",
+      "enum": [
+        "readiness-blocked",
+        "run-index-seal-failed",
+        "sealed-run-rejected",
+        "capability-admission-failed"
+      ],
+      "type": "string"
+    },
+    "run_id": {
+      "description": "Exact FeatureRun id",
+      "type": "string"
+    },
+    "run_index_digest": {
+      "description": "Required only for post-seal reasons; forbidden for pre-seal reasons",
+      "type": "string"
+    },
+    "run_revision": {
+      "description": "Exact optimistic FeatureRun revision",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "plan_id",
+    "run_id",
+    "freeze_id",
+    "run_revision",
+    "reason"
   ],
   "type": "object"
 }
