@@ -1813,7 +1813,12 @@ impl App {
             .optional()?;
         row.map(|(attempt, receipt, receipt_digest)| {
             let attempt = serde_json::from_str::<Value>(&attempt)?;
-            if attempt.get("execution_binding") != Some(&binding.execution_binding) {
+            if attempt
+                .get("raw_result")
+                .and_then(Value::as_object)
+                .and_then(|raw_result| raw_result.get("execution_binding"))
+                != Some(&binding.execution_binding)
+            {
                 bail!("hermetic reuse entry belongs to a different sealed execution subset");
             }
             Ok(json!({
@@ -2514,7 +2519,6 @@ impl App {
                     "max_attempts": 1,
                     "previous_attempt_ids": [],
                 }),
-                execution_binding: Some(execution_binding.clone()),
                 stdout_digest: Sha256Digest::parse(stdout_digest)
                     .map_err(|error| anyhow!(error))?,
                 stderr_digest: Sha256Digest::parse(stderr_digest)

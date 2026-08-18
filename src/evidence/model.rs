@@ -922,8 +922,6 @@ pub(crate) struct EvidenceAttempt {
     pub resolved_command: Value,
     pub exit: Value,
     pub retry_lineage: Value,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub execution_binding: Option<Value>,
     pub stdout_digest: Sha256Digest,
     pub stderr_digest: Sha256Digest,
     pub raw_result: Value,

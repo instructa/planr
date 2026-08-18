@@ -419,6 +419,14 @@ pub(crate) fn run_configured_process_adapter_guarded(
     if let Some(mismatch) = &post_process_repository_snapshot_mismatch {
         mark_repository_snapshot_mismatch(&mut process_result, mismatch)?;
     }
+    process_result
+        .raw_result
+        .as_object_mut()
+        .context("configured process result must be an object")?
+        .insert(
+            "execution_binding".to_string(),
+            input.execution_binding.clone(),
+        );
     let attempt_from_process_result =
         |process_result: &AdapterProcessResult| -> Result<EvidenceAttempt> {
             Ok(EvidenceAttempt {
@@ -433,7 +441,6 @@ pub(crate) fn run_configured_process_adapter_guarded(
                 resolved_command: resolved_run.command_identity.clone(),
                 exit: process_result.exit.clone(),
                 retry_lineage: retry_lineage.value.clone(),
-                execution_binding: Some(input.execution_binding.clone()),
                 stdout_digest: Sha256Digest::parse(process_result.stdout_digest.clone())?,
                 stderr_digest: Sha256Digest::parse(process_result.stderr_digest.clone())?,
                 raw_result: process_result.raw_result.clone(),
@@ -2028,7 +2035,12 @@ fn resolve_retry_lineage(
     }
     let predecessor_attempt: Value =
         serde_json::from_str(&predecessor.3).context("decoding retry predecessor attempt_json")?;
-    if predecessor_attempt.get("execution_binding") != Some(&input.execution_binding) {
+    if predecessor_attempt
+        .get("raw_result")
+        .and_then(Value::as_object)
+        .and_then(|raw_result| raw_result.get("execution_binding"))
+        != Some(&input.execution_binding)
+    {
         bail!("retry predecessor belongs to a different sealed execution subset");
     }
     let predecessor_lineage = predecessor_attempt
