@@ -5143,6 +5143,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
 
     #[test]
     fn public_evidence_input_rejects_agent_supplied_attempt_and_receipt_objects() {
