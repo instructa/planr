@@ -1759,6 +1759,81 @@ mod tests {
             .expect("verification item");
     }
 
+    fn prepare_fixture_binding(app: &App, binding: Option<(&str, Option<&str>, &str)>) {
+        let Some((obligation_id, item_id, slice)) = binding else {
+            return;
+        };
+        let exists: bool = app
+            .conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM proof_obligations WHERE id = ?1)",
+                [obligation_id],
+                |row| row.get(0),
+            )
+            .expect("fixture binding lookup");
+        if exists {
+            return;
+        }
+        let plan_path = app.root.join("plan-a.md");
+        fs::write(
+            &plan_path,
+            crate::planpack::build_plan_body("Plan", "product-plan", slice),
+        )
+        .expect("fixture build plan");
+        let plan_path = plan_path.to_string_lossy().to_string();
+        app.conn
+            .execute("UPDATE plans SET path = ?1 WHERE id = 'plan-a'", [&plan_path])
+            .expect("fixture plan path");
+        app.conn
+            .execute(
+                "UPDATE items SET plan_path = ?1 WHERE project_id = 'project-a'",
+                [&plan_path],
+            )
+            .expect("fixture item paths");
+        app.evidence_migration_value(
+            json!({
+                "schema_version": "planr.evidence.migration.v1",
+                "plan_id": "plan-a",
+                "obligations": [{
+                    "id": obligation_id,
+                    "schema_version": "evidence.contract.v1",
+                    "criterion_id": format!("criterion-{slice}"),
+                    "plan_id": "plan-a",
+                    "item_id": item_id,
+                    "title": "canonical fixture binding",
+                    "binding": true,
+                    "observations": [{
+                        "id": "obs-fixture-binding",
+                        "type": "com.example.ready.status",
+                        "subject": "fixture binding",
+                        "expected": {"status": "ready"},
+                        "target": {"kind": "process", "uri": "local://fixture"},
+                        "payload_schema": {"schema_ref": "com.example.ready.status@v1"}
+                    }],
+                    "fixture_policy": {},
+                    "freshness_policy": {},
+                    "assurance_policy": {"retry_aggregation": "all_applicable_pass"}
+                }]
+            }),
+            true,
+        )
+        .expect("fixture Evidence migration");
+    }
+
+    fn close_and_bind_fixture(
+        app: &App,
+        closed_item_id: &str,
+        binding: Option<(&str, Option<&str>, &str)>,
+    ) {
+        prepare_fixture_binding(app, binding);
+        if app.get_item(closed_item_id).expect("fixture item").status
+            != crate::model::ItemStatus::Closed
+        {
+            app.close_item_core(closed_item_id, "canonical fixture ordinary outcome closed", false)
+                .expect("closed fixture ordinary outcome");
+        }
+    }
+
     fn initialize_test_git(root: &std::path::Path) {
         fs::write(root.join("plan-a.md"), "# Plan\n").expect("plan source");
         for args in [
@@ -1817,44 +1892,20 @@ mod tests {
         let verification_item_id: String = app
             .conn
             .query_row(
-                "SELECT id FROM items WHERE plan_path = 'plan-a.md'
-                   AND work_type = 'verification' ORDER BY created_at, id LIMIT 1",
+                "SELECT id FROM items WHERE work_type = 'verification'
+                   ORDER BY created_at, id LIMIT 1",
                 [],
                 |row| row.get(0),
             )
             .expect("verification item");
-        app.conn
-            .execute(
-                "INSERT OR IGNORE INTO proof_obligations(
-                   id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
-                   binding, observation_requirements_json, fixture_policy_json,
-                   freshness_policy_json, assurance_policy_json, policy_digest, config_digest,
-                   source_digest, created_at, retry_aggregation, obligation_shape
-                 ) VALUES ('pob-risk-legacy', 'project-a', 'plan-a', ?1, 'crit-risk', 1,
-                   'legacy risk obligation', 1, '[]', '{}', '{}', '{}',
-                   'sha256:0000000000000000000000000000000000000000000000000000000000000000',
-                   'sha256:0000000000000000000000000000000000000000000000000000000000000000',
-                   NULL, datetime('now'), 'latest_applicable_pass', 'semantic_v1')",
-                [&verification_item_id],
-            )
-            .expect("legacy risk obligation");
-        app.conn
-            .execute(
-                "INSERT OR IGNORE INTO proof_obligations(
-                   id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
-                   binding, observation_requirements_json, fixture_policy_json,
-                   freshness_policy_json, assurance_policy_json, policy_digest, config_digest,
-                   source_digest, supersedes_obligation_id, created_at, retry_aggregation,
-                   obligation_shape
-                 ) VALUES ('pob-risk-active', 'project-a', 'plan-a', ?1, 'crit-risk', 2,
-                   'active risk obligation', 1, '[]', '{}', '{}', '{}',
-                   'sha256:0000000000000000000000000000000000000000000000000000000000000000',
-                   'sha256:0000000000000000000000000000000000000000000000000000000000000000',
-                   NULL, 'pob-risk-legacy', datetime('now'), 'latest_applicable_pass',
-                   'semantic_v1')",
-                [&verification_item_id],
-            )
-            .expect("active risk obligation");
+        let gate = ExecutionRunRepository::new(&app.conn)
+            .review_gate(gate_id)
+            .expect("risk gate");
+        close_and_bind_fixture(
+            app,
+            &gate.scope_id,
+            Some(("pob-risk-legacy", Some(&verification_item_id), "risk")),
+        );
         bind_risk_gate_source(
             app,
             gate_id,
@@ -1869,9 +1920,11 @@ mod tests {
         let gate = ExecutionRunRepository::new(&app.conn)
             .review_gate(gate_id)
             .expect("risk gate");
-        app.close_item_core(&gate.scope_id, "risk handoff fixture outcome closed", false)
-            .expect("closed risk handoff fixture outcome");
-        add_plan_wide_binding_obligation(app, "pob-risk-plan-wide");
+        close_and_bind_fixture(
+            app,
+            &gate.scope_id,
+            Some(("pob-risk-plan-wide", None, "risk-plan-wide")),
+        );
         bind_risk_gate_source(
             app,
             gate_id,
@@ -1880,24 +1933,6 @@ mod tests {
                 "selective_obligation_ids": []
             }),
         )
-    }
-
-    fn add_plan_wide_binding_obligation(app: &App, obligation_id: &str) {
-        app.conn
-            .execute(
-                "INSERT OR IGNORE INTO proof_obligations(
-                   id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
-                   binding, observation_requirements_json, fixture_policy_json,
-                   freshness_policy_json, assurance_policy_json, policy_digest, config_digest,
-                   source_digest, created_at, retry_aggregation, obligation_shape
-                 ) VALUES (?1, 'project-a', 'plan-a', NULL, 'crit-risk-plan-wide', 1,
-                   'plan-wide risk obligation', 1, '[]', '{}', '{}', '{}',
-                   'sha256:0000000000000000000000000000000000000000000000000000000000000000',
-                   'sha256:0000000000000000000000000000000000000000000000000000000000000000',
-                   NULL, datetime('now'), 'latest_applicable_pass', 'semantic_v1')",
-                [obligation_id],
-            )
-            .expect("plan-wide risk obligation");
     }
 
     fn materiality(review: bool) -> Value {
@@ -1916,6 +1951,10 @@ mod tests {
         initialize_test_git(root.path());
         let app = test_app_at(root.path().to_path_buf());
         add_outcome(&app, "item-risk-final");
+        prepare_fixture_binding(
+            &app,
+            Some(("pob-risk-plan-wide", None, "risk-plan-wide")),
+        );
         app.outcome_work_packet("item-risk-final")
             .expect("maker packet");
         let settled = app
@@ -1977,6 +2016,10 @@ mod tests {
         let app = test_app_at(root.path().to_path_buf());
         add_outcome(&app, "item-risk-bound");
         add_ready_verification(&app, "item-risk-verification");
+        prepare_fixture_binding(
+            &app,
+            Some(("pob-risk-legacy", Some("item-risk-verification"), "risk")),
+        );
         app.outcome_work_packet("item-risk-bound")
             .expect("maker packet");
         let settled = app
@@ -2214,6 +2257,10 @@ mod tests {
                 [],
             )
             .expect("remaining code");
+        prepare_fixture_binding(
+            &app,
+            Some(("pob-risk-legacy", Some("item-risk-verification"), "risk")),
+        );
         app.outcome_work_packet("item-risk-scope")
             .expect("maker packet");
         let settled = app
@@ -2297,6 +2344,10 @@ mod tests {
         let app = test_file_app(root.path(), &db, true);
         add_outcome(&app, "item-risk-concurrent");
         add_ready_verification(&app, "item-risk-verification");
+        prepare_fixture_binding(
+            &app,
+            Some(("pob-risk-legacy", Some("item-risk-verification"), "risk")),
+        );
         app.conn
             .execute(
                 "INSERT INTO items(id, project_id, title, description, status, work_type, plan_path, created_at, updated_at) VALUES ('item-risk-remaining', 'project-a', 'remaining', 'remaining code', 'ready', 'code', 'plan-a.md', datetime('now'), datetime('now'))",
@@ -2374,6 +2425,7 @@ mod tests {
         add_outcome(&app, "item-late-binding");
         app.outcome_work_packet("item-late-binding")
             .expect("maker packet");
+        close_and_bind_fixture(&app, "item-late-binding", None);
         let frozen = app
             .freeze_feature_run_source_value("plan-a")
             .expect("freeze")
@@ -2387,7 +2439,11 @@ mod tests {
         );
 
         let migration = test_file_app(root.path(), &db, false);
-        add_plan_wide_binding_obligation(&migration, "pob-late-binding");
+        close_and_bind_fixture(
+            &migration,
+            "item-late-binding",
+            Some(("pob-late-binding", None, "late-binding")),
+        );
         drop(migration);
         fs::write(root.path().join("late-binding-change.txt"), "changed")
             .expect("change source after freeze");
@@ -2420,7 +2476,7 @@ mod tests {
         assert!(
             gate_error
                 .to_string()
-                .starts_with("final_product_review_requires_verification_phase:")
+                == "final_product_review_source_freeze_stale:plan-a"
         );
         assert!(
             repository
@@ -2518,12 +2574,33 @@ mod tests {
             .as_str()
             .unwrap()
             .to_string();
-        let frozen = stale
-            .freeze_feature_run_source_value("plan-a")
-            .expect("initial readiness freeze")
-            .expect("active run");
-        let old_freeze_id = frozen["source_freeze"]["id"].as_str().unwrap().to_string();
         let repository = ExecutionRunRepository::new(&stale.conn);
+        let persisted = repository.feature_run(&old_run_id).expect("active run");
+        let snapshot = capture_repository_snapshot(&stale.root).expect("source snapshot");
+        let frozen = apply_phase_transition(
+            &persisted.run,
+            &PhaseTransition {
+                to: FeatureRunPhase::SourceFrozen,
+                cause: PhaseTransitionCause::ImplementationSettled,
+                reference: snapshot.source.revision.clone(),
+                owner: None,
+            },
+        )
+        .expect("malformed source-freeze transition");
+        repository
+            .save_feature_run(&frozen, persisted.revision)
+            .expect("persist malformed frozen run");
+        let expected_freeze = SourceFreezeRecord {
+            id: short_id("freeze"),
+            run_id: old_run_id.clone(),
+            source_revision: snapshot.source.revision,
+            source_digest: snapshot.source.tree_digest.as_str().to_string(),
+            status: SourceFreezeStatus::Active,
+        };
+        repository
+            .freeze_source(&expected_freeze)
+            .expect("persist malformed freeze");
+        let old_freeze_id = expected_freeze.id.clone();
         let old_freeze = repository
             .source_freeze(&old_freeze_id)
             .expect("old source freeze");
@@ -2584,6 +2661,13 @@ mod tests {
             .as_str()
             .unwrap();
         assert_ne!(new_run_id, old_run_id);
+        stale
+            .close_item_core(
+                "item-stale-source",
+                "normal successor settled before source freeze",
+                false,
+            )
+            .expect("close successor outcome");
         let new_freeze = stale
             .freeze_feature_run_source_value("plan-a")
             .expect("successor readiness freeze")
@@ -3032,6 +3116,29 @@ mod tests {
             .ensure_outcome_feature_run("item-final")
             .expect("ensure run")
             .expect("run");
+        close_and_bind_fixture(
+            &app,
+            "item-final",
+            Some(("pob-superseded-history", None, "superseded")),
+        );
+        app.conn
+            .execute_batch(
+                "INSERT INTO proof_obligations(
+                   id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
+                   binding, observation_requirements_json, fixture_policy_json,
+                   freshness_policy_json, assurance_policy_json, policy_digest, config_digest,
+                   source_digest, supersedes_obligation_id, created_at, retry_aggregation,
+                   obligation_shape
+                 ) VALUES (
+                   'pob-nonbinding-successor', 'project-a', 'plan-a', NULL, 'crit-superseded', 2,
+                   'nonbinding successor', 0, '[]', '{}', '{}', '{}',
+                   'sha256:0000000000000000000000000000000000000000000000000000000000000000',
+                   'sha256:0000000000000000000000000000000000000000000000000000000000000000',
+                   NULL, 'pob-superseded-history', datetime('now'), 'latest_applicable_pass',
+                   'semantic_v1'
+                 );",
+            )
+            .expect("nonbinding successor history");
         let repository = ExecutionRunRepository::new(&app.conn);
         let batch_id = persisted.run.active_batch_id.as_deref().unwrap();
         let batch = repository.batch(batch_id).expect("batch");
@@ -3063,36 +3170,6 @@ mod tests {
                 status: SourceFreezeStatus::Active,
             })
             .expect("persist source freeze");
-        app.conn
-            .execute_batch(
-                "INSERT INTO proof_obligations(
-                   id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
-                   binding, observation_requirements_json, fixture_policy_json,
-                   freshness_policy_json, assurance_policy_json, policy_digest, config_digest,
-                   source_digest, created_at, retry_aggregation, obligation_shape
-                 ) VALUES (
-                   'pob-superseded-history', 'project-a', 'plan-a', NULL, 'crit-superseded', 1,
-                   'superseded history', 1, '[]', '{}', '{}', '{}',
-                   'sha256:0000000000000000000000000000000000000000000000000000000000000000',
-                   'sha256:0000000000000000000000000000000000000000000000000000000000000000',
-                   NULL, datetime('now'), 'latest_applicable_pass', 'semantic_v1'
-                 );
-                 INSERT INTO proof_obligations(
-                   id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
-                   binding, observation_requirements_json, fixture_policy_json,
-                   freshness_policy_json, assurance_policy_json, policy_digest, config_digest,
-                   source_digest, supersedes_obligation_id, created_at, retry_aggregation,
-                   obligation_shape
-                 ) VALUES (
-                   'pob-nonbinding-successor', 'project-a', 'plan-a', NULL, 'crit-superseded', 2,
-                   'nonbinding successor', 0, '[]', '{}', '{}', '{}',
-                   'sha256:0000000000000000000000000000000000000000000000000000000000000000',
-                   'sha256:0000000000000000000000000000000000000000000000000000000000000000',
-                   NULL, 'pob-superseded-history', datetime('now'), 'latest_applicable_pass',
-                   'semantic_v1'
-                 );",
-            )
-            .expect("superseded-only binding history");
         assert_eq!(
             app.plan_evidence_authority("plan-a")
                 .expect("authoritative supersession"),
@@ -3264,6 +3341,7 @@ mod tests {
             })
             .expect("risk settlement");
         let gate_id = settled["review_gate"]["id"].as_str().unwrap();
+        close_and_bind_fixture(&app, "item-risk-legacy-final", None);
         bind_risk_gate_source(
             &app,
             gate_id,
@@ -3307,27 +3385,14 @@ mod tests {
                 [],
             )
             .unwrap();
-        app.conn
-            .execute(
-                "INSERT INTO proof_obligations(
-                   id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
-                   binding, observation_requirements_json, fixture_policy_json, freshness_policy_json,
-                   assurance_policy_json, retry_aggregation, policy_digest, config_digest,
-                   source_digest, created_at, obligation_shape
-                 ) VALUES (
-                   'pob-only', 'project-a', 'plan-a', 'verification-product-finding', 'crit-only', 1,
-                   'only affected', 1, '[]', '{}', '{}', '{}', 'latest_applicable_pass',
-                   'sha256:0000000000000000000000000000000000000000000000000000000000000000',
-                   'sha256:0000000000000000000000000000000000000000000000000000000000000000',
-                   'sha256:0000000000000000000000000000000000000000000000000000000000000000',
-                   datetime('now'), 'semantic_v1'
-                 )",
-                [],
-            )
-            .unwrap();
         app.ensure_outcome_feature_run("item-product-finding")
             .expect("ensure run")
             .expect("feature run");
+        close_and_bind_fixture(
+            &app,
+            "item-product-finding",
+            Some(("pob-only", Some("verification-product-finding"), "only")),
+        );
         let frozen = app
             .freeze_feature_run_source_value("plan-a")
             .expect("freeze")
