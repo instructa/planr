@@ -3459,7 +3459,12 @@ mod tests {
                 "printf '{\"planr_adapter_boundary\":\"sandbox_blocked\"}\\n' >&2; exit 2",
                 GapReason::SandboxBlocked,
             ),
-            (1, "exit 77", GapReason::ProductFailed),
+            (
+                1,
+                "printf '{\"planr_adapter_gap_reasons\":[\"external_dependency_unavailable\"]}\\n' >&2; exit 2",
+                GapReason::ExternalDependencyUnavailable,
+            ),
+            (2, "exit 77", GapReason::ProductFailed),
         ] {
             let mut obligation = obligation();
             obligation.id = EvidenceId::parse(format!("obl-boundary-{idx}")).unwrap();
