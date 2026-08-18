@@ -7382,7 +7382,7 @@ allow_overwrite = true
         app.conn
             .execute(
                 "INSERT INTO items(id, project_id, title, description, status, work_type, plan_path, created_at, updated_at)
-                 VALUES ('item-after-verification', 'project-a', 'classification', 'remaining code', 'pending', 'code', 'plan-a.md', datetime('now'), datetime('now'))",
+                 VALUES ('item-after-verification', 'project-a', 'classification', 'remaining code', 'pending', 'code', (SELECT path FROM plans WHERE id = 'plan-a'), datetime('now'), datetime('now'))",
                 [],
             )
             .unwrap();
