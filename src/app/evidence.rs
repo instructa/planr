@@ -24,6 +24,7 @@ use crate::evidence::{
         evaluate_item_criterion_coverages, evaluate_obligation_coverage, evaluate_plan_coverage,
         evaluate_plan_criterion_coverages,
     },
+    builtins::BuiltInEvidenceCatalog,
     execution::{
         ConfiguredProcessRunInput, TrustedEvidencePersistenceInput, ensure_process_adapter_digest,
         persist_trusted_evidence_atomically, resolve_process_run,
@@ -485,13 +486,29 @@ impl App {
         &self,
         document: &crate::evidence::policy::EvidencePolicyDocument,
     ) -> Result<CapabilityRegistry> {
+        let builtins = BuiltInEvidenceCatalog::load()?;
         Ok(
             CapabilityRegistry::from_manifests_and_adapter_registrations(
                 &self.root,
-                std::iter::empty(),
+                builtins.manifests(),
                 &document.policy.adapter_registrations,
             ),
         )
+    }
+
+    fn evidence_observation_schema(
+        &self,
+        builtins: &BuiltInEvidenceCatalog,
+        observation_type: &crate::evidence::NamespacedIdentifier,
+        schema_ref: &str,
+        schema_digest: Option<&Sha256Digest>,
+    ) -> Result<Option<Value>> {
+        if let Some(schema) =
+            builtins.resolve_schema(observation_type, schema_ref, schema_digest)?
+        {
+            return Ok(Some(schema.clone()));
+        }
+        Ok(load_repository_observation_schema(&self.root, schema_ref)?)
     }
 
     fn default_capability_runtime(&self) -> CapabilityRuntimeContext<'static> {
@@ -1108,6 +1125,7 @@ impl App {
         let document = self.evidence_policy_document()?.ok_or_else(|| {
             EvidenceCommandError::bad_request("evidence readiness requires .planr/evidence.yaml")
         })?;
+        let builtins = BuiltInEvidenceCatalog::load()?;
         let mut registry = self.evidence_registry_from_policy(&document)?;
         let probe = self.probe_registry_capabilities(&mut registry)?;
         let project = self.default_project()?;
@@ -1143,9 +1161,11 @@ impl App {
                     }));
                     continue;
                 };
-                match load_repository_observation_schema(
-                    &self.root,
-                    payload_schema.schema_ref.as_str(),
+                match self.evidence_observation_schema(
+                    &builtins,
+                    &observation.observation_type,
+                    &payload_schema.schema_ref,
+                    None,
                 ) {
                     Ok(Some(_)) => {}
                     Ok(None) => gaps.push(json!({
@@ -2108,16 +2128,19 @@ impl App {
             serde_json::from_value(value.get("execution_contract").cloned().ok_or_else(|| {
                 EvidenceCommandError::bad_request("sealed evidence run requires execution_contract")
             })?)?;
+        let builtins = BuiltInEvidenceCatalog::load()?;
         let payload_json_schema = if execution_contract.payload_schema.schema_ref
             == "schema://planr.structured_observation_results.v1"
         {
             None
         } else {
-            load_repository_observation_schema(
-                &self.root,
-                execution_contract.payload_schema.schema_ref.as_str(),
+            self.evidence_observation_schema(
+                &builtins,
+                &execution_contract.payload_schema.observation_type,
+                &execution_contract.payload_schema.schema_ref,
+                Some(&execution_contract.payload_schema.schema_digest),
             )
-            .map_err(|error| anyhow!("repository observation schema invalid: {error}"))?
+            .map_err(|error| anyhow!("observation schema invalid: {error}"))?
         };
         let observation_payload_json_schemas = obligation
             .observations
@@ -2126,18 +2149,30 @@ impl App {
                 observation
                     .payload_schema
                     .as_ref()
-                    .map(|binding| (observation.id.as_str().to_string(), binding.schema_ref.clone()))
+                    .map(|binding| {
+                        (
+                            observation.id.as_str().to_string(),
+                            observation.observation_type.clone(),
+                            binding.schema_ref.clone(),
+                        )
+                    })
             })
-            .map(|(requirement_id, schema_ref)| {
-                let schema = load_repository_observation_schema(&self.root, &schema_ref)
+            .map(|(requirement_id, observation_type, schema_ref)| {
+                let schema = self
+                    .evidence_observation_schema(
+                        &builtins,
+                        &observation_type,
+                        &schema_ref,
+                        None,
+                    )
                     .map_err(|error| {
                         anyhow!(
-                            "repository observation schema invalid for {requirement_id} ({schema_ref}): {error}"
+                            "observation schema invalid for {requirement_id} ({schema_ref}): {error}"
                         )
                     })?
                     .ok_or_else(|| {
                         anyhow!(
-                            "repository observation schema missing for {requirement_id} ({schema_ref})"
+                            "observation schema missing for {requirement_id} ({schema_ref})"
                         )
                     })?;
                 Ok((requirement_id, schema))

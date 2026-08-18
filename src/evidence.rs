@@ -1,5 +1,6 @@
 pub(crate) mod adapter_signal;
 pub(crate) mod adapters;
+pub(crate) mod builtins;
 pub mod coverage;
 pub(crate) mod execution;
 pub(crate) mod host_capture_admission;
