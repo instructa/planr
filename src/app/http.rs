@@ -809,7 +809,6 @@ impl App {
         )?;
         Ok(())
     }
-
 }
 
 pub(super) const CORS_HEADERS: &str = "access-control-allow-origin: *\r\naccess-control-allow-methods: GET, POST, OPTIONS\r\naccess-control-allow-headers: content-type\r\n";
