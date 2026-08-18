@@ -67,6 +67,24 @@ pub(crate) enum CurrentPlanCoverageForSourceFreeze {
     Satisfied(CoverageEvaluation),
 }
 
+#[derive(Debug)]
+struct CoverageSourceFreezeMismatch {
+    freeze_id: String,
+    receipt_id: String,
+}
+
+impl std::fmt::Display for CoverageSourceFreezeMismatch {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "verification_coverage_source_freeze_mismatch:{}:{}",
+            self.freeze_id, self.receipt_id
+        )
+    }
+}
+
+impl std::error::Error for CoverageSourceFreezeMismatch {}
+
 struct HermeticReuseBinding {
     key: String,
     execution_contract_digest: String,
@@ -2877,8 +2895,13 @@ impl App {
                 coverage,
             ));
         }
-        self.ensure_plan_coverage_matches_source_freeze(project_id, plan_id, freeze, &coverage)?;
-        Ok(CurrentPlanCoverageForSourceFreeze::Satisfied(coverage))
+        match self.ensure_plan_coverage_matches_source_freeze(project_id, plan_id, freeze, &coverage) {
+            Ok(()) => Ok(CurrentPlanCoverageForSourceFreeze::Satisfied(coverage)),
+            Err(error) if error.downcast_ref::<CoverageSourceFreezeMismatch>().is_some() => {
+                Ok(CurrentPlanCoverageForSourceFreeze::NeedsVerification(coverage))
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub(crate) fn ensure_plan_coverage_matches_source_freeze(
@@ -2955,10 +2978,11 @@ impl App {
             if binding.source.revision != freeze.source_revision
                 || binding.source.tree_digest.as_str() != freeze.source_digest
             {
-                bail!(
-                    "verification_coverage_source_freeze_mismatch:{}:{receipt_id}",
-                    freeze.id
-                );
+                return Err(CoverageSourceFreezeMismatch {
+                    freeze_id: freeze.id.clone(),
+                    receipt_id,
+                }
+                .into());
             }
             receipt_digests.insert(receipt_digest);
         }
