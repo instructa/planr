@@ -193,5 +193,4 @@ impl App {
         }
         Ok(adopted > 0)
     }
-
 }
