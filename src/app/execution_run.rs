@@ -1,18 +1,16 @@
 use super::App;
 use super::feature_run_evidence::{BudgetUsageReport, FeatureRunBudgetAdmission};
 use super::repository::execution_run::{
-    ExecutionRunRepository, FindingRecord, FindingStatus, PersistedFeatureRun,
-    ReviewAttemptRecord, ReviewGateKind, ReviewGateRecord, ReviewGateStatus, ReviewScopeKind,
-    ReviewVerdict, RunOutcomeRecord, SourceFreezeRecord, SourceFreezeStatus,
+    ExecutionRunRepository, PersistedFeatureRun, ReviewGateKind, ReviewGateRecord,
+    ReviewGateStatus, ReviewScopeKind, RunOutcomeRecord,
 };
 use crate::canonical_json::sha256_json_digest;
 use crate::cli::{RunBatchCommand, RunCommand};
 use crate::execution_run::{
     DEFAULT_BATCH_OUTCOME_CAP, ExecutionBatch, ExecutionBatchStatus, FeatureRun, FeatureRunPhase,
     FeatureRunRestartDisposition, FeatureRunRestartReason, FeatureRunRestartRequest,
-    FeatureRunStatus, MakerReplacement, MakerReplacementReason, PhaseTransition,
-    PhaseTransitionCause, PrematureSourceFreezeRestartFacts, RoleOwner, RunRole,
-    VerificationAdmissionRepairReason, VerificationAdmissionRepairRequest, apply_phase_transition,
+    FeatureRunStatus, MakerReplacement, MakerReplacementReason, PrematureSourceFreezeRestartFacts,
+    RoleOwner, RunRole, VerificationAdmissionRepairReason, VerificationAdmissionRepairRequest,
     is_ordinary_implementation_work_type, pause_batch_for_risk_review, replace_batch_maker,
     retire_incompatible_feature_run,
     retire_premature_source_freeze_feature_run, roll_batch_for_same_maker,
@@ -1217,10 +1215,12 @@ impl App {
 mod tests {
     use super::super::proof::PlanEvidenceAuthority;
     use super::super::repository::execution_run::{
-        ReviewSourceBindingRecord, SourceFreezeRecord, SourceFreezeStatus,
+        FindingRecord, FindingStatus, ReviewAttemptRecord, ReviewSourceBindingRecord,
+        ReviewVerdict, SourceFreezeRecord, SourceFreezeStatus,
     };
     use super::*;
     use crate::evidence::policy::capture_repository_snapshot;
+    use crate::execution_run::{PhaseTransition, PhaseTransitionCause, apply_phase_transition};
     use crate::storage::ensure_schema;
     use crate::usage_policy::{EscalationSource, ReviewEscalationReason};
     use rusqlite::{Connection, params};
