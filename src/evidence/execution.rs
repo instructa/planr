@@ -297,16 +297,7 @@ pub(crate) fn run_configured_process_adapter_guarded(
         &input.environment,
         &execution_contract_digest,
     )?;
-    let retry_lineage = resolve_retry_lineage(
-        conn,
-        input.project_id,
-        &input.obligation.id,
-        &capability_instance.id,
-        input.retry_of.as_ref(),
-        input.attempt_index,
-        input.max_attempts,
-        &input.execution_binding,
-    )?;
+    let retry_lineage = resolve_retry_lineage(conn, &input)?;
     let resolved = match ResolvedProcessRun::resolve(
         input.repository_root,
         &input.execution_contract,
@@ -1987,30 +1978,24 @@ struct ResolvedRetryLineage {
 
 fn resolve_retry_lineage(
     conn: &Connection,
-    project_id: &str,
-    obligation_id: &EvidenceId,
-    capability_instance_id: &EvidenceId,
-    retry_of: Option<&EvidenceId>,
-    attempt_index: u32,
-    max_attempts: u32,
-    execution_binding: &Value,
+    input: &ConfiguredProcessRunInput<'_>,
 ) -> Result<ResolvedRetryLineage> {
-    if max_attempts == 0 {
+    if input.max_attempts == 0 {
         bail!("retry max_attempts must be at least one");
     }
-    let Some(retry_of) = retry_of else {
-        if attempt_index != 0 {
+    let Some(retry_of) = input.retry_of.as_ref() else {
+        if input.attempt_index != 0 {
             bail!("initial evidence attempt must use attempt_index 0");
         }
         let value = json!({
             "attempt_number": 1,
-            "max_attempts": max_attempts,
+            "max_attempts": input.max_attempts,
             "previous_attempt_ids": [],
         });
         return Ok(ResolvedRetryLineage {
             retry_of: None,
             attempt_number: 1,
-            max_attempts,
+            max_attempts: input.max_attempts,
             previous_attempt_ids: vec![],
             value,
         });
@@ -2032,18 +2017,18 @@ fn resolve_retry_lineage(
         )
         .optional()?
         .with_context(|| format!("retry predecessor {} was not found", retry_of.as_str()))?;
-    if predecessor.0 != project_id {
+    if predecessor.0 != input.project_id {
         bail!("retry predecessor belongs to a different project");
     }
-    if predecessor.1 != obligation_id.as_str() {
+    if predecessor.1 != input.obligation.id.as_str() {
         bail!("retry predecessor belongs to a different obligation");
     }
-    if predecessor.2 != capability_instance_id.as_str() {
+    if predecessor.2 != input.capability_instance.id.as_str() {
         bail!("retry predecessor belongs to a different capability instance");
     }
     let predecessor_attempt: Value =
         serde_json::from_str(&predecessor.3).context("decoding retry predecessor attempt_json")?;
-    if predecessor_attempt.get("execution_binding") != Some(execution_binding) {
+    if predecessor_attempt.get("execution_binding") != Some(&input.execution_binding) {
         bail!("retry predecessor belongs to a different sealed execution subset");
     }
     let predecessor_lineage = predecessor_attempt
@@ -2056,7 +2041,7 @@ fn resolve_retry_lineage(
     let expected_attempt_number = predecessor_attempt_number
         .checked_add(1)
         .context("retry predecessor attempt_number overflowed")?;
-    if u64::from(attempt_index) + 1 != expected_attempt_number {
+    if u64::from(input.attempt_index) + 1 != expected_attempt_number {
         bail!("retry attempt_index must be predecessor attempt_index plus one");
     }
     let mut previous_attempt_ids = predecessor_lineage
@@ -2080,21 +2065,21 @@ fn resolve_retry_lineage(
         .context("retry predecessor is missing max_attempts")?;
     let predecessor_max_attempts =
         u32::try_from(predecessor_max_attempts).context("retry max_attempts does not fit u32")?;
-    if max_attempts != predecessor_max_attempts {
+    if input.max_attempts != predecessor_max_attempts {
         bail!("retry max_attempts must match predecessor max_attempts");
     }
-    if attempt_number > max_attempts {
+    if attempt_number > input.max_attempts {
         bail!("retry max_attempts exhausted before launch");
     }
     let value = json!({
         "attempt_number": attempt_number,
-        "max_attempts": max_attempts,
+        "max_attempts": input.max_attempts,
         "previous_attempt_ids": previous_attempt_ids.iter().map(EvidenceId::as_str).collect::<Vec<_>>(),
     });
     Ok(ResolvedRetryLineage {
         retry_of: Some(retry_of.clone()),
         attempt_number,
-        max_attempts,
+        max_attempts: input.max_attempts,
         previous_attempt_ids,
         value,
     })

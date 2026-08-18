@@ -380,7 +380,7 @@ impl GapReason {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ObservationRequirement {
+pub struct ObservationRequirement {
     pub id: EvidenceId,
     #[serde(rename = "type")]
     pub observation_type: NamespacedIdentifier,
@@ -427,7 +427,7 @@ pub(crate) struct ObservationRequirement {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct SchemaReferenceBinding {
+pub struct SchemaReferenceBinding {
     pub schema_ref: String,
 }
 

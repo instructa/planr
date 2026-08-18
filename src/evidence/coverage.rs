@@ -56,10 +56,7 @@ struct EvaluationScope {
 #[derive(Debug, Clone)]
 pub struct AuthoritativeObligationBindingRow {
     pub id: String,
-    pub plan_id: String,
-    pub item_id: Option<String>,
     pub criterion_id: String,
-    pub obligation_version: i64,
     pub observations: Vec<ObservationRequirement>,
 }
 
@@ -1042,8 +1039,7 @@ fn authoritative_obligation_bindings_by_clause(
     scope_id: &str,
 ) -> Result<Vec<AuthoritativeObligationBindingRow>, EvidenceDomainError> {
     let sql = format!(
-        "SELECT id, plan_id, item_id, criterion_id, obligation_version,
-                observation_requirements_json
+        "SELECT id, criterion_id, observation_requirements_json
          FROM proof_obligations
          {where_clause}
            AND binding = 1
@@ -1062,13 +1058,10 @@ fn authoritative_obligation_bindings_by_clause(
         .query_map(params![project_id, scope_id], |row| {
             Ok(AuthoritativeObligationBindingRow {
                 id: row.get(0)?,
-                plan_id: row.get(1)?,
-                item_id: row.get(2)?,
-                criterion_id: row.get(3)?,
-                obligation_version: row.get(4)?,
-                observations: serde_json::from_str(&row.get::<_, String>(5)?).map_err(|error| {
+                criterion_id: row.get(1)?,
+                observations: serde_json::from_str(&row.get::<_, String>(2)?).map_err(|error| {
                     rusqlite::Error::FromSqlConversionFailure(
-                        5,
+                        2,
                         rusqlite::types::Type::Text,
                         Box::new(error),
                     )
