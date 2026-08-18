@@ -19,7 +19,7 @@ pub(crate) enum EvidenceCommand {
     Run(EvidenceRunArgs),
     /// Validate and persist an artifact import without creating trusted receipts.
     Import(EvidenceImportArgs),
-    /// Validate and persist a fresh external Codex host capture as trusted Evidence.
+    /// Admit and import a verifier-bound external host capture as trusted Evidence.
     HostCapture(EvidenceHostCaptureArgs),
     /// List or show process attempts.
     Attempts(EvidenceRecordArgs),
@@ -94,20 +94,20 @@ pub(crate) struct EvidenceHostCaptureArgs {
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum EvidenceHostCaptureCommand {
+    Admit(EvidenceHostCaptureAdmitArgs),
     Import(EvidenceHostCaptureImportArgs),
-    Run(EvidenceHostCaptureRunArgs),
 }
 
 #[derive(Args, Debug)]
-pub(crate) struct EvidenceHostCaptureImportArgs {
-    /// JSON file containing a planr.evidence.host_capture.import.v1 payload.
+pub(crate) struct EvidenceHostCaptureAdmitArgs {
+    /// JSON file containing a planr.evidence.host_capture.admission.v1 payload.
     #[arg(long)]
     pub(crate) input: PathBuf,
 }
 
 #[derive(Args, Debug)]
-pub(crate) struct EvidenceHostCaptureRunArgs {
-    /// JSON file containing a planr.evidence.host_capture.run.v1 payload.
+pub(crate) struct EvidenceHostCaptureImportArgs {
+    /// JSON file containing a planr.evidence.host_capture.import.v1 payload.
     #[arg(long)]
     pub(crate) input: PathBuf,
 }

@@ -367,15 +367,42 @@ pub fn mcp_tools() -> Vec<Value> {
             &["input", "artifact_root"],
         ),
         tool(
-            "planr_evidence_host_capture_import",
-            "Validate and persist a fresh external Codex host capture as trusted Evidence",
-            json!({"input": prop("object", "planr.evidence.host_capture.import.v1 payload with obligation_id and import_root")}),
+            "planr_evidence_host_capture_admit",
+            "Admit one verifier-bound external host capture and return its sealed pending import input",
+            json!({"input": {
+                "type": "object",
+                "description": "Exact planr.evidence.host_capture.admission.v1 payload",
+                "properties": {
+                    "schema_version": {"type": "string", "const": "planr.evidence.host_capture.admission.v1"},
+                    "plan_id": {"type": "string"},
+                    "run_id": {"type": "string"},
+                    "freeze_id": {"type": "string"},
+                    "run_revision": {"type": "integer", "minimum": 0},
+                    "obligation_id": {"type": "string"},
+                    "import_root": {"type": "string"},
+                    "experiment_id": {"type": "string"}
+                },
+                "required": ["schema_version", "plan_id", "run_id", "freeze_id", "run_revision", "obligation_id", "import_root"],
+                "additionalProperties": false
+            }}),
             &["input"],
         ),
         tool(
-            "planr_evidence_host_capture_run",
-            "Run a policy-registered host capture helper and persist Planr-observed Evidence",
-            json!({"input": prop("object", "planr.evidence.host_capture.run.v1 payload with obligation_id and manifest_id")}),
+            "planr_evidence_host_capture_import",
+            "Import exactly one pending verifier-admitted host capture as trusted Evidence",
+            json!({"input": {
+                "type": "object",
+                "description": "Exact planr.evidence.host_capture.import.v1 object returned by host-capture admission",
+                "properties": {
+                    "schema_version": {"type": "string", "const": "planr.evidence.host_capture.import.v1"},
+                    "run_index": {"type": "object", "description": "Exact sealed planr.evidence.run-index.v2 object returned by admission"},
+                    "run_index_entry": {"type": "integer", "const": 0},
+                    "import_root": {"type": "string"},
+                    "experiment_id": {"type": "string"}
+                },
+                "required": ["schema_version", "run_index", "run_index_entry", "import_root"],
+                "additionalProperties": false
+            }}),
             &["input"],
         ),
         tool(

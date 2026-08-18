@@ -297,20 +297,20 @@ impl App {
                 )
             }
             EvidenceCommand::HostCapture(args) => match args.command {
+                EvidenceHostCaptureCommand::Admit(input) => {
+                    let value = read_json_file(&input.input)?;
+                    (
+                        "evidence.host_capture.admit",
+                        self.evidence_host_capture_admit_value(value),
+                        "evidence host capture admit".to_string(),
+                    )
+                }
                 EvidenceHostCaptureCommand::Import(input) => {
                     let value = read_json_file(&input.input)?;
                     (
                         "evidence.host_capture.import",
-                        self.evidence_host_capture_import_value(value),
+                        self.evidence_pending_host_capture_import_value(value),
                         "evidence host capture import".to_string(),
-                    )
-                }
-                EvidenceHostCaptureCommand::Run(input) => {
-                    let value = read_json_file(&input.input)?;
-                    (
-                        "evidence.host_capture.run",
-                        self.evidence_host_capture_run_value(value),
-                        "evidence host capture run".to_string(),
                     )
                 }
             },
@@ -2395,15 +2395,6 @@ impl App {
             },
             "verdict": "valid",
         }))
-    }
-
-    pub(crate) fn evidence_host_capture_import_value(&self, value: Value) -> Result<Value> {
-        self.evidence_host_capture_import_value_with_observed_run(
-            value,
-            None,
-            None,
-            RunIndexCapabilityResolver::LiveRegistry,
-        )
     }
 
     pub(crate) fn evidence_pending_host_capture_import_value(

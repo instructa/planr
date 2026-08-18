@@ -67,23 +67,13 @@ impl App {
                     self.evidence_import_value(input, std::path::Path::new(artifact_root)),
                 )
             }
+            ("POST", "/v1/evidence/host-capture/admit") => http_evidence_json(
+                "evidence.host_capture.admit",
+                self.evidence_host_capture_admit_value(body_json.clone()),
+            ),
             ("POST", "/v1/evidence/host-capture/import") => http_evidence_json(
                 "evidence.host_capture.import",
-                self.evidence_host_capture_import_value(
-                    body_json
-                        .get("input")
-                        .cloned()
-                        .unwrap_or_else(|| body_json.clone()),
-                ),
-            ),
-            ("POST", "/v1/evidence/host-capture/run") => http_evidence_json(
-                "evidence.host_capture.run",
-                self.evidence_host_capture_run_value(
-                    body_json
-                        .get("input")
-                        .cloned()
-                        .unwrap_or_else(|| body_json.clone()),
-                ),
+                self.evidence_pending_host_capture_import_value(body_json.clone()),
             ),
             ("GET", "/v1/evidence/attempts") => http_evidence_json(
                 "evidence.attempts",

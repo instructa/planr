@@ -57,17 +57,19 @@ impl App {
                         )
                     }),
             )),
+            "planr_evidence_host_capture_admit" => Ok(mcp_evidence_json(
+                "evidence.host_capture.admit",
+                args.get("input")
+                    .cloned()
+                    .ok_or_else(|| anyhow!("missing input"))
+                    .and_then(|input| self.evidence_host_capture_admit_value(input)),
+            )),
             "planr_evidence_host_capture_import" => Ok(mcp_evidence_json(
                 "evidence.host_capture.import",
-                self.evidence_host_capture_import_value(
-                    args.get("input").cloned().unwrap_or_else(|| args.clone()),
-                ),
-            )),
-            "planr_evidence_host_capture_run" => Ok(mcp_evidence_json(
-                "evidence.host_capture.run",
-                self.evidence_host_capture_run_value(
-                    args.get("input").cloned().unwrap_or_else(|| args.clone()),
-                ),
+                args.get("input")
+                    .cloned()
+                    .ok_or_else(|| anyhow!("missing input"))
+                    .and_then(|input| self.evidence_pending_host_capture_import_value(input)),
             )),
             "planr_evidence_attempts" => Ok(mcp_evidence_json(
                 "evidence.attempts",
