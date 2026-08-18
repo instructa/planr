@@ -4123,13 +4123,47 @@ allow_overwrite = true
     fn frozen_plan_readiness_requires_the_verification_lease_before_side_effects() {
         let root = tempfile::tempdir().unwrap();
         write_budget_policy(root.path());
+        write_ready_evidence_policy(root.path());
+        let plan_path = root.path().join("plan-a.md");
+        std::fs::write(
+            &plan_path,
+            crate::planpack::build_plan_body("Plan", "product-plan", "phase ready"),
+        )
+        .unwrap();
         initialize_git(root.path());
         let app = test_app(root.path().to_path_buf());
+        app.conn
+            .execute(
+                "UPDATE plans SET path = ?1 WHERE id = 'plan-a'",
+                [plan_path.to_string_lossy().as_ref()],
+            )
+            .unwrap();
         add_outcome(&app, "item-lease-first-readiness");
+        add_verification_item(&app, "verification-phase");
+        app.conn
+            .execute(
+                "UPDATE items SET plan_path = ?1 WHERE id IN ('item-lease-first-readiness', 'verification-phase')",
+                [plan_path.to_string_lossy().as_ref()],
+            )
+            .unwrap();
+        app.evidence_migration_value(
+            json!({"schema_version":"planr.evidence.migration.v1","plan_id":"plan-a","obligations":[{
+                "id":"pob-phase-ready","schema_version":"evidence.contract.v1","criterion_id":"criterion-phase-ready","plan_id":"plan-a","item_id":"verification-phase","title":"ready process","binding":true,"observations":[{
+                    "id":"obs-phase-ready","type":"com.example.ready.status","subject":"ready process","expected":{"status":"ready"},"target":{"kind":"process","uri":"local://ready"},"payload_schema":{"schema_ref":"com.example.ready.status@v1"}
+                }],"fixture_policy":{},"freshness_policy":{},"assurance_policy":{"retry_aggregation":"all_applicable_pass"}
+            }]}),
+            true,
+        )
+        .unwrap();
         let run = app
             .ensure_outcome_feature_run("item-lease-first-readiness")
             .unwrap()
             .unwrap();
+        app.close_item_value(
+            "item-lease-first-readiness",
+            "ordinary outcome settled before readiness freeze",
+        )
+        .unwrap();
         app.freeze_feature_run_source_value("plan-a")
             .unwrap()
             .unwrap();
