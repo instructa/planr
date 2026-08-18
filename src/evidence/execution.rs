@@ -4064,6 +4064,7 @@ mod tests {
 
     #[test]
     fn configured_process_run_rejects_fixture_policy_mismatch_before_persistence() {
+        {
         let conn = conn();
         let root = tempdir().unwrap();
         let mut obligation = obligation();
@@ -4082,6 +4083,24 @@ mod tests {
 
         assert!(error.contains("fixtures disallowed"), "{error}");
         assert_no_attempts_or_receipts(&conn);
+        }
+
+        let mock_conn = conn();
+        let mock_root = tempdir().unwrap();
+        let mock_obligation = obligation();
+        let mock_instance = instance();
+        let mock_cancellation = CancellationToken::new();
+        let mock_contract = execution_contract("sh", vec!["-c", "true"], 5000);
+        seed(&mock_conn, &mock_obligation, &mock_instance, &mock_contract);
+        let mut mock_input = run_input(mock_root.path(), mock_obligation, mock_instance, mock_contract, &mock_cancellation);
+        mock_input.fixture_disclosure.mocks_used = true;
+        mock_input.fixture_disclosure.mock_refs = Some(vec!["mock://process".to_string()]);
+        let mock_error = run_configured_process_adapter(&mock_conn, mock_input)
+            .unwrap_err()
+            .to_string();
+
+        assert_eq!(mock_error, "fixture disclosure uses mocks disallowed by proof obligation policy");
+        assert_no_attempts_or_receipts(&mock_conn);
     }
 
     #[test]
