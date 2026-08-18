@@ -6572,7 +6572,7 @@ allow_overwrite = true
                     app.conn.execute("UPDATE evidence_attempts SET completed_at = NULL WHERE id = 'eatt-settle'", []).unwrap();
                 }
                 "remaining_work" => {
-                    app.conn.execute("INSERT INTO items(id, project_id, title, description, status, work_type, plan_path, created_at, updated_at) VALUES ('remaining-public', 'project-a', 'remaining', 'remaining', 'ready', 'code', 'plan-a.md', datetime('now'), datetime('now'))", []).unwrap();
+                    app.conn.execute("INSERT INTO items(id, project_id, title, description, status, work_type, plan_path, created_at, updated_at) VALUES ('remaining-public', 'project-a', 'remaining', 'remaining', 'ready', 'code', (SELECT path FROM plans WHERE id = 'plan-a'), datetime('now'), datetime('now'))", []).unwrap();
                 }
                 "waived_coverage" => {
                     app.conn.execute("UPDATE coverage_verdicts SET waiver_digest_set = '[\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"]' WHERE scope_kind = 'plan' AND scope_id = 'plan-a'", []).unwrap();
@@ -6705,7 +6705,7 @@ allow_overwrite = true
             .conn
             .execute(
                 "INSERT INTO items(id, project_id, title, description, status, work_type, plan_path, created_at, updated_at)
-                 VALUES ('remaining-code', 'project-a', 'remaining', 'remaining', 'ready', 'code', 'plan-a.md', datetime('now'), datetime('now'))",
+                 VALUES ('remaining-code', 'project-a', 'remaining', 'remaining', 'ready', 'code', (SELECT path FROM plans WHERE id = 'plan-a'), datetime('now'), datetime('now'))",
                 [],
             )
             .unwrap();
