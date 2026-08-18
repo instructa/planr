@@ -7600,6 +7600,11 @@ allow_overwrite = true
             .ensure_outcome_feature_run("item-refreeze")
             .unwrap()
             .unwrap();
+        app.close_item_value(
+            "item-refreeze",
+            "ordinary outcome settled before capability-held source freeze",
+        )
+        .unwrap();
         let first = app
             .freeze_feature_run_source_value("plan-a")
             .unwrap()
