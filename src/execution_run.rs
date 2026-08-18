@@ -2156,7 +2156,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(legal_count, 42);
+        assert_eq!(legal_count, 43);
     }
 
     #[test]
