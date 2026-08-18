@@ -3903,17 +3903,22 @@ mod tests {
         let marker = "non-contiguous.marker";
         let contract = marker_contract(marker);
         seed(&conn, &obligation, &instance, &contract);
+        let cancellation = CancellationToken::new();
+        let mut input = run_input(root.path(), obligation, instance, contract, &cancellation);
         insert_prior_attempt(
             &conn,
             "eatt-prior-zero",
             "p-evidence",
-            obligation.id.as_str(),
-            instance.id.as_str(),
+            input.obligation.id.as_str(),
+            input.capability_instance.id.as_str(),
             0,
             None,
         );
-        let cancellation = CancellationToken::new();
-        let mut input = run_input(root.path(), obligation, instance, contract, &cancellation);
+        conn.execute(
+            "UPDATE evidence_attempts SET attempt_json = json_set(attempt_json, '$.raw_result', json(?1)) WHERE id = ?2",
+            params![json!({"execution_binding": input.execution_binding}).to_string(), "eatt-prior-zero"],
+        )
+        .unwrap();
         input.retry_of = Some(EvidenceId::parse("eatt-prior-zero").unwrap());
         input.attempt_index = 2;
 
