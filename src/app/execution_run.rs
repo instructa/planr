@@ -1866,6 +1866,11 @@ mod tests {
     }
 
     fn bind_risk_gate_without_verification_item(app: &App, gate_id: &str) -> SourceFreezeRecord {
+        let gate = ExecutionRunRepository::new(&app.conn)
+            .review_gate(gate_id)
+            .expect("risk gate");
+        app.close_item_core(&gate.scope_id, "risk handoff fixture outcome closed", false)
+            .expect("closed risk handoff fixture outcome");
         add_plan_wide_binding_obligation(app, "pob-risk-plan-wide");
         bind_risk_gate_source(
             app,
