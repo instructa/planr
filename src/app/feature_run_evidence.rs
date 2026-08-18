@@ -4524,68 +4524,42 @@ allow_overwrite = true
         let root = tempfile::tempdir().unwrap();
         write_budget_policy(root.path());
         write_ready_evidence_policy(root.path());
-        let policy_digest = add_product_failure_evidence_adapter(root.path(), "repeatable");
+        add_product_failure_evidence_adapter(root.path(), "repeatable");
         initialize_git(root.path());
         let app = test_app(root.path().to_path_buf());
+        let plan_path = root.path().join("plan-a.md");
+        std::fs::write(
+            &plan_path,
+            "---\nname: plan\noverview: batch evidence fixture\ntodos:\n  - id: phase-1\n    content: batch evidence\n    status: pending\nisProject: false\nstage: build\nsource_plan: product-plan\nslice: batch\ncriteria:\n  - id: criterion-a-product-failure\n    title: product finding\n  - id: criterion-b-ready\n    title: ready process\n---\n\n# Plan\n",
+        )
+        .unwrap();
+        app.conn
+            .execute(
+                "UPDATE plans SET path = ?1 WHERE id = 'plan-a'",
+                [plan_path.to_string_lossy().as_ref()],
+            )
+            .unwrap();
         for item_id in ["item-batch-a", "item-batch-b"] {
             add_outcome(&app, item_id);
         }
         add_verification_outcome(&app, "item-verifier");
-        for (obligation_id, criterion_id) in [
-            ("pob-a-product-failure", "criterion-a-product-failure"),
-            ("pob-b-ready", "criterion-b-ready"),
-        ] {
-            app.conn
-                .execute(
-                    "INSERT INTO proof_obligations(
-                      id, project_id, plan_id, item_id, criterion_id, obligation_version, title,
-                      binding, observation_requirements_json, fixture_policy_json, freshness_policy_json,
-                      assurance_policy_json, retry_aggregation, policy_digest, config_digest,
-                      source_digest, supersedes_obligation_id, created_at, obligation_shape
-                    ) VALUES (
-                      ?1, 'project-a', 'plan-a', 'item-verifier', ?2, 1,
-                      ?1, 1, ?3, '{}', '{}', '{}', 'all_applicable_pass', ?4, ?4, ?4, NULL,
-                      datetime('now'), 'semantic_v1'
-                    )",
-                    params![
-                        obligation_id,
-                        criterion_id,
-                        json!([{
-                            "id": format!("obs-{obligation_id}"),
-                            "type": if obligation_id == "pob-a-product-failure" {
-                                "com.example.product.status"
-                            } else {
-                                "com.example.ready.status"
-                            },
-                            "subject": obligation_id,
-                            "expected": {"status": "ready"},
-                            "target": {"kind": "process", "uri": "local://ready"},
-                            "payload_schema": {"schema_ref": if obligation_id == "pob-a-product-failure" {
-                                "com.example.product.status@v1"
-                            } else {
-                                "com.example.ready.status@v1"
-                            }}
-                        }])
-                        .to_string(),
-                        policy_digest,
-                    ],
-                )
-                .unwrap();
-        }
+        app.conn
+            .execute(
+                "UPDATE items SET plan_path = ?1 WHERE id IN ('item-batch-a', 'item-batch-b', 'item-verifier')",
+                [plan_path.to_string_lossy().as_ref()],
+            )
+            .unwrap();
+        app.evidence_migration_value(json!({"schema_version":"planr.evidence.migration.v1","plan_id":"plan-a","obligations":[
+            {"id":"pob-a-product-failure","schema_version":"evidence.contract.v1","criterion_id":"criterion-a-product-failure","plan_id":"plan-a","item_id":"item-verifier","title":"product finding","binding":true,"observations":[{"id":"obs-pob-a-product-failure","type":"com.example.product.status","subject":"pob-a-product-failure","expected":{"status":"ready"},"target":{"kind":"process","uri":"local://ready"},"payload_schema":{"schema_ref":"com.example.product.status@v1"}}],"fixture_policy":{},"freshness_policy":{},"assurance_policy":{"retry_aggregation":"all_applicable_pass"}},
+            {"id":"pob-b-ready","schema_version":"evidence.contract.v1","criterion_id":"criterion-b-ready","plan_id":"plan-a","item_id":"item-verifier","title":"ready process","binding":true,"observations":[{"id":"obs-pob-b-ready","type":"com.example.ready.status","subject":"pob-b-ready","expected":{"status":"ready"},"target":{"kind":"process","uri":"local://ready"},"payload_schema":{"schema_ref":"com.example.ready.status@v1"}}],"fixture_policy":{},"freshness_policy":{},"assurance_policy":{"retry_aggregation":"all_applicable_pass"}}
+        ]}), true).unwrap();
         let run = app
             .ensure_outcome_feature_run("item-batch-a")
             .unwrap()
             .unwrap();
-        let non_material =
-            json!({"decision": {"material": false, "review": "none", "reasons": []}});
         for item_id in ["item-batch-a", "item-batch-b"] {
-            app.settle_feature_run_outcome(OutcomeSettlement {
-                item_id,
-                summary: "compatible batched maker outcome",
-                materiality: &non_material,
-                escalation: None,
-            })
-            .unwrap();
+            app.close_item_value(item_id, "ordinary batch outcome settled before readiness")
+                .unwrap();
         }
         app.conn
             .execute(
