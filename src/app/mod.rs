@@ -27,6 +27,7 @@ mod http_evidence;
 mod http_stream;
 mod inspection;
 mod lease;
+mod lease_runtime;
 mod mcp;
 mod mcp_evidence;
 mod packages;
