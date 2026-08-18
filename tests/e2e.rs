@@ -2076,6 +2076,49 @@ fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_m
     assert_eq!(http_persisted(), ("promoted".to_string(), 1, 1, 1));
     http_server.kill().unwrap();
     http_server.wait().unwrap();
+
+    let mcp_dir = tempfile::tempdir_in(&canonical_temp_root).unwrap();
+    let mcp_db_dir = tempdir().unwrap();
+    let mcp_db = mcp_db_dir.path().join("planr.sqlite");
+    write_evidence_policy_fixture(mcp_dir.path());
+    init_evidence_project(mcp_dir.path(), &mcp_db, "Evidence Host Capture MCP");
+    rewrite_evidence_policy_fixture(mcp_dir.path(), |policy| {
+        policy["trust_policy"]["accepted_provenance"].as_array_mut().unwrap().push(json!("verified_host_event"));
+    });
+    let conn = Connection::open(&mcp_db).unwrap();
+    conn.execute("INSERT INTO items(id,project_id,title,description,status,work_type,plan_path,created_at,updated_at) SELECT 'item-host-maker',project_id,'Host maker','settle host capture source','ready','code',path,datetime('now'),datetime('now') FROM plans WHERE id='pln-evidence-public' UNION ALL SELECT 'item-host-verifier',project_id,'Host verifier','verify host capture','ready','verification',path,datetime('now'),datetime('now') FROM plans WHERE id='pln-evidence-public'", []).unwrap();
+    drop(conn);
+    add_evidence_obligation_value(mcp_dir.path(), &mcp_db, "pob-host-capture", &obligation);
+    init_git_repo(mcp_dir.path());
+    let mcp_cli = |worker: &str, args: &[&str]| {
+        single_json_document(&planr().current_dir(mcp_dir.path()).env("PLANR_WORKER_ID", worker).args(["--db", mcp_db.to_str().unwrap(), "--json"]).args(args).assert().success().get_output().stdout)
+    };
+    assert_eq!(mcp_cli("mcp-maker", &["pick", "--plan", "pln-evidence-public", "--work-type", "code"])["item"]["id"], "item-host-maker");
+    mcp_cli("mcp-maker", &["done", "item-host-maker", "--summary", "mcp host source settled", "--cmd", "true", "--next"]);
+    let mcp_verifier = mcp_cli("mcp-verifier", &["pick", "--plan", "pln-evidence-public", "--work-type", "verification"]);
+    let mcp_authority = &mcp_verifier["work_packet"]["verification_admission"];
+    let mcp_import_root = tempfile::tempdir_in(&canonical_temp_root).unwrap();
+    let canonical_mcp_import_root = mcp_import_root.path().canonicalize().unwrap();
+    write_fresh_host_capture_envelope_with_producer(&canonical_mcp_import_root, "planr-codex-host-capture", |_| {});
+    let mcp_admission_request = json!({"schema_version":"planr.evidence.host_capture.admission.v1","plan_id":mcp_authority["plan_id"],"run_id":mcp_authority["run_id"],"freeze_id":mcp_authority["freeze_id"],"run_revision":mcp_authority["run_revision"],"obligation_id":"pob-host-capture","import_root":canonical_mcp_import_root});
+    let mcp = |id, name, arguments| mcp_text_value(&mcp_tool_response_with_env(
+        mcp_dir.path(), &mcp_db, id, name, arguments, &[("PLANR_WORKER_ID", "mcp-verifier"), ("TMPDIR", canonical_temp_root.to_str().unwrap())],
+    ));
+    let mcp_admitted = mcp(1, "planr_evidence_host_capture_admit", json!({"input": mcp_admission_request}));
+    assert_evidence_envelope(&mcp_admitted, "evidence.host_capture.admit", true);
+    assert_eq!(mcp_admitted["object"]["status"], admitted["object"]["status"]);
+    assert_eq!(mcp_admitted["object"]["status"], http_admitted["object"]["status"]);
+    assert_eq!(mcp_admitted["object"]["freeze_id"], mcp_authority["freeze_id"]);
+    assert_eq!(mcp_admitted["object"]["sealed_run_index"]["run_index_digest"], mcp_admitted["object"]["run_index_digest"]);
+    let mcp_digest = mcp_admitted["object"]["run_index_digest"].as_str().unwrap();
+    let mcp_persisted = || Connection::open(&mcp_db).unwrap().query_row("SELECT status,(SELECT COUNT(*) FROM verification_capability_instances WHERE id='host-exp-chrome-browser-client'),(SELECT COUNT(*) FROM evidence_attempts WHERE obligation_id='pob-host-capture'),(SELECT COUNT(*) FROM evidence_receipts WHERE obligation_id='pob-host-capture' AND receipt_json LIKE '%verified_host_event%') FROM host_capture_admissions WHERE sealed_run_index_digest=?1", [mcp_digest], |row| Ok((row.get::<_,String>(0)?,row.get::<_,i64>(1)?,row.get::<_,i64>(2)?,row.get::<_,i64>(3)?))).unwrap();
+    assert_eq!(mcp_persisted(), ("pending".to_string(), 0, 0, 0));
+    let mcp_imported = mcp(2, "planr_evidence_host_capture_import", json!({"input": mcp_admitted["object"]["import_input"].clone()}));
+    assert_evidence_envelope(&mcp_imported, "evidence.host_capture.import", true);
+    assert_eq!(mcp_imported["object"]["verdict"], imported["object"]["verdict"]);
+    assert_eq!(mcp_imported["object"]["verdict"], http_imported["object"]["verdict"]);
+    assert_eq!(mcp_imported["object"]["receipt"]["provenance"]["source"], "verified_host_event");
+    assert_eq!(mcp_persisted(), ("promoted".to_string(), 1, 1, 1));
 }
 struct StaticHttpServer {
     shutdown: mpsc::Sender<()>,
