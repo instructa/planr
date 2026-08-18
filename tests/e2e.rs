@@ -24057,12 +24057,25 @@ fn unplanned_done_retry_reuses_completion_log_without_review_rows() {
     init_materiality_git(dir.path());
     fs::create_dir_all(dir.path().join("src/app")).unwrap();
     fs::write(
-        dir.path().join("src/app/http.rs"),
+        dir.path().join("src/app/retry.rs"),
         "fn initial() {}\nfn retry_route() {}\n",
     )
     .unwrap();
 
     let item = create_test_item(dir.path(), &db, "Retry item", "retry gate");
+    planr()
+        .current_dir(dir.path())
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "item",
+            "update",
+            &item,
+            "--work-type",
+            "code",
+        ])
+        .assert()
+        .success();
     let first = planr()
         .current_dir(dir.path())
         .env("PLANR_WORKER_ID", "maker-retry")
@@ -24075,7 +24088,7 @@ fn unplanned_done_retry_reuses_completion_log_without_review_rows() {
             "--summary",
             "changed API route",
             "--files",
-            "src/app/http.rs",
+            "src/app/retry.rs",
             "--cmd",
             "cargo test retry",
         ])
@@ -24086,6 +24099,7 @@ fn unplanned_done_retry_reuses_completion_log_without_review_rows() {
         .clone();
     let first: Value = serde_json::from_slice(&first).unwrap();
     assert_eq!(first["work_packet"]["review_gate"], Value::Null);
+    let first_log_id = first["log_id"].as_str().unwrap().to_string();
 
     let retry = planr()
         .current_dir(dir.path())
@@ -24097,9 +24111,9 @@ fn unplanned_done_retry_reuses_completion_log_without_review_rows() {
             "done",
             &item,
             "--summary",
-            "retry same API route",
+            "changed API route",
             "--files",
-            "src/app/http.rs",
+            "src/app/retry.rs",
             "--cmd",
             "cargo test retry",
         ])
@@ -24110,6 +24124,9 @@ fn unplanned_done_retry_reuses_completion_log_without_review_rows() {
         .clone();
     let retry: Value = serde_json::from_slice(&retry).unwrap();
     assert_eq!(retry["work_packet"]["review_gate"], Value::Null);
+    assert_eq!(retry["work_packet"]["transition"], "already_settled");
+    assert_eq!(retry["work_packet"]["disposition"], "already_settled");
+    assert_eq!(retry["log_id"], first_log_id);
 
     let conn = Connection::open(&db).unwrap();
     let count: i64 = conn
@@ -24135,7 +24152,58 @@ fn unplanned_done_retry_reuses_completion_log_without_review_rows() {
         )
         .unwrap();
     assert_eq!(log_count, 1);
-    assert_eq!(decision_count, 2);
+    assert_eq!(decision_count, 1);
+    assert_eq!(item_status(&db, &item), "closed");
+    let settled = (count, log_count, decision_count, item_status(&db, &item));
+
+    let conflict = planr()
+        .current_dir(dir.path())
+        .env("PLANR_WORKER_ID", "maker-retry")
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--json",
+            "done",
+            &item,
+            "--summary",
+            "conflicting API route",
+            "--files",
+            "src/app/retry.rs",
+            "--cmd",
+            "cargo test retry",
+        ])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    assert!(
+        String::from_utf8_lossy(&conflict).contains("OutcomeSummaryMismatch"),
+        "{}",
+        String::from_utf8_lossy(&conflict)
+    );
+    let after_conflict = (
+        conn.query_row(
+            "SELECT COUNT(*) FROM review_gates WHERE scope_id = ?1",
+            [&item],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+        conn.query_row(
+            "SELECT COUNT(*) FROM logs WHERE item_id = ?1 AND kind = 'completion'",
+            [&item],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+        conn.query_row(
+            "SELECT COUNT(*) FROM events WHERE item_id = ?1 AND event_type = 'materiality_decided'",
+            [&item],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+        item_status(&db, &item),
+    );
+    assert_eq!(after_conflict, settled);
 }
 
 #[test]
