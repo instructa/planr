@@ -7536,7 +7536,7 @@ allow_overwrite = true
         assert_eq!(
             app.conn
                 .query_row(
-                    "SELECT COUNT(*) FROM events WHERE item_id = 'item-settle-verification' AND event_type = 'verification_item_closed'",
+                    "SELECT COUNT(*) FROM events WHERE item_id = 'item-settle-verification' AND event_type = 'feature_run_verification_settled'",
                     [],
                     |row| row.get::<_, u64>(0),
                 )
@@ -7551,7 +7551,7 @@ allow_overwrite = true
                 "CREATE TRIGGER test_conflict_after_settlement_log
                  AFTER INSERT ON logs
                  WHEN NEW.item_id = 'item-settle-verification'
-                   AND NEW.summary = 'canonical plan Evidence coverage satisfied verification outcome'
+                   AND NEW.summary = 'canonical plan Evidence coverage settled the FeatureRun verification lifecycle'
                  BEGIN
                    UPDATE items
                    SET status = 'closed'
@@ -7577,7 +7577,7 @@ allow_overwrite = true
         assert_eq!(
             app.conn
                 .query_row(
-                    "SELECT COUNT(*) FROM events WHERE item_id = 'item-settle-verification' AND event_type = 'verification_item_closed'",
+                    "SELECT COUNT(*) FROM events WHERE item_id = 'item-settle-verification' AND event_type = 'feature_run_verification_settled'",
                     [],
                     |row| row.get::<_, u64>(0),
                 )
@@ -7587,7 +7587,7 @@ allow_overwrite = true
         assert_eq!(
             app.conn
                 .query_row(
-                    "SELECT COUNT(*) FROM logs WHERE item_id = 'item-settle-verification' AND summary = 'canonical plan Evidence coverage satisfied verification outcome'",
+                    "SELECT COUNT(*) FROM logs WHERE item_id = 'item-settle-verification' AND summary = 'canonical plan Evidence coverage settled the FeatureRun verification lifecycle'",
                     [],
                     |row| row.get::<_, u64>(0),
                 )
