@@ -4058,7 +4058,10 @@ allow_overwrite = true
             let state = app.canonical_execution_state_value(&run_id, None).unwrap();
             assert_eq!(
                 (state["phase"].clone(), state["next_action"].clone()),
-                (json!("implementation"), json!("settle_next_outcome"))
+                (
+                    json!("implementation"),
+                    json!("settle_verification_admission_repair")
+                )
             );
             assert_eq!(protected_counts(&app), before);
             assert_eq!(app.conn.query_row("SELECT COUNT(*) FROM events WHERE event_type = 'feature_run_verification_admission_repaired'", [], |row| row.get::<_, u64>(0)).unwrap(), 1);
