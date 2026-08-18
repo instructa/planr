@@ -18,7 +18,6 @@ const LEGACY_REVIEW_SETTLEMENT_VERSION: &str = "1";
 /// they remain historical records in their original tables while every new
 /// execution producer writes only these canonical tables.
 pub(super) fn ensure_execution_run_schema(conn: &Connection) -> Result<()> {
-    upgrade_feature_run_terminal_reason_constraint(conn)?;
     conn.execute_batch("SAVEPOINT execution_run_schema_upgrade")?;
     let result = conn.execute_batch(
         r#"
@@ -315,6 +314,7 @@ CREATE INDEX IF NOT EXISTS idx_events_item_type_timestamp ON events(item_id, eve
     match result {
         Ok(()) => {
             conn.execute_batch("RELEASE execution_run_schema_upgrade")?;
+            upgrade_feature_run_terminal_reason_constraint(conn)?;
             Ok(())
         }
         Err(error) => {
