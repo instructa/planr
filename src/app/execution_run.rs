@@ -12,8 +12,8 @@ use crate::execution_run::{
     FeatureRunStatus, MakerReplacement, MakerReplacementReason, PrematureSourceFreezeRestartFacts,
     RoleOwner, RunRole, VerificationAdmissionRepairReason, VerificationAdmissionRepairRequest,
     is_ordinary_implementation_work_type, pause_batch_for_risk_review, replace_batch_maker,
-    retire_incompatible_feature_run,
-    retire_premature_source_freeze_feature_run, roll_batch_for_same_maker,
+    retire_incompatible_feature_run, retire_premature_source_freeze_feature_run,
+    roll_batch_for_same_maker,
 };
 use crate::model::ItemStatus;
 use crate::usage_policy::{
@@ -811,9 +811,8 @@ impl App {
         &self,
         input: ExistingOutcomeSettlement<'_>,
     ) -> Result<OutcomeSettlementTransition> {
-        let reject = |violation| {
-            already_settled_outcome_error("unplanned", input.item_id, violation)
-        };
+        let reject =
+            |violation| already_settled_outcome_error("unplanned", input.item_id, violation);
         let item = self.get_item(input.item_id)?;
         if !is_ordinary_implementation_work_type(&item.work_type) || item.plan_path.is_some() {
             return Err(reject(AlreadySettledOutcomeViolation::MissingOutcome));
@@ -822,7 +821,9 @@ impl App {
             return Err(reject(AlreadySettledOutcomeViolation::ItemNotTerminal));
         }
         if input.escalation.is_some() {
-            return Err(reject(AlreadySettledOutcomeViolation::OutcomeEscalationMismatch));
+            return Err(reject(
+                AlreadySettledOutcomeViolation::OutcomeEscalationMismatch,
+            ));
         }
         let mut statement = self.conn.prepare(
             "SELECT id, summary, files FROM logs WHERE item_id = ?1 AND kind = 'completion' ORDER BY created_at, id",
@@ -838,14 +839,18 @@ impl App {
             return Err(reject(AlreadySettledOutcomeViolation::MissingOutcome));
         }
         if summary != input.summary {
-            return Err(reject(AlreadySettledOutcomeViolation::OutcomeSummaryMismatch));
+            return Err(reject(
+                AlreadySettledOutcomeViolation::OutcomeSummaryMismatch,
+            ));
         }
         let persisted_files = files
             .and_then(|raw| serde_json::from_str::<Vec<String>>(&raw).ok())
             .map(|values| normalized_claimed_files(&values))
             .ok_or_else(|| reject(AlreadySettledOutcomeViolation::MissingOutcome))?;
         if persisted_files != input.claimed_files {
-            return Err(reject(AlreadySettledOutcomeViolation::OutcomeClaimedFilesMismatch));
+            return Err(reject(
+                AlreadySettledOutcomeViolation::OutcomeClaimedFilesMismatch,
+            ));
         }
         let materiality = self
             .item_metadata_field(input.item_id, "materiality")?
@@ -1208,7 +1213,6 @@ impl App {
             "reason": "same_maker_batch_rolled",
         }))
     }
-
 }
 
 #[cfg(test)]
