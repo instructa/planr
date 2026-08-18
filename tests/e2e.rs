@@ -2020,6 +2020,62 @@ fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_m
     assert_eq!(imported["object"]["receipt"]["vantage_point"]["kind"], "host_capture_import");
     assert_eq!(imported["object"]["receipt"]["vantage_point"]["identity"], "codex/chrome-browser-client");
     assert_eq!(persisted(), ("promoted".to_string(), 1, 1, 1));
+
+    let http_dir = tempfile::tempdir_in(&canonical_temp_root).unwrap();
+    let http_db_dir = tempdir().unwrap();
+    let http_db = http_db_dir.path().join("planr.sqlite");
+    write_evidence_policy_fixture(http_dir.path());
+    init_evidence_project(http_dir.path(), &http_db, "Evidence Host Capture HTTP");
+    rewrite_evidence_policy_fixture(http_dir.path(), |policy| {
+        policy["trust_policy"]["accepted_provenance"].as_array_mut().unwrap().push(json!("verified_host_event"));
+    });
+    let conn = Connection::open(&http_db).unwrap();
+    conn.execute("INSERT INTO items(id,project_id,title,description,status,work_type,plan_path,created_at,updated_at) SELECT 'item-host-maker',project_id,'Host maker','settle host capture source','ready','code',path,datetime('now'),datetime('now') FROM plans WHERE id='pln-evidence-public' UNION ALL SELECT 'item-host-verifier',project_id,'Host verifier','verify host capture','ready','verification',path,datetime('now'),datetime('now') FROM plans WHERE id='pln-evidence-public'", []).unwrap();
+    drop(conn);
+    add_evidence_obligation_value(http_dir.path(), &http_db, "pob-host-capture", &obligation);
+    init_git_repo(http_dir.path());
+    let http_cli = |worker: &str, args: &[&str]| {
+        single_json_document(&planr().current_dir(http_dir.path()).env("PLANR_WORKER_ID", worker).args(["--db", http_db.to_str().unwrap(), "--json"]).args(args).assert().success().get_output().stdout)
+    };
+    assert_eq!(http_cli("http-maker", &["pick", "--plan", "pln-evidence-public", "--work-type", "code"])["item"]["id"], "item-host-maker");
+    http_cli("http-maker", &["done", "item-host-maker", "--summary", "http host source settled", "--cmd", "true", "--next"]);
+    let http_verifier = http_cli("http-verifier", &["pick", "--plan", "pln-evidence-public", "--work-type", "verification"]);
+    let http_authority = &http_verifier["work_packet"]["verification_admission"];
+    let http_import_root = tempfile::tempdir_in(&canonical_temp_root).unwrap();
+    let canonical_http_import_root = http_import_root.path().canonicalize().unwrap();
+    write_fresh_host_capture_envelope_with_producer(&canonical_http_import_root, "planr-codex-host-capture", |_| {});
+    let http_admission_request = json!({"schema_version":"planr.evidence.host_capture.admission.v1","plan_id":http_authority["plan_id"],"run_id":http_authority["run_id"],"freeze_id":http_authority["freeze_id"],"run_revision":http_authority["run_revision"],"obligation_id":"pob-host-capture","import_root":canonical_http_import_root});
+    let http_port = free_port();
+    let mut http_server = std_planr_from_binary(&assert_cmd::cargo::cargo_bin("planr"));
+    let mut http_server = http_server
+        .current_dir(http_dir.path())
+        .env("PLANR_WORKER_ID", "http-verifier")
+        .env("TMPDIR", &canonical_temp_root)
+        .args(["--db", http_db.to_str().unwrap(), "serve", "--port", &http_port.to_string()])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    wait_for_http_server(http_port);
+    let http_admitted = http_json(&http_request(
+        http_port, "POST", "/v1/evidence/host-capture/admit", &http_admission_request.to_string(),
+    ));
+    assert_evidence_envelope(&http_admitted, "evidence.host_capture.admit", true);
+    assert_eq!(http_admitted["object"]["status"], admitted["object"]["status"]);
+    assert_eq!(http_admitted["object"]["freeze_id"], http_authority["freeze_id"]);
+    assert_eq!(http_admitted["object"]["sealed_run_index"]["run_index_digest"], http_admitted["object"]["run_index_digest"]);
+    let http_digest = http_admitted["object"]["run_index_digest"].as_str().unwrap();
+    let http_persisted = || Connection::open(&http_db).unwrap().query_row("SELECT status,(SELECT COUNT(*) FROM verification_capability_instances WHERE id='host-exp-chrome-browser-client'),(SELECT COUNT(*) FROM evidence_attempts WHERE obligation_id='pob-host-capture'),(SELECT COUNT(*) FROM evidence_receipts WHERE obligation_id='pob-host-capture' AND receipt_json LIKE '%verified_host_event%') FROM host_capture_admissions WHERE sealed_run_index_digest=?1", [http_digest], |row| Ok((row.get::<_,String>(0)?,row.get::<_,i64>(1)?,row.get::<_,i64>(2)?,row.get::<_,i64>(3)?))).unwrap();
+    assert_eq!(http_persisted(), ("pending".to_string(), 0, 0, 0));
+    let http_imported = http_json(&http_request(
+        http_port, "POST", "/v1/evidence/host-capture/import", &http_admitted["object"]["import_input"].to_string(),
+    ));
+    assert_evidence_envelope(&http_imported, "evidence.host_capture.import", true);
+    assert_eq!(http_imported["object"]["verdict"], imported["object"]["verdict"]);
+    assert_eq!(http_imported["object"]["receipt"]["provenance"]["source"], "verified_host_event");
+    assert_eq!(http_persisted(), ("promoted".to_string(), 1, 1, 1));
+    http_server.kill().unwrap();
+    http_server.wait().unwrap();
 }
 struct StaticHttpServer {
     shutdown: mpsc::Sender<()>,
