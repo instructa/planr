@@ -23348,7 +23348,11 @@ fn done_next_freezes_source_without_authored_verification_item() {
         .assert()
         .success();
     let plan_path = dir.path().join("verification-handoff.plan.md");
-    fs::write(&plan_path, "# Verification Handoff\n").unwrap();
+    fs::write(
+        &plan_path,
+        "---\ncriteria:\n  - id: criterion-verification-handoff-without-item\n    title: Verification handoff without item\n---\n\n# Verification Handoff\n",
+    )
+    .unwrap();
     let conn = Connection::open(&db).unwrap();
     let project_id: String = conn
         .query_row("SELECT id FROM projects LIMIT 1", [], |row| row.get(0))
@@ -23373,7 +23377,7 @@ fn done_next_freezes_source_without_authored_verification_item() {
     );
     obligation["plan_id"] = json!("plan-verification-handoff");
     obligation["item_id"] = Value::Null;
-    obligation["criterion_id"] = json!("crit-verification-handoff-without-item");
+    obligation["criterion_id"] = json!("criterion-verification-handoff-without-item");
     add_evidence_obligation_value(
         dir.path(),
         &db,
@@ -23515,7 +23519,7 @@ fn done_next_freezes_source_without_authored_verification_item() {
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "final_product_review_requires_verification_phase:phase=source_frozen",
+            "final_product_review_requires_settled_exact_source_coverage:phase=held",
         ));
 
     let conn = Connection::open(&db).unwrap();
@@ -23535,7 +23539,7 @@ fn done_next_freezes_source_without_authored_verification_item() {
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(phase, "source_frozen");
+    assert_eq!(phase, "held");
     assert_eq!(
         conn.query_row(
             "SELECT COUNT(*) FROM feature_run_source_freezes",
