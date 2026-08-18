@@ -39,7 +39,6 @@ use crate::evidence::{
         parse_evidence_policy_yaml, parse_trusted_receipt_binding,
     },
 };
-use builtins::BuiltInEvidenceCatalog;
 use crate::execution::{BoundedProcessInput, CancellationToken, run_bounded_process};
 use crate::execution_run::{
     ExecutionBatch, ExecutionBatchStatus, FeatureRunPhase, PhaseTransition, PhaseTransitionCause,
@@ -47,6 +46,7 @@ use crate::execution_run::{
 };
 use crate::util::short_id;
 use anyhow::{Context, Result, anyhow, bail};
+use builtins::BuiltInEvidenceCatalog;
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
 use std::cell::RefCell;
@@ -1571,8 +1571,7 @@ impl App {
                 EvidenceCommandError::conflict("evidence run-index policy is stale").into(),
             );
         }
-        let entries =
-            self.validate_run_index_target_subsets(value, &declared_digest, resolver)?;
+        let entries = self.validate_run_index_target_subsets(value, &declared_digest, resolver)?;
         Ok((declared_digest, entries))
     }
 
@@ -1584,9 +1583,7 @@ impl App {
             .ok_or_else(|| EvidenceCommandError::bad_request("evidence run-index has no runs"))?;
         let mut results = Vec::with_capacity(runs.len());
         let mut product_findings = Vec::new();
-        for ((expected_index, run), validated) in
-            runs.iter().enumerate().zip(validated_entries)
-        {
+        for ((expected_index, run), validated) in runs.iter().enumerate().zip(validated_entries) {
             if run["index"].as_u64() != Some(expected_index as u64) {
                 return Err(EvidenceCommandError::bad_request(
                     "evidence run-index entries must use contiguous indexes",
@@ -1828,15 +1825,12 @@ impl App {
                 instance: self.load_capability_instance(capability_instance_id)?,
             },
             RunIndexCapabilityResolver::PendingHostCapture => {
-                let admission = host_capture_admission::load_pending(
-                    &self.conn,
-                    run_index_digest,
-                )?
-                .ok_or_else(|| {
-                    EvidenceCommandError::conflict(
-                        "sealed host capture run has no pending admission",
-                    )
-                })?;
+                let admission = host_capture_admission::load_pending(&self.conn, run_index_digest)?
+                    .ok_or_else(|| {
+                        EvidenceCommandError::conflict(
+                            "sealed host capture run has no pending admission",
+                        )
+                    })?;
                 admission.validate_pending()?;
                 let valid_until = OffsetDateTime::parse(&admission.valid_until, &Rfc3339)?;
                 if valid_until <= OffsetDateTime::now_utc() {
@@ -2541,14 +2535,13 @@ impl App {
             &canonical_import_root,
             HOST_CAPTURE_VALIDATOR_TIMEOUT_MS,
         )?;
-        let captures = crate::evidence::adapters::host::evaluate_phase1_host_fixture(
-            &validated.root,
-        )
-        .map_err(|error| {
-            EvidenceCommandError::bad_request(format!(
-                "validated host capture bundle failed strict Evidence parsing: {error}"
-            ))
-        })?;
+        let captures =
+            crate::evidence::adapters::host::evaluate_phase1_host_fixture(&validated.root)
+                .map_err(|error| {
+                    EvidenceCommandError::bad_request(format!(
+                        "validated host capture bundle failed strict Evidence parsing: {error}"
+                    ))
+                })?;
         let capture = captures
             .into_iter()
             .find(|capture| capture.experiment_id == request.experiment_id)
@@ -2558,9 +2551,10 @@ impl App {
                     request.experiment_id
                 ))
             })?;
-        let adapter = crate::evidence::adapters::codex::enable_chrome_browser_client_from_verifier_admission(
-            capture.clone(),
-        )?;
+        let adapter =
+            crate::evidence::adapters::codex::enable_chrome_browser_client_from_verifier_admission(
+                capture.clone(),
+            )?;
         if !adapter.trusted_adapter_enabled {
             return Err(EvidenceCommandError::bad_request(format!(
                 "host capture candidate is not admissible: {}",
@@ -2571,11 +2565,10 @@ impl App {
         let manifest = adapter
             .manifest
             .ok_or_else(|| anyhow!("admitted host capture candidate is missing its manifest"))?;
-        let instance: VerificationCapabilityInstance = serde_json::from_value(
-            adapter
-                .instance
-                .ok_or_else(|| anyhow!("admitted host capture candidate is missing its instance"))?,
-        )?;
+        let instance: VerificationCapabilityInstance =
+            serde_json::from_value(adapter.instance.ok_or_else(|| {
+                anyhow!("admitted host capture candidate is missing its instance")
+            })?)?;
         ensure_capability_manifest_instance_identity(&manifest, &instance)?;
         let [(target_value, _)] = canonical_target_partitions(&obligation.observations)?
             .try_into()
@@ -2608,8 +2601,7 @@ impl App {
         let valid_until = ensure_host_capture_fresh(&instance)?;
         let (sealed_run_index, execution_binding) =
             self.build_host_capture_candidate_run_index(&obligation, &manifest, &instance)?;
-        let sealed_run_index_digest =
-            string_field(&sealed_run_index, "run_index_digest")?;
+        let sealed_run_index_digest = string_field(&sealed_run_index, "run_index_digest")?;
         let pending = host_capture_admission::PendingHostCaptureAdmission {
             sealed_run_index_digest: sealed_run_index_digest.clone(),
             project_id: project.id.clone(),
@@ -2856,16 +2848,23 @@ impl App {
         }
         let (run_index_digest, run_input, execution_binding, sealed_instance) =
             self.pending_host_capture_execution_subset(&value)?;
-        let pending_admission = host_capture_admission::load_pending(&self.conn, &run_index_digest)?
-            .ok_or_else(|| EvidenceCommandError::conflict("host capture admission is not pending"))?;
+        let pending_admission =
+            host_capture_admission::load_pending(&self.conn, &run_index_digest)?.ok_or_else(
+                || EvidenceCommandError::conflict("host capture admission is not pending"),
+            )?;
         let obligation_id = string_field(&run_input, "obligation_id")?;
         let project = self.default_project()?;
         let obligation = self.load_proof_obligation(&obligation_id)?;
         let (obligation, target) =
             select_execution_binding_subset(obligation, &run_input, &execution_binding)
                 .map_err(|error| EvidenceCommandError::bad_request(error.to_string()))?;
-        let lease = self.resolve_feature_run_evidence_lease(&project.id, obligation.plan_id.as_str())?
-            .ok_or_else(|| EvidenceCommandError::conflict("pending host capture import requires an active verifier lease"))?;
+        let lease = self
+            .resolve_feature_run_evidence_lease(&project.id, obligation.plan_id.as_str())?
+            .ok_or_else(|| {
+                EvidenceCommandError::conflict(
+                    "pending host capture import requires an active verifier lease",
+                )
+            })?;
         self.validate_pending_host_capture_import_authority(&pending_admission, &lease)?;
         (|| -> Result<Value> {
             let import_root =
@@ -2881,7 +2880,11 @@ impl App {
             .into());
             }
 
-            let validated = validate_external_host_capture(&self.root, &import_root, HOST_CAPTURE_VALIDATOR_TIMEOUT_MS)?;
+            let validated = validate_external_host_capture(
+                &self.root,
+                &import_root,
+                HOST_CAPTURE_VALIDATOR_TIMEOUT_MS,
+            )?;
             let captures =
                 crate::evidence::adapters::host::evaluate_phase1_host_fixture(&validated.root)
                     .map_err(|error| {
@@ -2911,10 +2914,24 @@ impl App {
             let captured_instance_value = adapter
                 .instance
                 .ok_or_else(|| anyhow!("enabled host capture missing instance"))?;
-            if (validated.normalized_root_digest.as_str(), serde_json::to_value(&captured_manifest)?, captured_instance_value, serde_json::to_value(&sealed_instance)?) != (pending_admission.normalized_capture_digest.as_str(), pending_admission.manifest.clone(), pending_admission.instance.clone(), pending_admission.instance.clone()) {
-                return Err(EvidenceCommandError::conflict("validated host capture does not match its pending admission").into());
+            if (
+                validated.normalized_root_digest.as_str(),
+                serde_json::to_value(&captured_manifest)?,
+                captured_instance_value,
+                serde_json::to_value(&sealed_instance)?,
+            ) != (
+                pending_admission.normalized_capture_digest.as_str(),
+                pending_admission.manifest.clone(),
+                pending_admission.instance.clone(),
+                pending_admission.instance.clone(),
+            ) {
+                return Err(EvidenceCommandError::conflict(
+                    "validated host capture does not match its pending admission",
+                )
+                .into());
             }
-            let evidence_manifest: VerificationCapabilityManifest = serde_json::from_value(pending_admission.manifest.clone())?;
+            let evidence_manifest: VerificationCapabilityManifest =
+                serde_json::from_value(pending_admission.manifest.clone())?;
             let evidence_instance = sealed_instance;
             let evidence_instance_value = serde_json::to_value(&evidence_instance)?;
             let environment: EnvironmentBinding = serde_json::from_value(
@@ -2924,7 +2941,12 @@ impl App {
                     )
                 })?,
             )?;
-            let fixture_disclosure = FixtureDisclosure { fixtures_used: false, mocks_used: false, fixture_refs: None, mock_refs: None };
+            let fixture_disclosure = FixtureDisclosure {
+                fixtures_used: false,
+                mocks_used: false,
+                fixture_refs: None,
+                mock_refs: None,
+            };
             ensure_host_import_bindings(
                 &obligation,
                 &evidence_instance,
@@ -3125,7 +3147,10 @@ impl App {
                 &self.conn,
                 |conn| {
                     host_capture_admission::require_exact_pending(conn, &pending_admission)?;
-                    self.validate_pending_host_capture_import_authority(&pending_admission, &lease)?;
+                    self.validate_pending_host_capture_import_authority(
+                        &pending_admission,
+                        &lease,
+                    )?;
                     registry.store_verified_host_capture_instance_with_expiry(
                         conn,
                         evidence_manifest.clone(),
@@ -3151,10 +3176,15 @@ impl App {
                     }
                     self.validate_feature_run_evidence_lease(conn, &lease)?;
                     host_capture_admission::require_exact_pending(conn, &pending_admission)?;
-                    self.validate_pending_host_capture_import_authority(&pending_admission, &lease)?;
+                    self.validate_pending_host_capture_import_authority(
+                        &pending_admission,
+                        &lease,
+                    )?;
                     let (current_digest, current_entries) =
                         self.validate_pending_host_capture_run_index(&value["run_index"])?;
-                    let [current_entry] = current_entries.as_slice() else { bail!("pending host capture import requires exactly one sealed run"); };
+                    let [current_entry] = current_entries.as_slice() else {
+                        bail!("pending host capture import requires exactly one sealed run");
+                    };
                     if current_digest != run_index_digest
                         || current_entry.execution_binding != execution_binding
                         || current_entry.instance.id != evidence_instance.id
@@ -4288,9 +4318,8 @@ fn ensure_capability_manifest_instance_identity(
     manifest: &VerificationCapabilityManifest,
     instance: &VerificationCapabilityInstance,
 ) -> Result<()> {
-    let manifest_digest = crate::canonical_json::sha256_json_digest(
-        &serde_json::to_value(manifest)?,
-    )?;
+    let manifest_digest =
+        crate::canonical_json::sha256_json_digest(&serde_json::to_value(manifest)?)?;
     if manifest.id != instance.manifest_id
         || manifest.version != instance.adapter_version
         || manifest_digest != instance.manifest_digest.as_str()

@@ -1,14 +1,13 @@
+use crate::canonical_json::sha256_json_digest;
 use crate::evidence::model::{
     NamespacedIdentifier, PayloadSchemaBinding, Sha256Digest, VerificationCapabilityManifest,
 };
-use crate::canonical_json::sha256_json_digest;
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
 const CODEX_CHROME_BROWSER_CLIENT_OBSERVATION: &str = "host.codex.chrome_browser_client";
 const HOST_CAPTURE_SCHEMA_ID: &str = "planr.host_capability_observed_raw.schema.v1";
-const HOST_CAPTURE_SCHEMA_REF: &str =
-    "schemas/host-capability-observed-raw.schema.json";
+const HOST_CAPTURE_SCHEMA_REF: &str = "schemas/host-capability-observed-raw.schema.json";
 const HOST_CAPTURE_SCHEMA_JSON: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/scripts/host-capability-runtime/v1/schemas/host-capability-observed-raw.schema.json"
@@ -33,13 +32,11 @@ impl BuiltInEvidenceCatalog {
         if schema.get("$id").and_then(Value::as_str) != Some(HOST_CAPTURE_SCHEMA_ID) {
             bail!("built-in host capture schema has an unexpected $id");
         }
-        let schema_digest = Sha256Digest::parse(sha256_json_digest(&schema)?)
-            .map_err(anyhow::Error::from)?;
+        let schema_digest =
+            Sha256Digest::parse(sha256_json_digest(&schema)?).map_err(anyhow::Error::from)?;
         let binding = PayloadSchemaBinding {
-            observation_type: NamespacedIdentifier::parse(
-                CODEX_CHROME_BROWSER_CLIENT_OBSERVATION,
-            )
-            .map_err(anyhow::Error::from)?,
+            observation_type: NamespacedIdentifier::parse(CODEX_CHROME_BROWSER_CLIENT_OBSERVATION)
+                .map_err(anyhow::Error::from)?,
             schema_ref: HOST_CAPTURE_SCHEMA_REF.to_string(),
             schema_digest,
         };
@@ -112,8 +109,8 @@ impl BuiltInEvidenceCatalog {
         schema_digest: Option<&Sha256Digest>,
     ) -> Result<Option<&Value>> {
         let binding = &self.host_capture_schema.binding;
-        let claims_builtin = observation_type == &binding.observation_type
-            || schema_ref == binding.schema_ref;
+        let claims_builtin =
+            observation_type == &binding.observation_type || schema_ref == binding.schema_ref;
         if !claims_builtin {
             return Ok(None);
         }
