@@ -1762,7 +1762,10 @@ fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_m
     write_evidence_policy_fixture(dir.path());
     init_evidence_project(dir.path(), &db, "Evidence Host Capture Import");
     rewrite_evidence_policy_fixture(dir.path(), |policy| {
-        policy["trust_policy"]["accepted_provenance"].as_array_mut().unwrap().push(json!("verified_host_event"));
+        policy["trust_policy"]["accepted_provenance"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("verified_host_event"));
     });
 
     let policy_output = planr()
@@ -1792,47 +1795,136 @@ fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_m
         "sha256:7777777777777777777777777777777777777777777777777777777777777777",
     );
     let mut obligation = bind_obligation_to_authored_criterion(
-        obligation, "pln-evidence-public", "criterion-evidence-public",
+        obligation,
+        "pln-evidence-public",
+        "criterion-evidence-public",
     );
     let conn = Connection::open(&db).unwrap();
     conn.execute("INSERT INTO items(id,project_id,title,description,status,work_type,plan_path,created_at,updated_at) SELECT 'item-host-maker',project_id,'Host maker','settle host capture source','ready','code',path,datetime('now'),datetime('now') FROM plans WHERE id='pln-evidence-public' UNION ALL SELECT 'item-host-verifier',project_id,'Host verifier','verify host capture','ready','verification',path,datetime('now'),datetime('now') FROM plans WHERE id='pln-evidence-public'", []).unwrap();
     drop(conn);
     obligation["item_id"] = json!("item-host-verifier");
-    obligation["observations"][0]["payload_schema"] = json!({"schema_ref": "schemas/host-capability-observed-raw.schema.json"});
+    obligation["observations"][0]["payload_schema"] =
+        json!({"schema_ref": "schemas/host-capability-observed-raw.schema.json"});
     add_evidence_obligation_value(dir.path(), &db, "pob-host-capture", &obligation);
     init_git_repo(dir.path());
 
     let cli = |worker: &str, args: &[&str]| {
-        single_json_document(&planr().current_dir(dir.path()).env("PLANR_WORKER_ID", worker).args(["--db", db.to_str().unwrap(), "--json"]).args(args).assert().success().get_output().stdout)
+        single_json_document(
+            &planr()
+                .current_dir(dir.path())
+                .env("PLANR_WORKER_ID", worker)
+                .args(["--db", db.to_str().unwrap(), "--json"])
+                .args(args)
+                .assert()
+                .success()
+                .get_output()
+                .stdout,
+        )
     };
-    assert_eq!(cli("host-maker", &["pick", "--plan", "pln-evidence-public", "--work-type", "code"])["item"]["id"], "item-host-maker");
-    cli("host-maker", &["done", "item-host-maker", "--summary", "host source settled", "--cmd", "true", "--next"]);
-    let verifier = cli("host-verifier", &["pick", "--plan", "pln-evidence-public", "--work-type", "verification"]);
+    assert_eq!(
+        cli(
+            "host-maker",
+            &[
+                "pick",
+                "--plan",
+                "pln-evidence-public",
+                "--work-type",
+                "code"
+            ]
+        )["item"]["id"],
+        "item-host-maker"
+    );
+    cli(
+        "host-maker",
+        &[
+            "done",
+            "item-host-maker",
+            "--summary",
+            "host source settled",
+            "--cmd",
+            "true",
+            "--next",
+        ],
+    );
+    let verifier = cli(
+        "host-verifier",
+        &[
+            "pick",
+            "--plan",
+            "pln-evidence-public",
+            "--work-type",
+            "verification",
+        ],
+    );
     let authority = &verifier["work_packet"]["verification_admission"];
 
     let import_root = tempfile::tempdir_in(&canonical_temp_root).unwrap();
     let canonical_import_root = import_root.path().canonicalize().unwrap();
-    write_fresh_host_capture_envelope_with_producer(&canonical_import_root, "planr-codex-host-capture", |_| {});
+    write_fresh_host_capture_envelope_with_producer(
+        &canonical_import_root,
+        "planr-codex-host-capture",
+        |_| {},
+    );
     let request = json!({"schema_version":"planr.evidence.host_capture.admission.v1","plan_id":authority["plan_id"],"run_id":authority["run_id"],"freeze_id":authority["freeze_id"],"run_revision":authority["run_revision"],"obligation_id":"pob-host-capture","import_root":canonical_import_root});
     let admission_path = db_dir.path().join("host-capture-admission.json");
-    fs::write(&admission_path, serde_json::to_vec_pretty(&request).unwrap()).unwrap();
-    let admitted = cli("host-verifier", &["evidence", "host-capture", "admit", "--input", admission_path.to_str().unwrap()]);
+    fs::write(
+        &admission_path,
+        serde_json::to_vec_pretty(&request).unwrap(),
+    )
+    .unwrap();
+    let admitted = cli(
+        "host-verifier",
+        &[
+            "evidence",
+            "host-capture",
+            "admit",
+            "--input",
+            admission_path.to_str().unwrap(),
+        ],
+    );
     assert_evidence_envelope(&admitted, "evidence.host_capture.admit", true);
     assert_eq!(admitted["object"]["status"], "pending");
     assert_eq!(admitted["object"]["freeze_id"], authority["freeze_id"]);
-    assert_eq!(admitted["object"]["sealed_run_index"]["run_index_digest"], admitted["object"]["run_index_digest"]);
+    assert_eq!(
+        admitted["object"]["sealed_run_index"]["run_index_digest"],
+        admitted["object"]["run_index_digest"]
+    );
     let digest = admitted["object"]["run_index_digest"].as_str().unwrap();
-    let persisted = || Connection::open(&db).unwrap().query_row("SELECT status,(SELECT COUNT(*) FROM verification_capability_instances WHERE id='host-exp-chrome-browser-client'),(SELECT COUNT(*) FROM evidence_attempts WHERE obligation_id='pob-host-capture'),(SELECT COUNT(*) FROM evidence_receipts WHERE obligation_id='pob-host-capture' AND receipt_json LIKE '%verified_host_event%') FROM host_capture_admissions WHERE sealed_run_index_digest=?1", [digest], |row| Ok((row.get::<_,String>(0)?,row.get::<_,i64>(1)?,row.get::<_,i64>(2)?,row.get::<_,i64>(3)?))).unwrap();
+    let persisted = || {
+        Connection::open(&db).unwrap().query_row("SELECT status,(SELECT COUNT(*) FROM verification_capability_instances WHERE id='host-exp-chrome-browser-client'),(SELECT COUNT(*) FROM evidence_attempts WHERE obligation_id='pob-host-capture'),(SELECT COUNT(*) FROM evidence_receipts WHERE obligation_id='pob-host-capture' AND receipt_json LIKE '%verified_host_event%') FROM host_capture_admissions WHERE sealed_run_index_digest=?1", [digest], |row| Ok((row.get::<_,String>(0)?,row.get::<_,i64>(1)?,row.get::<_,i64>(2)?,row.get::<_,i64>(3)?))).unwrap()
+    };
     assert_eq!(persisted(), ("pending".to_string(), 0, 0, 0));
 
     let import_path = db_dir.path().join("host-capture-import.json");
-    fs::write(&import_path, serde_json::to_vec_pretty(&admitted["object"]["import_input"]).unwrap()).unwrap();
-    let imported = cli("host-verifier", &["evidence", "host-capture", "import", "--input", import_path.to_str().unwrap()]);
+    fs::write(
+        &import_path,
+        serde_json::to_vec_pretty(&admitted["object"]["import_input"]).unwrap(),
+    )
+    .unwrap();
+    let imported = cli(
+        "host-verifier",
+        &[
+            "evidence",
+            "host-capture",
+            "import",
+            "--input",
+            import_path.to_str().unwrap(),
+        ],
+    );
     assert_evidence_envelope(&imported, "evidence.host_capture.import", true);
     assert_eq!(imported["object"]["verdict"], "trusted");
-    assert_eq!(imported["object"]["receipt"]["provenance"]["source"], "verified_host_event");
-    assert_eq!(imported["object"]["receipt"]["vantage_point"]["kind"], "host_capture_import");
-    assert_eq!(imported["object"]["receipt"]["vantage_point"]["identity"], "codex/chrome-browser-client");
+    assert_eq!(
+        imported["object"]["receipt"]["provenance"]["source"],
+        "verified_host_event"
+    );
+    assert_eq!(
+        imported["object"]["receipt"]["vantage_point"]["kind"],
+        "host_capture_import"
+    );
+    assert_eq!(
+        imported["object"]["receipt"]["vantage_point"]["identity"],
+        "codex/chrome-browser-client"
+    );
     assert_eq!(persisted(), ("promoted".to_string(), 1, 1, 1));
 
     let http_dir = tempfile::tempdir_in(&canonical_temp_root).unwrap();
@@ -1841,7 +1933,10 @@ fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_m
     write_evidence_policy_fixture(http_dir.path());
     init_evidence_project(http_dir.path(), &http_db, "Evidence Host Capture HTTP");
     rewrite_evidence_policy_fixture(http_dir.path(), |policy| {
-        policy["trust_policy"]["accepted_provenance"].as_array_mut().unwrap().push(json!("verified_host_event"));
+        policy["trust_policy"]["accepted_provenance"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("verified_host_event"));
     });
     let conn = Connection::open(&http_db).unwrap();
     conn.execute("INSERT INTO items(id,project_id,title,description,status,work_type,plan_path,created_at,updated_at) SELECT 'item-host-maker',project_id,'Host maker','settle host capture source','ready','code',path,datetime('now'),datetime('now') FROM plans WHERE id='pln-evidence-public' UNION ALL SELECT 'item-host-verifier',project_id,'Host verifier','verify host capture','ready','verification',path,datetime('now'),datetime('now') FROM plans WHERE id='pln-evidence-public'", []).unwrap();
@@ -1849,15 +1944,61 @@ fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_m
     add_evidence_obligation_value(http_dir.path(), &http_db, "pob-host-capture", &obligation);
     init_git_repo(http_dir.path());
     let http_cli = |worker: &str, args: &[&str]| {
-        single_json_document(&planr().current_dir(http_dir.path()).env("PLANR_WORKER_ID", worker).args(["--db", http_db.to_str().unwrap(), "--json"]).args(args).assert().success().get_output().stdout)
+        single_json_document(
+            &planr()
+                .current_dir(http_dir.path())
+                .env("PLANR_WORKER_ID", worker)
+                .args(["--db", http_db.to_str().unwrap(), "--json"])
+                .args(args)
+                .assert()
+                .success()
+                .get_output()
+                .stdout,
+        )
     };
-    assert_eq!(http_cli("http-maker", &["pick", "--plan", "pln-evidence-public", "--work-type", "code"])["item"]["id"], "item-host-maker");
-    http_cli("http-maker", &["done", "item-host-maker", "--summary", "http host source settled", "--cmd", "true", "--next"]);
-    let http_verifier = http_cli("http-verifier", &["pick", "--plan", "pln-evidence-public", "--work-type", "verification"]);
+    assert_eq!(
+        http_cli(
+            "http-maker",
+            &[
+                "pick",
+                "--plan",
+                "pln-evidence-public",
+                "--work-type",
+                "code"
+            ]
+        )["item"]["id"],
+        "item-host-maker"
+    );
+    http_cli(
+        "http-maker",
+        &[
+            "done",
+            "item-host-maker",
+            "--summary",
+            "http host source settled",
+            "--cmd",
+            "true",
+            "--next",
+        ],
+    );
+    let http_verifier = http_cli(
+        "http-verifier",
+        &[
+            "pick",
+            "--plan",
+            "pln-evidence-public",
+            "--work-type",
+            "verification",
+        ],
+    );
     let http_authority = &http_verifier["work_packet"]["verification_admission"];
     let http_import_root = tempfile::tempdir_in(&canonical_temp_root).unwrap();
     let canonical_http_import_root = http_import_root.path().canonicalize().unwrap();
-    write_fresh_host_capture_envelope_with_producer(&canonical_http_import_root, "planr-codex-host-capture", |_| {});
+    write_fresh_host_capture_envelope_with_producer(
+        &canonical_http_import_root,
+        "planr-codex-host-capture",
+        |_| {},
+    );
     let http_admission_request = json!({"schema_version":"planr.evidence.host_capture.admission.v1","plan_id":http_authority["plan_id"],"run_id":http_authority["run_id"],"freeze_id":http_authority["freeze_id"],"run_revision":http_authority["run_revision"],"obligation_id":"pob-host-capture","import_root":canonical_http_import_root});
     let http_port = free_port();
     let mut http_server = std_planr_from_binary(&assert_cmd::cargo::cargo_bin("planr"));
@@ -1865,28 +2006,59 @@ fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_m
         .current_dir(http_dir.path())
         .env("PLANR_WORKER_ID", "http-verifier")
         .env("TMPDIR", &canonical_temp_root)
-        .args(["--db", http_db.to_str().unwrap(), "serve", "--port", &http_port.to_string()])
+        .args([
+            "--db",
+            http_db.to_str().unwrap(),
+            "serve",
+            "--port",
+            &http_port.to_string(),
+        ])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
     wait_for_http_server(http_port);
     let http_admitted = http_json(&http_request(
-        http_port, "POST", "/v1/evidence/host-capture/admit", &http_admission_request.to_string(),
+        http_port,
+        "POST",
+        "/v1/evidence/host-capture/admit",
+        &http_admission_request.to_string(),
     ));
     assert_evidence_envelope(&http_admitted, "evidence.host_capture.admit", true);
-    assert_eq!(http_admitted["object"]["status"], admitted["object"]["status"]);
-    assert_eq!(http_admitted["object"]["freeze_id"], http_authority["freeze_id"]);
-    assert_eq!(http_admitted["object"]["sealed_run_index"]["run_index_digest"], http_admitted["object"]["run_index_digest"]);
-    let http_digest = http_admitted["object"]["run_index_digest"].as_str().unwrap();
-    let http_persisted = || Connection::open(&http_db).unwrap().query_row("SELECT status,(SELECT COUNT(*) FROM verification_capability_instances WHERE id='host-exp-chrome-browser-client'),(SELECT COUNT(*) FROM evidence_attempts WHERE obligation_id='pob-host-capture'),(SELECT COUNT(*) FROM evidence_receipts WHERE obligation_id='pob-host-capture' AND receipt_json LIKE '%verified_host_event%') FROM host_capture_admissions WHERE sealed_run_index_digest=?1", [http_digest], |row| Ok((row.get::<_,String>(0)?,row.get::<_,i64>(1)?,row.get::<_,i64>(2)?,row.get::<_,i64>(3)?))).unwrap();
+    assert_eq!(
+        http_admitted["object"]["status"],
+        admitted["object"]["status"]
+    );
+    assert_eq!(
+        http_admitted["object"]["freeze_id"],
+        http_authority["freeze_id"]
+    );
+    assert_eq!(
+        http_admitted["object"]["sealed_run_index"]["run_index_digest"],
+        http_admitted["object"]["run_index_digest"]
+    );
+    let http_digest = http_admitted["object"]["run_index_digest"]
+        .as_str()
+        .unwrap();
+    let http_persisted = || {
+        Connection::open(&http_db).unwrap().query_row("SELECT status,(SELECT COUNT(*) FROM verification_capability_instances WHERE id='host-exp-chrome-browser-client'),(SELECT COUNT(*) FROM evidence_attempts WHERE obligation_id='pob-host-capture'),(SELECT COUNT(*) FROM evidence_receipts WHERE obligation_id='pob-host-capture' AND receipt_json LIKE '%verified_host_event%') FROM host_capture_admissions WHERE sealed_run_index_digest=?1", [http_digest], |row| Ok((row.get::<_,String>(0)?,row.get::<_,i64>(1)?,row.get::<_,i64>(2)?,row.get::<_,i64>(3)?))).unwrap()
+    };
     assert_eq!(http_persisted(), ("pending".to_string(), 0, 0, 0));
     let http_imported = http_json(&http_request(
-        http_port, "POST", "/v1/evidence/host-capture/import", &http_admitted["object"]["import_input"].to_string(),
+        http_port,
+        "POST",
+        "/v1/evidence/host-capture/import",
+        &http_admitted["object"]["import_input"].to_string(),
     ));
     assert_evidence_envelope(&http_imported, "evidence.host_capture.import", true);
-    assert_eq!(http_imported["object"]["verdict"], imported["object"]["verdict"]);
-    assert_eq!(http_imported["object"]["receipt"]["provenance"]["source"], "verified_host_event");
+    assert_eq!(
+        http_imported["object"]["verdict"],
+        imported["object"]["verdict"]
+    );
+    assert_eq!(
+        http_imported["object"]["receipt"]["provenance"]["source"],
+        "verified_host_event"
+    );
     assert_eq!(http_persisted(), ("promoted".to_string(), 1, 1, 1));
     http_server.kill().unwrap();
     http_server.wait().unwrap();
@@ -1897,7 +2069,10 @@ fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_m
     write_evidence_policy_fixture(mcp_dir.path());
     init_evidence_project(mcp_dir.path(), &mcp_db, "Evidence Host Capture MCP");
     rewrite_evidence_policy_fixture(mcp_dir.path(), |policy| {
-        policy["trust_policy"]["accepted_provenance"].as_array_mut().unwrap().push(json!("verified_host_event"));
+        policy["trust_policy"]["accepted_provenance"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("verified_host_event"));
     });
     let conn = Connection::open(&mcp_db).unwrap();
     conn.execute("INSERT INTO items(id,project_id,title,description,status,work_type,plan_path,created_at,updated_at) SELECT 'item-host-maker',project_id,'Host maker','settle host capture source','ready','code',path,datetime('now'),datetime('now') FROM plans WHERE id='pln-evidence-public' UNION ALL SELECT 'item-host-verifier',project_id,'Host verifier','verify host capture','ready','verification',path,datetime('now'),datetime('now') FROM plans WHERE id='pln-evidence-public'", []).unwrap();
@@ -1905,91 +2080,296 @@ fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_m
     add_evidence_obligation_value(mcp_dir.path(), &mcp_db, "pob-host-capture", &obligation);
     init_git_repo(mcp_dir.path());
     let mcp_cli = |worker: &str, args: &[&str]| {
-        single_json_document(&planr().current_dir(mcp_dir.path()).env("PLANR_WORKER_ID", worker).args(["--db", mcp_db.to_str().unwrap(), "--json"]).args(args).assert().success().get_output().stdout)
+        single_json_document(
+            &planr()
+                .current_dir(mcp_dir.path())
+                .env("PLANR_WORKER_ID", worker)
+                .args(["--db", mcp_db.to_str().unwrap(), "--json"])
+                .args(args)
+                .assert()
+                .success()
+                .get_output()
+                .stdout,
+        )
     };
-    assert_eq!(mcp_cli("mcp-maker", &["pick", "--plan", "pln-evidence-public", "--work-type", "code"])["item"]["id"], "item-host-maker");
-    mcp_cli("mcp-maker", &["done", "item-host-maker", "--summary", "mcp host source settled", "--cmd", "true", "--next"]);
-    let mcp_verifier = mcp_cli("mcp-verifier", &["pick", "--plan", "pln-evidence-public", "--work-type", "verification"]);
+    assert_eq!(
+        mcp_cli(
+            "mcp-maker",
+            &[
+                "pick",
+                "--plan",
+                "pln-evidence-public",
+                "--work-type",
+                "code"
+            ]
+        )["item"]["id"],
+        "item-host-maker"
+    );
+    mcp_cli(
+        "mcp-maker",
+        &[
+            "done",
+            "item-host-maker",
+            "--summary",
+            "mcp host source settled",
+            "--cmd",
+            "true",
+            "--next",
+        ],
+    );
+    let mcp_verifier = mcp_cli(
+        "mcp-verifier",
+        &[
+            "pick",
+            "--plan",
+            "pln-evidence-public",
+            "--work-type",
+            "verification",
+        ],
+    );
     let mcp_authority = &mcp_verifier["work_packet"]["verification_admission"];
     let mcp_import_root = tempfile::tempdir_in(&canonical_temp_root).unwrap();
     let canonical_mcp_import_root = mcp_import_root.path().canonicalize().unwrap();
-    write_fresh_host_capture_envelope_with_producer(&canonical_mcp_import_root, "planr-codex-host-capture", |_| {});
+    write_fresh_host_capture_envelope_with_producer(
+        &canonical_mcp_import_root,
+        "planr-codex-host-capture",
+        |_| {},
+    );
     let mcp_admission_request = json!({"schema_version":"planr.evidence.host_capture.admission.v1","plan_id":mcp_authority["plan_id"],"run_id":mcp_authority["run_id"],"freeze_id":mcp_authority["freeze_id"],"run_revision":mcp_authority["run_revision"],"obligation_id":"pob-host-capture","import_root":canonical_mcp_import_root});
-    let mcp = |id, name, arguments| mcp_text_value(&mcp_tool_response_with_env(
-        mcp_dir.path(), &mcp_db, id, name, arguments, &[("PLANR_WORKER_ID", "mcp-verifier"), ("TMPDIR", canonical_temp_root.to_str().unwrap())],
-    ));
-    let mcp_admitted = mcp(1, "planr_evidence_host_capture_admit", json!({"input": mcp_admission_request}));
+    let mcp = |id, name, arguments| {
+        mcp_text_value(&mcp_tool_response_with_env(
+            mcp_dir.path(),
+            &mcp_db,
+            id,
+            name,
+            arguments,
+            &[
+                ("PLANR_WORKER_ID", "mcp-verifier"),
+                ("TMPDIR", canonical_temp_root.to_str().unwrap()),
+            ],
+        ))
+    };
+    let mcp_admitted = mcp(
+        1,
+        "planr_evidence_host_capture_admit",
+        json!({"input": mcp_admission_request}),
+    );
     assert_evidence_envelope(&mcp_admitted, "evidence.host_capture.admit", true);
-    assert_eq!(mcp_admitted["object"]["status"], admitted["object"]["status"]);
-    assert_eq!(mcp_admitted["object"]["status"], http_admitted["object"]["status"]);
-    assert_eq!(mcp_admitted["object"]["freeze_id"], mcp_authority["freeze_id"]);
-    assert_eq!(mcp_admitted["object"]["sealed_run_index"]["run_index_digest"], mcp_admitted["object"]["run_index_digest"]);
+    assert_eq!(
+        mcp_admitted["object"]["status"],
+        admitted["object"]["status"]
+    );
+    assert_eq!(
+        mcp_admitted["object"]["status"],
+        http_admitted["object"]["status"]
+    );
+    assert_eq!(
+        mcp_admitted["object"]["freeze_id"],
+        mcp_authority["freeze_id"]
+    );
+    assert_eq!(
+        mcp_admitted["object"]["sealed_run_index"]["run_index_digest"],
+        mcp_admitted["object"]["run_index_digest"]
+    );
     let mcp_digest = mcp_admitted["object"]["run_index_digest"].as_str().unwrap();
-    let mcp_persisted = || Connection::open(&mcp_db).unwrap().query_row("SELECT status,(SELECT COUNT(*) FROM verification_capability_instances WHERE id='host-exp-chrome-browser-client'),(SELECT COUNT(*) FROM evidence_attempts WHERE obligation_id='pob-host-capture'),(SELECT COUNT(*) FROM evidence_receipts WHERE obligation_id='pob-host-capture' AND receipt_json LIKE '%verified_host_event%') FROM host_capture_admissions WHERE sealed_run_index_digest=?1", [mcp_digest], |row| Ok((row.get::<_,String>(0)?,row.get::<_,i64>(1)?,row.get::<_,i64>(2)?,row.get::<_,i64>(3)?))).unwrap();
+    let mcp_persisted = || {
+        Connection::open(&mcp_db).unwrap().query_row("SELECT status,(SELECT COUNT(*) FROM verification_capability_instances WHERE id='host-exp-chrome-browser-client'),(SELECT COUNT(*) FROM evidence_attempts WHERE obligation_id='pob-host-capture'),(SELECT COUNT(*) FROM evidence_receipts WHERE obligation_id='pob-host-capture' AND receipt_json LIKE '%verified_host_event%') FROM host_capture_admissions WHERE sealed_run_index_digest=?1", [mcp_digest], |row| Ok((row.get::<_,String>(0)?,row.get::<_,i64>(1)?,row.get::<_,i64>(2)?,row.get::<_,i64>(3)?))).unwrap()
+    };
     assert_eq!(mcp_persisted(), ("pending".to_string(), 0, 0, 0));
-    let mcp_imported = mcp(2, "planr_evidence_host_capture_import", json!({"input": mcp_admitted["object"]["import_input"].clone()}));
+    let mcp_imported = mcp(
+        2,
+        "planr_evidence_host_capture_import",
+        json!({"input": mcp_admitted["object"]["import_input"].clone()}),
+    );
     assert_evidence_envelope(&mcp_imported, "evidence.host_capture.import", true);
-    assert_eq!(mcp_imported["object"]["verdict"], imported["object"]["verdict"]);
-    assert_eq!(mcp_imported["object"]["verdict"], http_imported["object"]["verdict"]);
-    assert_eq!(mcp_imported["object"]["receipt"]["provenance"]["source"], "verified_host_event");
+    assert_eq!(
+        mcp_imported["object"]["verdict"],
+        imported["object"]["verdict"]
+    );
+    assert_eq!(
+        mcp_imported["object"]["verdict"],
+        http_imported["object"]["verdict"]
+    );
+    assert_eq!(
+        mcp_imported["object"]["receipt"]["provenance"]["source"],
+        "verified_host_event"
+    );
     assert_eq!(mcp_persisted(), ("promoted".to_string(), 1, 1, 1));
 
     let negative_dir = tempfile::tempdir_in(&canonical_temp_root).unwrap();
     let negative_db_dir = tempdir().unwrap();
     let negative_db = negative_db_dir.path().join("planr.sqlite");
     write_evidence_policy_fixture(negative_dir.path());
-    init_evidence_project(negative_dir.path(), &negative_db, "Evidence Host Capture Negative Boundaries");
+    init_evidence_project(
+        negative_dir.path(),
+        &negative_db,
+        "Evidence Host Capture Negative Boundaries",
+    );
     rewrite_evidence_policy_fixture(negative_dir.path(), |policy| {
-        policy["trust_policy"]["accepted_provenance"].as_array_mut().unwrap().push(json!("verified_host_event"));
+        policy["trust_policy"]["accepted_provenance"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("verified_host_event"));
     });
     let conn = Connection::open(&negative_db).unwrap();
     conn.execute("INSERT INTO items(id,project_id,title,description,status,work_type,plan_path,created_at,updated_at) SELECT 'item-host-maker',project_id,'Host maker','settle host capture source','ready','code',path,datetime('now'),datetime('now') FROM plans WHERE id='pln-evidence-public' UNION ALL SELECT 'item-host-verifier',project_id,'Host verifier','verify host capture','ready','verification',path,datetime('now'),datetime('now') FROM plans WHERE id='pln-evidence-public'", []).unwrap();
     drop(conn);
-    add_evidence_obligation_value(negative_dir.path(), &negative_db, "pob-host-capture", &obligation);
+    add_evidence_obligation_value(
+        negative_dir.path(),
+        &negative_db,
+        "pob-host-capture",
+        &obligation,
+    );
     init_git_repo(negative_dir.path());
     let negative_cli = |worker: &str, args: &[&str]| {
-        single_json_document(&planr().current_dir(negative_dir.path()).env("PLANR_WORKER_ID", worker).args(["--db", negative_db.to_str().unwrap(), "--json"]).args(args).assert().success().get_output().stdout)
+        single_json_document(
+            &planr()
+                .current_dir(negative_dir.path())
+                .env("PLANR_WORKER_ID", worker)
+                .args(["--db", negative_db.to_str().unwrap(), "--json"])
+                .args(args)
+                .assert()
+                .success()
+                .get_output()
+                .stdout,
+        )
     };
-    assert_eq!(negative_cli("negative-maker", &["pick", "--plan", "pln-evidence-public", "--work-type", "code"])["item"]["id"], "item-host-maker");
-    negative_cli("negative-maker", &["done", "item-host-maker", "--summary", "negative host source settled", "--cmd", "true", "--next"]);
-    let negative_verifier = negative_cli("negative-verifier", &["pick", "--plan", "pln-evidence-public", "--work-type", "verification"]);
+    assert_eq!(
+        negative_cli(
+            "negative-maker",
+            &[
+                "pick",
+                "--plan",
+                "pln-evidence-public",
+                "--work-type",
+                "code"
+            ]
+        )["item"]["id"],
+        "item-host-maker"
+    );
+    negative_cli(
+        "negative-maker",
+        &[
+            "done",
+            "item-host-maker",
+            "--summary",
+            "negative host source settled",
+            "--cmd",
+            "true",
+            "--next",
+        ],
+    );
+    let negative_verifier = negative_cli(
+        "negative-verifier",
+        &[
+            "pick",
+            "--plan",
+            "pln-evidence-public",
+            "--work-type",
+            "verification",
+        ],
+    );
     let negative_authority = &negative_verifier["work_packet"]["verification_admission"];
     let reject = |command: &str, value: &Value| {
-        let path = negative_db_dir.path().join(format!("host-capture-{command}-rejected.json"));
+        let path = negative_db_dir
+            .path()
+            .join(format!("host-capture-{command}-rejected.json"));
         fs::write(&path, serde_json::to_vec_pretty(value).unwrap()).unwrap();
-        single_json_document(&planr().current_dir(negative_dir.path()).env("PLANR_WORKER_ID", "negative-verifier").args(["--db", negative_db.to_str().unwrap(), "--json", "evidence", "host-capture", command, "--input", path.to_str().unwrap()]).assert().failure().code(1).get_output().stdout)
+        single_json_document(
+            &planr()
+                .current_dir(negative_dir.path())
+                .env("PLANR_WORKER_ID", "negative-verifier")
+                .args([
+                    "--db",
+                    negative_db.to_str().unwrap(),
+                    "--json",
+                    "evidence",
+                    "host-capture",
+                    command,
+                    "--input",
+                    path.to_str().unwrap(),
+                ])
+                .assert()
+                .failure()
+                .code(1)
+                .get_output()
+                .stdout,
+        )
     };
-    let state = || Connection::open(&negative_db).unwrap().query_row("SELECT (SELECT COUNT(*) FROM host_capture_admissions WHERE status='pending'),(SELECT COUNT(*) FROM verification_capability_instances WHERE id='host-exp-chrome-browser-client'),(SELECT COUNT(*) FROM evidence_attempts WHERE obligation_id='pob-host-capture'),(SELECT COUNT(*) FROM evidence_receipts WHERE obligation_id='pob-host-capture' AND receipt_json LIKE '%verified_host_event%')", [], |row| Ok((row.get::<_,i64>(0)?,row.get::<_,i64>(1)?,row.get::<_,i64>(2)?,row.get::<_,i64>(3)?))).unwrap();
+    let state = || {
+        Connection::open(&negative_db).unwrap().query_row("SELECT (SELECT COUNT(*) FROM host_capture_admissions WHERE status='pending'),(SELECT COUNT(*) FROM verification_capability_instances WHERE id='host-exp-chrome-browser-client'),(SELECT COUNT(*) FROM evidence_attempts WHERE obligation_id='pob-host-capture'),(SELECT COUNT(*) FROM evidence_receipts WHERE obligation_id='pob-host-capture' AND receipt_json LIKE '%verified_host_event%')", [], |row| Ok((row.get::<_,i64>(0)?,row.get::<_,i64>(1)?,row.get::<_,i64>(2)?,row.get::<_,i64>(3)?))).unwrap()
+    };
 
     let mismatch_root = tempfile::tempdir_in(&canonical_temp_root).unwrap();
     let canonical_mismatch_root = mismatch_root.path().canonicalize().unwrap();
-    write_fresh_host_capture_envelope_with_producer(&canonical_mismatch_root, "planr-codex-host-capture", |raw| {
-        raw["events"][1]["payload"]["url"] = json!("https://wrong.example/");
-    });
+    write_fresh_host_capture_envelope_with_producer(
+        &canonical_mismatch_root,
+        "planr-codex-host-capture",
+        |raw| {
+            raw["events"][1]["payload"]["url"] = json!("https://wrong.example/");
+        },
+    );
     let mismatch_request = json!({"schema_version":"planr.evidence.host_capture.admission.v1","plan_id":negative_authority["plan_id"],"run_id":negative_authority["run_id"],"freeze_id":negative_authority["freeze_id"],"run_revision":negative_authority["run_revision"],"obligation_id":"pob-host-capture","import_root":canonical_mismatch_root});
     let mismatch = reject("admit", &mismatch_request);
-    assert_evidence_error(&mismatch, "evidence.host_capture.admit", "bad_request", "target uri does not match");
+    assert_evidence_error(
+        &mismatch,
+        "evidence.host_capture.admit",
+        "bad_request",
+        "target uri does not match",
+    );
     assert_eq!(state(), (0, 0, 0, 0));
 
     let valid_root = tempfile::tempdir_in(&canonical_temp_root).unwrap();
     let canonical_valid_root = valid_root.path().canonicalize().unwrap();
-    write_fresh_host_capture_envelope_with_producer(&canonical_valid_root, "planr-codex-host-capture", |_| {});
+    write_fresh_host_capture_envelope_with_producer(
+        &canonical_valid_root,
+        "planr-codex-host-capture",
+        |_| {},
+    );
     let valid_request = json!({"schema_version":"planr.evidence.host_capture.admission.v1","plan_id":negative_authority["plan_id"],"run_id":negative_authority["run_id"],"freeze_id":negative_authority["freeze_id"],"run_revision":negative_authority["run_revision"],"obligation_id":"pob-host-capture","import_root":canonical_valid_root});
     let valid_path = negative_db_dir.path().join("host-capture-admit-valid.json");
-    fs::write(&valid_path, serde_json::to_vec_pretty(&valid_request).unwrap()).unwrap();
-    let negative_admitted = negative_cli("negative-verifier", &["evidence", "host-capture", "admit", "--input", valid_path.to_str().unwrap()]);
+    fs::write(
+        &valid_path,
+        serde_json::to_vec_pretty(&valid_request).unwrap(),
+    )
+    .unwrap();
+    let negative_admitted = negative_cli(
+        "negative-verifier",
+        &[
+            "evidence",
+            "host-capture",
+            "admit",
+            "--input",
+            valid_path.to_str().unwrap(),
+        ],
+    );
     assert_evidence_envelope(&negative_admitted, "evidence.host_capture.admit", true);
     assert_eq!(state(), (1, 0, 0, 0));
 
     let mut tampered_input = negative_admitted["object"]["import_input"].clone();
-    tampered_input["run_index"]["runs"][0]["input"]["target"]["uri"] = json!("https://tampered.example/");
+    tampered_input["run_index"]["runs"][0]["input"]["target"]["uri"] =
+        json!("https://tampered.example/");
     let tampered = reject("import", &tampered_input);
-    assert_evidence_error(&tampered, "evidence.host_capture.import", "conflict", "run-index seal is invalid");
+    assert_evidence_error(
+        &tampered,
+        "evidence.host_capture.import",
+        "conflict",
+        "run-index seal is invalid",
+    );
     assert_eq!(state(), (1, 0, 0, 0));
 
-    fs::write(negative_dir.path().join("source-drift.txt"), "source changed after admission\n").unwrap();
+    fs::write(
+        negative_dir.path().join("source-drift.txt"),
+        "source changed after admission\n",
+    )
+    .unwrap();
     let stale = reject("import", &negative_admitted["object"]["import_input"]);
-    assert_evidence_error(&stale, "evidence.host_capture.import", "conflict", "run-index source is stale");
+    assert_evidence_error(
+        &stale,
+        "evidence.host_capture.import",
+        "conflict",
+        "run-index source is stale",
+    );
     assert_eq!(state(), (1, 0, 0, 0));
 }
 fn add_evidence_obligation_value(dir: &Path, db: &Path, id: &str, obligation: &Value) -> Value {
@@ -2019,7 +2399,6 @@ fn add_evidence_obligation_value(dir: &Path, db: &Path, id: &str, obligation: &V
             .stdout,
     )
 }
-
 
 fn superseding_obligation(mut base: Value, id: &str, supersedes: &str) -> Value {
     base["id"] = json!(id);
@@ -2459,21 +2838,25 @@ fn author_build_plan_criterion(path: &Path, criterion_id: &str) {
         .unwrap_or(existing.as_str());
     fs::write(
         path,
-        format!(
-            "---\ncriteria:\n  - id: {criterion_id}\n    title: {criterion_id}\n---\n{body}"
-        ),
+        format!("---\ncriteria:\n  - id: {criterion_id}\n    title: {criterion_id}\n---\n{body}"),
     )
     .unwrap();
 }
 
 fn author_build_plan_criteria(path: &Path, criterion_ids: &[&str]) {
-    assert!(!criterion_ids.is_empty(), "fixture criteria must be explicit");
+    assert!(
+        !criterion_ids.is_empty(),
+        "fixture criteria must be explicit"
+    );
     let existing = fs::read_to_string(path).unwrap_or_default();
     let body = existing
         .find("\n---\n")
         .map(|end| &existing[end + 5..])
         .unwrap_or(existing.as_str());
-    let criteria = criterion_ids.iter().map(|id| format!("  - id: {id}\n    title: {id}\n")).collect::<String>();
+    let criteria = criterion_ids
+        .iter()
+        .map(|id| format!("  - id: {id}\n    title: {id}\n"))
+        .collect::<String>();
     fs::write(path, format!("---\ncriteria:\n{criteria}---\n{body}")).unwrap();
 }
 
@@ -2602,9 +2985,18 @@ fn evidence_doctor_reports_degraded_states_and_matches_run_resolution() {
     );
     assert_evidence_envelope(&unavailable_readiness, "evidence.readiness", true);
     assert_eq!(unavailable_readiness["object"]["status"], "blocked");
-    assert_eq!(unavailable_readiness["object"]["gaps"][0]["code"], "ProbeUnavailable");
-    assert_eq!(unavailable_readiness["object"]["gaps"][0]["obligation_id"], "pob-unavailable");
-    assert_eq!(unavailable_readiness["object"]["registry"]["diagnostics"][0]["code"], "ProbeUnavailable");
+    assert_eq!(
+        unavailable_readiness["object"]["gaps"][0]["code"],
+        "ProbeUnavailable"
+    );
+    assert_eq!(
+        unavailable_readiness["object"]["gaps"][0]["obligation_id"],
+        "pob-unavailable"
+    );
+    assert_eq!(
+        unavailable_readiness["object"]["registry"]["diagnostics"][0]["code"],
+        "ProbeUnavailable"
+    );
 
     let degraded_dir = tempdir().unwrap();
     let degraded_db_dir = tempdir().unwrap();
@@ -2639,10 +3031,7 @@ fn evidence_doctor_reports_degraded_states_and_matches_run_resolution() {
     assert_eq!(first["status"], "ok");
     assert_eq!(first["policy"]["state"], "ready");
     let first_probe = repository_probe(&first);
-    let first_instance = first_probe["instance_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let first_instance = first_probe["instance_id"].as_str().unwrap().to_string();
 
     let expired_dir = tempdir().unwrap();
     let expired_db_dir = tempdir().unwrap();
@@ -2700,10 +3089,7 @@ fn evidence_doctor_reports_degraded_states_and_matches_run_resolution() {
     let mismatch_probe = repository_probe(&mismatch_recovery);
     assert_eq!(mismatch_recovery["status"], "warning");
     assert_eq!(mismatch_recovery["policy"]["state"], "recovered");
-    assert_eq!(
-        mismatch_probe["resolution"],
-        "reprobed_runtime_mismatch"
-    );
+    assert_eq!(mismatch_probe["resolution"], "reprobed_runtime_mismatch");
     let mismatch_instance = mismatch_probe["instance_id"].as_str().unwrap();
     assert_ne!(mismatch_instance, first_instance);
     add_evidence_obligation_with_environment(
@@ -2868,8 +3254,13 @@ fn evidence_run_enforces_frozen_source_before_receipt_commit() {
         ));
     });
     let manifest: Value = serde_json::from_slice(
-        &fs::read(dir.path().join(".planr/evidence/adapters/runner.manifest.json")).unwrap(),
-    ).unwrap();
+        &fs::read(
+            dir.path()
+                .join(".planr/evidence/adapters/runner.manifest.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
     rewrite_evidence_policy_fixture(dir.path(), |policy| {
         policy["adapter_registrations"][0]["manifest_digest"] = json!(manifest_digest);
         policy["adapter_registrations"][0]["execution_contract"] =
@@ -2929,27 +3320,57 @@ fn evidence_run_enforces_frozen_source_before_receipt_commit() {
     obligation["observations"][0]["payload_schema"] =
         json!({"schema_ref": "schema://com.example.health.status"});
     let obligation = bind_obligation_to_authored_criterion(
-        obligation, "pln-evidence-public", "criterion-evidence-public",
+        obligation,
+        "pln-evidence-public",
+        "criterion-evidence-public",
     );
     add_evidence_obligation_value(dir.path(), &db, "pob-frozen-source-boundary", &obligation);
 
     let sealed_run = || {
         let readiness = single_json_document(
-            &planr().current_dir(dir.path()).args([
-                "--db", db.to_str().unwrap(), "--json", "evidence", "readiness",
-                "--scope", "obligation", "--id", "pob-frozen-source-boundary",
-            ]).assert().success().get_output().stdout,
+            &planr()
+                .current_dir(dir.path())
+                .args([
+                    "--db",
+                    db.to_str().unwrap(),
+                    "--json",
+                    "evidence",
+                    "readiness",
+                    "--scope",
+                    "obligation",
+                    "--id",
+                    "pob-frozen-source-boundary",
+                ])
+                .assert()
+                .success()
+                .get_output()
+                .stdout,
         );
         assert_evidence_envelope(&readiness, "evidence.readiness", true);
         assert_eq!(readiness["object"]["status"], "passed");
-        dir.path().join(readiness["object"]["run_index"]["repository_path"].as_str().unwrap())
+        dir.path().join(
+            readiness["object"]["run_index"]["repository_path"]
+                .as_str()
+                .unwrap(),
+        )
     };
     let runtime_write_path = sealed_run();
     let runtime_write_run = single_json_document(
-        &planr().current_dir(dir.path()).args([
-            "--db", db.to_str().unwrap(), "--json", "evidence", "run", "--input",
-            runtime_write_path.to_str().unwrap(),
-        ]).assert().success().get_output().stdout,
+        &planr()
+            .current_dir(dir.path())
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "run",
+                "--input",
+                runtime_write_path.to_str().unwrap(),
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
     );
     assert_evidence_envelope(&runtime_write_run, "evidence.run", true);
     assert_eq!(runtime_write_run["object"]["verdict"], "passed");
@@ -3419,7 +3840,9 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
     obligation["observations"][0]["payload_schema"] =
         json!({"schema_ref": "schema://com.example.health.status"});
     let obligation = bind_obligation_to_authored_criterion(
-        obligation, "pln-evidence-public", "criterion-evidence-public",
+        obligation,
+        "pln-evidence-public",
+        "criterion-evidence-public",
     );
     let cli_add = add_evidence_obligation_value(dir.path(), &db, "pob-public-run", &obligation);
     assert_evidence_envelope(&cli_add, "evidence.migrate", true);
@@ -3477,8 +3900,15 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
         &planr()
             .current_dir(dir.path())
             .args([
-                "--db", db.to_str().unwrap(), "--json", "evidence", "readiness", "--scope",
-                "obligation", "--id", "pob-public-run",
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "readiness",
+                "--scope",
+                "obligation",
+                "--id",
+                "pob-public-run",
             ])
             .assert()
             .success()
@@ -3488,8 +3918,13 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
     assert_evidence_envelope(&cli_readiness, "evidence.readiness", true);
     assert_eq!(cli_readiness["object"]["status"], "passed");
     let sealed_run_index = cli_readiness["object"]["run_index"].clone();
-    assert_eq!(sealed_run_index["schema_version"], "planr.evidence.run-index.v2");
-    let run_input_path = dir.path().join(sealed_run_index["repository_path"].as_str().unwrap());
+    assert_eq!(
+        sealed_run_index["schema_version"],
+        "planr.evidence.run-index.v2"
+    );
+    let run_input_path = dir
+        .path()
+        .join(sealed_run_index["repository_path"].as_str().unwrap());
     let run_output = planr()
         .current_dir(dir.path())
         .args([
@@ -3508,9 +3943,15 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
         .clone();
     let run = single_json_document(&run_output);
     assert_evidence_envelope(&run, "evidence.run", true);
-    assert_eq!(run["object"]["schema_version"], "planr.evidence.run-index.result.v2");
+    assert_eq!(
+        run["object"]["schema_version"],
+        "planr.evidence.run-index.result.v2"
+    );
     assert_eq!(run["object"]["verdict"], "passed");
-    assert_eq!(run["object"]["run_index_digest"], sealed_run_index["run_index_digest"]);
+    assert_eq!(
+        run["object"]["run_index_digest"],
+        sealed_run_index["run_index_digest"]
+    );
     let run_result = &run["object"]["results"][0];
     assert_eq!(run_result["reused"], false);
     assert!(run_result["feature_run_lease"].is_null());
@@ -3582,7 +4023,11 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
         "duration_ms": 12,
     });
     let runner_bytes = serde_jcs::to_vec(&runner_artifact).unwrap();
-    fs::write(dir.path().join(".planr/evidence/runs/runner.json"), &runner_bytes).unwrap();
+    fs::write(
+        dir.path().join(".planr/evidence/runs/runner.json"),
+        &runner_bytes,
+    )
+    .unwrap();
     let import_input = json!({
         "id": "import-runner-public",
         "schema_version": "planr.evidence.import.v1",
@@ -3822,8 +4267,14 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
             readiness["object"]["active_obligation_ids"],
             json!(["pob-public-run"])
         );
-        assert_eq!(readiness["object"]["run_index"]["schema_version"], "planr.evidence.run-index.v2");
-        assert_eq!(readiness["object"]["run_index"]["run_index_digest"], sealed_run_index["run_index_digest"]);
+        assert_eq!(
+            readiness["object"]["run_index"]["schema_version"],
+            "planr.evidence.run-index.v2"
+        );
+        assert_eq!(
+            readiness["object"]["run_index"]["run_index_digest"],
+            sealed_run_index["run_index_digest"]
+        );
     }
 
     let coverage_output = planr()
@@ -5061,9 +5512,12 @@ fn evidence_process_adapter_semantic_mismatch_does_not_satisfy_coverage() {
         "sha256:9999999999999999999999999999999999999999999999999999999999999999",
     );
     let obligation = bind_obligation_to_authored_criterion(
-        obligation, "pln-evidence-public", "criterion-evidence-public",
+        obligation,
+        "pln-evidence-public",
+        "criterion-evidence-public",
     );
-    let plan_path = dir.path()
+    let plan_path = dir
+        .path()
         .join(".planr/plans/build/evidence-public-fixture.plan.md")
         .to_string_lossy()
         .to_string();
@@ -5088,11 +5542,69 @@ fn evidence_process_adapter_semantic_mismatch_does_not_satisfy_coverage() {
     obligation["observations"][0]["payload_schema"] =
         json!({"schema_ref": "schema://com.example.health.status"});
     add_evidence_obligation_value(dir.path(), &db, "pob-semantic-mismatch", &obligation);
-    let maker = single_json_document(&planr().current_dir(dir.path()).env("PLANR_WORKER_ID", "semantic-maker").args(["--db", db.to_str().unwrap(), "--json", "pick", "--plan", "pln-evidence-public", "--work-type", "code"]).assert().success().get_output().stdout);
+    let maker = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", "semantic-maker")
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "pick",
+                "--plan",
+                "pln-evidence-public",
+                "--work-type",
+                "code",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
     assert_eq!(maker["item"]["id"], "item-semantic-maker");
-    single_json_document(&planr().current_dir(dir.path()).env("PLANR_WORKER_ID", "semantic-maker").args(["--db", db.to_str().unwrap(), "--json", "done", "item-semantic-maker", "--summary", "semantic fixture", "--cmd", "true", "--next"]).assert().success().get_output().stdout);
-    let verifier = single_json_document(&planr().current_dir(dir.path()).env("PLANR_WORKER_ID", "semantic-verifier").args(["--db", db.to_str().unwrap(), "--json", "pick", "--plan", "pln-evidence-public", "--work-type", "verification"]).assert().success().get_output().stdout);
-    let run_path = verifier["work_packet"]["sealed_run_index"]["repository_path"].as_str().unwrap();
+    single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", "semantic-maker")
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "done",
+                "item-semantic-maker",
+                "--summary",
+                "semantic fixture",
+                "--cmd",
+                "true",
+                "--next",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    let verifier = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", "semantic-verifier")
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "pick",
+                "--plan",
+                "pln-evidence-public",
+                "--work-type",
+                "verification",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    let run_path = verifier["work_packet"]["sealed_run_index"]["repository_path"]
+        .as_str()
+        .unwrap();
     let run = single_json_document(
         &planr()
             .current_dir(dir.path())
@@ -5136,14 +5648,8 @@ fn evidence_process_adapter_semantic_mismatch_does_not_satisfy_coverage() {
         result["receipt"]["observations"][0]["predicate"],
         json!({"status": "missing"})
     );
-    assert_eq!(
-        result["receipt"]["observations"][0]["outcome"],
-        "failed"
-    );
-    assert_eq!(
-        result["receipt"]["proof_gaps"],
-        json!(["target_mismatch"])
-    );
+    assert_eq!(result["receipt"]["observations"][0]["outcome"], "failed");
+    assert_eq!(result["receipt"]["proof_gaps"], json!(["target_mismatch"]));
 
     let coverage = single_json_document(
         &planr()
@@ -5249,7 +5755,9 @@ fn evidence_process_adapter_schema_invalid_stdout_is_verifier_failed() {
         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     );
     let obligation = bind_obligation_to_authored_criterion(
-        obligation, "pln-evidence-public", "criterion-evidence-public",
+        obligation,
+        "pln-evidence-public",
+        "criterion-evidence-public",
     );
     let plan_path = dir
         .path()
@@ -5277,10 +5785,66 @@ fn evidence_process_adapter_schema_invalid_stdout_is_verifier_failed() {
     obligation["observations"][0]["payload_schema"] =
         json!({"schema_ref": "schema://com.example.health.status"});
     add_evidence_obligation_value(dir.path(), &db, "pob-schema-invalid-stdout", &obligation);
-    let maker = single_json_document(&planr().current_dir(dir.path()).env("PLANR_WORKER_ID", "schema-invalid-maker").args(["--db", db.to_str().unwrap(), "--json", "pick", "--plan", "pln-evidence-public", "--work-type", "code"]).assert().success().get_output().stdout);
+    let maker = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", "schema-invalid-maker")
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "pick",
+                "--plan",
+                "pln-evidence-public",
+                "--work-type",
+                "code",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
     assert_eq!(maker["item"]["id"], "item-schema-invalid-maker");
-    single_json_document(&planr().current_dir(dir.path()).env("PLANR_WORKER_ID", "schema-invalid-maker").args(["--db", db.to_str().unwrap(), "--json", "done", "item-schema-invalid-maker", "--summary", "schema invalid fixture", "--cmd", "true", "--next"]).assert().success().get_output().stdout);
-    let verifier = single_json_document(&planr().current_dir(dir.path()).env("PLANR_WORKER_ID", "schema-invalid-verifier").args(["--db", db.to_str().unwrap(), "--json", "pick", "--plan", "pln-evidence-public", "--work-type", "verification"]).assert().success().get_output().stdout);
+    single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", "schema-invalid-maker")
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "done",
+                "item-schema-invalid-maker",
+                "--summary",
+                "schema invalid fixture",
+                "--cmd",
+                "true",
+                "--next",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    let verifier = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", "schema-invalid-verifier")
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "pick",
+                "--plan",
+                "pln-evidence-public",
+                "--work-type",
+                "verification",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
     let run_path = verifier["work_packet"]["sealed_run_index"]["repository_path"]
         .as_str()
         .unwrap();
@@ -5327,14 +5891,8 @@ fn evidence_process_adapter_schema_invalid_stdout_is_verifier_failed() {
         schema_invalid_actual,
         json!({"status": "ok", "extra": true})
     );
-    assert_eq!(
-        result["receipt"]["observations"][0]["outcome"],
-        "failed"
-    );
-    assert_eq!(
-        result["receipt"]["proof_gaps"],
-        json!(["verifier_failed"])
-    );
+    assert_eq!(result["receipt"]["observations"][0]["outcome"], "failed");
+    assert_eq!(result["receipt"]["proof_gaps"], json!(["verifier_failed"]));
 
     let coverage = single_json_document(
         &planr()
@@ -11431,10 +11989,7 @@ fn canonical_verification_task_builds_a_sealed_verifier_packet_without_retagging
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .unwrap();
-    assert_eq!(
-        rolled_back,
-        ("ready".into(), None, "held".into(), 0)
-    );
+    assert_eq!(rolled_back, ("ready".into(), None, "held".into(), 0));
     drop(conn);
 
     obligation["supersedes"] = json!("pob-canonical-verifier-packet-missing-schema");
@@ -11459,16 +12014,31 @@ fn canonical_verification_task_builds_a_sealed_verifier_packet_without_retagging
             .current_dir(dir.path())
             .env("PLANR_WORKER_ID", "canonical-verifier-incomplete-binding")
             .args([
-                "--db", &db_arg, "--json", "run", "repair-verification-admission", "--plan",
-                &plan_id, "--run", run_id, "--freeze", freeze_id, "--revision", &revision,
-                "--reason", "readiness-blocked",
+                "--db",
+                &db_arg,
+                "--json",
+                "run",
+                "repair-verification-admission",
+                "--plan",
+                &plan_id,
+                "--run",
+                run_id,
+                "--freeze",
+                freeze_id,
+                "--revision",
+                &revision,
+                "--reason",
+                "readiness-blocked",
             ])
             .assert()
             .success()
             .get_output()
             .stdout,
     );
-    assert_eq!(repaired["repair"]["repaired_run"]["phase"], "implementation");
+    assert_eq!(
+        repaired["repair"]["repaired_run"]["phase"],
+        "implementation"
+    );
     let invalidation_id = repaired["repair"]["facts"]["invalidation_id"]
         .as_str()
         .unwrap();
@@ -11476,21 +12046,47 @@ fn canonical_verification_task_builds_a_sealed_verifier_packet_without_retagging
         &planr()
             .current_dir(dir.path())
             .env("PLANR_WORKER_ID", "canonical-maker")
-            .args(["--db", &db_arg, "--json", "pick", "--plan", &plan_id, "--work-type", "code"])
+            .args([
+                "--db",
+                &db_arg,
+                "--json",
+                "pick",
+                "--plan",
+                &plan_id,
+                "--work-type",
+                "code",
+            ])
             .assert()
             .success()
             .get_output()
             .stdout,
     );
-    assert_eq!(repair_packet["work_packet"]["mode"], "verification_admission_repair");
+    assert_eq!(
+        repair_packet["work_packet"]["mode"],
+        "verification_admission_repair"
+    );
     let refrozen = single_json_document(
         &planr()
             .current_dir(dir.path())
             .env("PLANR_WORKER_ID", "canonical-maker")
             .args([
-                "--db", &db_arg, "--json", "run", "settle-repair", "--plan", &plan_id,
-                "--invalidation", invalidation_id, "--summary", "settled verifier readiness repair",
-                "--files", "tests/e2e.rs", "--cmd", "true", "--tests", "focused repair lifecycle",
+                "--db",
+                &db_arg,
+                "--json",
+                "run",
+                "settle-repair",
+                "--plan",
+                &plan_id,
+                "--invalidation",
+                invalidation_id,
+                "--summary",
+                "settled verifier readiness repair",
+                "--files",
+                "tests/e2e.rs",
+                "--cmd",
+                "true",
+                "--tests",
+                "focused repair lifecycle",
             ])
             .assert()
             .success()
@@ -13984,11 +14580,14 @@ fn complete_binding_single_owner_inventory_keeps_adapter_at_boundary() {
         "Planr skills must delegate identity and completeness to canonical owners"
     );
 
-    let manifest: Value = serde_json::from_str(&fs::read_to_string(
-        root.join(".planr/evidence/adapters/verifier-complete-binding-authority-v1.manifest.json"),
-    )
-    .unwrap())
-    .unwrap();
+    let manifest: Value =
+        serde_json::from_str(
+            &fs::read_to_string(root.join(
+                ".planr/evidence/adapters/verifier-complete-binding-authority-v1.manifest.json",
+            ))
+            .unwrap(),
+        )
+        .unwrap();
     let policy: Value =
         serde_json::from_str(&fs::read_to_string(root.join(".planr/evidence.yaml")).unwrap())
             .unwrap();
@@ -13996,7 +14595,9 @@ fn complete_binding_single_owner_inventory_keeps_adapter_at_boundary() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|registration| registration["manifest_id"] == "verifier-complete-binding-authority-v1")
+        .find(|registration| {
+            registration["manifest_id"] == "verifier-complete-binding-authority-v1"
+        })
         .unwrap();
     let obsolete_adapter = ["scripts/verify-complete-binding-authority", ".mjs"].concat();
     for current_contract in [
@@ -14006,9 +14607,10 @@ fn complete_binding_single_owner_inventory_keeps_adapter_at_boundary() {
         assert_eq!(current_contract["executable"], "rustup");
         let args = current_contract["args"].as_array().unwrap();
         assert!(args.iter().any(|arg| arg == "cargo"));
-        assert!(args
-            .iter()
-            .any(|arg| arg == "planr-complete-binding-authority"));
+        assert!(
+            args.iter()
+                .any(|arg| arg == "planr-complete-binding-authority")
+        );
         assert!(!current_contract.to_string().contains(&obsolete_adapter));
     }
     assert!(
@@ -14366,7 +14968,15 @@ fn pick_peek_reads_the_packet_without_leasing() {
     .unwrap();
     planr()
         .current_dir(dir.path())
-        .args(["--db", &db_arg, "item", "update", &item, "--work-type", "code"])
+        .args([
+            "--db",
+            &db_arg,
+            "item",
+            "update",
+            &item,
+            "--work-type",
+            "code",
+        ])
         .assert()
         .success();
     let events_before: i64 = conn
@@ -20650,8 +21260,10 @@ fn concurrent_unplanned_settlement_creates_one_log_and_no_review_rows() {
     assert_eq!(
         settlements
             .iter()
-            .filter(|value| value["work_packet"]["transition"] == "already_settled"
-                && value["work_packet"]["disposition"] == "already_settled")
+            .filter(
+                |value| value["work_packet"]["transition"] == "already_settled"
+                    && value["work_packet"]["disposition"] == "already_settled"
+            )
             .count(),
         1
     );
@@ -20686,17 +21298,15 @@ fn concurrent_unplanned_settlement_creates_one_log_and_no_review_rows() {
     assert_eq!(decision_count, 1);
     assert_eq!(item_status(&db, &item), "closed");
     assert_eq!(
-        conn.query_row("SELECT COUNT(*) FROM feature_runs", [], |row| row.get::<_, i64>(0))
+        conn.query_row("SELECT COUNT(*) FROM feature_runs", [], |row| row
+            .get::<_, i64>(0))
             .unwrap(),
         0
     );
     assert_eq!(
-        conn.query_row(
-            "SELECT COUNT(*) FROM execution_run_outcomes",
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .unwrap(),
+        conn.query_row("SELECT COUNT(*) FROM execution_run_outcomes", [], |row| row
+            .get::<_, i64>(0),)
+            .unwrap(),
         0
     );
 }
@@ -23855,7 +24465,10 @@ fn rust_implementation_has_owned_module_boundaries() {
     }
     for moved_policy in ["load_policy(", "classify_materiality("] {
         assert!(settlement_materiality.contains(moved_policy));
-        assert!(!flow.contains(moved_policy), "flow duplicated {moved_policy}");
+        assert!(
+            !flow.contains(moved_policy),
+            "flow duplicated {moved_policy}"
+        );
     }
 
     let execution_run = fs::read_to_string(root.join("src/app/execution_run.rs")).unwrap();
@@ -24590,8 +25203,10 @@ fn plan_audit_uses_evidence_coverage_for_binding_criteria_and_logs_are_claims_on
             );
         };
 
-    let (workflow_plan, workflow_item) =
-        create_open_plan("Workflow proof propagation audit", &["crit-audit-workflow", "crit-audit-planless"]);
+    let (workflow_plan, workflow_item) = create_open_plan(
+        "Workflow proof propagation audit",
+        &["crit-audit-workflow", "crit-audit-planless"],
+    );
     let mut workflow_obligation = bind_obligation(
         evidence_obligation_for(
             "pob-audit-workflow",
@@ -24915,7 +25530,6 @@ fn plan_audit_uses_evidence_coverage_for_binding_criteria_and_logs_are_claims_on
     assert_eq!(broken_preview["proof"]["active_binding"], true);
     assert_eq!(broken_preview["proof_blocks_close"], true);
 
-
     let (browser_plan, browser_item) =
         create_settled_plan("Browser evidence audit", &["crit-audit-browser"]);
     let browser_obligation = bind_obligation(
@@ -24990,8 +25604,10 @@ fn plan_audit_uses_evidence_coverage_for_binding_criteria_and_logs_are_claims_on
         "claim rendering must not affect binding closure"
     );
 
-    let (browser_close_plan, browser_close_item) =
-        create_open_plan("Browser curl cannot close binding plan", &["crit-audit-browser-close"]);
+    let (browser_close_plan, browser_close_item) = create_open_plan(
+        "Browser curl cannot close binding plan",
+        &["crit-audit-browser-close"],
+    );
     let mut browser_close_obligation = bind_obligation(
         evidence_obligation_for(
             "pob-audit-browser-close",
@@ -25124,8 +25740,10 @@ fn plan_audit_uses_evidence_coverage_for_binding_criteria_and_logs_are_claims_on
         "{browser_stop}"
     );
 
-    let (policy_missing_obligation_plan, policy_missing_obligation_item) =
-        create_settled_plan("Binding policy missing obligation audit", &["crit-audit-policy-missing"]);
+    let (policy_missing_obligation_plan, policy_missing_obligation_item) = create_settled_plan(
+        "Binding policy missing obligation audit",
+        &["crit-audit-policy-missing"],
+    );
     run(
         "maker",
         &[
@@ -25173,5 +25791,4 @@ fn plan_audit_uses_evidence_coverage_for_binding_criteria_and_logs_are_claims_on
         false,
         "a missing obligation on one plan must not weaken a separate binding plan"
     );
-
 }
