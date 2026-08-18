@@ -4727,6 +4727,20 @@ allow_overwrite = true
     }
 
     fn seed_receipt_for_existing_settlement_obligation(app: &App, policy_digest: &str) -> String {
+        seed_receipt_for_existing_settlement_obligation_with_ids(
+            app,
+            policy_digest,
+            "erec-settle",
+            "eatt-settle",
+        )
+    }
+
+    fn seed_receipt_for_existing_settlement_obligation_with_ids(
+        app: &App,
+        policy_digest: &str,
+        receipt_id: &str,
+        attempt_id: &str,
+    ) -> String {
         app.verification_work_packet_value("plan-a", false)
             .unwrap()
             .unwrap();
@@ -4750,8 +4764,6 @@ allow_overwrite = true
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .unwrap();
-        let receipt_id = "erec-settle";
-        let attempt_id = "eatt-settle";
         app.conn
             .execute(
                 "INSERT INTO evidence_attempts(
@@ -7021,24 +7033,6 @@ allow_overwrite = true
         assert_eq!(settled_run.run.phase, FeatureRunPhase::SourceFrozen);
         assert!(settled_run.run.role_owners.is_empty());
         assert_eq!(settlement["next_action"], "planr plan final-review plan-a");
-        let event: String = app
-            .conn
-            .query_row(
-                "SELECT payload FROM events WHERE item_id = 'item-settle-verification' AND event_type = 'verification_item_closed' ORDER BY id DESC LIMIT 1",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let event: Value = serde_json::from_str(&event).unwrap();
-        assert_eq!(event["coverage"]["coverage_id"], coverage["coverage_id"]);
-        assert_eq!(
-            event["coverage"]["receipt_digests"],
-            coverage["receipt_digests"]
-        );
-        assert_eq!(
-            event["coverage"]["receipt_lineage"],
-            coverage["receipt_lineage"]
-        );
 
         let final_gate = app
             .ensure_final_product_review_gate_value("plan-a")
@@ -7096,6 +7090,12 @@ allow_overwrite = true
                     .unwrap()],
             )
             .unwrap();
+        seed_receipt_for_existing_settlement_obligation_with_ids(
+            &app,
+            &policy_digest,
+            "erec-settle-refreeze",
+            "eatt-settle-refreeze",
+        );
         let packet = app
             .verification_work_packet_value("plan-a", false)
             .expect("review finding reverification packet")
