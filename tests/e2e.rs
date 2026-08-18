@@ -7566,18 +7566,43 @@ fn evidence_process_adapter_schema_invalid_stdout_is_verifier_failed() {
     let obligation = bind_obligation_to_authored_criterion(
         obligation, "pln-evidence-public", "criterion-evidence-public",
     );
+    let plan_path = dir
+        .path()
+        .join(".planr/plans/build/evidence-public-fixture.plan.md")
+        .to_string_lossy()
+        .to_string();
+    let project_id: String = Connection::open(&db)
+        .unwrap()
+        .query_row("SELECT id FROM projects LIMIT 1", [], |row| row.get(0))
+        .unwrap();
+    let conn = Connection::open(&db).unwrap();
+    for (id, work_type) in [
+        ("item-schema-invalid-maker", "code"),
+        ("item-schema-invalid-verifier", "verification"),
+    ] {
+        conn.execute(
+            "INSERT INTO items(id, project_id, title, description, status, work_type, plan_path, created_at, updated_at) VALUES (?1, ?2, ?1, 'schema invalid fixture', 'ready', ?3, ?4, datetime('now'), datetime('now'))",
+            rusqlite::params![id, project_id, work_type, plan_path],
+        )
+        .unwrap();
+    }
+    drop(conn);
+    let mut obligation = obligation;
+    obligation["item_id"] = json!("item-schema-invalid-verifier");
+    obligation["observations"][0]["payload_schema"] =
+        json!({"schema_ref": "schema://com.example.health.status"});
     add_evidence_obligation_value(dir.path(), &db, "pob-schema-invalid-stdout", &obligation);
-
-    let run_input = json!({
-        "obligation_id": "pob-schema-invalid-stdout",
-        "capability_instance_id": instance_id,
-        "target": {"kind": "process", "uri": "local://health"},
-    });
-    let run_path = dir.path().join("schema-invalid-stdout-run.json");
-    fs::write(&run_path, serde_json::to_vec_pretty(&run_input).unwrap()).unwrap();
+    let maker = single_json_document(&planr().current_dir(dir.path()).env("PLANR_WORKER_ID", "schema-invalid-maker").args(["--db", db.to_str().unwrap(), "--json", "pick", "--plan", "pln-evidence-public", "--work-type", "code"]).assert().success().get_output().stdout);
+    assert_eq!(maker["item"]["id"], "item-schema-invalid-maker");
+    single_json_document(&planr().current_dir(dir.path()).env("PLANR_WORKER_ID", "schema-invalid-maker").args(["--db", db.to_str().unwrap(), "--json", "done", "item-schema-invalid-maker", "--summary", "schema invalid fixture", "--cmd", "true", "--next"]).assert().success().get_output().stdout);
+    let verifier = single_json_document(&planr().current_dir(dir.path()).env("PLANR_WORKER_ID", "schema-invalid-verifier").args(["--db", db.to_str().unwrap(), "--json", "pick", "--plan", "pln-evidence-public", "--work-type", "verification"]).assert().success().get_output().stdout);
+    let run_path = verifier["work_packet"]["sealed_run_index"]["repository_path"]
+        .as_str()
+        .unwrap();
     let run = single_json_document(
         &planr()
             .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", "schema-invalid-verifier")
             .args([
                 "--db",
                 db.to_str().unwrap(),
@@ -7585,29 +7610,30 @@ fn evidence_process_adapter_schema_invalid_stdout_is_verifier_failed() {
                 "evidence",
                 "run",
                 "--input",
-                run_path.to_str().unwrap(),
+                run_path,
             ])
             .assert()
-            .code(1)
+            .code(2)
             .get_output()
             .stdout,
     );
     assert_evidence_envelope(&run, "evidence.run", true);
-    assert_eq!(run["object"]["verdict"], "verifier_failed");
-    assert_eq!(run["object"]["attempt"]["status"], "failed");
+    assert_eq!(run["object"]["verdict"], "failed");
+    let result = &run["object"]["results"][0];
+    assert_eq!(result["attempt"]["status"], "failed");
     assert_eq!(
-        run["object"]["attempt"]["raw_result"]["planr_adapter_gap_reasons"],
+        result["attempt"]["raw_result"]["planr_adapter_gap_reasons"],
         json!(["verifier_failed"])
     );
     assert!(
-        run["object"]["attempt"]["raw_result"]["ordinary_observation_error"]
+        result["attempt"]["raw_result"]["ordinary_observation_error"]
             .as_str()
             .unwrap()
             .contains("does not match payload schema"),
         "{run}"
     );
     let schema_invalid_actual: Value = serde_json::from_str(
-        run["object"]["receipt"]["observations"][0]["actual"]["stdout_excerpt"]
+        result["receipt"]["observations"][0]["actual"]["stdout_excerpt"]
             .as_str()
             .unwrap(),
     )
@@ -7617,11 +7643,11 @@ fn evidence_process_adapter_schema_invalid_stdout_is_verifier_failed() {
         json!({"status": "ok", "extra": true})
     );
     assert_eq!(
-        run["object"]["receipt"]["observations"][0]["outcome"],
+        result["receipt"]["observations"][0]["outcome"],
         "failed"
     );
     assert_eq!(
-        run["object"]["receipt"]["proof_gaps"],
+        result["receipt"]["proof_gaps"],
         json!(["verifier_failed"])
     );
 
