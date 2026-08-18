@@ -3613,7 +3613,7 @@ allow_overwrite = true
                     "schema_version": "evidence.contract.v1",
                     "criterion_id": "criterion-phase-ready",
                     "plan_id": "plan-a",
-                    "item_id": "item-phase",
+                    "item_id": "verification-phase",
                     "title": "ready process",
                     "binding": true,
                     "observations": [{
