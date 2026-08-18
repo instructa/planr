@@ -8,7 +8,8 @@ use super::repository::execution_run::{
     CurrentVerificationSnapshot, EvidenceInvalidationRecord, ExecutionRunRepository, FindingStatus,
     PersistedFeatureRun, ProductRepairSettlementRecord, ReviewGateKind, ReviewGateRecord,
     ReviewGateStatus, SourceFreezeRecord, SourceFreezeStatus, VerificationAdmissionRecord,
-    VerificationAdmissionRepairSettlementRecord, VerificationReadinessDiagnosticRecord,
+    VerificationAdmissionRepairSettlementInput, VerificationAdmissionRepairSettlementRecord,
+    VerificationReadinessDiagnosticRecord,
 };
 use crate::cli::EvidenceCoverageScope;
 use crate::evidence::policy::capture_repository_snapshot;
@@ -2018,13 +2019,15 @@ impl App {
         let result = (|| -> Result<()> {
             self.reconcile_active_phase_wall(&persisted.run.id, BudgetPhase::Repair)?;
             repository.persist_verification_admission_repair_settlement(
-                invalidation,
-                persisted.revision,
-                verification_item_id.as_deref(),
-                &settlement,
-                &freeze,
-                &frozen,
-                &worker_id(),
+                VerificationAdmissionRepairSettlementInput {
+                    invalidation,
+                    expected_run_revision: persisted.revision,
+                    expected_verification_item_id: verification_item_id.as_deref(),
+                    settlement: &settlement,
+                    freeze: &freeze,
+                    frozen_run: &frozen,
+                    operator_worker_id: &worker_id(),
+                },
             )
         })();
         match result {

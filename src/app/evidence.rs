@@ -2368,17 +2368,15 @@ impl App {
                     )
                     .into());
                 }
-            } else {
-                if captured_instance.id != sealed_instance.id
-                    || captured_instance.manifest_id != sealed_instance.manifest_id
-                    || captured_instance.manifest_digest != sealed_instance.manifest_digest
-                    || captured_manifest.id != sealed_instance.manifest_id
-                {
-                    return Err(EvidenceCommandError::bad_request(
-                        "imported host capture capability does not match the sealed capability",
-                    )
-                    .into());
-                }
+            } else if captured_instance.id != sealed_instance.id
+                || captured_instance.manifest_id != sealed_instance.manifest_id
+                || captured_instance.manifest_digest != sealed_instance.manifest_digest
+                || captured_manifest.id != sealed_instance.manifest_id
+            {
+                return Err(EvidenceCommandError::bad_request(
+                    "imported host capture capability does not match the sealed capability",
+                )
+                .into());
             }
             let evidence_manifest = self.load_capability_manifest(sealed_instance.id.as_str())?;
             let evidence_instance = sealed_instance;

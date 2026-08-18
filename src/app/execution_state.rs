@@ -121,7 +121,7 @@ pub(crate) enum CanonicalFeatureRunRestartDto {
     InconsistentVerification {
         status: &'static str,
         reason: FeatureRunRestartReason,
-        current_verification: CurrentVerificationDiagnosis,
+        current_verification: Box<CurrentVerificationDiagnosis>,
         disposition: Option<FeatureRunRestartDisposition>,
     },
 }
@@ -364,7 +364,7 @@ impl App {
             Some(CanonicalFeatureRunRestartDto::InconsistentVerification {
                 status: "required",
                 reason: FeatureRunRestartReason::InconsistentVerification,
-                current_verification,
+                current_verification: Box::new(current_verification),
                 disposition: None,
             })
         } else if let Some(source_freeze) = premature_source_freeze {
@@ -385,7 +385,7 @@ impl App {
                 Some(CanonicalFeatureRunRestartDto::InconsistentVerification {
                     status: "retired",
                     reason: transition.request.reason,
-                    current_verification: transition.facts.diagnosis,
+                    current_verification: Box::new(transition.facts.diagnosis),
                     disposition: Some(transition.disposition),
                 })
             } else if let Some(transition) = repository

@@ -235,6 +235,18 @@ pub(crate) struct VerificationAdmissionRepairSettlementRecord {
     pub(crate) source_digest: String,
 }
 
+/// Exact application-computed facts that the repository atomically revalidates
+/// and persists for one verification-admission repair settlement.
+pub(crate) struct VerificationAdmissionRepairSettlementInput<'a> {
+    pub(crate) invalidation: &'a EvidenceInvalidationRecord,
+    pub(crate) expected_run_revision: u64,
+    pub(crate) expected_verification_item_id: Option<&'a str>,
+    pub(crate) settlement: &'a VerificationAdmissionRepairSettlementRecord,
+    pub(crate) freeze: &'a SourceFreezeRecord,
+    pub(crate) frozen_run: &'a FeatureRun,
+    pub(crate) operator_worker_id: &'a str,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct VerificationAdmissionRecord {
     pub(crate) plan_id: String,
@@ -2817,14 +2829,17 @@ impl<'conn> ExecutionRunRepository<'conn> {
 
     pub(crate) fn persist_verification_admission_repair_settlement(
         &self,
-        invalidation: &EvidenceInvalidationRecord,
-        expected_run_revision: u64,
-        expected_verification_item_id: Option<&str>,
-        settlement: &VerificationAdmissionRepairSettlementRecord,
-        freeze: &SourceFreezeRecord,
-        frozen_run: &FeatureRun,
-        operator_worker_id: &str,
+        input: VerificationAdmissionRepairSettlementInput<'_>,
     ) -> Result<()> {
+        let VerificationAdmissionRepairSettlementInput {
+            invalidation,
+            expected_run_revision,
+            expected_verification_item_id,
+            settlement,
+            freeze,
+            frozen_run,
+            operator_worker_id,
+        } = input;
         if self.conn.is_autocommit() {
             bail!("verification_admission_repair_settlement_requires_active_transaction");
         }
