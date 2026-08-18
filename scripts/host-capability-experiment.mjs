@@ -1722,7 +1722,7 @@ function loadExternalCaptures(importRoot, suite = defaultSuite()) {
     rawById.set(anchored.id, raw);
   }
   validateArtifactGraph(root, rawById);
-  return { suite, captures: [...rawById.values()] };
+  return { suite, captures: [...rawById.values()], producer };
 }
 
 async function importFixtureCapture(outDir, importFixtureRoot, suite = defaultSuite()) {
@@ -1730,14 +1730,19 @@ async function importFixtureCapture(outDir, importFixtureRoot, suite = defaultSu
     outDir,
     { importRoot: importFixtureRoot },
     async (stagingRoot) => {
-      const { captures } = loadExternalCaptures(importFixtureRoot, suite);
+      const { captures, producer } = loadExternalCaptures(importFixtureRoot, suite);
       writeSchemaReferences(stagingRoot);
       copyDirectory(path.join(importFixtureRoot, "artifacts"), path.join(stagingRoot, "artifacts"));
       for (const capture of captures) {
         const anchored = suite.experiments.find((experiment) => experiment.id === capture.experiment_id);
         writeJson(safeFixturePath(stagingRoot, `observed/${anchored.id}.json`, "observed capture path"), capture);
       }
-      const allCaptures = completeCapturesWithUnavailablePlaceholders(suite, captures, stagingRoot);
+      const allCaptures = completeCapturesWithUnavailablePlaceholders(
+        suite,
+        captures,
+        stagingRoot,
+        producer.captured_at,
+      );
       writeJson(path.join(stagingRoot, "experiment-suite.json"), suiteFromCaptures(suite, allCaptures));
       for (const capture of allCaptures) {
         if (!existsSync(path.join(stagingRoot, "observed", `${capture.experiment_id}.json`))) {
@@ -1793,16 +1798,15 @@ function probeOutcomeForCapture(capture) {
   return "unavailable";
 }
 
-function completeCapturesWithUnavailablePlaceholders(suite, captures, fixtureRoot) {
+function completeCapturesWithUnavailablePlaceholders(suite, captures, fixtureRoot, placeholderTimestamp) {
   const byId = new Map(captures.map((capture) => [capture.experiment_id, capture]));
-  const now = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
   return suite.experiments.map((experiment) => {
     const imported = byId.get(experiment.id);
     if (imported) return imported;
     if (experiment.input_kind === "mechanical_availability_probe") {
-      return mechanicalUnavailableProbeCapture(fixtureRoot, experiment, now);
+      return mechanicalUnavailableProbeCapture(fixtureRoot, experiment, placeholderTimestamp);
     }
-    return unavailableCapture(experiment, now);
+    return unavailableCapture(experiment, placeholderTimestamp);
   });
 }
 
