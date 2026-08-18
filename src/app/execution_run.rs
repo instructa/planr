@@ -26,7 +26,9 @@ use crate::usage_policy::{
 };
 use crate::util::{short_id, worker_id};
 use anyhow::{Result, anyhow, bail};
+use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 use time::OffsetDateTime;
 #[derive(Clone, Debug)]
 pub(crate) struct OutcomeSettlement<'a> {
@@ -180,6 +182,18 @@ fn admitted_outcome_escalation(
         })
         .transpose()
 }
+
+fn normalized_claimed_files(values: &[String]) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    values
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .filter(|value| seen.insert((*value).to_string()))
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
 impl App {
     pub(crate) fn execution_run(&self, command: RunCommand) -> Result<()> {
         match command {
@@ -667,11 +681,7 @@ impl App {
         input: ExistingOutcomeSettlement<'_>,
     ) -> Result<OutcomeSettlementTransition> {
         let Some(persisted) = self.ensure_outcome_feature_run(input.item_id)? else {
-            return Err(already_settled_outcome_error(
-                "unplanned",
-                input.item_id,
-                AlreadySettledOutcomeViolation::MissingOutcome,
-            ));
+            return self.settle_existing_planless_outcome(input);
         };
         if self
             .incompatible_feature_run_hold_value(input.item_id, &persisted)?
@@ -793,6 +803,72 @@ impl App {
             "materiality": &materiality,
             "review_gate": null,
             "execution_state": execution_state,
+        });
+        Ok(OutcomeSettlementTransition::already_settled(
+            work_packet,
+            materiality,
+        ))
+    }
+
+    fn settle_existing_planless_outcome(
+        &self,
+        input: ExistingOutcomeSettlement<'_>,
+    ) -> Result<OutcomeSettlementTransition> {
+        let reject = |violation| {
+            already_settled_outcome_error("unplanned", input.item_id, violation)
+        };
+        let item = self.get_item(input.item_id)?;
+        if !is_ordinary_implementation_work_type(&item.work_type) || item.plan_path.is_some() {
+            return Err(reject(AlreadySettledOutcomeViolation::MissingOutcome));
+        }
+        if !matches!(item.status, ItemStatus::Closed | ItemStatus::ClosedPartial) {
+            return Err(reject(AlreadySettledOutcomeViolation::ItemNotTerminal));
+        }
+        if input.escalation.is_some() {
+            return Err(reject(AlreadySettledOutcomeViolation::OutcomeEscalationMismatch));
+        }
+        let mut statement = self.conn.prepare(
+            "SELECT id, summary, files FROM logs WHERE item_id = ?1 AND kind = 'completion' ORDER BY created_at, id",
+        )?;
+        let mut rows = statement.query(params![input.item_id])?;
+        let Some(row) = rows.next()? else {
+            return Err(reject(AlreadySettledOutcomeViolation::MissingOutcome));
+        };
+        let log_id: String = row.get(0)?;
+        let summary: String = row.get(1)?;
+        let files: Option<String> = row.get(2)?;
+        if rows.next()?.is_some() {
+            return Err(reject(AlreadySettledOutcomeViolation::MissingOutcome));
+        }
+        if summary != input.summary {
+            return Err(reject(AlreadySettledOutcomeViolation::OutcomeSummaryMismatch));
+        }
+        let persisted_files = files
+            .and_then(|raw| serde_json::from_str::<Vec<String>>(&raw).ok())
+            .map(|values| normalized_claimed_files(&values))
+            .ok_or_else(|| reject(AlreadySettledOutcomeViolation::MissingOutcome))?;
+        if persisted_files != input.claimed_files {
+            return Err(reject(AlreadySettledOutcomeViolation::OutcomeClaimedFilesMismatch));
+        }
+        let materiality = self
+            .item_metadata_field(input.item_id, "materiality")?
+            .filter(Value::is_object)
+            .ok_or_else(|| reject(AlreadySettledOutcomeViolation::MissingOutcome))?;
+        if materiality["item_id"].as_str() != Some(input.item_id)
+            || materiality["decision"]["review"].as_str() != Some("none")
+            || materiality["effective_review"]["required"].as_bool() != Some(false)
+            || materiality["effective_review"]["explicit_escalation"].as_bool() != Some(false)
+        {
+            return Err(reject(AlreadySettledOutcomeViolation::MissingOutcome));
+        }
+        let work_packet = json!({
+            "kind": "outcome",
+            "transition": "already_settled",
+            "disposition": "already_settled",
+            "settlement": "legacy_unplanned",
+            "completion_log_id": log_id,
+            "materiality": &materiality,
+            "review_gate": null,
         });
         Ok(OutcomeSettlementTransition::already_settled(
             work_packet,
