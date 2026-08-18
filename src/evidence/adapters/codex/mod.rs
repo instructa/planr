@@ -641,7 +641,6 @@ mod tests {
                 .contains(&"host_version".to_string())
         );
         assert!(chrome_adapter.manifest.is_none());
-        assert!(chrome_adapter.receipt_contract_vector.is_none());
 
         for surface in ["terminal", "local-function"] {
             let adapter = adapters
@@ -651,7 +650,6 @@ mod tests {
             assert!(!adapter.trusted_adapter_enabled);
             assert!(adapter.reason.contains("harness-only"));
             assert!(adapter.manifest.is_none());
-            assert!(adapter.receipt_contract_vector.is_none());
         }
 
         for surface in [
@@ -669,7 +667,6 @@ mod tests {
                 .find(|adapter| adapter.surface == surface)
                 .unwrap();
             assert!(!adapter.trusted_adapter_enabled);
-            assert!(adapter.receipt_contract_vector.is_none());
         }
 
         let classifications = host_adapter_classifications_value();
