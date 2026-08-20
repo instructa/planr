@@ -284,6 +284,13 @@ impl App {
             )
             .map_err(|violation| anyhow!("review_gate_lease_transition:{violation:?}"))?;
             repository.save_feature_run(&transitioned, persisted.revision)?;
+            let current = repository.review_gate(&gate.id)?;
+            repository.set_review_gate_status(
+                &gate.id,
+                current.status,
+                ReviewGateStatus::Leased,
+            )?;
+            gate_leased = true;
             let transitioned = repository.feature_run(&gate.run_id)?;
             match self.admit_feature_run_budget(
                 &transitioned,
@@ -295,13 +302,6 @@ impl App {
                 FeatureRunBudgetAdmission::Held(hold) => return Ok(hold),
                 FeatureRunBudgetAdmission::Reserved(_) => {}
             }
-            let current = repository.review_gate(&gate.id)?;
-            repository.set_review_gate_status(
-                &gate.id,
-                current.status,
-                ReviewGateStatus::Leased,
-            )?;
-            gate_leased = true;
             Ok(json!({
                 "work_packet": {
                     "kind": "review_gate",
