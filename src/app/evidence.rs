@@ -395,7 +395,13 @@ impl App {
         match result {
             Ok(object) => {
                 let envelope = evidence_success_envelope(command, object);
-                let exit_code = evidence_envelope_exit_code(&envelope);
+                let exit_code = if command == "evidence.policy"
+                    && envelope["object"]["status"] == "stale_digest"
+                {
+                    EVIDENCE_OK
+                } else {
+                    evidence_envelope_exit_code(&envelope)
+                };
                 self.emit(envelope, human)?;
                 if exit_code == 0 {
                     Ok(())
