@@ -259,7 +259,11 @@ impl App {
         let (command_name, result, human) = match command {
             EvidenceCommand::Policy(args) => (
                 "evidence.policy",
-                self.evidence_policy_value(),
+                if args.refresh_projection {
+                    self.evidence_policy_refresh_projection_value()
+                } else {
+                    self.evidence_policy_value()
+                },
                 if args.check {
                     "evidence policy checked".to_string()
                 } else {
@@ -433,6 +437,22 @@ impl App {
             "waivers": document.waivers,
             "registry": probe,
             "status": if registry.diagnostics().is_empty() { "valid" } else { "warning" },
+            "diagnostics": registry_diagnostics_value(registry.diagnostics()),
+        }))
+    }
+
+    fn evidence_policy_refresh_projection_value(&self) -> Result<Value> {
+        let path = self.root.join(".planr/evidence.yaml");
+        let text = fs::read_to_string(&path)?;
+        let document = crate::evidence::policy::parse_evidence_policy_yaml_for_refresh_projection(&text)
+            .map_err(|diagnostics| anyhow!("evidence policy invalid: {diagnostics}"))?;
+        let mut registry = self.evidence_registry_from_policy(&document)?;
+        let probe = self.probe_registry_capabilities(&mut registry)?;
+        Ok(json!({
+            "status": if document.policy.policy_digest.as_str() == document.digest { "valid" } else { "stale_digest" },
+            "digest": document.digest,
+            "policy_digest": document.policy.policy_digest.as_str(),
+            "registry": probe,
             "diagnostics": registry_diagnostics_value(registry.diagnostics()),
         }))
     }

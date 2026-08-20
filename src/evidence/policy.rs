@@ -155,6 +155,12 @@ pub(crate) fn parse_evidence_policy_yaml(
     parse_evidence_policy_yaml_with_owner(text, false)
 }
 
+pub(crate) fn parse_evidence_policy_yaml_for_refresh_projection(
+    text: &str,
+) -> Result<EvidencePolicyDocument, EvidencePolicyDiagnostics> {
+    parse_evidence_policy_yaml_with_owner_and_stale_digest(text, false, true)
+}
+
 pub(crate) fn parse_trusted_builtin_evidence_policy_yaml(
     text: &str,
 ) -> Result<EvidencePolicyDocument, EvidencePolicyDiagnostics> {
@@ -353,6 +359,14 @@ fn parse_evidence_policy_yaml_with_owner(
     text: &str,
     trusted_builtin: bool,
 ) -> Result<EvidencePolicyDocument, EvidencePolicyDiagnostics> {
+    parse_evidence_policy_yaml_with_owner_and_stale_digest(text, trusted_builtin, false)
+}
+
+fn parse_evidence_policy_yaml_with_owner_and_stale_digest(
+    text: &str,
+    trusted_builtin: bool,
+    allow_stale_top_level_digest: bool,
+) -> Result<EvidencePolicyDocument, EvidencePolicyDiagnostics> {
     let value = serde_yaml::from_str::<serde_yaml::Value>(text).map_err(|error| {
         diagnostics(vec![EvidencePolicyDiagnostic {
             path: ".planr/evidence.yaml".to_string(),
@@ -388,7 +402,13 @@ fn parse_evidence_policy_yaml_with_owner(
         digest,
         trusted_builtin,
     };
-    validate_evidence_policy_document(&document)?;
+    if let Err(error) = validate_evidence_policy_document(&document) {
+        if !allow_stale_top_level_digest
+            || error.diagnostics.iter().any(|diagnostic| diagnostic.path != "policy_digest")
+        {
+            return Err(error);
+        }
+    }
     Ok(document)
 }
 

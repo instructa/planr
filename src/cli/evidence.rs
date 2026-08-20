@@ -43,6 +43,9 @@ pub(crate) enum EvidenceCommand {
 pub(crate) struct EvidencePolicyArgs {
     #[arg(long)]
     pub(crate) check: bool,
+    /// Read-only canonical projections for repairing only a stale top-level policy digest.
+    #[arg(long)]
+    pub(crate) refresh_projection: bool,
 }
 
 #[derive(Args, Debug)]
