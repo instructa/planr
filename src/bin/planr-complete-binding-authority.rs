@@ -67,11 +67,7 @@ fn run_target_signal(target_json: &str) -> Result<Value, String> {
     let signal = target
         .get("uri")
         .and_then(Value::as_str)
-        .and_then(|uri| {
-            uri.split('/')
-                .filter(|segment| !segment.is_empty())
-                .next_back()
-        })
+        .and_then(|uri| uri.split('/').rfind(|segment| !segment.is_empty()))
         .ok_or_else(|| "complete-binding target uri must end with a signal".to_string())?;
     let focused = FOCUSED_SIGNALS
         .iter()
