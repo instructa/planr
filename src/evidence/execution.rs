@@ -1010,10 +1010,7 @@ impl ResolvedProcessRun {
             "argument_index": argument_index,
             "argument": argument,
             "resolved_relative_to": "command_cwd",
-            "cwd": self.cwd.to_string_lossy(),
-            "path": canonical.to_string_lossy(),
             "cwd_relative_path": relative,
-            "path_digest": sha256_prefixed_bytes(canonical.to_string_lossy().as_bytes()),
             "content_digest": sha256_prefixed_bytes(&bytes),
         }))
     }
@@ -2784,6 +2781,56 @@ mod tests {
             }
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn resolved_process_adapter_digest_is_portable_across_roots() {
+        let contract = execution_contract("node", vec![".planr/evidence/adapters/helper.mjs"], 5000);
+        let manifest: super::super::model::VerificationCapabilityManifest = serde_json::from_value(json!({
+            "id": "vcap-process", "schema_version": "evidence.contract.v1", "version": "1.0.0",
+            "adapter_kind": "process", "adapter_digest": DIGEST_A,
+            "supported_surfaces": ["local-process"],
+            "supported_observations": [contract.payload_schema], "supported_interactions": ["process"],
+            "supported_artifacts": ["stdout"], "runtime_targets": [{"kind": "process", "id": "test"}],
+            "provenance_path": "planr_observed_execution",
+            "permissions": {"network": "none", "filesystem": "read_workspace"},
+            "costs": {}, "determinism": "deterministic", "repeatability": "repeatable",
+            "independence": "unit test process adapter", "blind_spots": [],
+            "availability_probe": {"kind": "process", "execution": contract}
+        }))
+        .unwrap();
+        let first = tempdir().unwrap();
+        let second = tempdir().unwrap();
+        for root in [first.path(), second.path()] {
+            fs::create_dir_all(root.join(".planr/evidence/adapters")).unwrap();
+            fs::write(root.join(".planr/evidence/adapters/helper.mjs"), "export default 'same';\n").unwrap();
+        }
+        let empty_env = BTreeMap::new();
+        let first_digest = resolved_process_adapter_digest(
+            &manifest,
+            &resolve_process_run(first.path(), &contract, &empty_env).unwrap(),
+        ).unwrap();
+        let second_digest = resolved_process_adapter_digest(
+            &manifest,
+            &resolve_process_run(second.path(), &contract, &empty_env).unwrap(),
+        ).unwrap();
+        assert_eq!(first_digest, second_digest);
+
+        fs::write(second.path().join(".planr/evidence/adapters/helper.mjs"), "export default 'changed';\n").unwrap();
+        let changed_bytes = resolved_process_adapter_digest(
+            &manifest,
+            &resolve_process_run(second.path(), &contract, &empty_env).unwrap(),
+        ).unwrap();
+        assert_ne!(first_digest, changed_bytes);
+
+        fs::write(second.path().join("other.mjs"), "export default 'same';\n").unwrap();
+        let mut renamed = contract.clone();
+        renamed.args = vec!["other.mjs".to_string()];
+        let changed_relative_identity = resolved_process_adapter_digest(
+            &manifest,
+            &resolve_process_run(second.path(), &renamed, &empty_env).unwrap(),
+        ).unwrap();
+        assert_ne!(first_digest, changed_relative_identity);
     }
 
     fn marker_contract(marker_name: &str) -> ProcessExecutionContract {
