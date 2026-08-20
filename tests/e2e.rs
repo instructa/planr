@@ -18337,6 +18337,27 @@ fn canonical_final_review_cli_mcp_pick_accept_and_audit_use_one_gate_without_map
 }
 
 #[test]
+fn final_review_cli_release_relinquishes_only_the_current_reviewer_lease() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    let plan_id = seed_final_review_feature_run(dir.path(), &db);
+    let created: Value = serde_json::from_slice(&planr().current_dir(dir.path()).args(["--db", db.to_str().unwrap(), "--json", "plan", "final-review", &plan_id]).assert().success().get_output().stdout).unwrap();
+    let gate_id = created["execution_state"]["review_gate"]["id"].as_str().unwrap().to_string();
+    let pick = |reviewer: &str| {
+        planr().current_dir(dir.path()).env("PLANR_WORKER_ID", reviewer).args(["--db", db.to_str().unwrap(), "--json", "pick", "--plan", &plan_id, "--work-type", "review"]).assert().success();
+    };
+    pick("reviewer-a");
+    planr().current_dir(dir.path()).env("PLANR_WORKER_ID", "reviewer-b").args(["--db", db.to_str().unwrap(), "review", "release", &gate_id]).assert().failure();
+    let conn = Connection::open(&db).unwrap();
+    assert_eq!(conn.query_row("SELECT status FROM review_gates WHERE id=?1", [&gate_id], |r| r.get::<_, String>(0)).unwrap(), "leased");
+    planr().current_dir(dir.path()).env("PLANR_WORKER_ID", "reviewer-a").args(["--db", db.to_str().unwrap(), "review", "release", &gate_id]).assert().success();
+    assert_eq!(conn.query_row("SELECT status FROM review_gates WHERE id=?1", [&gate_id], |r| r.get::<_, String>(0)).unwrap(), "pending");
+    assert_eq!(conn.query_row("SELECT COUNT(*) FROM feature_run_role_leases WHERE run_id='run-final-seed' AND role='reviewer' AND released_at IS NULL", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+    assert_eq!(conn.query_row("SELECT COUNT(*) FROM review_attempts WHERE gate_id=?1", [&gate_id], |r| r.get::<_, i64>(0)).unwrap(), 0);
+    pick("reviewer-b");
+}
+
+#[test]
 fn execution_state_v2_budget_is_byte_equivalent_across_cli_mcp_http_and_packets() {
     let secret_marker = "sk-planr-budget-provenance-0123456789abcdef0123456789abcdef";
     let dir = tempdir().unwrap();
