@@ -779,6 +779,13 @@ impl App {
                     args.get("reviewer").and_then(Value::as_str),
                 )?))
             }
+            "planr_review_gate_release" => {
+                let gate_id = required_arg(&args, "review_gate_id")?;
+                let reason = args.get("reason").and_then(Value::as_str).unwrap_or("reviewer_relinquished");
+                Ok(mcp_json(self.relinquish_final_review_gate_value(
+                    gate_id, &crate::util::worker_id(), reason,
+                )?))
+            }
             "planr_review_findings_resolve" => {
                 let gate_id = required_arg(&args, "review_gate_id")?;
                 let finding_ids = args

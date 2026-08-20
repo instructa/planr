@@ -534,6 +534,12 @@ pub fn mcp_tools() -> Vec<Value> {
             &["review_gate_id"],
         ),
         tool(
+            "planr_review_gate_release",
+            "Relinquish a leased final-product ReviewGate without recording a verdict",
+            json!({"review_gate_id": prop("string", "Leased final-product ReviewGate id"), "reason": prop("string", "Bounded relinquish reason")}),
+            &["review_gate_id"],
+        ),
+        tool(
             "planr_review_findings_resolve",
             "Resolve durable ReviewGate findings and return the same gate to pending re-review",
             json!({"review_gate_id": prop("string", "ReviewGate id"), "finding_ids": string_array("Finding ids resolved by the responsible maker")}),

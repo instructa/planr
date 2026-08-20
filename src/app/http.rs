@@ -621,6 +621,13 @@ impl App {
                         &self.resolve_review_gate_findings_value(gate_id, &finding_ids)?,
                     )?
                 }
+                ("POST", p) if p.starts_with("/v1/review-gates/") && p.ends_with("/release") => {
+                    let gate_id = p.trim_start_matches("/v1/review-gates/").trim_end_matches("/release").trim_end_matches('/');
+                    let reason = body_json.get("reason").and_then(Value::as_str).unwrap_or("reviewer_relinquished");
+                    serde_json::to_string(&self.relinquish_final_review_gate_value(
+                        gate_id, &crate::util::worker_id(), reason,
+                    )?)?
+                }
                 ("POST", p) if p.ends_with("/close") => {
                     let item_id =
                         path_item_id(p).ok_or_else(|| anyhow!("missing item id in close route"))?;
