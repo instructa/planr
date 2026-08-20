@@ -95,6 +95,35 @@ impl App {
                     && gate.scope_id == plan_id
             })
         {
+            if nonbinding
+                && gate.status == ReviewGateStatus::Pending
+                && run.run.phase == FeatureRunPhase::SourceFrozen
+            {
+                self.conn.execute_batch(
+                    "BEGIN IMMEDIATE; SAVEPOINT refresh_pending_nonbinding_final_review",
+                )?;
+                let refresh = (|| -> Result<()> {
+                    if self.refresh_nonbinding_final_review_source_freeze(plan_id, &run_id)? {
+                        let binding = self.capture_final_review_source_binding(
+                            &gate.id,
+                            &gate.run_id,
+                            &gate.scope_id,
+                        )?;
+                        repository.rebind_review_gate_source(&binding)?;
+                    }
+                    Ok(())
+                })();
+                match refresh {
+                    Ok(()) => self.conn.execute_batch(
+                        "RELEASE refresh_pending_nonbinding_final_review; COMMIT",
+                    )?,
+                    Err(error) => {
+                        let _ = self.conn.execute_batch("ROLLBACK TO refresh_pending_nonbinding_final_review; RELEASE refresh_pending_nonbinding_final_review; ROLLBACK");
+                        return Err(error);
+                    }
+                }
+                gate = repository.review_gate(&gate.id)?;
+            }
             if active_binding
                 && gate.status != ReviewGateStatus::Accepted
                 && run.run.phase != FeatureRunPhase::SourceFrozen

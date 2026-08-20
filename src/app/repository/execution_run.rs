@@ -2191,7 +2191,7 @@ impl<'conn> ExecutionRunRepository<'conn> {
         )?;
         require_nonempty("final_review_binding.source_digest", &binding.source_digest)?;
         let updated = self.conn.execute(
-            "UPDATE review_gates SET source_revision = ?1, updated_at = datetime('now') WHERE id = ?2 AND status = 'changes_requested'",
+            "UPDATE review_gates SET source_revision = ?1, updated_at = datetime('now') WHERE id = ?2 AND status IN ('changes_requested', 'pending')",
             params![binding.source_revision, binding.gate_id],
         )?;
         if updated != 1 {
