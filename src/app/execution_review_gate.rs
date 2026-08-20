@@ -388,8 +388,16 @@ impl App {
                 bail!("review_gate_reviewer_lease_mismatch:{gate_id}");
             }
             let generation = lease.lease_generation;
-            let mut released = persisted.run.clone();
-            released.role_owners.retain(|owner| owner.role != RunRole::Reviewer);
+            let released = apply_phase_transition(
+                &persisted.run,
+                &PhaseTransition {
+                    to: FeatureRunPhase::SourceFrozen,
+                    cause: PhaseTransitionCause::FinalReviewRelinquished,
+                    reference: format!("review_gate_relinquished:{gate_id}"),
+                    owner: None,
+                },
+            )
+            .map_err(|violation| anyhow!("review_gate_relinquish_transition:{violation:?}"))?;
             repository.set_review_gate_status(gate_id, ReviewGateStatus::Leased, ReviewGateStatus::Pending)?;
             repository.save_feature_run(&released, persisted.revision)?;
             self.record_event("review_gate_relinquished", Some(&gate.scope_id), json!({

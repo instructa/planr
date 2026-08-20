@@ -714,6 +714,7 @@ pub enum PhaseTransitionCause {
     VerificationReleased,
     VerificationPassed,
     ProductFinding,
+    FinalReviewRelinquished,
     FinalReviewAccepted,
     BudgetHold,
     CapabilityHold,
@@ -786,7 +787,7 @@ pub const ALL_FEATURE_RUN_PHASES: [FeatureRunPhase; 8] = [
     FeatureRunPhase::Cancelled,
 ];
 
-pub const ALL_PHASE_TRANSITION_CAUSES: [PhaseTransitionCause; 15] = [
+pub const ALL_PHASE_TRANSITION_CAUSES: [PhaseTransitionCause; 16] = [
     PhaseTransitionCause::ProtectedRiskDiscovered,
     PhaseTransitionCause::RiskCheckpointAccepted,
     PhaseTransitionCause::ImplementationSettled,
@@ -795,6 +796,7 @@ pub const ALL_PHASE_TRANSITION_CAUSES: [PhaseTransitionCause; 15] = [
     PhaseTransitionCause::VerificationReleased,
     PhaseTransitionCause::VerificationPassed,
     PhaseTransitionCause::ProductFinding,
+    PhaseTransitionCause::FinalReviewRelinquished,
     PhaseTransitionCause::FinalReviewAccepted,
     PhaseTransitionCause::BudgetHold,
     PhaseTransitionCause::CapabilityHold,
@@ -851,6 +853,10 @@ pub fn is_legal_phase_transition(
             FeatureRunPhase::SourceFrozen,
             FeatureRunPhase::FinalReview,
             PhaseTransitionCause::VerificationPassed
+        ) | (
+            FeatureRunPhase::FinalReview,
+            FeatureRunPhase::SourceFrozen,
+            PhaseTransitionCause::FinalReviewRelinquished
         ) | (
             FeatureRunPhase::FinalReview,
             FeatureRunPhase::Implementation,
