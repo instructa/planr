@@ -3075,4 +3075,69 @@ mod tests {
         assert_eq!(repository.feature_run(run_id).unwrap(), after);
         assert_eq!(freeze_counts(), (2, 1));
     }
+
+    #[test]
+    fn budget_held_final_review_keeps_gate_leased_to_reviewer() {
+        let (_root, app) = test_app();
+        add_outcome(&app, "item-review-budget-hold");
+        let persisted = app
+            .ensure_outcome_feature_run("item-review-budget-hold")
+            .unwrap()
+            .unwrap();
+        let repository = ExecutionRunRepository::new(&app.conn);
+        let frozen = apply_phase_transition(
+            &persisted.run,
+            &PhaseTransition {
+                to: FeatureRunPhase::SourceFrozen,
+                cause: PhaseTransitionCause::ImplementationSettled,
+                reference: "review-budget-hold-source".into(),
+                owner: None,
+            },
+        )
+        .unwrap();
+        repository.save_feature_run(&frozen, persisted.revision).unwrap();
+        repository
+            .create_review_gate(&ReviewGateRecord {
+                id: "gate-review-budget-hold".into(),
+                run_id: frozen.id.clone(),
+                scope_kind: ReviewScopeKind::Plan,
+                scope_id: "plan-a".into(),
+                kind: ReviewGateKind::FinalProduct,
+                status: ReviewGateStatus::Pending,
+                required_risk: None,
+                responsible_maker_id: worker_id(),
+                latest_attempt: 0,
+                source_revision: Some("review-budget-hold-source".into()),
+            })
+            .unwrap();
+        app.conn
+            .execute(
+                "INSERT INTO feature_run_budget_reservations(id, run_id, phase, boundary_key, status, started_at_unix_ms, provenance) VALUES ('reservation-review-mismatch', ?1, 'implementation', 'review:gate-review-budget-hold', 'active', 1, 'test.invalid_review_reservation')",
+                [&frozen.id],
+            )
+            .unwrap();
+
+        let hold = app
+            .review_gate_pick_value_for_worker("plan-a", false, "reviewer-budget-held")
+            .unwrap()
+            .unwrap();
+        assert_eq!(hold["work_packet"]["classification"], "budget");
+        assert_eq!(hold["work_packet"]["execution_state"]["phase"], "held");
+        assert_eq!(
+            repository
+                .review_gate("gate-review-budget-hold")
+                .unwrap()
+                .status,
+            ReviewGateStatus::Leased
+        );
+        let held = repository.feature_run(&frozen.id).unwrap().run;
+        assert_eq!(held.held_from_phase, Some(FeatureRunPhase::FinalReview));
+        assert!(held.role_owners.iter().any(|owner| {
+            owner.role == RunRole::Reviewer && owner.worker_id == "reviewer-budget-held"
+        }));
+        assert!(repository
+            .review_attempts("gate-review-budget-hold")
+            .unwrap()
+            .is_empty());
+    }
 }
