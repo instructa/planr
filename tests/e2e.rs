@@ -18354,6 +18354,20 @@ fn final_review_cli_release_relinquishes_only_the_current_reviewer_lease() {
     assert_eq!(conn.query_row("SELECT status FROM review_gates WHERE id=?1", [&gate_id], |r| r.get::<_, String>(0)).unwrap(), "pending");
     assert_eq!(conn.query_row("SELECT COUNT(*) FROM feature_run_role_leases WHERE run_id='run-final-seed' AND role='reviewer' AND released_at IS NULL", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
     assert_eq!(conn.query_row("SELECT COUNT(*) FROM review_attempts WHERE gate_id=?1", [&gate_id], |r| r.get::<_, i64>(0)).unwrap(), 0);
+    let old_revision: String = conn.query_row("SELECT source_revision FROM final_review_source_bindings WHERE gate_id=?1", [&gate_id], |r| r.get(0)).unwrap();
+    fs::write(dir.path().join("review-source-change.txt"), "current source\n").unwrap();
+    for args in [["add", "review-source-change.txt"].as_slice(), ["commit", "-m", "advance reviewed source"].as_slice()] {
+        let output = StdCommand::new("git").arg("-C").arg(dir.path()).args(args).output().unwrap();
+        assert!(output.status.success(), "git failed: {output:?}");
+    }
+    let current_revision = String::from_utf8(StdCommand::new("git").arg("-C").arg(dir.path()).args(["rev-parse", "HEAD"]).output().unwrap().stdout).unwrap().trim().to_string();
+    assert_ne!(current_revision, old_revision);
+    let refreshed: Value = serde_json::from_slice(&planr().current_dir(dir.path()).args(["--db", db.to_str().unwrap(), "--json", "plan", "final-review", &plan_id]).assert().success().get_output().stdout).unwrap();
+    assert_eq!(refreshed["created"], false);
+    assert_eq!(refreshed["execution_state"]["feature_run"]["source_revision"], current_revision);
+    assert_eq!(refreshed["execution_state"]["review_gate"]["status"], "pending");
+    assert_eq!(conn.query_row("SELECT source_revision FROM final_review_source_bindings WHERE gate_id=?1", [&gate_id], |r| r.get::<_, String>(0)).unwrap(), current_revision);
+    assert_eq!(conn.query_row("SELECT COUNT(*) FROM review_attempts WHERE gate_id=?1", [&gate_id], |r| r.get::<_, i64>(0)).unwrap(), 0);
     pick("reviewer-b");
 }
 
