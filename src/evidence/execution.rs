@@ -630,8 +630,7 @@ pub(crate) fn ensure_process_adapter_digest(
     manifest: &super::model::VerificationCapabilityManifest,
     resolved: &ResolvedProcessRun,
 ) -> Result<()> {
-    let binding = process_adapter_binding(resolved, &manifest.availability_probe.execution)?;
-    let actual_digest = sha256_json_digest(&binding)?;
+    let actual_digest = resolved_process_adapter_digest(manifest, resolved)?;
     if actual_digest != manifest.adapter_digest.as_str() {
         bail!(
             "process adapter_digest drift: manifest declares {}, actual helper/config digest is {}",
@@ -640,6 +639,14 @@ pub(crate) fn ensure_process_adapter_digest(
         );
     }
     Ok(())
+}
+
+pub(crate) fn resolved_process_adapter_digest(
+    manifest: &super::model::VerificationCapabilityManifest,
+    resolved: &ResolvedProcessRun,
+) -> Result<String> {
+    let binding = process_adapter_binding(resolved, &manifest.availability_probe.execution)?;
+    sha256_json_digest(&binding)
 }
 
 fn process_adapter_binding(

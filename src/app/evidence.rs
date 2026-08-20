@@ -30,6 +30,7 @@ use crate::evidence::{
     execution::{
         ConfiguredProcessRunInput, TrustedEvidencePersistenceInput, ensure_process_adapter_digest,
         persist_trusted_evidence_atomically, resolve_process_run,
+        resolved_process_adapter_digest,
         run_configured_process_adapter_guarded, run_repository_snapshot_pre_commit_test_hook,
         select_execution_binding_subset,
     },
@@ -535,12 +536,28 @@ impl App {
     fn probe_registry_capabilities(&self, registry: &mut CapabilityRegistry) -> Result<Value> {
         let runtime = self.default_capability_runtime();
         let mut probes = Vec::new();
+        let resolved_adapter_digests = registry
+            .capabilities()
+            .filter_map(|capability| {
+                let execution = capability.repository_execution_contract.as_ref()?;
+                let projection = resolve_process_run(&self.root, execution, &BTreeMap::new())
+                    .and_then(|resolved| {
+                        resolved_process_adapter_digest(&capability.manifest, &resolved)
+                    })
+                    .map(|digest| json!({"digest": digest}))
+                    .unwrap_or_else(|error| json!({"error": error.to_string()}));
+                Some((
+                    capability.manifest.id.as_str().to_string(),
+                    projection,
+                ))
+            })
+            .collect::<BTreeMap<_, _>>();
         let manifest_ids = registry
             .capabilities()
             .map(|capability| capability.manifest.id.as_str().to_string())
             .collect::<Vec<_>>();
         for manifest_id in manifest_ids {
-            let outcome = registry
+            let mut outcome = registry
                 .current_or_probe_and_store(&self.conn, &self.root, &manifest_id, runtime)
                 .map(|resolution| {
                     json!({
@@ -560,6 +577,9 @@ impl App {
                         "resolution": "error",
                     })
                 });
+            if let Some(projection) = resolved_adapter_digests.get(&manifest_id) {
+                outcome["resolved_adapter_digest"] = projection.clone();
+            }
             probes.push(outcome);
         }
         Ok(json!({
