@@ -721,6 +721,7 @@ pub(crate) enum ReviewCommand {
     Ingest(ReviewIngestArgs),
     Evidence(ReviewEvidenceArgs),
     Close(ReviewCloseArgs),
+    Release(ReviewReleaseArgs),
     Findings(ReviewFindingsArgs),
     List(ReviewListArgs),
     Show(IdArg),
@@ -776,6 +777,13 @@ pub(crate) struct ReviewCloseArgs {
     /// Defaults to this process's worker id.
     #[arg(long)]
     pub(crate) reviewer: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct ReviewReleaseArgs {
+    pub(crate) review_gate_id: String,
+    #[arg(long, default_value = "reviewer_relinquished")]
+    pub(crate) reason: String,
 }
 
 #[derive(Args, Debug)]

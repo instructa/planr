@@ -889,6 +889,15 @@ impl App {
                 )?;
                 self.emit(result, "review gate completed".to_string())
             }
+            ReviewCommand::Release(args) => {
+                let reviewer = crate::util::worker_id();
+                let result = self.relinquish_final_review_gate_value(
+                    &args.review_gate_id,
+                    &reviewer,
+                    &args.reason,
+                )?;
+                self.emit(result, "review gate relinquished".to_string())
+            }
             ReviewCommand::Findings(args) => {
                 let result =
                     self.resolve_review_gate_findings_value(&args.review_gate_id, &args.resolve)?;
