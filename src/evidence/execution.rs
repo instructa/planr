@@ -2,11 +2,11 @@
 
 use super::adapter_signal::{AdapterBoundarySignal, adapter_boundary_signal_from_process_output};
 use super::model::{
-    AttemptStatus, CapabilityBinding, EnvironmentBinding, EvidenceAttempt, EvidenceId,
-    FixtureDisclosure, GapReason, ObservationResult, ProcessExecutionContract, ProofObligation,
-    RawResultRef, SandboxLimits, SandboxState, SchemaVersion, Sha256Digest, TargetBinding,
-    TrustedProvenance, TrustedReceiptInput, VantagePoint, VerificationCapabilityInstance,
-    build_trusted_receipt,
+    AgentSkillInvocationResult, AttemptStatus, CapabilityBinding, EnvironmentBinding,
+    EvidenceAttempt, EvidenceId, FixtureDisclosure, GapReason, ObservationResult,
+    ProcessExecutionContract, ProofObligation, RawResultRef, SandboxLimits, SandboxState,
+    SchemaVersion, Sha256Digest, TargetBinding, TrustedProvenance, TrustedReceiptInput,
+    VantagePoint, VerificationCapabilityInstance, build_trusted_receipt,
 };
 use super::policy::{
     EvidenceRepositorySnapshot, capture_repository_snapshot, trusted_receipt_binding_value,
@@ -1478,6 +1478,7 @@ fn strict_structured_observation_results(
         context.repository_root,
         context.fixture_disclosure,
     )?;
+    validate_agent_skill_invocation(obligation, &parsed)?;
     let observations = parsed
         .get("observations")
         .and_then(Value::as_array)
@@ -1579,6 +1580,65 @@ fn strict_structured_observation_results(
         }
     }
     Ok(actuals)
+}
+
+fn validate_agent_skill_invocation(obligation: &ProofObligation, parsed: &Value) -> Result<()> {
+    let methods = obligation
+        .observations
+        .iter()
+        .filter_map(|observation| observation.execution_method.as_ref())
+        .collect::<Vec<_>>();
+    if methods.is_empty() {
+        return Ok(());
+    }
+    if methods.len() != obligation.observations.len() {
+        bail!("agent-skill execution method must cover the exact obligation subset");
+    }
+    let expected = serde_json::to_value(methods[0])?;
+    if methods
+        .iter()
+        .skip(1)
+        .any(|method| serde_json::to_value(method).ok().as_ref() != Some(&expected))
+    {
+        bail!("agent-skill execution method must be identical for the obligation subset");
+    }
+    let invocation: AgentSkillInvocationResult = serde_json::from_value(
+        parsed
+            .get("agent_skill")
+            .cloned()
+            .context("structured observation results missing agent_skill invocation record")?,
+    )
+    .context("structured observation results agent_skill invocation record is invalid")?;
+    if !invocation.invoked {
+        bail!("selected agent skill was not invoked");
+    }
+    if invocation.skill != methods[0].skill {
+        bail!("invoked agent skill does not match the selected skill");
+    }
+    if methods[0].result_schema.schema_ref != invocation.schema_version {
+        bail!("agent-skill result schema does not match the selected result schema");
+    }
+    let expected_ids = obligation
+        .observations
+        .iter()
+        .map(|observation| observation.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let actual_ids = invocation
+        .observations
+        .iter()
+        .map(|observation| observation.requirement_id.as_str())
+        .collect::<BTreeSet<_>>();
+    if actual_ids != expected_ids {
+        bail!("agent-skill invocation observations do not match the obligation subset");
+    }
+    if invocation
+        .observations
+        .iter()
+        .any(|observation| observation.status != AttemptStatus::Passed)
+    {
+        bail!("agent-skill invocation did not pass every required observation");
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
