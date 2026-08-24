@@ -398,6 +398,12 @@ pub struct ObservationRequirement {
         deserialize_with = "deserialize_optional_value_without_null",
         skip_serializing_if = "Option::is_none"
     )]
+    pub execution_method: Option<AgentSkillExecutionMethod>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_value_without_null",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub state_transitions: Option<Value>,
     #[serde(
         default,
@@ -471,7 +477,7 @@ pub(crate) const AGENT_SKILL_RESULT_V1: &str = "planr.evidence.agent-skill-resul
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct AgentSkillExecutionMethod {
+pub struct AgentSkillExecutionMethod {
     pub kind: String,
     pub skill: String,
     pub result_schema: SchemaReferenceBinding,

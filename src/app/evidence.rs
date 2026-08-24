@@ -1428,6 +1428,41 @@ impl App {
                     .repository_execution_contract
                     .as_ref()
                     .unwrap_or(&capability.manifest.availability_probe.execution);
+                let selected_agent_skill = selected
+                    .iter()
+                    .find_map(|observation| observation.execution_method.as_ref())
+                    .map(serde_json::to_value)
+                    .transpose()?;
+                if selected_agent_skill.is_some()
+                    && selected.iter().any(|observation| {
+                        observation
+                            .execution_method
+                            .as_ref()
+                            .and_then(|method| serde_json::to_value(method).ok())
+                            != selected_agent_skill
+                    })
+                {
+                    return Err(EvidenceCommandError::conflict(format!(
+                        "target subset for {} must declare one exact agent-skill execution method",
+                        row.id.as_str()
+                    ))
+                    .into());
+                }
+                let mut input = json!({
+                    "obligation_id": row.id.as_str(),
+                    "requirement_ids": requirement_ids,
+                    "capability_instance_id": instance_id,
+                    "target": target,
+                    "environment": instance.environment,
+                    "execution_contract": execution_contract,
+                    "fixture_disclosure": {
+                        "fixtures_used": false,
+                        "mocks_used": false
+                    }
+                });
+                if let Some(agent_skill) = selected_agent_skill {
+                    input["agent_skill"] = agent_skill;
+                }
                 runs.push(json!({
                     "index": runs.len(),
                     "capability": {
@@ -1436,18 +1471,7 @@ impl App {
                         "manifest_digest": instance.manifest_digest.as_str(),
                         "manifest_version": instance.adapter_version,
                     },
-                    "input": {
-                        "obligation_id": row.id.as_str(),
-                        "requirement_ids": requirement_ids,
-                        "capability_instance_id": instance_id,
-                        "target": target,
-                        "environment": instance.environment,
-                        "execution_contract": execution_contract,
-                        "fixture_disclosure": {
-                            "fixtures_used": false,
-                            "mocks_used": false
-                        }
-                    }
+                    "input": input
                 }));
             }
         }
