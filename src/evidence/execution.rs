@@ -1679,6 +1679,22 @@ fn strict_ordinary_process_observation_results(
             "ordinary process stdout must be a JSON object".to_string(),
         ));
     }
+    validate_agent_skill_invocation(obligation, &parsed).map_err(|error| {
+        OrdinaryObservationError::Malformed(format!(
+            "ordinary process agent-skill invocation is invalid: {error}"
+        ))
+    })?;
+    let mut observed_payload = parsed.clone();
+    if obligation
+        .observations
+        .iter()
+        .any(|observation| observation.execution_method.is_some())
+    {
+        observed_payload
+            .as_object_mut()
+            .expect("ordinary payload was checked as object")
+            .remove("agent_skill");
+    }
     if let Some(schema) = payload_json_schema {
         let validator = jsonschema::draft202012::options()
             .build(schema)
@@ -1688,7 +1704,7 @@ fn strict_ordinary_process_observation_results(
                 ))
             })?;
         let schema_errors = validator
-            .iter_errors(&parsed)
+            .iter_errors(&observed_payload)
             .map(|error| error.to_string())
             .collect::<Vec<_>>();
         if !schema_errors.is_empty() {
@@ -1698,7 +1714,7 @@ fn strict_ordinary_process_observation_results(
             )));
         }
     }
-    let actual_object = parsed.as_object().cloned().ok_or_else(|| {
+    let actual_object = observed_payload.as_object().cloned().ok_or_else(|| {
         OrdinaryObservationError::Malformed(
             "ordinary process stdout must be a JSON object".to_string(),
         )
