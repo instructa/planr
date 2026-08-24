@@ -3580,6 +3580,20 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
     let db_dir = tempdir().unwrap();
     let db = db_dir.path().join("planr.sqlite");
     write_evidence_policy_fixture(dir.path());
+    let skill_output = r#"{"status":"ok","agent_skill":{"schema_version":"planr.evidence.agent-skill-result.v1","skill":"browser-harness","invoked":true,"invocation_id":"inv-browser-harness","observations":[{"requirement_id":"obs-pob-public-run","status":"passed"}]}}"#;
+    let manifest_digest = rewrite_evidence_runner_manifest(dir.path(), |manifest| {
+        manifest["availability_probe"]["execution"]["args"] =
+            json!(["-c", format!("printf '%s' '{skill_output}'")]);
+        manifest["adapter_digest"] = json!(process_adapter_digest(
+            &manifest["availability_probe"]["execution"],
+            vec![]
+        ));
+    });
+    rewrite_evidence_policy_fixture(dir.path(), |policy| {
+        policy["adapter_registrations"][0]["manifest_digest"] = json!(manifest_digest);
+        policy["adapter_registrations"][0]["execution_contract"]["args"] =
+            json!(["-c", format!("printf '%s' '{skill_output}'")]);
+    });
     write_generic_import_validator_fixture(dir.path());
     init_evidence_project(dir.path(), &db, "Evidence Public Surfaces");
     init_git_repo(dir.path());
@@ -3839,6 +3853,11 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
     );
     obligation["observations"][0]["payload_schema"] =
         json!({"schema_ref": "schema://com.example.health.status"});
+    obligation["observations"][0]["execution_method"] = json!({
+        "kind": "agent_skill",
+        "skill": "browser-harness",
+        "result_schema": {"schema_ref": "planr.evidence.agent-skill-result.v1"}
+    });
     let obligation = bind_obligation_to_authored_criterion(
         obligation,
         "pln-evidence-public",
@@ -3922,6 +3941,10 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
         sealed_run_index["schema_version"],
         "planr.evidence.run-index.v2"
     );
+    assert_eq!(
+        sealed_run_index["runs"][0]["input"]["agent_skill"]["skill"],
+        "browser-harness"
+    );
     let run_input_path = dir
         .path()
         .join(sealed_run_index["repository_path"].as_str().unwrap());
@@ -3957,6 +3980,10 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
     assert!(run_result["feature_run_lease"].is_null());
     let attempt_id = run_result["attempt"]["id"].as_str().unwrap();
     let receipt_id = run_result["receipt"]["id"].as_str().unwrap();
+    assert_eq!(
+        run_result["attempt"]["raw_result"]["stdout_excerpt"],
+        skill_output
+    );
 
     let mcp_run = mcp_tool(
         dir.path(),
