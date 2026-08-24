@@ -467,6 +467,159 @@ pub(crate) struct PayloadSchemaBinding {
     pub schema_digest: Sha256Digest,
 }
 
+pub(crate) const AGENT_SKILL_RESULT_V1: &str = "planr.evidence.agent-skill-result.v1";
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AgentSkillExecutionMethod {
+    pub kind: String,
+    pub skill: String,
+    pub result_schema: SchemaReferenceBinding,
+}
+
+impl AgentSkillExecutionMethod {
+    fn validate(&self) -> Result<(), EvidenceDomainError> {
+        if self.kind != "agent_skill" {
+            return Err(EvidenceDomainError::InvalidTrustedBinding(
+                "agent_skill.kind",
+            ));
+        }
+        validate_agent_skill_identifier(&self.skill)?;
+        self.result_schema
+            .validate("agent_skill.result_schema.schema_ref")
+    }
+}
+
+impl<'de> Deserialize<'de> for AgentSkillExecutionMethod {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Raw {
+            kind: String,
+            skill: String,
+            result_schema: SchemaReferenceBinding,
+        }
+
+        let raw = Raw::deserialize(deserializer)?;
+        let method = Self {
+            kind: raw.kind,
+            skill: raw.skill,
+            result_schema: raw.result_schema,
+        };
+        method.validate().map_err(serde::de::Error::custom)?;
+        Ok(method)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AgentSkillObservationResult {
+    pub requirement_id: EvidenceId,
+    pub status: AttemptStatus,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_value_without_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub diagnostics: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AgentSkillInvocationResult {
+    pub schema_version: String,
+    pub skill: String,
+    pub invoked: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub invocation_id: Option<EvidenceId>,
+    pub observations: Vec<AgentSkillObservationResult>,
+}
+
+impl AgentSkillInvocationResult {
+    fn validate(&self) -> Result<(), EvidenceDomainError> {
+        if self.schema_version != AGENT_SKILL_RESULT_V1 {
+            return Err(EvidenceDomainError::InvalidStatus {
+                kind: "agent skill result schema_version",
+                value: self.schema_version.clone(),
+            });
+        }
+        validate_agent_skill_identifier(&self.skill)?;
+        if self.invoked && self.invocation_id.is_none() {
+            return Err(EvidenceDomainError::MissingTrustedBinding(
+                "agent_skill.invocation_id",
+            ));
+        }
+        if !self.invoked && self.invocation_id.is_some() {
+            return Err(EvidenceDomainError::InvalidTrustedBinding(
+                "agent_skill.invocation_id",
+            ));
+        }
+        if self.invoked && self.observations.is_empty() {
+            return Err(EvidenceDomainError::MissingTrustedBinding(
+                "agent_skill.observations",
+            ));
+        }
+        let mut requirement_ids = std::collections::BTreeSet::new();
+        for observation in &self.observations {
+            if !requirement_ids.insert(observation.requirement_id.as_str()) {
+                return Err(EvidenceDomainError::InvalidTrustedBinding(
+                    "agent_skill.observations[].requirement_id",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<'de> Deserialize<'de> for AgentSkillInvocationResult {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Raw {
+            schema_version: String,
+            skill: String,
+            invoked: bool,
+            #[serde(
+                default,
+                deserialize_with = "deserialize_optional_value_without_null"
+            )]
+            invocation_id: Option<EvidenceId>,
+            observations: Vec<AgentSkillObservationResult>,
+        }
+
+        let raw = Raw::deserialize(deserializer)?;
+        let result = Self {
+            schema_version: raw.schema_version,
+            skill: raw.skill,
+            invoked: raw.invoked,
+            invocation_id: raw.invocation_id,
+            observations: raw.observations,
+        };
+        result.validate().map_err(serde::de::Error::custom)?;
+        Ok(result)
+    }
+}
+
+fn validate_agent_skill_identifier(value: &str) -> Result<(), EvidenceDomainError> {
+    if value.is_empty()
+        || value.trim() != value
+        || !value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | ':')
+        })
+    {
+        return Err(EvidenceDomainError::InvalidTrustedBinding(
+            "agent_skill.skill",
+        ));
+    }
+    Ok(())
+}
+
 impl PayloadSchemaBinding {
     fn validate(&self) -> Result<(), EvidenceDomainError> {
         require_non_empty(&self.schema_ref, "payload_schema.schema_ref")
