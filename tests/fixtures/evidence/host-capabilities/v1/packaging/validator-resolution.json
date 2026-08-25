@@ -7,8 +7,8 @@
     "entrypoint": "scripts/planr-host-capability-validator",
     "entrypoint_resolution_order": [
       "npm/native/<target>/planr-host-capability-validator",
-      "target/release/planr-host-capability-validator",
-      "target/debug/planr-host-capability-validator",
+      "<cargo-metadata-target-directory>/release/planr-host-capability-validator",
+      "<cargo-metadata-target-directory>/debug/planr-host-capability-validator",
       "cargo build --manifest-path <package-root>/Cargo.toml --bin planr-host-capability-validator"
     ],
     "platform_suffix": {

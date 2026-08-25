@@ -1,7 +1,13 @@
 #!/usr/bin/env sh
 set -eu
 
-version="$(cargo metadata --no-deps --format-version 1 | sed -n 's/.*"version":"\([^"]*\)".*/\1/p' | head -n 1)"
+cargo_metadata="$(cargo metadata --no-deps --format-version 1)"
+version="$(printf '%s\n' "$cargo_metadata" | sed -n 's/.*"version":"\([^"]*\)".*/\1/p' | head -n 1)"
+cargo_target_dir="$(printf '%s\n' "$cargo_metadata" | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p' | head -n 1)"
+if [ -z "$version" ] || [ -z "$cargo_target_dir" ]; then
+  echo "cargo metadata did not return the package version and target directory" >&2
+  exit 1
+fi
 detect_target() {
   os="$(uname -s | tr '[:upper:]' '[:lower:]')"
   arch="$(uname -m)"
@@ -50,12 +56,12 @@ mkdir -p "$target_dir"
 
 if [ -n "$cargo_target" ]; then
   cargo build --release --target "$cargo_target"
-  built_bin="target/$cargo_target/release/planr"
-  built_validator="target/$cargo_target/release/planr-host-capability-validator"
+  built_bin="$cargo_target_dir/$cargo_target/release/planr"
+  built_validator="$cargo_target_dir/$cargo_target/release/planr-host-capability-validator"
 else
   cargo build --release
-  built_bin="target/release/planr"
-  built_validator="target/release/planr-host-capability-validator"
+  built_bin="$cargo_target_dir/release/planr"
+  built_validator="$cargo_target_dir/release/planr-host-capability-validator"
 fi
 
 cp "$built_bin" "$target_dir/planr"

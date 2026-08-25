@@ -97,10 +97,18 @@ install_binary() {
   chmod 755 "$bin_dir/planr"
 }
 
+local_release_bin=""
+if [ "${PLANR_DOWNLOAD:-0}" != "1" ] && [ -f Cargo.toml ] && command -v cargo >/dev/null 2>&1; then
+  cargo_target_dir="$(cargo metadata --no-deps --format-version 1 | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p' | head -n 1)"
+  if [ -n "$cargo_target_dir" ]; then
+    local_release_bin="$cargo_target_dir/release/planr"
+  fi
+fi
+
 if [ -n "${PLANR_BIN:-}" ]; then
   install_binary "$PLANR_BIN"
-elif [ "${PLANR_DOWNLOAD:-0}" != "1" ] && [ -f target/release/planr ]; then
-  install_binary target/release/planr
+elif [ -n "$local_release_bin" ] && [ -f "$local_release_bin" ]; then
+  install_binary "$local_release_bin"
 else
   target="${PLANR_TARGET:-$(detect_target)}"
   asset="planr-$target.tar.gz"

@@ -19,7 +19,8 @@ node "$planr_harness" replay --fixture-root "$planr_fixture_root"
 
 The replay command resolves the canonical Rust validator as a sibling
 entrypoint at `scripts/planr-host-capability-validator`. In a source checkout
-that entrypoint uses an existing local build or builds
+that entrypoint uses the Cargo-configured target directory for an existing
+local build or builds
 `planr-host-capability-validator`; in packaged artifacts the native validator is
 bundled beside the harness.
 

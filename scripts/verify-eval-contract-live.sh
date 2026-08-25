@@ -2,7 +2,16 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN="${PLANR_BIN:-$ROOT/target/debug/planr}"
+if [[ -n "${PLANR_BIN:-}" ]]; then
+  BIN="$PLANR_BIN"
+else
+  CARGO_TARGET_DIRECTORY="$(cargo metadata --manifest-path "$ROOT/Cargo.toml" --no-deps --format-version 1 | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p' | head -n 1)"
+  [[ -n "$CARGO_TARGET_DIRECTORY" ]] || {
+    echo "cargo metadata did not return a target directory" >&2
+    exit 1
+  }
+  BIN="$CARGO_TARGET_DIRECTORY/debug/planr"
+fi
 NODE_BIN="${NODE_BIN:-$(command -v node)}"
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/planr-eval-live.XXXXXX")"
 FRESH="$TMP/fresh-repo"
