@@ -2021,7 +2021,10 @@ mod tests {
         let gate_error = app
             .ensure_final_product_review_gate_value("plan-a")
             .expect_err("late binding must block final-review admission");
-        assert!(gate_error.to_string() == "final_product_review_source_freeze_stale:plan-a");
+        assert_eq!(
+            gate_error.to_string(),
+            "binding_plan_completes_through_evidence_coverage:plan-a"
+        );
         assert!(
             repository
                 .review_gates_for_run(run_id, false)

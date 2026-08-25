@@ -3946,12 +3946,12 @@ allow_overwrite = true
             .verification_work_packet_value("plan-a", false)
             .unwrap()
             .unwrap();
-        (
-            root,
-            app,
-            run.run.id,
-            packet["work_packet"]["sealed_run_index"].clone(),
-        )
+        assert_eq!(packet["work_packet"]["kind"], "verification");
+        let readiness = app
+            .evidence_readiness_value(EvidenceCoverageScope::Plan, "plan-a")
+            .unwrap();
+        assert_eq!(readiness["status"], "passed");
+        (root, app, run.run.id, readiness["run_index"].clone())
     }
 
     #[test]
@@ -5394,9 +5394,9 @@ allow_overwrite = true
             )
             .unwrap();
         seed_receipt_bound_settlement(&app, &policy_digest);
+        add_outcome(&app, "item-after-verification");
         app.evidence_coverage_value(EvidenceCoverageScope::Plan, "plan-a")
             .expect("initial canonical settlement");
-        add_outcome(&app, "item-after-verification");
         let repository = ExecutionRunRepository::new(&app.conn);
         let settled = repository
             .active_feature_run_for_plan("project-a", "plan-a")
@@ -5428,8 +5428,8 @@ allow_overwrite = true
             .unwrap();
         app.conn
             .execute(
-                "UPDATE feature_run_role_leases SET worker_id = ?2
-                 WHERE run_id = ?1 AND role = 'maker'",
+                "UPDATE feature_run_role_leases SET worker_id = ?2, released_at = datetime('now')
+                 WHERE run_id = ?1 AND role = 'maker' AND released_at IS NULL",
                 params![settled.run.id, worker_id()],
             )
             .unwrap();
@@ -6838,8 +6838,9 @@ allow_overwrite = true
     }
 
     #[test]
-    fn final_recovery_created_outcome_reuses_verified_lineage_and_returns_to_final_review() {
+    fn recovered_verified_continuation_reuses_lineage_and_completes_without_reverification() {
         let (_root, app, input) = stranded_recovery_app();
+        let run_id = input["run_id"].as_str().unwrap().to_string();
         app.recover_verification_settlement_value(input)
             .expect("restore verified continuation");
         let attempts_before: i64 = app
@@ -6861,7 +6862,7 @@ allow_overwrite = true
         assert_eq!(settled["transition"], "verified_continuation_complete");
         assert_eq!(
             settled["execution_state"]["feature_run"]["phase"],
-            "source_frozen"
+            "complete"
         );
         let (attempts_after, completions): (i64, i64) = app
             .conn
@@ -6881,10 +6882,9 @@ allow_overwrite = true
             )
             .unwrap();
         let run = ExecutionRunRepository::new(&app.conn)
-            .active_feature_run_for_plan("project-a", "plan-a")
-            .unwrap()
+            .feature_run(&run_id)
             .unwrap();
-        assert_eq!(run.run.phase, FeatureRunPhase::SourceFrozen);
+        assert_eq!(run.run.phase, FeatureRunPhase::Complete);
         assert!(run.run.role_owners.is_empty());
     }
 
@@ -6897,7 +6897,7 @@ allow_overwrite = true
         assert_eq!(recovered["created"], true);
         assert_eq!(
             recovered["execution_state"]["feature_run"]["phase"],
-            "source_frozen"
+            "complete"
         );
         let repeated = app
             .recover_verification_settlement_value(input)
