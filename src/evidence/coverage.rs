@@ -666,7 +666,11 @@ fn evaluate_observation(
             context.repository_snapshot,
         )?;
         let binding_relevant = !gaps.iter().any(|gap| stale_candidate_gap(gap));
-        if !lineage_relevant || !binding_relevant {
+        if !lineage_relevant {
+            historical_rejected_gaps.push((receipt.id.clone(), gaps));
+            continue;
+        }
+        if !binding_relevant {
             coverage.rejected_receipt_ids.insert(receipt.id.clone());
             coverage.diagnostic_receipt_ids.insert(receipt.id.clone());
             historical_rejected_gaps.push((receipt.id.clone(), gaps));

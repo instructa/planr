@@ -1757,7 +1757,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::super::execution::{ConfiguredProcessRunInput, run_configured_process_adapter};
+    use super::super::execution::{
+        ConfiguredProcessRunInput, resolve_process_run, resolved_process_adapter_digest,
+        run_configured_process_adapter,
+    };
     use super::super::model::{
         FixtureDisclosure, ProcessExecutionContract, ProofObligation, TargetBinding,
     };
@@ -1926,41 +1929,15 @@ mod tests {
         );
     }
 
-    fn process_adapter_digest(root: &Path, execution: &ProcessExecutionContract) -> String {
-        sha256_json_digest(&json!({
-            "schema_version": "planr.process_adapter.binding.v1",
-            "execution_contract": execution,
-            "file_arguments": [process_adapter_file_argument_identity(root, execution, 0)],
-        }))
-        .unwrap()
-    }
-
-    fn process_adapter_file_argument_identity(
+    fn process_adapter_digest(
         root: &Path,
+        manifest: &Value,
         execution: &ProcessExecutionContract,
-        index: usize,
-    ) -> Value {
-        let argument = execution.args[index].as_str();
-        let cwd = root
-            .join(execution.working_directory.as_deref().unwrap_or("."))
-            .canonicalize()
-            .unwrap();
-        let canonical = cwd.join(argument).canonicalize().unwrap();
-        let relative = canonical
-            .strip_prefix(&cwd)
-            .unwrap()
-            .to_string_lossy()
-            .to_string();
-        json!({
-            "argument_index": index,
-            "argument": argument,
-            "resolved_relative_to": "command_cwd",
-            "cwd": cwd.to_string_lossy(),
-            "path": canonical.to_string_lossy(),
-            "cwd_relative_path": relative,
-            "path_digest": sha256_prefixed_bytes(canonical.to_string_lossy().as_bytes()),
-            "content_digest": sha256_prefixed_bytes(&fs::read(&canonical).unwrap()),
-        })
+    ) -> String {
+        let manifest: VerificationCapabilityManifest =
+            serde_json::from_value(manifest.clone()).unwrap();
+        let resolved = resolve_process_run(root, execution, &BTreeMap::new()).unwrap();
+        resolved_process_adapter_digest(&manifest, &resolved).unwrap()
     }
 
     fn fixture_root() -> TempDir {
@@ -2129,7 +2106,9 @@ process.stdout.write(JSON.stringify(result));
             formats,
             observations,
             generic_validator_execution_contract("generic-validator.mjs"),
-            |execution_contract| process_adapter_digest(root, execution_contract),
+            |manifest, execution_contract| {
+                process_adapter_digest(root, manifest, execution_contract)
+            },
         );
     }
 
@@ -2156,7 +2135,7 @@ process.stdout.write(JSON.stringify(result));
             formats,
             observations,
             execution_contract,
-            |_| {
+            |_, _| {
                 "sha256:1111111111111111111111111111111111111111111111111111111111111111"
                     .to_string()
             },
@@ -2175,7 +2154,9 @@ process.stdout.write(JSON.stringify(result));
             formats,
             observations,
             execution_contract,
-            |execution_contract| process_adapter_digest(root, execution_contract),
+            |manifest, execution_contract| {
+                process_adapter_digest(root, manifest, execution_contract)
+            },
         );
     }
 
@@ -2184,12 +2165,12 @@ process.stdout.write(JSON.stringify(result));
         formats: &[&str],
         observations: &[&str],
         execution_contract: ProcessExecutionContract,
-        adapter_digest: impl FnOnce(&ProcessExecutionContract) -> String,
+        adapter_digest: impl FnOnce(&Value, &ProcessExecutionContract) -> String,
     ) {
         let manifest = manifest_value(formats, observations);
         let mut manifest = manifest;
         manifest["availability_probe"]["execution"] = json!(execution_contract);
-        manifest["adapter_digest"] = json!(adapter_digest(&execution_contract));
+        manifest["adapter_digest"] = json!(adapter_digest(&manifest, &execution_contract));
         let manifest_digest = sha256_json_digest(&manifest).unwrap();
         let instance = instance_value(&manifest_digest, observations[0]);
         insert_verifier_rows(
