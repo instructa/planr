@@ -23,8 +23,9 @@ use tempfile::tempdir;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 fn planr() -> Command {
-    let mut cmd = Command::cargo_bin("planr").expect("planr binary");
-    scrub_planr_test_environment(&mut cmd);
+    let binary = assert_cmd::cargo::cargo_bin("planr");
+    let mut cmd = Command::new(&binary);
+    configure_planr_test_environment(&mut cmd, &binary);
     cmd
 }
 
@@ -206,8 +207,14 @@ fn verification_admission_repair_settles_refreezes_and_replays_idempotently() {
     let db_arg = db.to_str().unwrap().to_string();
     write_evidence_policy_fixture(dir.path());
     write_materiality_policy(dir.path());
+    // Cargo may hardlink target/debug/planr to its hashed test artifact on
+    // Linux. Source-freeze identity intentionally rejects hardlinks, so run
+    // this lifecycle from the same private single-link copy that a packaged
+    // Planr installation provides.
+    let binary_dir = tempdir().unwrap();
+    let source_freeze_planr = private_planr_binary(binary_dir.path());
     let run = |worker: &str, args: &[&str], succeeds: bool| -> Value {
-        let mut command = planr();
+        let mut command = planr_from_binary(&source_freeze_planr);
         command
             .current_dir(dir.path())
             .env("PLANR_WORKER_ID", worker)
@@ -462,7 +469,7 @@ fn verification_admission_repair_settles_refreezes_and_replays_idempotently() {
 
 fn planr_from_binary(binary: &Path) -> Command {
     let mut cmd = Command::new(binary);
-    scrub_planr_test_environment(&mut cmd);
+    configure_planr_test_environment(&mut cmd, binary);
     cmd
 }
 
@@ -486,11 +493,34 @@ fn scrub_planr_test_environment(cmd: &mut Command) {
     }
 }
 
+fn planr_test_path(binary: &Path) -> std::ffi::OsString {
+    std::env::join_paths(
+        std::iter::once(
+            binary
+                .parent()
+                .expect("Planr test binary must have a parent directory")
+                .to_path_buf(),
+        )
+        .chain(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        )),
+    )
+    .expect("Planr test binary path must be valid")
+}
+
+fn configure_planr_test_environment(cmd: &mut Command, binary: &Path) {
+    scrub_planr_test_environment(cmd);
+    // Built-in Evidence probes invoke bare `planr`. Bind them to the exact
+    // binary under test instead of an installed developer copy or CI PATH.
+    cmd.env("PATH", planr_test_path(binary));
+}
+
 fn std_planr_from_binary(binary: &Path) -> StdCommand {
     let mut cmd = StdCommand::new(binary);
     for var in PLANR_TEST_ENV_VARS {
         cmd.env_remove(var);
     }
+    cmd.env("PATH", planr_test_path(binary));
     cmd
 }
 
@@ -4267,7 +4297,7 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
 
     let port = free_port();
     let bin = assert_cmd::cargo::cargo_bin("planr");
-    let mut server = StdCommand::new(&bin)
+    let mut server = std_planr_from_binary(&bin)
         .current_dir(dir.path())
         .args([
             "--db",
@@ -14819,39 +14849,22 @@ fn complete_binding_single_owner_inventory_keeps_adapter_at_boundary() {
         "Planr skills must delegate identity and completeness to canonical owners"
     );
 
-    let manifest: Value =
-        serde_json::from_str(
-            &fs::read_to_string(root.join(
-                ".planr/evidence/adapters/verifier-complete-binding-authority-v1.manifest.json",
-            ))
-            .unwrap(),
-        )
-        .unwrap();
-    let policy: Value =
-        serde_json::from_str(&fs::read_to_string(root.join(".planr/evidence.yaml")).unwrap())
-            .unwrap();
-    let registration = policy["adapter_registrations"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|registration| {
-            registration["manifest_id"] == "verifier-complete-binding-authority-v1"
-        })
-        .unwrap();
     let obsolete_adapter = ["scripts/verify-complete-binding-authority", ".mjs"].concat();
-    for current_contract in [
-        &manifest["availability_probe"]["execution"],
-        &registration["execution_contract"],
-    ] {
-        assert_eq!(current_contract["executable"], "rustup");
-        let args = current_contract["args"].as_array().unwrap();
-        assert!(args.iter().any(|arg| arg == "cargo"));
-        assert!(
-            args.iter()
-                .any(|arg| arg == "planr-complete-binding-authority")
-        );
-        assert!(!current_contract.to_string().contains(&obsolete_adapter));
-    }
+    let cargo_manifest = fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    let adapter =
+        fs::read_to_string(root.join("src/bin/planr-complete-binding-authority.rs")).unwrap();
+    assert!(
+        cargo_manifest.contains("name = \"planr-complete-binding-authority\"")
+            && cargo_manifest.contains("path = \"src/bin/planr-complete-binding-authority.rs\""),
+        "the complete-binding authority must remain a tracked Rust adapter binary"
+    );
+    assert!(
+        adapter.contains("const ADAPTER_SOURCE_ARG: &str =")
+            && adapter
+                .contains("complete_binding_authority_requires_the_exact_declared_criterion_set")
+            && !adapter.contains(&obsolete_adapter),
+        "the tracked adapter must own the focused complete-binding boundary"
+    );
     assert!(
         !root.join(obsolete_adapter).exists(),
         "obsolete JavaScript adapter must be deleted"
