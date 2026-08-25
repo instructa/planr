@@ -46,6 +46,7 @@ Start the server with `planr serve --port 7526`. It binds only `127.0.0.1`; ther
 | GET | `/v1/evidence/capabilities` |
 | GET | `/v1/evidence/capabilities/{id}` |
 | POST | `/v1/evidence/run` |
+| POST | `/v1/evidence/verify` |
 | POST | `/v1/evidence/import` |
 | POST | `/v1/evidence/migrate` |
 | GET | `/v1/evidence/classifications` |
@@ -55,6 +56,7 @@ Start the server with `planr serve --port 7526`. It binds only `127.0.0.1`; ther
 | POST | `/v1/evidence/coverage`, `/v1/evidence/explain` |
 | POST | `/v1/items/{id}/review-annotations`, `/v1/items/{id}/review-feedback` |
 | POST | `/v1/review-gates/{id}/close` |
+| POST | `/v1/review-gates/{id}/release` |
 | POST | `/v1/review-gates/{id}/findings/resolve` |
 | POST | `/v1/recover/sweep`, `/v1/policy/admit` |
 
