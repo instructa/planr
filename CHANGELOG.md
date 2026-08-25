@@ -22,7 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Retire a stranded Verification FeatureRun when its current item status or owner no longer matches the verifier lease, and restore the exact observed item state without direct database repair.
 - Stop pre-cancelled Evidence processes before spawn so interrupted work cannot execute adapter side effects or race into an unavailable result.
 - Preserve the observed adapter exit when a fast child closes stdin without reading the sealed request, instead of misclassifying the completed process as unavailable because of a benign broken pipe.
-- Bind clean-checkout Evidence E2E probes to the exact Planr binary under test and use a private single-link copy for source-freeze identity, so Linux CI cannot depend on a global installation or ignored local runtime state.
+- Bind clean-checkout Evidence E2E probes to the exact Planr binary under test and use a private single-link bundle with its native host validator for source-freeze identity, so Linux CI cannot depend on a global installation, Cargo fallback, or ignored local runtime state.
 
 ## [1.10.0-alpha.7] - 2026-08-15
 

@@ -526,25 +526,38 @@ fn std_planr_from_binary(binary: &Path) -> StdCommand {
 
 fn private_planr_binary(root: &Path) -> PathBuf {
     let source = assert_cmd::cargo::cargo_bin("planr");
-    private_planr_binary_from(root, &source)
+    let planr = private_planr_binary_from(root, &source);
+    let validator_source = assert_cmd::cargo::cargo_bin("planr-host-capability-validator");
+    let validator_name = validator_source
+        .file_name()
+        .expect("host capability validator must have a file name");
+    copy_private_test_binary(
+        &validator_source,
+        &planr.parent().unwrap().join(validator_name),
+    );
+    planr
 }
 
 fn private_planr_binary_from(root: &Path, source: &Path) -> PathBuf {
     let destination = root.join(".planr/test-bin/planr");
+    copy_private_test_binary(source, &destination);
+    destination
+}
+
+fn copy_private_test_binary(source: &Path, destination: &Path) {
     fs::create_dir_all(destination.parent().unwrap()).unwrap();
-    fs::copy(source, &destination).unwrap();
+    fs::copy(source, destination).unwrap();
     #[cfg(unix)]
-    fs::set_permissions(&destination, fs::Permissions::from_mode(0o555)).unwrap();
+    fs::set_permissions(destination, fs::Permissions::from_mode(0o555)).unwrap();
     #[cfg(not(unix))]
     {
-        let mut permissions = fs::metadata(&destination).unwrap().permissions();
+        let mut permissions = fs::metadata(destination).unwrap().permissions();
         permissions.set_readonly(true);
-        fs::set_permissions(&destination, permissions).unwrap();
+        fs::set_permissions(destination, permissions).unwrap();
     }
-    assert_eq!(fs::read(&destination).unwrap(), fs::read(source).unwrap());
+    assert_eq!(fs::read(destination).unwrap(), fs::read(source).unwrap());
     #[cfg(unix)]
-    assert_eq!(fs::metadata(&destination).unwrap().nlink(), 1);
-    destination
+    assert_eq!(fs::metadata(destination).unwrap().nlink(), 1);
 }
 
 #[cfg(unix)]
@@ -1782,11 +1795,13 @@ fn write_fresh_host_capture_envelope_with_producer(
 #[test]
 fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_mcp() {
     const HOST_OBSERVATION: &str = "host.codex.chrome_browser_client";
+    let planr_binary_dir = tempdir().unwrap();
+    let planr_binary = private_planr_binary(planr_binary_dir.path());
     let canonical_temp_root = std::env::temp_dir().canonicalize().unwrap();
     let dir = tempfile::tempdir_in(canonical_temp_root).unwrap();
     let canonical_temp_root = dir.path().parent().unwrap().to_path_buf();
     let planr = || {
-        let mut command = crate::planr();
+        let mut command = planr_from_binary(&planr_binary);
         command.env("TMPDIR", &canonical_temp_root);
         command
     };
@@ -2086,7 +2101,7 @@ fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_m
     );
     let http_admission_request = json!({"schema_version":"planr.evidence.host_capture.admission.v1","plan_id":http_authority["plan_id"],"run_id":http_authority["run_id"],"freeze_id":http_authority["freeze_id"],"run_revision":http_authority["run_revision"],"obligation_id":"pob-host-capture","import_root":canonical_http_import_root});
     let http_port = free_port();
-    let mut http_server = std_planr_from_binary(&assert_cmd::cargo::cargo_bin("planr"));
+    let mut http_server = std_planr_from_binary(&planr_binary);
     let mut http_server = http_server
         .current_dir(http_dir.path())
         .env("PLANR_WORKER_ID", "http-verifier")
@@ -5640,6 +5655,9 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
 
 #[test]
 fn evidence_process_adapter_semantic_mismatch_does_not_satisfy_coverage() {
+    let planr_binary_dir = tempdir().unwrap();
+    let planr_binary = private_planr_binary(planr_binary_dir.path());
+    let planr = || planr_from_binary(&planr_binary);
     let dir = tempdir().unwrap();
     let db_dir = tempdir().unwrap();
     let db = db_dir.path().join("planr.sqlite");
@@ -5895,6 +5913,9 @@ fn evidence_process_adapter_semantic_mismatch_does_not_satisfy_coverage() {
 
 #[test]
 fn evidence_process_adapter_schema_invalid_stdout_is_verifier_failed() {
+    let planr_binary_dir = tempdir().unwrap();
+    let planr_binary = private_planr_binary(planr_binary_dir.path());
+    let planr = || planr_from_binary(&planr_binary);
     let dir = tempdir().unwrap();
     let db_dir = tempdir().unwrap();
     let db = db_dir.path().join("planr.sqlite");
@@ -11997,6 +12018,9 @@ fn plan_work_type_annotations_seed_routed_items_without_retags() {
 
 #[test]
 fn canonical_verification_task_builds_a_sealed_verifier_packet_without_retagging() {
+    let planr_binary_dir = tempdir().unwrap();
+    let planr_binary = private_planr_binary(planr_binary_dir.path());
+    let planr = || planr_from_binary(&planr_binary);
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
     let db_arg = db.to_str().unwrap().to_string();
@@ -12102,7 +12126,6 @@ fn canonical_verification_task_builds_a_sealed_verifier_packet_without_retagging
             .stdout,
     );
     init_git_repo(dir.path());
-    let source_freeze_planr = private_planr_binary(dir.path());
     let mut obligation = evidence_obligation(
         "pob-canonical-verifier-packet",
         policy["object"]["digest"].as_str().unwrap(),
@@ -12151,7 +12174,7 @@ fn canonical_verification_task_builds_a_sealed_verifier_packet_without_retagging
     assert_eq!(picked["item"]["id"], implementation_id);
 
     let done = single_json_document(
-        &planr_from_binary(&source_freeze_planr)
+        &planr()
             .current_dir(dir.path())
             .env("PLANR_WORKER_ID", "canonical-maker")
             .args([
