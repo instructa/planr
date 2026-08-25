@@ -18,16 +18,40 @@ function platformTarget() {
 }
 
 const target = platformTarget();
-const candidates = [
+const packagedCandidates = [
   process.env.PLANR_NATIVE_BIN,
   // Published package: per-platform binaries bundled at release time.
   target && path.join(here, "..", "native", target, "planr"),
-  // Repository checkout: local cargo builds.
-  path.join(packageRoot, "target", "release", "planr"),
-  path.join(packageRoot, "target", "debug", "planr"),
 ].filter(Boolean);
 
-const binary = candidates.find(candidate => fs.existsSync(candidate));
+function repositoryBuildCandidates() {
+  if (!fs.existsSync(path.join(packageRoot, "Cargo.toml"))) {
+    return [];
+  }
+  const metadata = spawnSync(
+    "cargo",
+    ["metadata", "--no-deps", "--format-version", "1"],
+    { cwd: packageRoot, encoding: "utf8" },
+  );
+  if (metadata.status !== 0) {
+    return [];
+  }
+  try {
+    const targetDirectory = JSON.parse(metadata.stdout).target_directory;
+    if (typeof targetDirectory !== "string" || targetDirectory.length === 0) {
+      return [];
+    }
+    return [
+      path.join(targetDirectory, "release", "planr"),
+      path.join(targetDirectory, "debug", "planr"),
+    ];
+  } catch {
+    return [];
+  }
+}
+
+const binary = packagedCandidates.find(candidate => fs.existsSync(candidate))
+  ?? repositoryBuildCandidates().find(candidate => fs.existsSync(candidate));
 
 if (!binary) {
   if (!target) {
