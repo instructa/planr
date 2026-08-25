@@ -4716,11 +4716,18 @@ fn validate_external_host_capture_with_script(
         "--import-fixture-root".to_string(),
         import_root.to_string_lossy().to_string(),
     ];
+    let mut env = Vec::new();
+    if let Some(validator) = host_capability_validator_path()? {
+        env.push((
+            "PLANR_HOST_CAPABILITY_VALIDATOR",
+            validator.to_string_lossy().to_string(),
+        ));
+    }
     let cancellation = CancellationToken::new();
     let output = run_bounded_process(BoundedProcessInput {
         cwd: repository_root,
         argv: &argv,
-        env: Vec::new(),
+        env,
         stdin: None,
         timeout: Duration::from_millis(timeout_ms),
         output_limit_bytes: 1_048_576,
@@ -4815,6 +4822,21 @@ fn host_capability_harness_path() -> Result<PathBuf> {
         .into_iter()
         .find(|path| path.exists())
         .ok_or_else(|| anyhow!("host capability harness script is not installed"))
+}
+
+fn host_capability_validator_path() -> Result<Option<PathBuf>> {
+    if let Ok(path) = std::env::var("PLANR_HOST_CAPABILITY_VALIDATOR") {
+        return Ok(Some(PathBuf::from(path)));
+    }
+    let executable_name = format!(
+        "planr-host-capability-validator{}",
+        std::env::consts::EXE_SUFFIX
+    );
+    let Some(bin_dir) = std::env::current_exe()?.parent().map(Path::to_path_buf) else {
+        return Ok(None);
+    };
+    let candidate = bin_dir.join(executable_name);
+    Ok(candidate.is_file().then_some(candidate))
 }
 
 fn resolve_evidence_input_path(repository_root: &Path, raw: &str) -> PathBuf {

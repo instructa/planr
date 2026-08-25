@@ -1858,6 +1858,32 @@ fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_m
             "verification",
         ],
     );
+    assert_eq!(
+        verifier["work_packet"]["next_action"],
+        "planr evidence readiness --scope plan --id pln-evidence-public --json"
+    );
+    let readiness = cli(
+        "host-verifier",
+        &[
+            "evidence",
+            "readiness",
+            "--scope",
+            "plan",
+            "--id",
+            "pln-evidence-public",
+        ],
+    );
+    assert_eq!(readiness["object"]["status"], "passed");
+    let verifier = cli(
+        "host-verifier",
+        &[
+            "pick",
+            "--plan",
+            "pln-evidence-public",
+            "--work-type",
+            "verification",
+        ],
+    );
     let authority = &verifier["work_packet"]["verification_admission"];
 
     let import_root = tempfile::tempdir_in(&canonical_temp_root).unwrap();
@@ -1983,6 +2009,32 @@ fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_m
             "--next",
         ],
     );
+    let http_verifier = http_cli(
+        "http-verifier",
+        &[
+            "pick",
+            "--plan",
+            "pln-evidence-public",
+            "--work-type",
+            "verification",
+        ],
+    );
+    assert_eq!(
+        http_verifier["work_packet"]["next_action"],
+        "planr evidence readiness --scope plan --id pln-evidence-public --json"
+    );
+    let http_readiness = http_cli(
+        "http-verifier",
+        &[
+            "evidence",
+            "readiness",
+            "--scope",
+            "plan",
+            "--id",
+            "pln-evidence-public",
+        ],
+    );
+    assert_eq!(http_readiness["object"]["status"], "passed");
     let http_verifier = http_cli(
         "http-verifier",
         &[
@@ -2129,6 +2181,32 @@ fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_m
             "verification",
         ],
     );
+    assert_eq!(
+        mcp_verifier["work_packet"]["next_action"],
+        "planr evidence readiness --scope plan --id pln-evidence-public --json"
+    );
+    let mcp_readiness = mcp_cli(
+        "mcp-verifier",
+        &[
+            "evidence",
+            "readiness",
+            "--scope",
+            "plan",
+            "--id",
+            "pln-evidence-public",
+        ],
+    );
+    assert_eq!(mcp_readiness["object"]["status"], "passed");
+    let mcp_verifier = mcp_cli(
+        "mcp-verifier",
+        &[
+            "pick",
+            "--plan",
+            "pln-evidence-public",
+            "--work-type",
+            "verification",
+        ],
+    );
     let mcp_authority = &mcp_verifier["work_packet"]["verification_admission"];
     let mcp_import_root = tempfile::tempdir_in(&canonical_temp_root).unwrap();
     let canonical_mcp_import_root = mcp_import_root.path().canonicalize().unwrap();
@@ -2261,6 +2339,32 @@ fn evidence_host_capture_import_uses_fresh_strict_boundary_across_cli_http_and_m
             "--next",
         ],
     );
+    let negative_verifier = negative_cli(
+        "negative-verifier",
+        &[
+            "pick",
+            "--plan",
+            "pln-evidence-public",
+            "--work-type",
+            "verification",
+        ],
+    );
+    assert_eq!(
+        negative_verifier["work_packet"]["next_action"],
+        "planr evidence readiness --scope plan --id pln-evidence-public --json"
+    );
+    let negative_readiness = negative_cli(
+        "negative-verifier",
+        &[
+            "evidence",
+            "readiness",
+            "--scope",
+            "plan",
+            "--id",
+            "pln-evidence-public",
+        ],
+    );
+    assert_eq!(negative_readiness["object"]["status"], "passed");
     let negative_verifier = negative_cli(
         "negative-verifier",
         &[
@@ -5651,7 +5755,32 @@ fn evidence_process_adapter_semantic_mismatch_does_not_satisfy_coverage() {
             .get_output()
             .stdout,
     );
-    let run_path = verifier["work_packet"]["sealed_run_index"]["repository_path"]
+    assert_eq!(
+        verifier["work_packet"]["next_action"],
+        "planr evidence readiness --scope plan --id pln-evidence-public --json"
+    );
+    let readiness = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", "semantic-verifier")
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "readiness",
+                "--scope",
+                "plan",
+                "--id",
+                "pln-evidence-public",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    assert_eq!(readiness["object"]["status"], "passed");
+    let run_path = readiness["object"]["run_index"]["repository_path"]
         .as_str()
         .unwrap();
     let run = single_json_document(
@@ -5894,7 +6023,32 @@ fn evidence_process_adapter_schema_invalid_stdout_is_verifier_failed() {
             .get_output()
             .stdout,
     );
-    let run_path = verifier["work_packet"]["sealed_run_index"]["repository_path"]
+    assert_eq!(
+        verifier["work_packet"]["next_action"],
+        "planr evidence readiness --scope plan --id pln-evidence-public --json"
+    );
+    let readiness = single_json_document(
+        &planr()
+            .current_dir(dir.path())
+            .env("PLANR_WORKER_ID", "schema-invalid-verifier")
+            .args([
+                "--db",
+                db.to_str().unwrap(),
+                "--json",
+                "evidence",
+                "readiness",
+                "--scope",
+                "plan",
+                "--id",
+                "pln-evidence-public",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    );
+    assert_eq!(readiness["object"]["status"], "passed");
+    let run_path = readiness["object"]["run_index"]["repository_path"]
         .as_str()
         .unwrap();
     let run = single_json_document(
