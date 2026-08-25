@@ -235,21 +235,17 @@ impl App {
         }
         let CurrentVerificationSnapshot { facts, admission } =
             ExecutionRunRepository::new(&self.conn).current_verification_snapshot(persisted)?;
-        if facts.verification_item.as_ref().is_some_and(|item| {
-            !matches!(
-                item.status,
-                CurrentVerificationItemLeaseStatus::Picked
-                    | CurrentVerificationItemLeaseStatus::Running
-            ) || item.worker_id.as_deref() != Some(facts.verifier_worker_id.as_str())
-        }) {
-            bail!(
-                "current_verification_item_ownership_conflict:{}",
-                facts.run_id
-            );
-        }
+        let verification_item_ownership_conflict =
+            facts.verification_item.as_ref().is_some_and(|item| {
+                !matches!(
+                    item.status,
+                    CurrentVerificationItemLeaseStatus::Picked
+                        | CurrentVerificationItemLeaseStatus::Running
+                ) || item.worker_id.as_deref() != Some(facts.verifier_worker_id.as_str())
+            });
         // Verification starts when pick commits the verifier lease. Admission does not exist
         // until that verifier subsequently passes readiness and seals the exact run index.
-        if admission.is_none() {
+        if admission.is_none() && !verification_item_ownership_conflict {
             return Ok(None);
         }
         Ok(Some(CurrentVerificationDiagnosisSnapshot {

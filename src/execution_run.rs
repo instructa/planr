@@ -260,6 +260,7 @@ pub struct CurrentVerificationInvariantFacts {
 #[serde(rename_all = "snake_case")]
 pub enum CurrentVerificationInconsistency {
     ActiveFreezeSourceMismatch,
+    VerificationItemOwnershipConflict,
     MissingAdmission,
     AdmissionPlanMismatch,
     AdmissionRunMismatch,
@@ -277,6 +278,7 @@ impl CurrentVerificationInconsistency {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::ActiveFreezeSourceMismatch => "active_freeze_source_mismatch",
+            Self::VerificationItemOwnershipConflict => "verification_item_ownership_conflict",
             Self::MissingAdmission => "missing_admission",
             Self::AdmissionPlanMismatch => "admission_plan_mismatch",
             Self::AdmissionRunMismatch => "admission_run_mismatch",
@@ -372,8 +374,18 @@ pub fn classify_current_verification(
         .verification_item
         .as_ref()
         .map(|item| item.id.as_str());
+    let verification_item_ownership_conflict =
+        facts.verification_item.as_ref().is_some_and(|item| {
+            !matches!(
+                item.status,
+                CurrentVerificationItemLeaseStatus::Picked
+                    | CurrentVerificationItemLeaseStatus::Running
+            ) || item.worker_id.as_deref() != Some(facts.verifier_worker_id.as_str())
+        });
     let inconsistency = if facts.run_source_revision != facts.freeze_source_revision {
         Some(CurrentVerificationInconsistency::ActiveFreezeSourceMismatch)
+    } else if verification_item_ownership_conflict {
+        Some(CurrentVerificationInconsistency::VerificationItemOwnershipConflict)
     } else if facts.admission.is_none() {
         Some(CurrentVerificationInconsistency::MissingAdmission)
     } else {
@@ -769,7 +781,6 @@ pub enum RunContractViolation {
     RestartInconsistentVerificationIneligible,
     RestartCurrentVerificationHealthy,
     RestartCurrentVerificationFactsInvalid,
-    RestartVerificationItemOwnershipConflict,
     RestartRunTerminal,
     BudgetHoldResolutionPlanMismatch,
     BudgetHoldResolutionNotBudgetHeld,
@@ -1363,15 +1374,6 @@ pub fn retire_inconsistent_verification_feature_run(
         || verifier.lease_generation != current.verifier_lease_generation
     {
         return Err(RunContractViolation::RestartCurrentVerificationFactsInvalid);
-    }
-    if current.verification_item.as_ref().is_some_and(|item| {
-        !matches!(
-            item.status,
-            CurrentVerificationItemLeaseStatus::Picked
-                | CurrentVerificationItemLeaseStatus::Running
-        ) || item.worker_id.as_deref() != Some(verifier.worker_id.as_str())
-    }) {
-        return Err(RunContractViolation::RestartVerificationItemOwnershipConflict);
     }
     match (run.active_batch_id.as_deref(), facts.batch.as_ref()) {
         (None, None) => {}

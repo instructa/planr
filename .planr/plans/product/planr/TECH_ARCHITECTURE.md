@@ -148,9 +148,10 @@ diagnosis/orchestration path; `app/repository/execution_run` owns one immediate 
 transaction; and `app/execution_state` owns required/retired projection. CLI, MCP, HTTP, and run
 commands only parse or render `inconsistent-verification`. The transaction preserves every
 Evidence/history identity, invalidates the unusable freeze, ends or preserves-ended the referenced
-batch, releases exact verifier state, and creates no successor. Missing/stale admission errors and
-surface-local restart policy are deleted; admission-write validation and repository revalidation
-remain legitimate boundary checks.
+batch, releases the verifier role and the exact observed optional item state, and creates no
+successor. `verification_item_ownership_conflict` covers a current item whose status or worker does
+not match the verifier lease. Missing/stale admission errors and surface-local restart policy are
+deleted; admission-write validation and repository revalidation remain legitimate boundary checks.
 
 ## Backend Architecture
 

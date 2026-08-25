@@ -1369,15 +1369,30 @@ impl<'conn> ExecutionRunRepository<'conn> {
         }
         repository.save_feature_run(&transition.retired_run, current.revision)?;
         if let Some(item_id) = transition.released_verification_item_id.as_deref() {
+            let item = transition
+                .facts
+                .diagnosis
+                .facts
+                .verification_item
+                .as_ref()
+                .ok_or_else(|| {
+                    anyhow!("feature_run_restart_verification_item_missing:{item_id}")
+                })?;
+            let item_status = match item.status {
+                CurrentVerificationItemLeaseStatus::Ready => "ready",
+                CurrentVerificationItemLeaseStatus::Picked => "picked",
+                CurrentVerificationItemLeaseStatus::Running => "running",
+            };
             let changed = tx.execute(
                 "UPDATE items SET status = 'ready', worker_id = NULL, pick_token = NULL,
                      picked_at = NULL, last_heartbeat_at = NULL, paused_at = NULL,
                      updated_at = datetime('now')
-                 WHERE id = ?1 AND status IN ('picked','running') AND worker_id = ?2
-                   AND plan_path = (SELECT path FROM plans WHERE id = ?3)",
+                 WHERE id = ?1 AND status = ?2 AND worker_id IS ?3
+                   AND plan_path = (SELECT path FROM plans WHERE id = ?4)",
                 params![
                     item_id,
-                    transition.facts.diagnosis.facts.verifier_worker_id,
+                    item_status,
+                    item.worker_id,
                     transition.request.plan_id,
                 ],
             )?;

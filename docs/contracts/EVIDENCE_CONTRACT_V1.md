@@ -45,11 +45,13 @@ observation; registering it does not execute or satisfy that observation during 
 
 An active Verification FeatureRun whose current admission is absent or unequal across the active
 plan/run/revision, freeze, verifier worker/generation, optional item, or admitted/sealed run-index
-digest is retired only by the typed `inconsistent-verification` transition. Exact equality rejects
-retirement. One immediate optimistic transaction invalidates but preserves the freeze, ends or
-preserves-ended the referenced batch, releases exact roles, Verification reservations, and only an
-exact verifier-owned optional item, preserves every prior Evidence/history identity, emits one
-typed event, and creates no successor. Repetition reads that event and writes nothing. The
+digest is retired only by the typed `inconsistent-verification` transition. A current item whose
+status or worker does not match the verifier lease is
+`verification_item_ownership_conflict`. Exact equality rejects retirement. One immediate
+optimistic transaction invalidates but preserves the freeze, ends or preserves-ended the referenced
+batch, releases exact roles, Verification reservations, and the exact observed optional item state,
+preserves every prior Evidence/history identity, emits one typed event, and creates no successor.
+Repetition reads that event and writes nothing. The
 repository-owned `com.planr.inconsistent_verification.retirement.v1` capability is registered during
 BUILD but first executes only after HARDEN supplies the exact focused invariant.
 

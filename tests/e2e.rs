@@ -120,6 +120,7 @@ fn inconsistent_verification_restart_retires_atomically_and_successor_starts_onl
         .failure();
     let conn = Connection::open(&db).unwrap();
     conn.execute("UPDATE events SET payload = json_set(payload, '$.run_revision', 99) WHERE event_type = 'feature_run_verification_admitted'", []).unwrap();
+    conn.execute("UPDATE items SET status = 'ready', worker_id = NULL WHERE id = 'item-verification-current'", []).unwrap();
     drop(conn);
     let retired = single_json_document(
         &planr()
@@ -143,7 +144,7 @@ fn inconsistent_verification_restart_retires_atomically_and_successor_starts_onl
     );
     assert_eq!(
         retired["restart"]["facts"]["diagnosis"]["inconsistency"],
-        "admission_revision_mismatch"
+        "verification_item_ownership_conflict"
     );
     assert_eq!(retired["restart"]["batch_effect"]["disposition"], "ended");
     assert_eq!(

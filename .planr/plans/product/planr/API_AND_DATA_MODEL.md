@@ -52,9 +52,10 @@ The pure admission input contains mode, consumed, reserved, remaining, protected
 `planr.feature_run_restart.v1` application result. The current invariant compares the active
 Verification run/plan/revision and freeze, verifier worker/generation, zero-or-one current item,
 persisted admission identity, and admitted/sealed run-index digest. Exact equality is healthy;
-absence or inequality is one closed inconsistency. One immediate optimistic transaction invalidates
+an item status or worker mismatch is `verification_item_ownership_conflict`, and every other
+absence or inequality is a closed inconsistency. One immediate optimistic transaction invalidates
 but preserves the freeze, ends or preserves-ended the referenced batch, releases exact roles,
-Verification reservations, and only an exact verifier-owned item, preserves Evidence/history
+Verification reservations, and the exact observed optional item state, preserves Evidence/history
 identity digest and count, emits one typed event, and creates no successor. Repetition returns
 `already_retired`; ordinary pick alone owns later successor creation.
 

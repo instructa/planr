@@ -104,10 +104,12 @@ Planr turns broad product ideas and coding work into a coherent flow: product pl
 - REQ-PROD-EVIDENCE-014: An active Verification FeatureRun whose current admission identity is
   absent or unequal across plan, run, revision, active freeze, verifier worker/generation, optional
   item, or admitted/sealed run-index digest exposes only the typed `inconsistent-verification`
-  retirement. Exact equality is healthy and rejects retirement.
+  retirement. A current item whose status or worker does not match the verifier lease is the
+  `verification_item_ownership_conflict` inconsistency. Exact equality is healthy and rejects
+  retirement.
 - REQ-PROD-EVIDENCE-015: The retirement is a hard cut: one optimistic transaction invalidates but
   preserves the freeze, ends or preserves-ended the batch, releases exact roles/reservations and
-  only an exact verifier-owned optional item, preserves all Evidence/history identities, emits one
+  the exact observed optional item state, preserves all Evidence/history identities, emits one
   event, and creates no successor. Ordinary pick alone may later create a successor.
 
 ## Ordinary Outcomes And Premature Source-Freeze Recovery
