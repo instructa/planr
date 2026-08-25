@@ -4,13 +4,12 @@ import { constants } from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { resolvePlanrBinary } from '../../../scripts/resolve-planr-binary.mjs';
 
 const docsRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repositoryRoot = path.dirname(path.dirname(docsRoot));
 const outputPath = path.join(docsRoot, 'content', 'docs', 'reference', 'cli-generated.mdx');
-const planrBin = process.env.PLANR_BIN
-  ? path.resolve(process.cwd(), process.env.PLANR_BIN)
-  : path.join(repositoryRoot, 'target', 'debug', 'planr');
+const planrBin = resolvePlanrBinary(repositoryRoot);
 const checkOnly = process.argv.includes('--check');
 
 await access(planrBin, constants.X_OK).catch(() => {

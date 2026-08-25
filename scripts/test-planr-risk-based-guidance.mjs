@@ -5,11 +5,12 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } 
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolvePlanrBinary } from "./resolve-planr-binary.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (name) => readFileSync(path.join(root, "plugins/planr/skills", name, "SKILL.md"), "utf8");
 const readRel = (name) => readFileSync(path.join(root, name), "utf8");
-const planrBin = process.env.PLANR_BIN ?? path.join(root, "target/debug/planr");
+const planrBin = resolvePlanrBinary(root);
 const shippedSkillRoot = path.join(root, "plugins/planr/skills");
 const forbiddenBlanketReplay = [
   /reviewer reruns (?:it|the logged verification evidence)/iu,

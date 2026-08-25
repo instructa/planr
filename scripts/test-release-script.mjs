@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { routeSelection } from "./ci-router.mjs";
 import { classifyChanges } from "./verification-policy.mjs";
 import { changelogPredecessor, parseReleaseVersion } from "./release-contract.mjs";
+import { resolvePlanrBinary } from "./resolve-planr-binary.mjs";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const prepareSource = fs.readFileSync(path.join(repo, "scripts/prepare-release-candidate.sh"), "utf8");
@@ -23,6 +24,28 @@ const repositoryVersion = JSON.parse(fs.readFileSync(path.join(repo, "package.js
 const repositoryChangelog = fs.readFileSync(path.join(repo, "CHANGELOG.md"), "utf8");
 const version = "9.9.9";
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "planr-release-contract-"));
+
+const cargoMetadataResult = spawnSync(
+  "cargo",
+  ["metadata", "--no-deps", "--format-version", "1"],
+  { cwd: repo, encoding: "utf8" },
+);
+assert.equal(cargoMetadataResult.status, 0, cargoMetadataResult.stderr);
+const cargoTargetDirectory = JSON.parse(cargoMetadataResult.stdout).target_directory;
+assert.equal(
+  resolvePlanrBinary(repo),
+  path.join(cargoTargetDirectory, "debug", process.platform === "win32" ? "planr.exe" : "planr"),
+  "repository tooling must resolve the Cargo-configured target directory",
+);
+const priorPlanrBin = process.env.PLANR_BIN;
+process.env.PLANR_BIN = "relative-candidate/planr";
+assert.equal(
+  resolvePlanrBinary(repo),
+  path.resolve(process.cwd(), "relative-candidate/planr"),
+  "an explicit PLANR_BIN must remain authoritative",
+);
+if (priorPlanrBin === undefined) delete process.env.PLANR_BIN;
+else process.env.PLANR_BIN = priorPlanrBin;
 
 function write(file, content, mode) {
   fs.mkdirSync(path.dirname(file), { recursive: true });

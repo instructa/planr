@@ -6,12 +6,11 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { verifyGeneratedMcpInventory } from './generated-mcp-inventory.mjs';
+import { resolvePlanrBinary } from '../../../scripts/resolve-planr-binary.mjs';
 
 const docsRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repositoryRoot = path.dirname(path.dirname(docsRoot));
-const planrBin = process.env.PLANR_BIN
-  ? path.resolve(process.cwd(), process.env.PLANR_BIN)
-  : path.join(repositoryRoot, 'target', 'debug', 'planr');
+const planrBin = resolvePlanrBinary(repositoryRoot);
 const workspace = await mkdtemp(path.join(tmpdir(), 'planr-docs-reference-'));
 const assertions = [];
 

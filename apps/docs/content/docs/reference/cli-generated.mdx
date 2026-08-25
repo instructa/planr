@@ -1403,6 +1403,7 @@ Commands:
   ingest
   evidence
   close
+  release
   findings
   list
   show
@@ -1484,6 +1485,22 @@ Options:
       --no-color             Disable color in human output
       --reviewer <REVIEWER>  Independent reviewer identity recorded on the durable attempt. Defaults to this process's worker id
   -h, --help                 Print help
+```
+
+#### `planr review release`
+
+```text
+Usage: planr review release [OPTIONS] <REVIEW_GATE_ID>
+
+Arguments:
+  <REVIEW_GATE_ID>
+
+Options:
+      --db <DB>          Path to Planr SQLite database
+      --reason <REASON>  [default: reviewer_relinquished]
+      --json             Emit JSON output
+      --no-color         Disable color in human output
+  -h, --help             Print help
 ```
 
 #### `planr review findings`
@@ -1720,6 +1737,7 @@ Commands:
   coverage            Evaluate and persist coverage for an Evidence scope
   explain             Explain coverage, candidates, and durable records for an Evidence scope
   readiness           Check that active obligations have compatible schemas and available capabilities before goal work
+  verify              Lease and execute the complete binding Evidence phase for one plan
   recover-settlement  Recover a verified run stranded before maker continuation
   migrate             Preview or apply explicit pre-Evidence plan migration into binding Evidence obligations
   classifications     Show canonical Evidence gap classifications and legacy/operator aliases
@@ -1741,10 +1759,11 @@ Usage: planr evidence policy [OPTIONS]
 
 Options:
       --check
-      --db <DB>   Path to Planr SQLite database
-      --json      Emit JSON output
-      --no-color  Disable color in human output
-  -h, --help      Print help
+      --db <DB>             Path to Planr SQLite database
+      --json                Emit JSON output
+      --refresh-projection  Read-only canonical projections for repairing only a stale top-level policy digest
+      --no-color            Disable color in human output
+  -h, --help                Print help
 ```
 
 #### `planr evidence obligation`
@@ -1988,6 +2007,22 @@ Options:
 Check that active obligations have compatible schemas and available capabilities before goal work
 
 Usage: planr evidence readiness [OPTIONS] --scope <SCOPE> --id <ID>
+
+Options:
+      --db <DB>        Path to Planr SQLite database
+      --scope <SCOPE>  [possible values: obligation, criterion, item, plan]
+      --id <ID>
+      --json           Emit JSON output
+      --no-color       Disable color in human output
+  -h, --help           Print help
+```
+
+#### `planr evidence verify`
+
+```text
+Lease and execute the complete binding Evidence phase for one plan
+
+Usage: planr evidence verify [OPTIONS] --scope <SCOPE> --id <ID>
 
 Options:
       --db <DB>        Path to Planr SQLite database

@@ -6,14 +6,12 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { resolvePlanrBinary } from '../../../scripts/resolve-planr-binary.mjs';
 
 const docsRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repositoryRoot = path.dirname(path.dirname(docsRoot));
 const verifierPath = fileURLToPath(import.meta.url);
-const configuredPlanrBin = process.env.PLANR_BIN;
-const sourcePlanrBin = configuredPlanrBin
-  ? path.resolve(process.cwd(), configuredPlanrBin)
-  : path.join(repositoryRoot, 'target', 'debug', 'planr');
+const sourcePlanrBin = resolvePlanrBinary(repositoryRoot);
 const repositoryPackage = JSON.parse(await readFile(path.join(repositoryRoot, 'package.json'), 'utf8'));
 const cargoManifest = await readFile(path.join(repositoryRoot, 'Cargo.toml'), 'utf8');
 const cargoVersion = cargoManifest.match(/^version\s*=\s*"([^"]+)"/m)?.[1];

@@ -39,7 +39,7 @@ pnpm docs:verify-clean-install # release-readiness gate
 
 All commands run through the root workspace scripts; no global Fumadocs or Next.js installation is required.
 
-`docs:verify-onboarding` first builds `target/debug/planr`, asserts that its version exactly matches both the root `package.json` and `Cargo.toml`, and replays the documented lifecycle in a fresh temporary project. It never falls back to a global `planr` on `PATH`. To test another explicit build of this same repository, run `PLANR_BIN=/absolute/path/to/planr pnpm --filter @planr/docs verify:onboarding`; the version parity assertion still applies.
+`docs:verify-onboarding` first builds Planr in Cargo's configured target directory, asserts that its version exactly matches both the root `package.json` and `Cargo.toml`, and replays the documented lifecycle in a fresh temporary project. It never falls back to a global `planr` on `PATH`. To test another explicit build of this same repository, run `PLANR_BIN=/absolute/path/to/planr pnpm --filter @planr/docs verify:onboarding`; the version parity assertion still applies.
 
 `docs:verify-concepts` builds the same repository binary, checks the source-level readiness predicates, and replays focused graph fixtures. It asserts that both `blocks` and `hands_to` gate readiness, only `closed`/`closed_partial` upstream items unlock them, cancellation stays blocking, and canonical `done` settlement never manufactures review map items.
 

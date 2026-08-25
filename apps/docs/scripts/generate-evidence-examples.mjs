@@ -18,14 +18,13 @@ import {
   writeEvidencePolicy,
   writeJson,
 } from './evidence-fixture-builder.mjs';
+import { resolvePlanrBinary } from '../../../scripts/resolve-planr-binary.mjs';
 
 const docsRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repositoryRoot = path.dirname(path.dirname(docsRoot));
 const fixtureRoot = path.join(repositoryRoot, 'tests', 'fixtures', 'evidence', 'docs', 'v1');
 const outputPath = path.join(fixtureRoot, 'examples.generated.json');
-const planrBin = process.env.PLANR_BIN
-  ? path.resolve(process.cwd(), process.env.PLANR_BIN)
-  : path.join(repositoryRoot, 'target', 'debug', 'planr');
+const planrBin = resolvePlanrBinary(repositoryRoot);
 const checkOnly = process.argv.includes('--check');
 const liveMode = process.argv.includes('--live');
 

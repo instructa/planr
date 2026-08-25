@@ -12,12 +12,11 @@ import {
   agentRecipes,
   setupReceiptFields,
 } from '../lib/agent-recipes.ts';
+import { resolvePlanrBinary } from '../../../scripts/resolve-planr-binary.mjs';
 
 const docsRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repositoryRoot = path.dirname(path.dirname(docsRoot));
-const planrBin = process.env.PLANR_BIN
-  ? path.resolve(process.cwd(), process.env.PLANR_BIN)
-  : path.join(repositoryRoot, 'target', 'debug', 'planr');
+const planrBin = resolvePlanrBinary(repositoryRoot);
 const expectedClients = ['codex', 'claude', 'cursor', 'pi'];
 const forbiddenDefaultGoal = /\/goal Use \$planr(?!-loop)/;
 
