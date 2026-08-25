@@ -295,16 +295,16 @@ pub(crate) fn run_configured_process_adapter_guarded(
     )?;
     ensure_adapter_env_is_caller_owned(&input.env)?;
     let retry_lineage = resolve_retry_lineage(conn, &input)?;
-    let adapter_request = sealed_adapter_request(
-        &input.obligation,
-        &input.target,
-        &input.environment,
-        &input.fixture_disclosure,
-        &input.execution_contract.payload_schema,
-        &execution_contract_digest,
-        &input.execution_binding,
-        &retry_lineage,
-    )?;
+    let adapter_request = sealed_adapter_request(AdapterRequestContext {
+        obligation: &input.obligation,
+        target: &input.target,
+        environment: &input.environment,
+        fixture_disclosure: &input.fixture_disclosure,
+        result_contract: &input.execution_contract.payload_schema,
+        execution_contract_digest: &execution_contract_digest,
+        execution_binding: &input.execution_binding,
+        retry_lineage: &retry_lineage,
+    })?;
     let resolved = match ResolvedProcessRun::resolve(
         input.repository_root,
         &input.execution_contract,
@@ -887,16 +887,28 @@ fn ensure_adapter_env_is_caller_owned(caller_env: &BTreeMap<String, String>) -> 
     Ok(())
 }
 
-fn sealed_adapter_request(
-    obligation: &ProofObligation,
-    target: &TargetBinding,
-    environment: &EnvironmentBinding,
-    fixture_disclosure: &FixtureDisclosure,
-    result_contract: &PayloadSchemaBinding,
-    execution_contract_digest: &str,
-    execution_binding: &Value,
-    retry_lineage: &ResolvedRetryLineage,
-) -> Result<SealedAdapterRequest> {
+struct AdapterRequestContext<'a> {
+    obligation: &'a ProofObligation,
+    target: &'a TargetBinding,
+    environment: &'a EnvironmentBinding,
+    fixture_disclosure: &'a FixtureDisclosure,
+    result_contract: &'a PayloadSchemaBinding,
+    execution_contract_digest: &'a str,
+    execution_binding: &'a Value,
+    retry_lineage: &'a ResolvedRetryLineage,
+}
+
+fn sealed_adapter_request(context: AdapterRequestContext<'_>) -> Result<SealedAdapterRequest> {
+    let AdapterRequestContext {
+        obligation,
+        target,
+        environment,
+        fixture_disclosure,
+        result_contract,
+        execution_contract_digest,
+        execution_binding,
+        retry_lineage,
+    } = context;
     let id = format!("ereq-{}", Uuid::new_v4());
     let mut value = json!({
         "schema_version": EVIDENCE_ADAPTER_REQUEST_V1,
@@ -4729,16 +4741,16 @@ mod tests {
         let contract_digest =
             sha256_json_digest(&serde_json::to_value(&execution).unwrap()).unwrap();
 
-        let request = sealed_adapter_request(
-            &obligation,
-            &target,
-            &environment,
-            &fixture_disclosure,
-            &execution.payload_schema,
-            &contract_digest,
-            &execution_binding,
-            &retry,
-        )
+        let request = sealed_adapter_request(AdapterRequestContext {
+            obligation: &obligation,
+            target: &target,
+            environment: &environment,
+            fixture_disclosure: &fixture_disclosure,
+            result_contract: &execution.payload_schema,
+            execution_contract_digest: &contract_digest,
+            execution_binding: &execution_binding,
+            retry_lineage: &retry,
+        })
         .unwrap();
         let decoded: Value = serde_json::from_slice(&request.stdin).unwrap();
         assert_eq!(decoded, request.value);
@@ -4767,16 +4779,16 @@ mod tests {
         assert!(decoded.get("provider").is_none());
         assert!(decoded.get("adapter_kind").is_none());
 
-        let second = sealed_adapter_request(
-            &obligation,
-            &target,
-            &environment,
-            &fixture_disclosure,
-            &execution.payload_schema,
-            &contract_digest,
-            &execution_binding,
-            &retry,
-        )
+        let second = sealed_adapter_request(AdapterRequestContext {
+            obligation: &obligation,
+            target: &target,
+            environment: &environment,
+            fixture_disclosure: &fixture_disclosure,
+            result_contract: &execution.payload_schema,
+            execution_contract_digest: &contract_digest,
+            execution_binding: &execution_binding,
+            retry_lineage: &retry,
+        })
         .unwrap();
         assert_ne!(second.id, request.id);
         assert_ne!(second.digest, request.digest);

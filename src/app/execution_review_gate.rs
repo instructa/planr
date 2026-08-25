@@ -417,7 +417,7 @@ impl App {
                     "lease_generation": generation, "reason": reason,
                 }),
             )?;
-            Ok(self.canonical_execution_state_value(&gate.run_id, Some(gate_id))?)
+            self.canonical_execution_state_value(&gate.run_id, Some(gate_id))
         })();
         match result {
             Ok(value) => {
