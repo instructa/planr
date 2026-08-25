@@ -386,13 +386,7 @@ pub fn classify_current_verification(
         Some(CurrentVerificationInconsistency::ActiveFreezeSourceMismatch)
     } else if verification_item_ownership_conflict {
         Some(CurrentVerificationInconsistency::VerificationItemOwnershipConflict)
-    } else if facts.admission.is_none() {
-        Some(CurrentVerificationInconsistency::MissingAdmission)
-    } else {
-        let admission = facts
-            .admission
-            .as_ref()
-            .expect("admission presence checked");
+    } else if let Some(admission) = facts.admission.as_ref() {
         if admission.plan_id != facts.plan_id {
             Some(CurrentVerificationInconsistency::AdmissionPlanMismatch)
         } else if admission.run_id != facts.run_id {
@@ -422,6 +416,8 @@ pub fn classify_current_verification(
         } else {
             None
         }
+    } else {
+        Some(CurrentVerificationInconsistency::MissingAdmission)
     };
     CurrentVerificationDiagnosis {
         facts: facts.clone(),
