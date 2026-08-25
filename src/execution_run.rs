@@ -847,7 +847,15 @@ pub fn is_legal_phase_transition(
                 | PhaseTransitionCause::SourceInvalidated
         ) | (
             FeatureRunPhase::Verification,
+            FeatureRunPhase::Complete,
+            PhaseTransitionCause::VerificationPassed
+        ) | (
+            FeatureRunPhase::Verification,
             FeatureRunPhase::FinalReview,
+            PhaseTransitionCause::VerificationPassed
+        ) | (
+            FeatureRunPhase::SourceFrozen,
+            FeatureRunPhase::Complete,
             PhaseTransitionCause::VerificationPassed
         ) | (
             FeatureRunPhase::SourceFrozen,

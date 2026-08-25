@@ -24,7 +24,7 @@ Include:
 - what works now;
 - verification commands and results;
 - open blockers or unverified items;
-- final product ReviewGate state when the summary is plan-scoped;
+- any explicitly required material ReviewGate state when the summary is plan-scoped;
 - next recommended Planr command.
 
-If completion is not proven, say so directly and recommend `planr-status`, `planr-work`, or `planr-review`.
+If completion is not proven, say so directly and recommend `planr-status` or `planr-work`; recommend `planr-review` only when an explicit material ReviewGate is open.

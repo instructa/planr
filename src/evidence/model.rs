@@ -8,6 +8,11 @@ use std::str::FromStr;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 pub const EVIDENCE_CONTRACT_V1: &str = "evidence.contract.v1";
+pub(crate) const EVIDENCE_ADAPTER_REQUEST_V1: &str = "planr.evidence.adapter-request.v1";
+pub(crate) const STRUCTURED_OBSERVATION_RESULTS_V2: &str =
+    "planr.structured_observation_results.v2";
+pub(crate) const STRUCTURED_OBSERVATION_RESULTS_V2_SCHEMA_REF: &str =
+    "schema://planr.structured_observation_results.v2";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EvidenceDomainError {
@@ -591,10 +596,7 @@ impl<'de> Deserialize<'de> for AgentSkillInvocationResult {
             schema_version: String,
             skill: String,
             invoked: bool,
-            #[serde(
-                default,
-                deserialize_with = "deserialize_optional_value_without_null"
-            )]
+            #[serde(default, deserialize_with = "deserialize_optional_value_without_null")]
             invocation_id: Option<EvidenceId>,
             observations: Vec<AgentSkillObservationResult>,
         }

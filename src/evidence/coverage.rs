@@ -650,7 +650,7 @@ fn evaluate_observation(
         coverage.attempted_receipt_ids.insert(receipt.id.clone());
         let historical_obligation = receipt.obligation_id != context.obligation.id;
         let superseded_retry = retry_superseded_ids.contains(&receipt.id);
-        let completion_relevant = !historical_obligation
+        let lineage_relevant = !historical_obligation
             && (coverage.aggregation_policy == RetryAggregationPolicy::AllApplicablePass
                 || !superseded_retry);
         if historical_obligation || superseded_retry {
@@ -665,7 +665,10 @@ fn evaluate_observation(
             observation,
             context.repository_snapshot,
         )?;
-        if !completion_relevant {
+        let binding_relevant = !gaps.iter().any(|gap| stale_candidate_gap(gap));
+        if !lineage_relevant || !binding_relevant {
+            coverage.rejected_receipt_ids.insert(receipt.id.clone());
+            coverage.diagnostic_receipt_ids.insert(receipt.id.clone());
             historical_rejected_gaps.push((receipt.id.clone(), gaps));
             continue;
         }
@@ -752,6 +755,18 @@ fn evaluate_observation(
         coverage.status = status_for_gap(primary_gap(&coverage));
     }
     Ok(coverage)
+}
+
+fn stale_candidate_gap(gap: &str) -> bool {
+    matches!(
+        gap,
+        "stale_source"
+            | "stale_target"
+            | "stale_environment"
+            | "stale_policy"
+            | "stale_adapter_schema"
+            | "stale_configuration"
+    )
 }
 
 fn retry_aggregation_policy(value: &str) -> Result<RetryAggregationPolicy, EvidenceDomainError> {

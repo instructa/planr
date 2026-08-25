@@ -76,7 +76,7 @@ Compatible budget-hold resolution is a separate `app/feature_run_evidence` lifec
 - `planpack` owns the checked build-plan criterion identity list; Markdown acceptance prose is not an identity source.
 - `evidence/coverage` owns authoritative active-obligation row selection and exposes typed rows; no application surface duplicates its binding/supersession query.
 - `app/proof` is the sole owner of `PlanEvidenceAuthority`: `nonbinding`, `binding_unsatisfied`, or `binding_active`, derived by joining policy, the checked declared criterion set, and authoritative active obligation rows.
-- FeatureRun handoff, verifier admission, audit, final-review admission, accepted-risk handoff, and stop activation consume that classification. They do not infer authority from an empty coverage list or verification logs.
+- FeatureRun handoff, verifier admission, coverage settlement, audit, accepted-risk handoff, and stop activation consume that classification. Non-binding final-review admission rejects binding authority. No path infers authority from an empty coverage list or verification logs.
 - Explicit Evidence migration remains the sole obligation writer and accepts only the exact declared criterion set. An incomplete or invalid binding set becomes a durable capability hold, not a compatibility route.
 
 Binding execution has one additional ownership chain. `app/evidence` partitions each canonical
@@ -85,7 +85,15 @@ one target, and a sorted non-empty requirement subset. Admission recomputes the 
 and requires exact union/no duplicates before launch. `evidence/execution` applies that subset to
 result validation, retry lineage, independence, reuse, attempts, and receipts. Host capture consumes
 the same subset contract. `evidence/coverage` remains the sole coverage owner and never delegates
-closure authority to run-index aggregation.
+closure authority to run-index aggregation. After a plan-scoped batch finishes, `app/evidence`
+invokes that canonical coverage owner and returns coverage plus any FeatureRun settlement in the
+same application result; transports and agents do not orchestrate a second coverage call.
+
+`app/evidence::evidence_verify_value` is the normal binding Evidence broker. The coordinator calls
+`planr evidence verify` after source freeze under an identity that differs from the maker. The broker
+leases verification, seals readiness, executes the configured adapter, evaluates coverage, and
+settles the FeatureRun. Skills and host integrations do not spawn a verifier model or rebuild this
+sequence from `pick`, `readiness`, and `run` calls.
 
 `execution_run` owns the pure pre-receipt `VerificationAdmissionRepair` transition and its closed
 reason-dependent seal rule: pre-seal reasons reject any run-index digest, while post-seal reasons
@@ -113,17 +121,20 @@ the exact verifier lease generation, active immutable freeze, and satisfied acce
 lineage whose source binding matches that freeze. It always reconciles the verification wall and
 persists `VerificationPassed` through `app/repository/execution_run`. A verification item is a
 zero-or-one projection: an active item is closed/logged in that same transaction, absence causes no
-item/log mutation, and a ready unleased item fails closed. One nullable-item event shape covers both.
+item/log mutation, and a ready unleased item fails closed. When no ordinary outcomes remain, the
+same transaction moves the binding FeatureRun directly from Verification to Complete and returns no
+next action. One nullable-item event shape covers both item projections.
 
-`app/final_review_admission` consumes the same exact freeze/coverage guard for binding plans and owns
-no item-status rule. Its one create-or-show flow resolves the durable final gate before
-creation-only phase admission: an existing Accepted gate may project from Complete only after its
-stored source binding still equals the current intact freeze and exact satisfied receipt lineage;
-new and non-Accepted active-binding gates remain SourceFrozen-only. `app/feature_run_evidence` keeps
-terminal one-shot exhaustion in the trusted attempt/receipt transaction: cancellation, budget
-reconciliation, and verifier release always occur; item failure/logging occurs only for one present
-active projection. `execution_run` remains pure phase-transition policy and the repository remains
-atomic persistence owner.
+Execution admission defaults every capability to one attempt. A repeatable capability may declare
+a larger bounded value, but coordinator skills never retry an unchanged verifier or environment
+failure. A later canonical run requires a material external-state change and a fresh admission.
+
+`app/final_review_admission` accepts non-binding plans only. Binding plans never create a final
+product ReviewGate after satisfied Evidence. Explicit material and risk gates remain earlier
+lifecycle controls. `app/feature_run_evidence` keeps terminal one-shot exhaustion in the trusted
+attempt/receipt transaction: cancellation, budget reconciliation, and verifier release always
+occur; item failure/logging occurs only for one present active projection. `execution_run` remains
+pure phase-transition policy and the repository remains atomic persistence owner.
 
 The hard cut has no run-index v1 reader, first-observation target inference, host-only target
 equality rule, item-required repair/settlement/admission/exhaustion helper, persisted repair-item

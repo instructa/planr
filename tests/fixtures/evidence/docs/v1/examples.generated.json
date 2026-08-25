@@ -1291,7 +1291,7 @@
                       "kind": "process",
                       "payload_schema": {
                         "schema_digest": "<sha256>",
-                        "schema_ref": "schema://planr.structured_observation_results.v1",
+                        "schema_ref": "schema://planr.structured_observation_results.v2",
                         "type": "planr.structured_observation_results"
                       },
                       "stderr_limit_bytes": 65536,

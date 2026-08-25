@@ -37,7 +37,7 @@ Continue only from the typed packet you were authorized to perform. Makers consu
 
 Require `planr.execution_state.v2`. Its budget projection is opaque; skills must not recompute budget policy or replace supplied consumed, reserved, protected, available, provenance, digest, or deadline values.
 
-Every closure must be evidence-backed: changed files through `--files`, commands through `--cmd`, tests through `--tests`, remaining risk through context or findings, and review outcome through `planr review`. Plain `planr done` is the standard outcome settlement. Branch on the returned `work_packet.transition` and `work_packet.kind`: continue only for another compatible outcome; stop for a ReviewGate, verification packet, hold, incompatible ownership or scope, or an empty pick. Use `--escalate <reason>` only for an allowed intentional override, always with `--escalation-ref <stable-reference>` and `--escalation-explanation <why-the-override-is-required>`; never use escalation to replace computed materiality. Keep longer work current with `planr pick progress`, `pause`, and `resume`.
+Every closure must be evidence-backed: changed files through `--files`, commands through `--cmd`, tests through `--tests`, remaining risk through context or findings, and a `planr review` outcome only when an explicit material ReviewGate exists. Plain `planr done` is the standard outcome settlement. Branch on the returned `work_packet.transition` and `work_packet.kind`: continue only for another compatible outcome; stop for a ReviewGate, verification packet, hold, incompatible ownership or scope, or an empty pick. Use `--escalate <reason>` only for an allowed intentional override, always with `--escalation-ref <stable-reference>` and `--escalation-explanation <why-the-override-is-required>`; never use escalation to replace computed materiality. Keep longer work current with `planr pick progress`, `pause`, and `resume`.
 
 ## Plans And Dependencies
 
@@ -64,4 +64,4 @@ planr context list --item <item-id>
 planr pick stale --older-than-seconds 900
 ```
 
-Release stale ownership only after inspection. Do not claim completion until children and reviews are closed, approvals are clear, verification commands ran, findings became settled follow-up work, and the user-facing summary matches Planr state.
+Release stale ownership only after inspection. Do not claim completion until children and explicitly required material reviews are closed, approvals are clear, verification commands ran, findings became settled follow-up work, and the user-facing summary matches Planr state.

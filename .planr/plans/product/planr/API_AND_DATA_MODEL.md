@@ -66,8 +66,22 @@ instance/manifest identity, environment, execution contract, and fixture disclos
 obligation, the run subsets must be disjoint and their exact union must equal the authoritative
 observation IDs; each selected requirement must carry the sealed target. One run never spans
 obligations. `planr.evidence.execution-binding.v2` persists that seal/subset identity for attempt,
-receipt, retry, independence, and reuse validation. Run-index result status is execution summary,
-not coverage.
+receipt, retry, independence, and reuse validation. Run-index result status remains the execution
+summary. For plan-scoped input, the same result additionally contains canonical plan coverage and
+any `feature_run_verification_settlement`; clients do not issue a second coverage command on the
+normal path.
+
+One active freeze may receive a later, different admission only after the previously admitted
+run-index has produced both a durable Evidence attempt and receipt. The later canonical readiness
+call appends a new admission event; it never edits the earlier admission, attempt, or receipt. This
+is the post-receipt stale-Evidence refresh path for a materially changed policy, adapter, schema,
+configuration, target, or obligation while the source freeze remains exact. A conflicting
+pre-receipt admission still fails closed and must use Verification Admission Repair.
+If the exact source snapshot also changed after that receipt, the same canonical broker call may
+perform one bounded refresh: it invalidates and preserves the old freeze and bound receipts,
+releases the exact verifier lease, freezes the current source, reacquires verification, and seals
+once more. This automatic path is forbidden before the prior run-index has both an attempt and
+receipt, and it never loops more than once per broker call.
 
 ### Verification Admission Repair
 
@@ -109,13 +123,15 @@ source binding equals the freeze. The existing coverage response projects one
 `feature_run_verification_settlement` with nullable `item_id` and `log_id`, resulting phase, next
 ordinary item, and next action. One picked/running verification item is closed/logged atomically;
 absence performs zero item/log writes; any ready unleased verification item rejects the transaction.
+With no open ordinary outcomes, the same transaction applies `VerificationPassed` directly to
+`Complete` and returns `next_action: none`. The plan-scoped `evidence verify` application service
+leases the coordinator as verifier, seals readiness, executes the adapter, calls the coverage owner,
+and returns coverage plus settlement in one response. It creates no verifier agent or final ReviewGate.
 
-Binding `planr plan final-review` is create-or-show. It creates a gate only from the post-settlement
-SourceFrozen run with that same intact freeze and exactly matching satisfied coverage. It also
-requires SourceFrozen before returning or reopening an existing non-Accepted gate. An existing
-Accepted gate on the Complete run returns `created=false` only after its stored binding still equals
-the current intact freeze and exact satisfied receipt lineage. Verification-item status is not
-queried.
+`planr plan final-review` is create-or-show only for non-binding plans. Binding-active and
+binding-unsatisfied plans complete or remain blocked through the Evidence authority and cannot open
+a final product gate. Explicit material and risk ReviewGates remain separate earlier lifecycle
+controls.
 Terminal `planr.verification-exhaustion.v1` likewise projects nullable `item`: trusted
 attempt/receipt persistence, budget reconciliation, FeatureRun cancellation, and verifier release
 always commit together, while failure log/item mutation occurs only for a present active projection.

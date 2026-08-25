@@ -8,6 +8,8 @@ const docsRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repositoryRoot = path.dirname(path.dirname(docsRoot));
 const fixturePath = path.join(repositoryRoot, 'tests/fixtures/evidence/docs/v1/examples.generated.json');
 const hostMatrixPath = path.join(repositoryRoot, 'tests/fixtures/evidence/host-capabilities/v1/expected/host-surface-matrix.json');
+const browserFixturePath = path.join(repositoryRoot, 'tests/fixtures/evidence/browser-cdp/v1/browser-cdp-live.cjs');
+const generatorPath = path.join(repositoryRoot, 'apps/docs/scripts/generate-evidence-examples.mjs');
 
 function digest(bytes) {
   return `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
@@ -24,6 +26,16 @@ assert.equal(fixture.schema_version, 'planr.evidence_docs_examples.v1');
 assert.equal(fixture.host_matrix_digest, digest(await readFile(hostMatrixPath)));
 assert.equal(fixture.cases.length, 7);
 assert.equal(fixtureText.includes('/planr-docs-'), false, 'generated commands must redact disposable workspaces');
+
+const browserFixtureSource = await readFile(browserFixturePath, 'utf8');
+const generatorSource = await readFile(generatorPath, 'utf8');
+for (const source of [browserFixtureSource, generatorSource]) {
+  assert.equal(source.includes('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'), false);
+  assert.equal(source.includes('--headless=new'), false);
+}
+assert.match(browserFixtureSource, /PLANR_TEST_HEADLESS_BROWSER|__PLANR_HEADLESS_BROWSER_PATH__/u);
+assert.match(generatorSource, /PLANR_TEST_HEADLESS_BROWSER/u);
+assert.equal(generatorSource.includes('PLANR_TEST_CHROME'), false);
 
 const byId = new Map(fixture.cases.map((entry) => [entry.id, entry]));
 for (const id of [

@@ -14,7 +14,7 @@ Acceptance: BUILD compilation and ownership evidence pass without test edits; on
 
 ### TASK-ALPHA6-EVIDENCE-001: Make Policy And Obligations One Fail-Closed Authority
 
-Keep typed build-plan frontmatter as criterion identity authority and `app/proof` as the sole completeness owner; reject zero, partial, duplicate, and undeclared binding sets before implementation, readiness, coverage settlement, and final review; persist a capability hold when verifier readiness fails; remove claim-log, partial-row, and empty-lineage compatibility authority; retain explicit migration as the only obligation writer.
+Keep typed build-plan frontmatter as criterion identity authority and `app/proof` as the sole completeness owner; reject zero, partial, duplicate, and undeclared binding sets before implementation, readiness, coverage settlement, and closure; persist a capability hold when verifier readiness fails; remove claim-log, partial-row, and empty-lineage compatibility authority; retain explicit migration as the only obligation writer.
 
 Acceptance: `cargo check --lib` passes, followed by one focused lifecycle invariant in the separate hardening phase.
 
@@ -29,7 +29,7 @@ first-observation, all-target-equality, v1, and compatibility owners.
 
 Acceptance: exact-union/no-duplicate multi-target verification, subset lineage, no-launch one-shot
 readiness, host-capture parity, persisted v2 consequences, and losing-owner deletion have focused
-Evidence under the active Proofloop contract.
+Evidence through the canonical Planr Evidence broker.
 
 ### TASK-BEMT-002 (fix): Repair Itemless Verification Admission
 
@@ -45,23 +45,27 @@ item-required/alternate pre-receipt lifecycle owners.
 Acceptance: itemless/item-backed equivalence, pre-seal absent-digest/post-seal exact-digest
 validation, durable readiness hold, stale optimistic rollback and proven idempotence, original-maker
 generation restoration, zero Evidence/ProductFinding writes, and one-request CLI/MCP/HTTP/work-
-packet projection have focused Evidence under the active Proofloop contract.
+packet projection have focused Evidence through the canonical Planr Evidence broker.
 
 ## Canonical Itemless Verification Lifecycle Settlement
 
 ### TASK-ITEMLESS-SETTLEMENT-001 (fix): Remove Item Status From Lifecycle Authority
 
-Replace item-required plan coverage settlement, binding final-review admission, and terminal
-one-shot exhaustion together. Key settlement by active FeatureRun, exact verifier lease generation,
-active freeze, and satisfied accepted receipt/source binding. Close/log one active verification item
-or mutate zero items/logs when absent; retain ready-unleased failure. Always reconcile budget and
-persist phase/role changes through the repository. Keep `execution_run` pure, coverage unchanged,
-and add no item synthesis, alternate API, compatibility path, direct DB path, or plan exception.
+Replace item-required plan coverage settlement and terminal one-shot exhaustion together. Key
+settlement by active FeatureRun, exact verifier lease generation, active freeze, and satisfied
+accepted receipt/source binding. Close/log one active verification item or mutate zero items/logs
+when absent; retain ready-unleased failure. Complete a binding run directly when no ordinary work
+remains. Return canonical plan coverage and settlement from the same plan-scoped `evidence verify`
+application result. The coordinator calls it without a verifier agent or second command. Default all capabilities to one attempt unless a
+repeatable manifest explicitly declares a larger bound; never coordinator-retry an unchanged
+verifier/environment failure. Always reconcile budget and persist phase/role changes through the repository. Keep
+`execution_run` pure, coverage unchanged, and add no item synthesis, alternate API, compatibility
+path, direct DB path, or plan exception.
 
 Acceptance: BUILD compiles the relevant binaries without tracked-test edits or test execution; one
-separate HARDEN invariant in existing `tests/e2e.rs` covers itemless pass settlement, exact-freeze
-final review including idempotent re-show of the same Accepted gate from Complete, terminal
-exhaustion, and ready-unleased failure through the registered no-model capability.
+separate HARDEN invariant in existing `tests/e2e.rs` covers itemless pass settlement with direct
+binding completion and no final ReviewGate, terminal exhaustion, and ready-unleased failure through
+the registered no-model capability.
 
 ## Itemless Post-Receipt ProductFinding Repair
 

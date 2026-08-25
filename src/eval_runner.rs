@@ -850,6 +850,7 @@ fn run_eval_command(input: EvalCommandRunInput<'_>) -> Result<EvalCommandEvidenc
                 if input.warmup { "1" } else { "0" }.to_string(),
             ),
         ],
+        stdin: None,
         timeout: input.timeout,
         output_limit_bytes: input.output_limit_bytes,
         stdout_limit_bytes: None,

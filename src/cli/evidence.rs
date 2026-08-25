@@ -31,6 +31,8 @@ pub(crate) enum EvidenceCommand {
     Explain(EvidenceCoverageArgs),
     /// Check that active obligations have compatible schemas and available capabilities before goal work.
     Readiness(EvidenceCoverageArgs),
+    /// Lease and execute the complete binding Evidence phase for one plan.
+    Verify(EvidenceCoverageArgs),
     /// Recover a verified run stranded before maker continuation.
     RecoverSettlement(EvidenceInputArgs),
     /// Preview or apply explicit pre-Evidence plan migration into binding Evidence obligations.
@@ -141,7 +143,7 @@ pub(crate) struct EvidenceMigrationArgs {
     pub(crate) apply: bool,
 }
 
-#[derive(Clone, Copy, Debug, ValueEnum)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub(crate) enum EvidenceCoverageScope {
     Obligation,
     Criterion,

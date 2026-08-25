@@ -91,7 +91,7 @@ Authoring a custom adapter does not require Planr core changes:
 3. Register both in `.planr/evidence.yaml`.
 4. Add the namespace to `extension_namespaces`.
 5. Probe capabilities with `planr evidence capability list --json`.
-6. Run only the exact path returned as `readiness.run_index.repository_path` with `planr evidence run --input <exact-readiness.run_index.repository_path> --json`.
+6. Run `planr evidence verify --scope plan --id <plan-id> --json`. The broker executes only its own sealed run index.
 
 Unknown or unregistered observation types remain uncovered. A weaker built-in proof cannot satisfy a custom obligation.
 

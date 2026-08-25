@@ -14,6 +14,7 @@ planr evidence obligation list --plan <plan-id> --json
 planr evidence obligation show <obligation-id> --json
 planr evidence capability list --json
 planr evidence capability show <capability-instance-id> --json
+planr evidence verify --scope plan --id <plan-id> --json
 planr evidence run --input <exact-readiness.run_index.repository_path> --json
 planr evidence import --input import.json --artifact-root . --json
 planr evidence host-capture import --input host-import.json --json
@@ -53,6 +54,7 @@ The MCP tools call the same application services:
 - `planr_evidence_attempts`
 - `planr_evidence_receipts`
 - `planr_evidence_coverage`
+- `planr_evidence_verify`
 - `planr_evidence_explain`
 - `planr_evidence_readiness`
 
@@ -77,6 +79,7 @@ Start `planr serve --port 7526`; the server binds `127.0.0.1`.
 | GET | `/v1/evidence/attempts?obligation=<obligation-id>` |
 | GET | `/v1/evidence/receipts?obligation=<obligation-id>` |
 | POST | `/v1/evidence/coverage` |
+| POST | `/v1/evidence/verify` |
 | POST | `/v1/evidence/explain` |
 | POST | `/v1/evidence/migrate` |
 | GET | `/v1/evidence/classifications` |
@@ -118,9 +121,19 @@ planr evidence migrate --input migration.json --apply --json
 
 Preview is the default and does not write obligations. Apply is idempotent: duplicate IDs, lineage collisions, cross-project containment, and changed immutable fields are reported instead of silently rewriting history. Migration does not rewrite plans, logs, reviews, artifacts, or legacy claims.
 
-## Readiness
+## Verify a binding plan
 
-Run readiness after a stable implementation batch has settled, before binding source-sensitive receipts. It checks every active semantic observation, freezes exact runtime inputs, writes one digest-sealed executable run file, and returns that file only as `readiness.run_index.repository_path` without executing the product oracle:
+After the implementation source freezes, run one broker command under a coordinator identity that differs from the maker:
+
+```bash
+PLANR_WORKER_ID="coordinator-verifier-1" planr evidence verify --scope plan --id <plan-id> --json
+```
+
+The broker leases verification, runs readiness, executes the configured adapter, evaluates coverage, and settles the FeatureRun. It does not start another model. Read `object.verification_broker`, `object.coverage`, and `object.feature_run_verification_settlement` from the same result.
+
+## Inspect readiness
+
+Use the lower-level commands only to diagnose a known admission or adapter problem. Readiness checks every active semantic observation, freezes exact runtime inputs, writes one digest-sealed executable run file, and returns that file as `readiness.run_index.repository_path` without executing the product oracle:
 
 ```bash
 planr evidence readiness --scope plan --id <plan-id> --json
@@ -155,29 +168,31 @@ planr done <api-item> --summary "Changed public API." \
 
 The first command can close with `materiality.decision.review: "none"` when the actual change facts are non-material. The second command returns a review gate when protected materiality triggers apply.
 
-### Selective replay and final review
+### Canonical run, diagnostics, and material review
 
-Exact-source expensive receipts are validated before replay. Reviewers selectively replay only cheap, missing, failing, or explicitly high-risk evidence:
+For a Binding Evidence plan, readiness returns one sealed plan-scoped run index. The run command executes that batch, evaluates plan coverage, and settles the FeatureRun in the same application call:
 
 ```bash
 planr evidence readiness --scope plan --id <plan-id> --json
-planr evidence coverage --scope criterion --id AC-008 --json
-planr evidence explain --scope criterion --id AC-008 --json
-planr plan final-review <plan-id> --json
-planr plan audit <plan-id> --json
+planr evidence run --input <exact-readiness.run_index.repository_path> --json
 ```
 
-Use `evidence explain` to name stale source, target, policy, adapter, or configuration bindings. A fix reruns affected evidence after the source-sensitive batch is stable; newly introduced material review risk can justify exact evidence earlier, but the log should say why.
+Read `object.coverage` and, on successful terminal settlement, `object.feature_run_verification_settlement`. Do not add a second coverage command, reviewer, or final ReviewGate to the normal successful path. Use criterion-scoped commands only to diagnose an explicit gap, and pass a criterion id rather than an observation requirement id:
+
+```bash
+planr evidence coverage --scope criterion --id AC-008 --json
+planr evidence explain --scope criterion --id AC-008 --json
+```
+
+Use `evidence explain` to name stale source, target, policy, adapter, or configuration bindings. A verifier or environment failure stops without an automatic retry; rerun only after the reported external state changes. A product failure returns to maker repair. Explicit material ReviewGates remain available for protected risk, but Binding Evidence success does not create one.
 
 ### Command or backend observation
 
-The queue-worker example registers `com.example.queue.depth.v2`, executes a repository-owned command, validates stdout against its registered payload schema, then evaluates coverage:
+The queue-worker example registers `com.example.queue.depth.v2`, executes a repository-owned command, validates stdout against its registered payload schema, then evaluates and settles plan coverage in the same run call:
 
 ```bash
-planr evidence readiness --scope criterion --id crit-pob-docs-queue-depth
-planr evidence run --input <exact-readiness.run_index.repository_path>
-planr evidence coverage --scope criterion --id crit-pob-docs-queue-depth
-planr evidence explain --scope criterion --id crit-pob-docs-queue-depth
+planr evidence readiness --scope plan --id <plan-id> --json
+planr evidence run --input <exact-readiness.run_index.repository_path> --json
 ```
 
 Its method is a process adapter because the required fact is backend queue state. It does not claim browser behavior.
@@ -199,7 +214,7 @@ The same curl capability is deliberately rejected by the separate `curl-http-not
 
 ### Rendered web observation
 
-The full-stack example launches real Chrome and drives raw CDP. One structured execution returns six observations: rendered visibility, user interaction, navigation, network result, console errors, and persistence after reload. The outer execution contract uses `schema://planr.structured_observation_results.v1`; every inner `actual` value is separately validated against the JSON Schema registered for its observation type.
+The full-stack example launches real Chrome and drives raw CDP. One structured execution returns six observations: rendered visibility, user interaction, navigation, network result, console errors, and persistence after reload. Planr sends one `planr.evidence.adapter-request.v1` JSON object over stdin. The adapter returns `schema://planr.structured_observation_results.v2` on stdout and echoes the request ID and digest. Every inner `actual` value is separately validated against the JSON Schema registered for its observation type.
 
 ```bash
 PLANR_BIN=target/debug/planr pnpm docs:evidence-examples:generate --live

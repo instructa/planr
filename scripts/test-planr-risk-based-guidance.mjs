@@ -61,6 +61,40 @@ const roleAssets = [
   ["host-dispatch", readRel("plugins/planr/skills/planr-loop/references/host-dispatch.md")],
 ];
 
+if (process.argv.includes("--single-session-loop")) {
+  const hostDispatch = roleAssets.find(([name]) => name === "host-dispatch")[1];
+  const dailyLoop = readRel("apps/docs/content/docs/guides/daily-worker-loop.mdx");
+  const packets = readRel("apps/docs/content/docs/guides/feature-run-work-packets.mdx");
+
+  assert.match(loop, /The invoking session is the default maker\./u);
+  assert.match(loop, /Do not spawn a coordinator or maker for the default path\./u);
+  assert.match(loop, /export PLANR_WORKER_ID="maker-<stable-session-id>"/u);
+  assert.match(loop, /planr done <item-id> \.\.\. --next --json/u);
+  assert.match(loop, /Continue in this session\./u);
+  assert.match(loop, /Switch to a stable verifier identity that differs from the maker/u);
+  assert.match(loop, /planr evidence verify --scope plan --id <plan-id> --json/u);
+  assert.match(loop, /dispatch one\s+distinct checker through `\$planr-review`/u);
+  assert.match(loop, /Host-native maker dispatch is not part of the sequential default\./u);
+  assert.doesNotMatch(loop, /does not implement or inspect product source when subagents are available/u);
+  assert.doesNotMatch(loop, /Dispatch `\$planr-work` for a compatible same-plan maker run/u);
+  assert.doesNotMatch(loop, /Read and apply the canonical \[Evidence ownership guard\]/u);
+
+  assert.doesNotMatch(work, /\.\.\/planr\/SKILL\.md#evidence-ownership-guard/u);
+  assert.match(work, /the invoking loop session becomes the coordinator/u);
+
+  assert.match(hostDispatch, /explicit delegation or parallel branch/u);
+  assert.match(hostDispatch, /default sequential maker/u);
+  assert.match(hostDispatch, /Never use this adapter to\s+start a coordinator and then a maker/u);
+
+  assert.match(dailyLoop, /the active session is the default maker/u);
+  assert.match(dailyLoop, /keep verification in the same session/u);
+  assert.match(packets, /the invoking loop session runs\s+one broker command/u);
+  assert.match(packets, /executes\s+the next compatible outcome directly/u);
+
+  console.log("single_session_loop_contract=passed");
+  process.exit(0);
+}
+
 function runPlanr(args, cwd) {
   const command = existsSync(planrBin)
     ? { bin: planrBin, args }

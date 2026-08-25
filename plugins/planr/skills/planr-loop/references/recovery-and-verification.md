@@ -16,12 +16,11 @@ Use `planr pick stale --older-than-seconds 900` before releasing abandoned owner
 Verification:
 
 ```bash
-planr evidence readiness --scope criterion --id <criterion-id>
-planr evidence run --input <exact-readiness.run_index.repository_path>
-planr evidence coverage --scope criterion --id <criterion-id>
-planr evidence explain --scope criterion --id <criterion-id>
+planr evidence verify --scope plan --id <plan-id> --json
 ```
 
-Execute only the exact `readiness.run_index.repository_path` returned by the immediately preceding leased readiness call. A repository-authored obligation, declarative index, guessed digest path, or remembered run filename is not executable Evidence input.
+The verify result owns plan coverage and settlement. Use criterion-scoped coverage or explain only to diagnose an explicit gap, with a real criterion id rather than a requirement id. A verifier or environment failure stops without an automatic retry.
+
+The Evidence broker executes only the sealed run index from its own readiness stage. A repository-authored obligation, declarative index, guessed digest path, or remembered run filename is not executable Evidence input.
 
 Use a capability whose declared observations cover the criterion: browser automation for rendered web behavior, the built binary for CLI, real requests for API/backend, and simulator launch plus exercised flow for iOS. If tooling is unavailable, preserve the typed blocker, request approval when appropriate, and pause. Do not replace it with a weaker method that observes different facts.

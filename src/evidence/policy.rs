@@ -404,7 +404,10 @@ fn parse_evidence_policy_yaml_with_owner_and_stale_digest(
     };
     if let Err(error) = validate_evidence_policy_document(&document) {
         if !allow_stale_top_level_digest
-            || error.diagnostics.iter().any(|diagnostic| diagnostic.path != "policy_digest")
+            || error
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.path != "policy_digest")
         {
             return Err(error);
         }

@@ -92,14 +92,17 @@ function closeServer(server) {
 }
 
 async function main() {
-  const configuredChromePath = "__PLANR_CHROME_PATH__";
-  const chromePath = configuredChromePath || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-  if (!fs.existsSync(chromePath)) throw new Error(`Chrome executable not found: ${chromePath}`);
+  const requestText = fs.readFileSync(0, "utf8").trim();
+  const adapterRequest = requestText ? JSON.parse(requestText) : null;
+  if (adapterRequest && adapterRequest.schema_version !== "planr.evidence.adapter-request.v1") {
+    throw new Error("unsupported Planr Evidence adapter request");
+  }
+  const configuredBrowserPath = "__PLANR_HEADLESS_BROWSER_PATH__";
+  const chromePath = canonicalHeadlessBrowser(configuredBrowserPath);
   const debugPort = Number(process.argv[4]);
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "planr-cdp-profile-"));
   const server = await listen(port);
   const chrome = spawn(chromePath, [
-    "--headless=new",
     "--disable-gpu",
     "--no-first-run",
     "--no-default-browser-check",
@@ -209,12 +212,14 @@ async function main() {
       fixture_refs: fixtureSources.map((source) => source.ref)
     };
     const result = {
-      schema_version: "planr.structured_observation_results.v1",
+      schema_version: "planr.structured_observation_results.v2",
+      request_id: adapterRequest?.request_id ?? null,
+      request_digest: adapterRequest?.request_digest ?? null,
       method: "raw_chrome_cdp",
       observed_target: observedTarget,
-      target: JSON.parse(process.env.PLANR_EVIDENCE_TARGET_JSON || "null"),
-      environment: JSON.parse(process.env.PLANR_EVIDENCE_ENVIRONMENT_JSON || "null"),
-      execution_contract_digest: process.env.PLANR_EVIDENCE_EXECUTION_CONTRACT_DIGEST || null,
+      target: adapterRequest?.target ?? null,
+      environment: adapterRequest?.environment ?? null,
+      execution_contract_digest: adapterRequest?.execution_contract_digest ?? null,
       runtime_identity: runtimeIdentity,
       fixture_sources: fixtureSources,
       fixture_disclosure: fixtureDisclosure,
@@ -238,6 +243,19 @@ async function main() {
     await closeServer(server);
     fs.rmSync(userDataDir, {recursive: true, force: true});
   }
+}
+
+function canonicalHeadlessBrowser(candidate) {
+  if (!path.isAbsolute(candidate) || !fs.existsSync(candidate)) {
+    throw new Error("PLANR_TEST_HEADLESS_BROWSER must name an absolute executable path");
+  }
+  const executable = fs.realpathSync(candidate);
+  const allowed = new Set(["chrome-headless-shell", "chromium-headless-shell", "headless_shell"]);
+  if (executable.includes(".app/Contents/MacOS/") || !allowed.has(path.basename(executable))) {
+    throw new Error("browser fixture requires a dedicated headless_shell executable, never a GUI browser app");
+  }
+  fs.accessSync(executable, fs.constants.X_OK);
+  return executable;
 }
 
 main().catch((error) => {

@@ -1,5 +1,4 @@
 use super::App;
-use super::evidence::CurrentPlanCoverageForSourceFreeze;
 use super::proof::PlanEvidenceAuthority;
 use super::repository::execution_run::{
     ExecutionRunRepository, FindingStatus, ReviewGateKind, ReviewGateRecord, ReviewGateStatus,
@@ -31,21 +30,7 @@ impl App {
         }
         let receipt_lineage = match self.plan_evidence_authority(plan_id)? {
             PlanEvidenceAuthority::BindingActive => {
-                let project = self.default_project()?;
-                let coverage = match self.current_plan_coverage_for_source_freeze(
-                    &project.id,
-                    plan_id,
-                    &freeze,
-                )? {
-                    CurrentPlanCoverageForSourceFreeze::Satisfied(coverage) => coverage,
-                    CurrentPlanCoverageForSourceFreeze::NeedsVerification(coverage) => {
-                        bail!(
-                            "final_product_review_requires_satisfied_exact_source_coverage:{plan_id}:{}",
-                            coverage.status.as_str()
-                        );
-                    }
-                };
-                coverage.receipt_lineage
+                bail!("binding_plan_completes_through_evidence_coverage:{plan_id}");
             }
             PlanEvidenceAuthority::BindingUnsatisfied => {
                 let proof = self.proof_status_for_plan(plan_id)?;
@@ -74,18 +59,22 @@ impl App {
             .canonical_execution_run_id_for_plan(plan_id)?
             .ok_or_else(|| anyhow!("feature_run_not_found_for_plan:{plan_id}"))?;
         let evidence_authority = self.plan_evidence_authority(plan_id)?;
-        if evidence_authority == PlanEvidenceAuthority::BindingUnsatisfied {
-            let proof = self.proof_status_for_plan(plan_id)?;
-            bail!(
-                "final_product_review_binding_evidence_obligations_missing:{plan_id}:{}",
-                proof["next_action"]
-                    .as_str()
-                    .unwrap_or("repair_evidence_obligations")
-            );
+        match evidence_authority {
+            PlanEvidenceAuthority::BindingActive => {
+                bail!("binding_plan_completes_through_evidence_coverage:{plan_id}");
+            }
+            PlanEvidenceAuthority::BindingUnsatisfied => {
+                let proof = self.proof_status_for_plan(plan_id)?;
+                bail!(
+                    "final_product_review_binding_evidence_obligations_missing:{plan_id}:{}",
+                    proof["next_action"]
+                        .as_str()
+                        .unwrap_or("repair_evidence_obligations")
+                );
+            }
+            PlanEvidenceAuthority::NonBinding => {}
         }
         let run = repository.feature_run(&run_id)?;
-        let active_binding = evidence_authority == PlanEvidenceAuthority::BindingActive;
-        let nonbinding = evidence_authority == PlanEvidenceAuthority::NonBinding;
         if let Some(mut gate) = repository
             .review_gates_for_run(&run_id, false)?
             .into_iter()
@@ -95,8 +84,7 @@ impl App {
                     && gate.scope_id == plan_id
             })
         {
-            if nonbinding
-                && gate.status == ReviewGateStatus::Pending
+            if gate.status == ReviewGateStatus::Pending
                 && run.run.phase == FeatureRunPhase::SourceFrozen
             {
                 self.conn.execute_batch(
@@ -114,25 +102,15 @@ impl App {
                     Ok(())
                 })();
                 match refresh {
-                    Ok(()) => self.conn.execute_batch(
-                        "RELEASE refresh_pending_nonbinding_final_review; COMMIT",
-                    )?,
+                    Ok(()) => self
+                        .conn
+                        .execute_batch("RELEASE refresh_pending_nonbinding_final_review; COMMIT")?,
                     Err(error) => {
                         let _ = self.conn.execute_batch("ROLLBACK TO refresh_pending_nonbinding_final_review; RELEASE refresh_pending_nonbinding_final_review; ROLLBACK");
                         return Err(error);
                     }
                 }
                 gate = repository.review_gate(&gate.id)?;
-            }
-            if active_binding
-                && gate.status != ReviewGateStatus::Accepted
-                && run.run.phase != FeatureRunPhase::SourceFrozen
-            {
-                bail!(
-                    "final_product_review_requires_settled_exact_source_coverage:phase={}: run `planr evidence coverage --scope plan --id {}`",
-                    serde_json::to_string(&run.run.phase)?.trim_matches('"'),
-                    plan_id
-                );
             }
             if gate.status == ReviewGateStatus::ChangesRequested
                 && !repository
@@ -168,21 +146,6 @@ impl App {
                 }
                 gate = repository.review_gate(&gate.id)?;
             }
-            if active_binding {
-                let current = self.capture_final_review_source_binding(
-                    &gate.id,
-                    &gate.run_id,
-                    &gate.scope_id,
-                )?;
-                let stored = repository.review_source_binding(&gate.id)?.ok_or_else(|| {
-                    anyhow!("final_product_review_source_binding_missing:{}", gate.id)
-                })?;
-                if stored != current
-                    || gate.source_revision.as_deref() != Some(stored.source_revision.as_str())
-                {
-                    bail!("final_product_review_source_binding_stale:{}", gate.id);
-                }
-            }
             return Ok(json!({
                 "plan": plan,
                 "execution_state": self.canonical_execution_state_value(&gate.run_id, Some(&gate.id))?,
@@ -195,13 +158,6 @@ impl App {
         let create_result = (|| -> Result<Value> {
             let repository = ExecutionRunRepository::new(&self.conn);
             let run = repository.feature_run(&run_id)?;
-            if active_binding && run.run.phase != FeatureRunPhase::SourceFrozen {
-                bail!(
-                    "final_product_review_requires_settled_exact_source_coverage:phase={}: run `planr evidence coverage --scope plan --id {}`",
-                    serde_json::to_string(&run.run.phase)?.trim_matches('"'),
-                    plan_id
-                );
-            }
             if let Some(gate) = repository
                 .review_gates_for_run(&run_id, false)?
                 .into_iter()
@@ -217,19 +173,17 @@ impl App {
                     "created": false,
                 }));
             }
-            if nonbinding
-                && !matches!(
-                    run.run.phase,
-                    FeatureRunPhase::Verification | FeatureRunPhase::SourceFrozen
-                )
-            {
+            if !matches!(
+                run.run.phase,
+                FeatureRunPhase::Verification | FeatureRunPhase::SourceFrozen
+            ) {
                 bail!(
                     "final_product_review_requires_verification_phase:phase={}: run `planr pick --plan {} --work-type verification --json`",
                     serde_json::to_string(&run.run.phase)?.trim_matches('"'),
                     plan_id
                 );
             }
-            if nonbinding && run.run.phase == FeatureRunPhase::SourceFrozen {
+            if run.run.phase == FeatureRunPhase::SourceFrozen {
                 self.refresh_nonbinding_final_review_source_freeze(plan_id, &run.run.id)?;
             }
             let responsible_maker_id = run

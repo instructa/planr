@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use std::{
-    io::Read,
+    io::{Read, Write},
     path::Path,
     process::Child,
     process::{Command, ExitStatus, Stdio},
@@ -39,6 +39,7 @@ pub(crate) struct BoundedProcessInput<'a> {
     pub(crate) cwd: &'a Path,
     pub(crate) argv: &'a [String],
     pub(crate) env: Vec<(&'a str, String)>,
+    pub(crate) stdin: Option<&'a [u8]>,
     pub(crate) timeout: Duration,
     pub(crate) output_limit_bytes: usize,
     pub(crate) stdout_limit_bytes: Option<usize>,
@@ -109,6 +110,11 @@ pub(crate) fn run_bounded_process(input: BoundedProcessInput<'_>) -> Result<Boun
         .args(&input.argv[1..])
         .env_clear()
         .current_dir(input.cwd)
+        .stdin(if input.stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     for (name, value) in input.env {
@@ -119,6 +125,19 @@ pub(crate) fn run_bounded_process(input: BoundedProcessInput<'_>) -> Result<Boun
     let mut child = command
         .spawn()
         .with_context(|| format!("spawning {}", input.argv[0]))?;
+    let stdin_handle = input.stdin.map(|bytes| {
+        let mut stdin = child
+            .stdin
+            .take()
+            .expect("piped child stdin must be available");
+        let bytes = bytes.to_vec();
+        thread::spawn(move || -> Result<()> {
+            stdin
+                .write_all(&bytes)
+                .context("writing bounded process stdin")?;
+            Ok(())
+        })
+    });
     let stdout = child.stdout.take().context("capturing child stdout")?;
     let stderr = child.stderr.take().context("capturing child stderr")?;
     let output_exceeded = Arc::new(AtomicBool::new(false));
@@ -165,6 +184,11 @@ pub(crate) fn run_bounded_process(input: BoundedProcessInput<'_>) -> Result<Boun
     };
     let stdout = join_drain(stdout_handle)?;
     let stderr = join_drain(stderr_handle)?;
+    if let Some(handle) = stdin_handle {
+        handle
+            .join()
+            .map_err(|_| anyhow::anyhow!("bounded process stdin writer panicked"))??;
+    }
     let output_limit_exceeded = output_exceeded.load(Ordering::SeqCst)
         || stdout.truncated
         || stderr.truncated
@@ -333,6 +357,7 @@ mod tests {
             cwd: cwd.path(),
             argv: &argv,
             env: Vec::new(),
+            stdin: None,
             timeout,
             output_limit_bytes,
             stdout_limit_bytes: None,
@@ -366,6 +391,28 @@ mod tests {
     }
 
     #[test]
+    fn bounded_process_delivers_exact_stdin_and_closes_the_pipe() {
+        let cwd = tempfile::tempdir().unwrap();
+        let argv = vec!["sh".to_string(), "-c".to_string(), "cat".to_string()];
+        let cancellation = CancellationToken::new();
+        let output = run_bounded_process(BoundedProcessInput {
+            cwd: cwd.path(),
+            argv: &argv,
+            env: Vec::new(),
+            stdin: Some(b"sealed request\n"),
+            timeout: Duration::from_secs(1),
+            output_limit_bytes: 64,
+            stdout_limit_bytes: None,
+            stderr_limit_bytes: None,
+            cancellation: &cancellation,
+        })
+        .unwrap();
+
+        assert_eq!(output.exit_code, Some(0));
+        assert_eq!(output.stdout_excerpt, "sealed request\n");
+    }
+
+    #[test]
     fn bounded_process_marks_timeout_and_interrupts_on_cancellation() {
         let timed_out = run(&["sleep", "1"], Duration::from_millis(20), 16).unwrap();
         assert!(timed_out.timed_out);
@@ -379,6 +426,7 @@ mod tests {
             cwd: cwd.path(),
             argv: &argv,
             env: Vec::new(),
+            stdin: None,
             timeout: Duration::from_secs(1),
             output_limit_bytes: 16,
             stdout_limit_bytes: None,
@@ -441,6 +489,7 @@ mod tests {
                 cwd: &cwd_path,
                 argv: &argv,
                 env: Vec::new(),
+                stdin: None,
                 timeout: Duration::from_secs(5),
                 output_limit_bytes: 1024,
                 stdout_limit_bytes: None,
@@ -480,6 +529,7 @@ mod tests {
             cwd: cwd.path(),
             argv: &argv,
             env: Vec::new(),
+            stdin: None,
             timeout: Duration::from_secs(5),
             output_limit_bytes: 1024,
             stdout_limit_bytes: None,

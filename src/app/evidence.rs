@@ -2,18 +2,19 @@ mod builtins;
 mod host_capture_admission;
 
 use super::App;
+use super::feature_run_evidence::CanonicalFeatureRunEvidenceLease;
 use super::repository::execution_run::{
-    ExecutionRunRepository, FindingStatus, ReviewGateKind, ReviewGateStatus,
-    ReviewSourceBindingRecord, SourceFreezeRecord, VerificationAdmissionRecord,
+    ExecutionRunRepository, SourceFreezeRecord, VerificationAdmissionRecord,
 };
 use crate::cli::{
     EvidenceCapabilityCommand, EvidenceCommand, EvidenceCoverageScope, EvidenceHostCaptureCommand,
     EvidenceObligationCommand,
 };
 use crate::evidence::model::{
-    ArtifactRef, CapabilityBinding, EvidenceAttempt, EvidenceReceipt, ObservationRequirement,
-    ObservationResult, RawResultRef, SandboxLimits, SandboxState, Sha256Digest, TrustedProvenance,
-    TrustedReceiptInput, VantagePoint, build_trusted_receipt,
+    ArtifactRef, CapabilityBinding, EvidenceAttempt, EvidenceDomainError, EvidenceReceipt,
+    ObservationRequirement, ObservationResult, RawResultRef,
+    STRUCTURED_OBSERVATION_RESULTS_V2_SCHEMA_REF, SandboxLimits, SandboxState, Sha256Digest,
+    TrustedProvenance, TrustedReceiptInput, VantagePoint, build_trusted_receipt,
 };
 use crate::evidence::{
     AttemptStatus, CapabilityRegistry, CapabilityRuntimeContext, EnvironmentBinding, EvidenceId,
@@ -29,8 +30,7 @@ use crate::evidence::{
     },
     execution::{
         ConfiguredProcessRunInput, TrustedEvidencePersistenceInput, ensure_process_adapter_digest,
-        persist_trusted_evidence_atomically, resolve_process_run,
-        resolved_process_adapter_digest,
+        persist_trusted_evidence_atomically, resolve_process_run, resolved_process_adapter_digest,
         run_configured_process_adapter_guarded, run_repository_snapshot_pre_commit_test_hook,
         select_execution_binding_subset,
     },
@@ -43,7 +43,7 @@ use crate::evidence::{
 use crate::execution::{BoundedProcessInput, CancellationToken, run_bounded_process};
 use crate::execution_run::{
     ExecutionBatch, ExecutionBatchStatus, FeatureRunPhase, PhaseTransition, PhaseTransitionCause,
-    RoleOwner, RunRole, apply_phase_transition,
+    RoleOwner, RunRole, VerificationAdmissionRepairReason, apply_phase_transition,
 };
 use crate::util::short_id;
 use anyhow::{Context, Result, anyhow, bail};
@@ -68,8 +68,8 @@ const HOST_CAPTURE_VALIDATOR_TIMEOUT_MS: u64 = 30_000;
 
 #[derive(Debug)]
 pub(crate) enum CurrentPlanCoverageForSourceFreeze {
-    NeedsVerification(CoverageEvaluation),
-    Satisfied(CoverageEvaluation),
+    NeedsVerification,
+    Satisfied,
 }
 
 #[derive(Debug)]
@@ -357,6 +357,11 @@ impl App {
                 self.evidence_readiness_value(args.scope, &args.id),
                 "evidence readiness".to_string(),
             ),
+            EvidenceCommand::Verify(args) => (
+                "evidence.verify",
+                self.evidence_verify_value(args.scope, &args.id),
+                "evidence verification".to_string(),
+            ),
             EvidenceCommand::RecoverSettlement(args) => {
                 let value = read_json_file(&args.input)?;
                 (
@@ -450,8 +455,9 @@ impl App {
     fn evidence_policy_refresh_projection_value(&self) -> Result<Value> {
         let path = self.root.join(".planr/evidence.yaml");
         let text = fs::read_to_string(&path)?;
-        let document = crate::evidence::policy::parse_evidence_policy_yaml_for_refresh_projection(&text)
-            .map_err(|diagnostics| anyhow!("evidence policy invalid: {diagnostics}"))?;
+        let document =
+            crate::evidence::policy::parse_evidence_policy_yaml_for_refresh_projection(&text)
+                .map_err(|diagnostics| anyhow!("evidence policy invalid: {diagnostics}"))?;
         let mut registry = self.evidence_registry_from_policy(&document)?;
         let probe = self.probe_registry_capabilities(&mut registry)?;
         Ok(json!({
@@ -572,10 +578,7 @@ impl App {
                     })
                     .map(|digest| json!({"digest": digest}))
                     .unwrap_or_else(|error| json!({"error": error.to_string()}));
-                Some((
-                    capability.manifest.id.as_str().to_string(),
-                    projection,
-                ))
+                Some((capability.manifest.id.as_str().to_string(), projection))
             })
             .collect::<BTreeMap<_, _>>();
         let manifest_ids = registry
@@ -1177,9 +1180,11 @@ impl App {
         // FeatureRun is frozen nothing beyond that boundary may probe capabilities, parse policy,
         // or create an executable run index until the current worker owns the verifier lease.
         // Non-FeatureRun plans retain the ordinary readiness path.
-        if matches!(scope, EvidenceCoverageScope::Plan) {
-            self.resolve_feature_run_evidence_lease(&self.default_project()?.id, id)?;
-        }
+        let feature_run_lease = if matches!(scope, EvidenceCoverageScope::Plan) {
+            self.resolve_feature_run_evidence_lease(&self.default_project()?.id, id)?
+        } else {
+            None
+        };
         let document = self.evidence_policy_document()?.ok_or_else(|| {
             EvidenceCommandError::bad_request("evidence readiness requires .planr/evidence.yaml")
         })?;
@@ -1322,11 +1327,6 @@ impl App {
         }
         gaps.sort_by_key(|gap| gap.to_string());
         gaps.dedup();
-        let feature_run_readiness = if matches!(scope, EvidenceCoverageScope::Plan) {
-            self.classify_feature_run_readiness_value(id, !gaps.is_empty())?
-        } else {
-            None
-        };
         let run_index = if gaps.is_empty() {
             Some(self.build_readiness_run_index(
                 scope,
@@ -1336,6 +1336,21 @@ impl App {
                 &probe,
                 &document.digest,
             )?)
+        } else {
+            None
+        };
+        if let (Some(lease), Some(sealed_run_index)) =
+            (feature_run_lease.as_ref(), run_index.as_ref())
+        {
+            self.admit_feature_run_readiness(lease, sealed_run_index)?;
+        }
+        let feature_run_readiness = if matches!(scope, EvidenceCoverageScope::Plan) {
+            self.classify_feature_run_readiness_value(
+                id,
+                !gaps.is_empty(),
+                Some(Value::Array(gaps.clone())),
+                Some(VerificationAdmissionRepairReason::ReadinessBlocked),
+            )?
         } else {
             None
         };
@@ -1355,6 +1370,194 @@ impl App {
                 "repair the reported Evidence policy, schema, capability, or runtime gap"
             }
         }))
+    }
+
+    pub(crate) fn evidence_verify_value(
+        &self,
+        scope: EvidenceCoverageScope,
+        id: &str,
+    ) -> Result<Value> {
+        self.evidence_verify_value_with_refresh(scope, id, true)
+    }
+
+    fn evidence_verify_value_with_refresh(
+        &self,
+        scope: EvidenceCoverageScope,
+        id: &str,
+        allow_post_receipt_source_refresh: bool,
+    ) -> Result<Value> {
+        if scope != EvidenceCoverageScope::Plan {
+            return Err(
+                EvidenceCommandError::bad_request("evidence verify requires --scope plan").into(),
+            );
+        }
+        if let Some(execution_state) = self.canonical_execution_state_for_plan_value(id)?
+            && execution_state["phase"] == "held"
+            && execution_state["feature_run"]["hold_reason"] == "capability"
+        {
+            if execution_state["verification_admission_repair"].is_null() {
+                return Err(EvidenceCommandError::conflict(format!(
+                    "capability-held verification has no canonical repair request for plan {id}"
+                ))
+                .into());
+            }
+            return Ok(json!({
+                "status": "blocked",
+                "verification_broker": {
+                    "plan_id": id,
+                    "stage": "repair",
+                },
+                "repair_request": execution_state["verification_admission_repair"],
+                "execution_state": execution_state,
+            }));
+        }
+        let pick = self
+            .verification_work_packet_value(id, false)?
+            .ok_or_else(|| {
+                EvidenceCommandError::conflict(format!(
+                    "no binding verification is ready for plan {id}"
+                ))
+            })?;
+        let packet = pick.get("work_packet").ok_or_else(|| {
+            EvidenceCommandError::internal("verification pick has no work packet")
+        })?;
+        if packet["kind"] == "hold" {
+            return Ok(json!({
+                "status": "blocked",
+                "verification_broker": {
+                    "plan_id": id,
+                    "stage": "lease",
+                },
+                "work_packet": packet,
+            }));
+        }
+        if packet["kind"] != "verification" {
+            return Err(EvidenceCommandError::conflict(format!(
+                "verification pick returned {} for plan {id}",
+                packet["kind"].as_str().unwrap_or("an unknown packet")
+            ))
+            .into());
+        }
+
+        let readiness = match self.evidence_readiness_value(scope, id) {
+            Ok(readiness) => readiness,
+            Err(error) => {
+                if allow_post_receipt_source_refresh
+                    && error.to_string().starts_with("stale_source_freeze:")
+                    && self.refresh_post_receipt_stale_evidence_source(id)?
+                {
+                    return self.evidence_verify_value_with_refresh(scope, id, false);
+                }
+                let diagnostic = json!([{
+                    "code": "readiness_error",
+                    "message": error.to_string(),
+                }]);
+                let hold = self.classify_feature_run_readiness_value(
+                    id,
+                    true,
+                    Some(diagnostic.clone()),
+                    Some(VerificationAdmissionRepairReason::RunIndexSealFailed),
+                )?;
+                return Ok(json!({
+                    "status": "blocked",
+                    "verification_broker": {
+                        "plan_id": id,
+                        "stage": "readiness",
+                        "verification_lease": packet["verification_lease"],
+                    },
+                    "readiness_error": diagnostic,
+                    "feature_run_readiness": hold,
+                }));
+            }
+        };
+        if readiness["status"] != "passed" {
+            return Ok(json!({
+                "status": "blocked",
+                "verification_broker": {
+                    "plan_id": id,
+                    "stage": "readiness",
+                    "verification_lease": packet["verification_lease"],
+                },
+                "readiness": readiness,
+                "feature_run_readiness": readiness["feature_run_readiness"],
+            }));
+        }
+        let run_index = readiness
+            .get("run_index")
+            .filter(|value| !value.is_null())
+            .cloned()
+            .ok_or_else(|| {
+                EvidenceCommandError::internal("passed readiness has no sealed run index")
+            })?;
+        let run_index_digest = run_index["run_index_digest"].clone();
+        let mut result = self.evidence_run_value(run_index)?;
+        result["verification_broker"] = json!({
+            "plan_id": id,
+            "stage": "settled",
+            "verification_lease": packet["verification_lease"],
+            "run_index_digest": run_index_digest,
+        });
+        Ok(result)
+    }
+
+    fn admit_feature_run_readiness(
+        &self,
+        lease: &CanonicalFeatureRunEvidenceLease,
+        sealed_run_index: &Value,
+    ) -> Result<()> {
+        let run_index_digest = string_field(sealed_run_index, "run_index_digest")?;
+        self.conn
+            .execute_batch("BEGIN IMMEDIATE; SAVEPOINT admit_feature_run_readiness")?;
+        let result = (|| -> Result<()> {
+            self.validate_feature_run_evidence_lease(&self.conn, lease)?;
+            let repository = ExecutionRunRepository::new(&self.conn);
+            let current = repository.feature_run(&lease.run_id)?;
+            let verification_item_id = repository
+                .verification_item_projection(&lease.plan_id)?
+                .map(|item| item.id);
+            let admission = VerificationAdmissionRecord {
+                plan_id: lease.plan_id.clone(),
+                run_id: lease.run_id.clone(),
+                freeze_id: lease.freeze_id.clone(),
+                run_revision: current.revision,
+                verifier_worker_id: lease.verifier_worker_id.clone(),
+                verifier_lease_generation: lease.lease_generation,
+                verification_item_id,
+                run_index_digest,
+                sealed_run_index: sealed_run_index.clone(),
+            };
+            match repository.latest_verification_admission(&lease.run_id, &lease.freeze_id)? {
+                Some(existing) if existing == admission => Ok(()),
+                Some(existing) => {
+                    let (attempt_count, receipt_count) = repository
+                        .sealed_run_index_execution_activity(
+                            &lease.project_id,
+                            &lease.plan_id,
+                            &existing.run_index_digest,
+                        )?;
+                    if attempt_count == 0 || receipt_count == 0 {
+                        bail!(
+                            "evidence_readiness_verification_admission_conflict:{}",
+                            lease.run_id
+                        );
+                    }
+                    repository.record_verification_admission(&admission)
+                }
+                None => repository.record_verification_admission(&admission),
+            }
+        })();
+        match result {
+            Ok(()) => self
+                .conn
+                .execute_batch("RELEASE admit_feature_run_readiness; COMMIT")?,
+            Err(error) => {
+                let _ = self.conn.execute_batch(
+                    "ROLLBACK TO admit_feature_run_readiness; RELEASE admit_feature_run_readiness; ROLLBACK",
+                );
+                return Err(error);
+            }
+        }
+        Ok(())
     }
 
     fn build_readiness_run_index(
@@ -1656,6 +1859,14 @@ impl App {
     }
 
     fn evidence_run_index_value(&self, value: Value) -> Result<Value> {
+        let scope_kind = value["scope"]["kind"]
+            .as_str()
+            .ok_or_else(|| EvidenceCommandError::bad_request("run-index scope.kind is required"))?
+            .to_string();
+        let scope_id = value["scope"]["id"]
+            .as_str()
+            .ok_or_else(|| EvidenceCommandError::bad_request("run-index scope.id is required"))?
+            .to_string();
         let (declared_digest, validated_entries) = self.validate_sealed_run_index(&value)?;
         let runs = value["runs"]
             .as_array()
@@ -1729,14 +1940,22 @@ impl App {
             (!result["terminal_exhaustion"].is_null())
                 .then(|| result["terminal_exhaustion"].clone())
         });
-        Ok(json!({
+        let mut response = json!({
             "schema_version": "planr.evidence.run-index.result.v2",
             "run_index_digest": declared_digest,
             "status": verdict,
             "verdict": verdict,
             "results": results,
             "terminal_exhaustion": terminal_exhaustion,
-        }))
+        });
+        if scope_kind == "plan" {
+            let coverage = self.evidence_coverage_value(EvidenceCoverageScope::Plan, &scope_id)?;
+            if let Some(settlement) = coverage.get("feature_run_verification_settlement") {
+                response["feature_run_verification_settlement"] = settlement.clone();
+            }
+            response["coverage"] = coverage;
+        }
+        Ok(response)
     }
 
     fn validate_run_index_target_subsets(
@@ -2215,7 +2434,7 @@ impl App {
             })?)?;
         let builtins = BuiltInEvidenceCatalog::load()?;
         let payload_json_schema = if execution_contract.payload_schema.schema_ref
-            == "schema://planr.structured_observation_results.v1"
+            == STRUCTURED_OBSERVATION_RESULTS_V2_SCHEMA_REF
         {
             None
         } else {
@@ -3377,7 +3596,7 @@ impl App {
                 }
                 super::proof::PlanEvidenceAuthority::NonBinding => {
                     return Err(EvidenceCommandError::bad_request(
-                        "nonbinding plans have no binding Evidence coverage; use the source-frozen final-review route",
+                        "nonbinding plans have no binding Evidence coverage; use explicit material ReviewGates only when the plan requires independent review",
                     )
                     .into());
                 }
@@ -3399,7 +3618,20 @@ impl App {
                 evaluate_plan_coverage(&self.conn, &project.id, id, &evaluated_at)
             }
         }
-        .map_err(|err| anyhow!("{err}"))?;
+        .map_err(|err| {
+            if matches!(scope, EvidenceCoverageScope::Criterion)
+                && matches!(
+                    &err,
+                    EvidenceDomainError::MissingTrustedBinding("proof_obligation")
+                )
+            {
+                anyhow::Error::new(EvidenceCommandError::bad_request(format!(
+                    "no authoritative binding Evidence obligation exists for criterion scope id '{id}'; --scope criterion requires a criterion id, not a requirement id. Prefer --scope plan --id <plan-id> for canonical settlement"
+                )))
+            } else {
+                anyhow!("{err}")
+            }
+        })?;
         let mut value = json!({
             "coverage": coverage.verdict.clone(),
             "coverage_id": coverage.id.clone(),
@@ -3413,8 +3645,7 @@ impl App {
         if matches!(scope, EvidenceCoverageScope::Plan)
             && coverage.status.as_str() == "satisfied"
             && !coverage.receipt_digests.is_empty()
-            && let Some(settlement) =
-                self.settle_feature_run_after_plan_coverage(id, value.clone())?
+            && let Some(settlement) = self.settle_feature_run_after_plan_coverage(id)?
         {
             value["feature_run_verification_settlement"] = settlement;
         }
@@ -3431,22 +3662,18 @@ impl App {
         let coverage = evaluate_plan_coverage(&self.conn, project_id, plan_id, &evaluated_at)
             .map_err(|error| anyhow!("{error}"))?;
         if coverage.status.as_str() != "satisfied" {
-            return Ok(CurrentPlanCoverageForSourceFreeze::NeedsVerification(
-                coverage,
-            ));
+            return Ok(CurrentPlanCoverageForSourceFreeze::NeedsVerification);
         }
         match self
             .ensure_plan_coverage_matches_source_freeze(project_id, plan_id, freeze, &coverage)
         {
-            Ok(()) => Ok(CurrentPlanCoverageForSourceFreeze::Satisfied(coverage)),
+            Ok(()) => Ok(CurrentPlanCoverageForSourceFreeze::Satisfied),
             Err(error)
                 if error
                     .downcast_ref::<CoverageSourceFreezeMismatch>()
                     .is_some() =>
             {
-                Ok(CurrentPlanCoverageForSourceFreeze::NeedsVerification(
-                    coverage,
-                ))
+                Ok(CurrentPlanCoverageForSourceFreeze::NeedsVerification)
             }
             Err(error) => Err(error),
         }
@@ -3545,19 +3772,8 @@ impl App {
         Ok(())
     }
 
-    fn settle_feature_run_after_plan_coverage(
-        &self,
-        plan_id: &str,
-        coverage_binding: Value,
-    ) -> Result<Option<Value>> {
+    fn settle_feature_run_after_plan_coverage(&self, plan_id: &str) -> Result<Option<Value>> {
         let current_worker = crate::util::worker_id();
-        if let Some(settlement) = self.settle_review_finding_reverification(
-            plan_id,
-            coverage_binding.clone(),
-            &current_worker,
-        )? {
-            return Ok(Some(settlement));
-        }
         self.conn
             .execute_batch("BEGIN IMMEDIATE; SAVEPOINT settle_feature_run_verification")?;
         let result = (|| -> Result<Option<Value>> {
@@ -3590,6 +3806,11 @@ impl App {
             let locked_coverage =
                 evaluate_plan_coverage(&self.conn, &project.id, plan_id, &evaluated_at)
                     .map_err(|error| anyhow!("{error}"))?;
+            if locked_coverage.status.as_str() != "satisfied"
+                || locked_coverage.receipt_digests.is_empty()
+            {
+                return Ok(None);
+            }
             self.ensure_plan_coverage_matches_source_freeze(
                 &project.id,
                 plan_id,
@@ -3757,23 +3978,18 @@ impl App {
                     format!("planr pick --plan {plan_id} --json"),
                 )
             } else {
-                let source_frozen = apply_phase_transition(
+                let complete = apply_phase_transition(
                     &persisted.run,
                     &PhaseTransition {
-                        to: FeatureRunPhase::SourceFrozen,
+                        to: FeatureRunPhase::Complete,
                         cause: PhaseTransitionCause::VerificationPassed,
                         reference: format!("evidence_coverage:{coverage_id}"),
                         owner: None,
                     },
                 )
-                .map_err(|violation| {
-                    anyhow!("verification_final_review_transition:{violation:?}")
-                })?;
-                repository.save_feature_run(&source_frozen, persisted.revision)?;
-                (
-                    FeatureRunPhase::SourceFrozen,
-                    format!("planr plan final-review {plan_id}"),
-                )
+                .map_err(|violation| anyhow!("verification_complete_transition:{violation:?}"))?;
+                repository.save_feature_run(&complete, persisted.revision)?;
+                (FeatureRunPhase::Complete, "none".to_string())
             };
             self.record_event(
                 "feature_run_verification_settled",
@@ -3810,184 +4026,6 @@ impl App {
                 let _ = self.conn.execute_batch(
                     "ROLLBACK TO settle_feature_run_verification; RELEASE settle_feature_run_verification; ROLLBACK",
                 );
-                Err(error)
-            }
-        }
-    }
-
-    fn settle_review_finding_reverification(
-        &self,
-        plan_id: &str,
-        coverage_binding: Value,
-        verifier_worker_id: &str,
-    ) -> Result<Option<Value>> {
-        self.conn
-            .execute_batch("BEGIN IMMEDIATE; SAVEPOINT settle_review_finding_reverification")?;
-        let result = (|| -> Result<Option<Value>> {
-            let project = self.default_project()?;
-            let repository = ExecutionRunRepository::new(&self.conn);
-            let Some(current) = repository.active_feature_run_for_plan(&project.id, plan_id)?
-            else {
-                return Ok(None);
-            };
-            let run_id = current.run.id.as_str();
-            let Some(gate) = repository
-                .review_gates_for_run(run_id, false)?
-                .into_iter()
-                .find(|gate| gate.kind == ReviewGateKind::FinalProduct)
-            else {
-                return Ok(None);
-            };
-            let findings = repository.findings(&gate.id)?;
-            if findings.is_empty() {
-                return Ok(None);
-            }
-            if findings
-                .iter()
-                .any(|finding| finding.status != FindingStatus::Resolved)
-            {
-                if current.run.phase == FeatureRunPhase::Verification {
-                    bail!("review_reverification_findings_not_resolved:{}", gate.id);
-                }
-                return Ok(None);
-            }
-            if !matches!(
-                current.run.phase,
-                FeatureRunPhase::Verification | FeatureRunPhase::SourceFrozen
-            ) {
-                return Ok(None);
-            }
-
-            let evaluated_at = timestamp()?;
-            let coverage = evaluate_plan_coverage(&self.conn, &project.id, plan_id, &evaluated_at)
-                .map_err(|error| anyhow!("{error}"))?;
-            let mut locked_coverage = json!({
-                "coverage": coverage.verdict,
-                "coverage_id": coverage.id,
-                "status": coverage.status.as_str(),
-                "receipt_digests": coverage.receipt_digests,
-                "waiver_digests": coverage.waiver_digests,
-                "receipt_lineage": coverage.receipt_lineage,
-                "verdict": coverage.status.as_str(),
-            });
-            locked_coverage["canonical_projection"] =
-                canonical_coverage_projection(&locked_coverage);
-            for field in [
-                "coverage_id",
-                "status",
-                "receipt_digests",
-                "waiver_digests",
-                "receipt_lineage",
-            ] {
-                if coverage_binding[field] != locked_coverage[field] {
-                    bail!("review_reverification_coverage_changed:{plan_id}:{field}");
-                }
-            }
-            if locked_coverage["status"] != "satisfied"
-                || locked_coverage["receipt_digests"]
-                    .as_array()
-                    .is_none_or(Vec::is_empty)
-                || locked_coverage["waiver_digests"]
-                    .as_array()
-                    .is_some_and(|values| !values.is_empty())
-            {
-                bail!("review_reverification_requires_unwaived_satisfied_coverage:{plan_id}");
-            }
-
-            let freeze = repository
-                .active_source_freeze(run_id)?
-                .ok_or_else(|| anyhow!("review_reverification_freeze_missing:{run_id}"))?;
-            let binding = ReviewSourceBindingRecord {
-                gate_id: gate.id.clone(),
-                freeze_id: freeze.id.clone(),
-                source_revision: freeze.source_revision.clone(),
-                source_digest: freeze.source_digest.clone(),
-                receipt_lineage: locked_coverage["receipt_lineage"].clone(),
-            };
-
-            if gate.status == ReviewGateStatus::Pending {
-                if current.run.phase != FeatureRunPhase::SourceFrozen {
-                    bail!(
-                        "review_reverification_idempotence_phase_conflict:{}",
-                        gate.id
-                    );
-                }
-                let stored = repository
-                    .review_source_binding(&gate.id)?
-                    .ok_or_else(|| anyhow!("review_reverification_binding_missing:{}", gate.id))?;
-                if stored != binding {
-                    bail!("review_reverification_idempotence_conflict:{}", gate.id);
-                }
-                return Ok(Some(json!({
-                    "mode": "review_finding_reverification",
-                    "review_gate_id": gate.id,
-                    "status": "already_settled",
-                    "source_freeze": freeze,
-                    "coverage": locked_coverage,
-                    "next_action": format!("planr pick --plan {plan_id} --work-type review --json"),
-                })));
-            }
-            if gate.status != ReviewGateStatus::ChangesRequested {
-                bail!("review_reverification_gate_not_repairing:{}", gate.id);
-            }
-            if current.run.phase != FeatureRunPhase::Verification {
-                bail!("review_reverification_phase_conflict:{run_id}");
-            }
-            let verifier = current
-                .run
-                .role_owners
-                .iter()
-                .find(|owner| owner.role == RunRole::Verifier)
-                .ok_or_else(|| anyhow!("review_reverification_verifier_missing:{run_id}"))?;
-            if verifier.worker_id != verifier_worker_id {
-                bail!("review_reverification_verifier_conflict:{run_id}");
-            }
-            let snapshot = capture_repository_snapshot(&self.root)
-                .map_err(|error| anyhow!("review_reverification_source_capture:{error}"))?;
-            if snapshot.source.revision != freeze.source_revision
-                || snapshot.source.tree_digest.as_str() != freeze.source_digest
-            {
-                bail!("review_reverification_source_stale:{}", freeze.id);
-            }
-            repository.rebind_review_gate_source(&binding)?;
-            repository.set_review_gate_status(
-                &gate.id,
-                ReviewGateStatus::ChangesRequested,
-                ReviewGateStatus::Pending,
-            )?;
-            self.reconcile_active_phase_wall(run_id, crate::usage_policy::BudgetPhase::Repair)?;
-            self.reconcile_active_phase_wall(
-                run_id,
-                crate::usage_policy::BudgetPhase::Verification,
-            )?;
-            let review_ready = apply_phase_transition(
-                &current.run,
-                &PhaseTransition {
-                    to: FeatureRunPhase::SourceFrozen,
-                    cause: PhaseTransitionCause::VerificationPassed,
-                    reference: format!("review_gate:{}", gate.id),
-                    owner: None,
-                },
-            )
-            .map_err(|violation| anyhow!("review_reverification_transition:{violation:?}"))?;
-            repository.save_feature_run(&review_ready, current.revision)?;
-            Ok(Some(json!({
-                "mode": "review_finding_reverification",
-                "review_gate_id": gate.id,
-                "status": "settled",
-                "source_freeze": freeze,
-                "coverage": locked_coverage,
-                "next_action": format!("planr pick --plan {plan_id} --work-type review --json"),
-            })))
-        })();
-        match result {
-            Ok(value) => {
-                self.conn
-                    .execute_batch("RELEASE settle_review_finding_reverification; COMMIT")?;
-                Ok(value)
-            }
-            Err(error) => {
-                let _ = self.conn.execute_batch("ROLLBACK TO settle_review_finding_reverification; RELEASE settle_review_finding_reverification; ROLLBACK");
                 Err(error)
             }
         }
@@ -4439,7 +4477,7 @@ fn admitted_max_attempts(repeatability: &str, declared: Option<u64>) -> Result<u
         }
         Ok(1)
     } else {
-        Ok(declared.unwrap_or(3))
+        Ok(declared.unwrap_or(1))
     }
 }
 
@@ -4683,6 +4721,7 @@ fn validate_external_host_capture_with_script(
         cwd: repository_root,
         argv: &argv,
         env: Vec::new(),
+        stdin: None,
         timeout: Duration::from_millis(timeout_ms),
         output_limit_bytes: 1_048_576,
         stdout_limit_bytes: Some(1_048_576),
@@ -5074,6 +5113,16 @@ fn reject_trusted_receipt_input(value: &Value) -> Result<()> {
             .into());
         }
     }
+    if value
+        .get("agent_skill")
+        .and_then(|claim| claim.get("invoked"))
+        .is_some()
+    {
+        return Err(EvidenceCommandError::bad_request(
+            "public Evidence input cannot claim trusted execution with agent_skill.invoked",
+        )
+        .into());
+    }
     Ok(())
 }
 
@@ -5333,6 +5382,21 @@ mod tests {
                 "{field}: {error}"
             );
         }
+
+        let fabricated_invocation = json!({
+            "agent_skill": {
+                "schema_version": "planr.evidence.agent-skill-result.v1",
+                "skill": "browser-harness",
+                "invoked": true,
+                "invocation_id": "inv-fabricated",
+                "observations": [{
+                    "requirement_id": "obs-fabricated",
+                    "status": "passed"
+                }]
+            }
+        });
+        let error = reject_trusted_receipt_input(&fabricated_invocation).unwrap_err();
+        assert!(error.to_string().contains("agent_skill.invoked"), "{error}");
     }
 
     #[test]
@@ -5409,7 +5473,8 @@ mod tests {
                 .to_string()
                 .contains("requires max_attempts = 1")
         );
-        assert_eq!(admitted_max_attempts("repeatable", None).unwrap(), 3);
+        assert_eq!(admitted_max_attempts("repeatable", None).unwrap(), 1);
+        assert_eq!(admitted_max_attempts("repeatable", Some(2)).unwrap(), 2);
         assert!(should_settle_terminal_exhaustion(
             "failed",
             true,

@@ -6,17 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-## [1.10.0-alpha.8] - 2026-08-18
+## [1.10.0-alpha.8] - 2026-08-25
 
 ### Changed
 
-- Seal binding-Evidence execution to exact per-target observation subsets and retain the immutable source, receipt, and review lineage through completion.
-- Make final product reviews create-or-show from the current accepted Evidence binding, including after a FeatureRun reaches completion.
+- Route binding verification through one canonical Evidence broker that seals a provider-neutral adapter request, supervises the selected process, validates exact source, target, environment, requirement, and execution bindings, and settles coverage without an extra model turn.
+- Add the first-class Browser Harness process adapter for one-session, structured DOM postcondition Evidence without mandatory screenshots, recordings, or success-path traces.
+- Keep the invoking Codex session as the default sequential maker and verifier while reserving independent ReviewGates for explicitly material risk.
 
 ### Fixed
 
-- Recover premature source freezes, inconsistent verification admission, itemless verification settlement, and post-receipt ProductFinding repair through their sole typed lifecycle transitions.
-- Keep ordinary outcome settlement idempotent and preserve retry/materiality identity without compatibility ownership paths.
+- Reject agent-authored invocation claims at every public Evidence surface; only Planr-observed adapter execution can create local trusted provenance, and a failed process overrides any claimed passing payload.
+- Complete binding FeatureRuns directly from exact satisfied coverage, without synthetic verification items, mandatory final reviews, post-coverage bookkeeping, or unchanged-environment retry loops.
+- Recover readiness failures and ProductFindings through bounded typed transitions while preserving immutable source, receipt, retry, and review lineage.
 
 ## [1.10.0-alpha.7] - 2026-08-15
 

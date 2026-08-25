@@ -38,7 +38,7 @@ planr evidence readiness --scope plan --id <plan-id>
 planr evidence explain --scope plan --id <plan-id>
 ```
 
-Audit answers `holds: true/false` from settled outcomes, required independent material ReviewGates, exactly one current independent final product ReviewGate, approvals, and canonical Evidence coverage. When the final gate clause is missing after work has settled, the next command is `planr plan final-review <plan-id>`. Readiness reports configuration/runtime blockers before execution; explain reports exact receipt applicability and gaps. Report `contract holds` or `contract open` plus the exact unmet clauses straight from these outputs. Use `planr search "GOAL CONTRACT"` only to read the contract text itself.
+Audit answers `holds: true/false` from settled outcomes, explicitly required independent material ReviewGates, approvals, and canonical Evidence coverage. Binding Evidence success does not require a final product ReviewGate. Readiness reports configuration/runtime blockers before execution; explain reports exact receipt applicability and gaps. Report `contract holds` or `contract open` plus the exact unmet clauses straight from these outputs. Use `planr search "GOAL CONTRACT"` only to read the contract text itself.
 
 ## Verdicts
 

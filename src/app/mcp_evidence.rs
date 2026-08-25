@@ -104,6 +104,12 @@ impl App {
                         .and_then(|id| self.evidence_readiness_value(scope, id))
                 }),
             )),
+            "planr_evidence_verify" => Ok(mcp_evidence_json(
+                "evidence.verify",
+                evidence_scope_arg(&args).and_then(|scope| {
+                    required_arg(&args, "id").and_then(|id| self.evidence_verify_value(scope, id))
+                }),
+            )),
             "planr_evidence_recover_settlement" => Ok(mcp_evidence_json(
                 "evidence.recover_settlement",
                 self.recover_verification_settlement_value(

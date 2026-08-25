@@ -70,7 +70,7 @@ Planr turns broad product ideas and coding work into a coherent flow: product pl
 ## Binding Evidence Authority
 
 - REQ-PROD-EVIDENCE-001: Typed build-plan frontmatter owns one non-empty, unique, closed criterion identity list; acceptance prose is narrative only. Repository Evidence policy, that declared list, and authoritative active plan obligations jointly determine one canonical authority: `nonbinding`, `binding_unsatisfied`, or `binding_active`.
-- REQ-PROD-EVIDENCE-002: A binding plan with zero, partial, duplicate, or undeclared criterion bindings must fail closed before implementation activation and at every later lifecycle boundary. It must never reach coverage settlement or final review through claim logs, partial rows, empty coverage, or empty receipt lineage.
+- REQ-PROD-EVIDENCE-002: A binding plan with zero, partial, duplicate, or undeclared criterion bindings must fail closed before implementation activation and at every later lifecycle boundary. It must never reach coverage settlement or closure through claim logs, partial rows, empty coverage, or empty receipt lineage.
 - REQ-PROD-EVIDENCE-003: Only explicit `planr.evidence.migration.v1` application materializes obligations. Planr must not synthesize them during planning, picking, readiness, audit, or review.
 - REQ-PROD-EVIDENCE-004: A verification-readiness failure must roll back its tentative verifier/item lease transaction, then persist a durable capability hold and diagnostic that projects the exact pre-seal repair request.
 - REQ-PROD-EVIDENCE-005: `planr.evidence.run-index.v2` must seal one run per canonical `(obligation_id, target)` with sorted non-empty `requirement_ids`; each obligation's run subsets must form the exact no-duplicate union of its authoritative observations.
@@ -81,16 +81,20 @@ Planr turns broad product ideas and coding work into a coherent flow: product pl
 - REQ-PROD-EVIDENCE-010: Satisfied plan coverage settles the active FeatureRun by exact verifier
   lease generation, active immutable freeze, and trusted receipt/source binding. A verification map
   item is a zero-or-one projection: close/log one active item atomically or mutate zero items/logs
-  when absent; a ready unleased item remains fail-closed.
-- REQ-PROD-EVIDENCE-011: Binding final review is one create-or-show contract. New gates and existing
-  gates that are not Accepted require post-settlement SourceFrozen plus satisfied coverage whose
-  accepted receipt/source binding exactly matches the intact active freeze. An existing Accepted
-  gate remains showable after the FeatureRun becomes Complete only when its stored binding still
-  equals that same current freeze and exact coverage. Item existence or status has no authority.
+  when absent; a ready unleased item remains fail-closed. If no ordinary outcomes remain, that same
+  transaction moves Verification directly to Complete and returns no next action. The canonical
+  plan-scoped `evidence verify` broker owns the verifier lease, readiness seal, adapter execution,
+  coverage, and settlement under one worker identity. The coordinator calls it directly after
+  source freeze. Normal success requires no verifier agent, second coverage command, or model turn.
+- REQ-PROD-EVIDENCE-011: Binding plans do not open a final product ReviewGate after satisfied
+  Evidence. `planr plan final-review` is non-binding-only. Explicit material and risk ReviewGates
+  remain independent earlier lifecycle controls and cannot replace binding Evidence.
 - REQ-PROD-EVIDENCE-012: Terminal one-shot exhaustion always commits attempt/receipt, reconciles the
   verification budget, cancels the FeatureRun, and releases the verifier. It fails/logs a projected
   verification item only when present and supports true itemless state without an exactly-one-item
-  invariant.
+  invariant. All other capabilities also default to one attempt; a repeatable manifest must
+  explicitly admit any larger bound, and verifier/environment failure never triggers an automatic
+  coordinator retry.
 - REQ-PROD-EVIDENCE-013: Post-receipt ProductFinding repair is application-owned and distinct from
   pre-receipt admission repair. Routing, maker work packets, settlement, idempotent replay,
   selective-replay handoff, and verifier release treat a verification item as an optional current

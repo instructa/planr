@@ -618,10 +618,10 @@ impl App {
                 FeatureRunPhase::SourceFrozen
                     if matches!(
                         current_plan_coverage.as_ref(),
-                        Some(CurrentPlanCoverageForSourceFreeze::Satisfied(_))
+                        Some(CurrentPlanCoverageForSourceFreeze::Satisfied)
                     ) =>
                 {
-                    ("binding_evidence_satisfied", "open_final_review")
+                    ("binding_evidence_satisfied", "settle_binding_evidence")
                 }
                 FeatureRunPhase::SourceFrozen => ("source_frozen", "lease_verification"),
                 FeatureRunPhase::Verification => {
@@ -745,22 +745,11 @@ impl App {
             .ok_or_else(|| {
                 anyhow::anyhow!("verification_handoff_execution_state_missing:{plan_id}")
             })?;
-        let lease_verifier = canonical_planr_command(
-            planr_executable,
-            vec![
-                "pick".to_string(),
-                "--plan".to_string(),
-                plan_id.to_string(),
-                "--work-type".to_string(),
-                "verification".to_string(),
-                "--json".to_string(),
-            ],
-        );
-        let readiness = canonical_planr_command(
+        let verify = canonical_planr_command(
             planr_executable,
             vec![
                 "evidence".to_string(),
-                "readiness".to_string(),
+                "verify".to_string(),
                 "--scope".to_string(),
                 "plan".to_string(),
                 "--id".to_string(),
@@ -780,10 +769,9 @@ impl App {
                 "source_freeze": source_freeze,
                 "planr_executable": planr_executable,
                 "commands": {
-                    "lease_verifier": lease_verifier,
-                    "readiness": readiness,
+                    "verify": verify,
                 },
-                "next_action": "lease_verifier_then_run_readiness",
+                "next_action": "run_verify",
             }
         }))
     }
@@ -820,7 +808,7 @@ impl App {
                 );
             }
             PlanEvidenceAuthority::BindingUnsatisfied => {
-                self.classify_feature_run_readiness_value(plan_id, true)?;
+                self.classify_feature_run_readiness_value(plan_id, true, None, None)?;
                 let proof = self.proof_status_for_plan(plan_id)?;
                 let execution_state = self
                     .canonical_execution_state_for_plan_value(plan_id)?

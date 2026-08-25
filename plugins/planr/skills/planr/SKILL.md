@@ -45,7 +45,7 @@ Evaluate top to bottom; pick the first row that matches both intent and state:
 | new idea, PRD, scope, architecture | no plan, or plan needs refinement | `planr-plan` |
 | new feature, refactor, or fix on an existing project | project exists, scope has no plan yet | `planr-plan` (feature-scoped plan, then extend the map) |
 | plan exists but no map / map needs structure, dependencies, breakdown | build plan checked, map missing or stale | `planr-task-graph` |
-| ReviewGate pending or leased | open gate in the active FeatureRun | `planr-review` |
+| ReviewGate pending or leased | explicit material gate in the active FeatureRun | `planr-review` |
 | ReviewGate has findings | active FeatureRun returns `work_packet.mode: "finding_repair"` to its responsible maker | `planr-work` |
 | implement, fix, continue work | ready items exist on the map | `planr-work` |
 | implement, but nothing is ready | all items blocked | `planr-status`, then report blockers to the user |
@@ -54,7 +54,7 @@ Evaluate top to bottom; pick the first row that matches both intent and state:
 
 - Route to exactly one skill per dispatch. If the request spans stages (idea -> running feature), route to `planr-loop` and let the loop sequence the stages.
 - Explicit delivery language such as "implement", "work autonomously until complete", or "finish this" outranks missing plan or map state and routes to `planr-loop`. Never turn a delivery request into a prep-only handoff.
-- Never skip a stage: no map items without a checked build plan, no FeatureRun completion without its required ReviewGates, and no review verdict without evidence.
+- Never skip a stage: no map items without a checked build plan, no FeatureRun completion without Binding Evidence or any explicitly required material ReviewGates, and no review verdict without evidence.
 - When delegating to a subagent, prompt it with a skill reference plus item id (for example: `Use $planr-work on item <id>`), never with a hand-written workflow prompt.
-- The maker never reviews its own work. Reviews run through `planr-review` in a separate agent or subagent whenever the host supports it.
+- The maker never reviews its own material ReviewGate. Reviews run through `planr-review` in a separate agent or subagent only when the plan or a protected-risk transition explicitly requires one.
 - If intent is genuinely ambiguous and state allows multiple routes, ask the user one short question instead of guessing.

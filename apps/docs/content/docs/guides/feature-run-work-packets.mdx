@@ -56,24 +56,14 @@ An accepted risk gate resumes the same maker and batch when compatible code work
 
 ## 3. Frozen-source verification
 
-After the stable implementation batch is settled, the coordinator calls readiness once to freeze the canonical source:
+After the stable implementation batch settles, the invoking loop session runs
+one broker command. Use an identity that differs from the maker:
 
 ```bash
-planr evidence readiness --scope plan --id <plan-id> --json
+PLANR_WORKER_ID="coordinator-verifier-1" planr evidence verify --scope plan --id <plan-id> --json
 ```
 
-For a frozen FeatureRun, readiness returns the exact verification-pick repair. Dispatch a fresh verifier identity, and make the typed pick its first action. Under that same lease, rerun readiness and execute only the returned `readiness.run_index.repository_path`:
-
-```bash
-export PLANR_WORKER_ID="verifier-feature-1"
-planr pick --plan <plan-id> --work-type verification --json
-planr evidence readiness --scope plan --id <plan-id> --json
-planr evidence run --input <exact-readiness.run_index.repository_path>
-planr evidence coverage --scope plan --id <plan-id> --json
-planr evidence explain --scope plan --id <plan-id> --json
-```
-
-Continue only from `work_packet.kind: "verification"`. Its `source_freeze` and `verification_lease` bind the pass. Product source is read-only; the verifier may write Planr receipts, logs, and artifacts. `planr evidence run` checks the canonical `SOURCE_PATHS` digest inside the transaction. A source mismatch creates a failed non-covering attempt and zero trusted receipts. Do not call `planr done` from this packet: the implementation outcomes were already settled.
+The broker leases verification, seals readiness, executes the configured adapter, evaluates coverage, and settles the FeatureRun. Product source is read-only. Planr may write receipts, logs, and artifacts. A source mismatch creates a failed non-covering attempt and zero trusted receipts. Do not call `planr done`: the implementation outcomes were already settled.
 
 ## 4. Finding and repair on one ReviewGate
 
@@ -131,7 +121,13 @@ Do not swap in an unregistered tool, weaken a browser observation to HTTP, open 
 
 ## Driver and Stop behavior
 
-The driver reads `planr plan audit <plan-id> --json` and dispatches exactly the packet named by current state. The installed Codex Stop hook also delegates to that audit; it owns no lifecycle policy and cannot translate a hold or ReviewGate into a legacy map item. A plan is complete only when audit holds with settled outcomes, required gates accepted, approvals clear, and canonical Evidence coverage satisfied.
+The `$planr-loop` session reads `planr plan audit <plan-id> --json` and executes
+the next compatible outcome directly. It dispatches only an explicit parallel
+branch, an incompatible owner, or a distinct checker for a material ReviewGate.
+The installed Codex Stop hook also delegates to that audit. The hook owns no
+lifecycle policy and cannot translate a hold or ReviewGate into a legacy map
+item. A plan is complete only when audit holds with settled outcomes, required
+gates accepted, approvals clear, and canonical Evidence coverage satisfied.
 
 Preview host installation before writing it, then diagnose the same client:
 

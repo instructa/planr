@@ -2,11 +2,12 @@
 
 use super::adapter_signal::{AdapterBoundarySignal, adapter_boundary_signal_from_process_output};
 use super::model::{
-    AgentSkillInvocationResult, AttemptStatus, CapabilityBinding, EnvironmentBinding,
-    EvidenceAttempt, EvidenceId, FixtureDisclosure, GapReason, ObservationResult,
-    ProcessExecutionContract, ProofObligation, RawResultRef, SandboxLimits, SandboxState,
-    SchemaVersion, Sha256Digest, TargetBinding, TrustedProvenance, TrustedReceiptInput,
-    VantagePoint, VerificationCapabilityInstance, build_trusted_receipt,
+    AgentSkillInvocationResult, AttemptStatus, CapabilityBinding, EVIDENCE_ADAPTER_REQUEST_V1,
+    EnvironmentBinding, EvidenceAttempt, EvidenceId, FixtureDisclosure, GapReason,
+    ObservationResult, PayloadSchemaBinding, ProcessExecutionContract, ProofObligation,
+    RawResultRef, STRUCTURED_OBSERVATION_RESULTS_V2, STRUCTURED_OBSERVATION_RESULTS_V2_SCHEMA_REF,
+    SandboxLimits, SandboxState, SchemaVersion, Sha256Digest, TargetBinding, TrustedProvenance,
+    TrustedReceiptInput, VantagePoint, VerificationCapabilityInstance, build_trusted_receipt,
 };
 use super::policy::{
     EvidenceRepositorySnapshot, capture_repository_snapshot, trusted_receipt_binding_value,
@@ -235,6 +236,7 @@ pub(crate) fn run_resolved_process(
         cwd: &resolved.cwd,
         argv: &resolved.argv,
         env: resolved.env_for_process(),
+        stdin: None,
         timeout: Duration::from_millis(execution.timeout_ms),
         output_limit_bytes: usize::MAX,
         stdout_limit_bytes: Some(limit_to_usize(execution.stdout_limit_bytes)),
@@ -291,17 +293,22 @@ pub(crate) fn run_configured_process_adapter_guarded(
         &input.environment,
         &input.fixture_disclosure,
     )?;
-    let adapter_env = evidence_adapter_env(
-        &input.env,
+    ensure_adapter_env_is_caller_owned(&input.env)?;
+    let retry_lineage = resolve_retry_lineage(conn, &input)?;
+    let adapter_request = sealed_adapter_request(
+        &input.obligation,
         &input.target,
         &input.environment,
+        &input.fixture_disclosure,
+        &input.execution_contract.payload_schema,
         &execution_contract_digest,
+        &input.execution_binding,
+        &retry_lineage,
     )?;
-    let retry_lineage = resolve_retry_lineage(conn, &input)?;
     let resolved = match ResolvedProcessRun::resolve(
         input.repository_root,
         &input.execution_contract,
-        &adapter_env,
+        &input.env,
     ) {
         Ok(resolved) => ResolvedProcessRunResolution::Runnable(resolved),
         Err(error) if is_missing_process_executable(&error) => {
@@ -310,7 +317,7 @@ pub(crate) fn run_configured_process_adapter_guarded(
                 ResolvedProcessRun::unresolved(
                     input.repository_root,
                     &input.execution_contract,
-                    &adapter_env,
+                    &input.env,
                     &reason,
                 )?,
                 reason,
@@ -340,6 +347,7 @@ pub(crate) fn run_configured_process_adapter_guarded(
                 cwd: &resolved.cwd,
                 argv: &resolved.argv,
                 env: resolved.env_for_process(),
+                stdin: Some(&adapter_request.stdin),
                 timeout: Duration::from_millis(input.execution_contract.timeout_ms),
                 output_limit_bytes: usize::MAX,
                 stdout_limit_bytes: Some(limit_to_usize(
@@ -379,12 +387,27 @@ pub(crate) fn run_configured_process_adapter_guarded(
                     environment: &input.environment,
                     fixture_disclosure: &input.fixture_disclosure,
                     repository_root: input.repository_root,
+                    adapter_request_id: &adapter_request.id,
+                    adapter_request_digest: &adapter_request.digest,
                 },
                 &process_result.raw_result,
             ) {
                 Ok(results) => Some(results),
                 Err(error) => {
-                    mark_structured_observation_failure(&mut process_result, error.to_string())?;
+                    if let Some(mismatch) =
+                        error.downcast_ref::<StructuredObservationSemanticMismatch>()
+                    {
+                        mark_semantic_observation_mismatch(
+                            &mut process_result,
+                            mismatch.to_string(),
+                            "structured_observation_error",
+                        )?;
+                    } else {
+                        mark_structured_observation_failure(
+                            &mut process_result,
+                            error.to_string(),
+                        )?;
+                    }
                     None
                 }
             }
@@ -400,7 +423,11 @@ pub(crate) fn run_configured_process_adapter_guarded(
                     None
                 }
                 Err(OrdinaryObservationError::SemanticMismatch(error)) => {
-                    mark_semantic_observation_mismatch(&mut process_result, error)?;
+                    mark_semantic_observation_mismatch(
+                        &mut process_result,
+                        error,
+                        "ordinary_observation_error",
+                    )?;
                     None
                 }
             }
@@ -419,6 +446,11 @@ pub(crate) fn run_configured_process_adapter_guarded(
     if let Some(mismatch) = &post_process_repository_snapshot_mismatch {
         mark_repository_snapshot_mismatch(&mut process_result, mismatch)?;
     }
+    process_result
+        .raw_result
+        .as_object_mut()
+        .context("configured process result must be an object")?
+        .insert("adapter_request".to_string(), adapter_request.value.clone());
     process_result
         .raw_result
         .as_object_mut()
@@ -835,40 +867,71 @@ fn ensure_fixture_disclosure_allowed(
     Ok(())
 }
 
-const PLANR_EVIDENCE_TARGET_JSON_ENV: &str = "PLANR_EVIDENCE_TARGET_JSON";
-const PLANR_EVIDENCE_ENVIRONMENT_JSON_ENV: &str = "PLANR_EVIDENCE_ENVIRONMENT_JSON";
-const PLANR_EVIDENCE_EXECUTION_CONTRACT_DIGEST_ENV: &str =
-    "PLANR_EVIDENCE_EXECUTION_CONTRACT_DIGEST";
+#[derive(Debug, Clone)]
+struct SealedAdapterRequest {
+    id: String,
+    digest: String,
+    value: Value,
+    stdin: Vec<u8>,
+}
 
-fn evidence_adapter_env(
-    caller_env: &BTreeMap<String, String>,
+const MAX_EVIDENCE_ADAPTER_REQUEST_BYTES: usize = 1_048_576;
+
+fn ensure_adapter_env_is_caller_owned(caller_env: &BTreeMap<String, String>) -> Result<()> {
+    if let Some(reserved) = caller_env
+        .keys()
+        .find(|key| key.starts_with("PLANR_EVIDENCE_"))
+    {
+        bail!("evidence adapter env may not use reserved Planr namespace {reserved}");
+    }
+    Ok(())
+}
+
+fn sealed_adapter_request(
+    obligation: &ProofObligation,
     target: &TargetBinding,
     environment: &EnvironmentBinding,
+    fixture_disclosure: &FixtureDisclosure,
+    result_contract: &PayloadSchemaBinding,
     execution_contract_digest: &str,
-) -> Result<BTreeMap<String, String>> {
-    for reserved in [
-        PLANR_EVIDENCE_TARGET_JSON_ENV,
-        PLANR_EVIDENCE_ENVIRONMENT_JSON_ENV,
-        PLANR_EVIDENCE_EXECUTION_CONTRACT_DIGEST_ENV,
-    ] {
-        if caller_env.contains_key(reserved) {
-            bail!("evidence adapter env overrides reserved Planr binding key {reserved}");
-        }
+    execution_binding: &Value,
+    retry_lineage: &ResolvedRetryLineage,
+) -> Result<SealedAdapterRequest> {
+    let id = format!("ereq-{}", Uuid::new_v4());
+    let mut value = json!({
+        "schema_version": EVIDENCE_ADAPTER_REQUEST_V1,
+        "request_id": id,
+        "obligation_id": obligation.id,
+        "criterion_id": obligation.criterion_id,
+        "requirements": obligation.observations,
+        "target": target,
+        "environment": environment,
+        "fixture_disclosure": fixture_disclosure,
+        "assurance_policy": obligation.assurance_policy,
+        "result_contract": result_contract,
+        "execution_contract_digest": execution_contract_digest,
+        "execution_binding": execution_binding,
+        "retry": retry_lineage.value,
+    });
+    let digest = sha256_json_digest(&value)?;
+    value
+        .as_object_mut()
+        .expect("sealed adapter request is an object")
+        .insert("request_digest".to_string(), json!(digest));
+    let mut stdin = serde_json::to_vec(&value)?;
+    stdin.push(b'\n');
+    if stdin.len() > MAX_EVIDENCE_ADAPTER_REQUEST_BYTES {
+        bail!(
+            "sealed evidence adapter request exceeds {} bytes",
+            MAX_EVIDENCE_ADAPTER_REQUEST_BYTES
+        );
     }
-    let mut env = caller_env.clone();
-    env.insert(
-        PLANR_EVIDENCE_TARGET_JSON_ENV.to_string(),
-        serde_json::to_value(target)?.to_string(),
-    );
-    env.insert(
-        PLANR_EVIDENCE_ENVIRONMENT_JSON_ENV.to_string(),
-        serde_json::to_value(environment)?.to_string(),
-    );
-    env.insert(
-        PLANR_EVIDENCE_EXECUTION_CONTRACT_DIGEST_ENV.to_string(),
-        execution_contract_digest.to_string(),
-    );
-    Ok(env)
+    Ok(SealedAdapterRequest {
+        id,
+        digest,
+        value,
+        stdin,
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -1422,7 +1485,7 @@ fn observation_actual(
 }
 
 fn requires_structured_observation_results(execution: &ProcessExecutionContract) -> bool {
-    execution.payload_schema.schema_ref == "schema://planr.structured_observation_results.v1"
+    execution.payload_schema.schema_ref == STRUCTURED_OBSERVATION_RESULTS_V2_SCHEMA_REF
 }
 
 struct StructuredObservationContext<'a> {
@@ -1430,6 +1493,8 @@ struct StructuredObservationContext<'a> {
     environment: &'a EnvironmentBinding,
     fixture_disclosure: &'a FixtureDisclosure,
     repository_root: &'a Path,
+    adapter_request_id: &'a str,
+    adapter_request_digest: &'a str,
 }
 
 fn strict_structured_observation_results(
@@ -1453,9 +1518,16 @@ fn strict_structured_observation_results(
     let parsed: Value = serde_json::from_str(stdout)
         .context("structured observation results must be single JSON")?;
     if parsed.get("schema_version").and_then(Value::as_str)
-        != Some("planr.structured_observation_results.v1")
+        != Some(STRUCTURED_OBSERVATION_RESULTS_V2)
     {
         bail!("structured observation results schema_version mismatch");
+    }
+    if parsed.get("request_id").and_then(Value::as_str) != Some(context.adapter_request_id) {
+        bail!("structured observation results request_id mismatch");
+    }
+    if parsed.get("request_digest").and_then(Value::as_str) != Some(context.adapter_request_digest)
+    {
+        bail!("structured observation results request_digest mismatch");
     }
     if parsed.get("target") != Some(&serde_json::to_value(context.target)?) {
         bail!("structured observation results target does not match runtime target binding");
@@ -1565,9 +1637,10 @@ fn strict_structured_observation_results(
             }
         }
         if !actual_satisfies_expected(&Value::Object(actual.clone()), &requirement.expected) {
-            bail!(
+            return Err(StructuredObservationSemanticMismatch(format!(
                 "structured observation result actual does not satisfy expected predicate for {requirement_id}"
-            );
+            ))
+            .into());
         }
         actuals.insert(requirement_id.to_string(), actual.clone());
     }
@@ -1581,6 +1654,17 @@ fn strict_structured_observation_results(
     }
     Ok(actuals)
 }
+
+#[derive(Debug)]
+struct StructuredObservationSemanticMismatch(String);
+
+impl std::fmt::Display for StructuredObservationSemanticMismatch {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for StructuredObservationSemanticMismatch {}
 
 fn validate_agent_skill_invocation(obligation: &ProofObligation, parsed: &Value) -> Result<()> {
     let methods = obligation
@@ -1631,13 +1715,10 @@ fn validate_agent_skill_invocation(obligation: &ProofObligation, parsed: &Value)
     if actual_ids != expected_ids {
         bail!("agent-skill invocation observations do not match the obligation subset");
     }
-    if invocation
-        .observations
-        .iter()
-        .any(|observation| observation.status != AttemptStatus::Passed)
-    {
-        bail!("agent-skill invocation did not pass every required observation");
-    }
+    // The adapter-authored status is descriptive, not the authority for
+    // criterion satisfaction. Planr evaluates the bound `actual` value below.
+    // In particular, a completed observation may validly report `failed`
+    // because the product did not reach the required postcondition.
     Ok(())
 }
 
@@ -1994,6 +2075,7 @@ fn mark_ordinary_observation_verifier_failure(
 fn mark_semantic_observation_mismatch(
     process_result: &mut AdapterProcessResult,
     error: String,
+    error_field: &'static str,
 ) -> Result<()> {
     process_result.status = AttemptStatus::Failed;
     process_result.exit = json!({
@@ -2007,15 +2089,12 @@ fn mark_semantic_observation_mismatch(
             "planr_adapter_gap_reasons".to_string(),
             json!(["target_mismatch"]),
         );
-        raw.insert(
-            "ordinary_observation_error".to_string(),
-            Value::String(error),
-        );
+        raw.insert(error_field.to_string(), Value::String(error));
         let digest = sha256_json_digest(&json!({
             "stdout_digest": process_result.stdout_digest,
             "stderr_digest": process_result.stderr_digest,
             "exit": process_result.exit,
-            "ordinary_observation_error": raw.get("ordinary_observation_error"),
+            "observation_error": raw.get(error_field),
         }))?;
         raw.insert("digest".to_string(), Value::String(digest));
     }
@@ -2861,7 +2940,8 @@ mod tests {
 
     #[test]
     fn resolved_process_adapter_digest_is_portable_across_roots() {
-        let contract = execution_contract("node", vec![".planr/evidence/adapters/helper.mjs"], 5000);
+        let contract =
+            execution_contract("node", vec![".planr/evidence/adapters/helper.mjs"], 5000);
         let manifest: super::super::model::VerificationCapabilityManifest = serde_json::from_value(json!({
             "id": "vcap-process", "schema_version": "evidence.contract.v1", "version": "1.0.0",
             "adapter_kind": "process", "adapter_digest": DIGEST_A,
@@ -2879,24 +2959,35 @@ mod tests {
         let second = tempdir().unwrap();
         for root in [first.path(), second.path()] {
             fs::create_dir_all(root.join(".planr/evidence/adapters")).unwrap();
-            fs::write(root.join(".planr/evidence/adapters/helper.mjs"), "export default 'same';\n").unwrap();
+            fs::write(
+                root.join(".planr/evidence/adapters/helper.mjs"),
+                "export default 'same';\n",
+            )
+            .unwrap();
         }
         let empty_env = BTreeMap::new();
         let first_digest = resolved_process_adapter_digest(
             &manifest,
             &resolve_process_run(first.path(), &contract, &empty_env).unwrap(),
-        ).unwrap();
+        )
+        .unwrap();
         let second_digest = resolved_process_adapter_digest(
             &manifest,
             &resolve_process_run(second.path(), &contract, &empty_env).unwrap(),
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(first_digest, second_digest);
 
-        fs::write(second.path().join(".planr/evidence/adapters/helper.mjs"), "export default 'changed';\n").unwrap();
+        fs::write(
+            second.path().join(".planr/evidence/adapters/helper.mjs"),
+            "export default 'changed';\n",
+        )
+        .unwrap();
         let changed_bytes = resolved_process_adapter_digest(
             &manifest,
             &resolve_process_run(second.path(), &contract, &empty_env).unwrap(),
-        ).unwrap();
+        )
+        .unwrap();
         assert_ne!(first_digest, changed_bytes);
 
         fs::write(second.path().join("other.mjs"), "export default 'same';\n").unwrap();
@@ -2905,7 +2996,8 @@ mod tests {
         let changed_relative_identity = resolved_process_adapter_digest(
             &manifest,
             &resolve_process_run(second.path(), &renamed, &empty_env).unwrap(),
-        ).unwrap();
+        )
+        .unwrap();
         assert_ne!(first_digest, changed_relative_identity);
     }
 
@@ -3638,6 +3730,42 @@ mod tests {
     }
 
     #[test]
+    fn configured_process_run_nonzero_exit_overrides_matching_result_payload() {
+        let conn = conn();
+        let root = tempdir().unwrap();
+        let obligation = obligation();
+        let instance = instance();
+        let contract = execution_contract(
+            "sh",
+            vec!["-c", "printf '{\"contains\":\"ready\"}'; exit 9"],
+            5000,
+        );
+        seed(&conn, &obligation, &instance, &contract);
+
+        let output = run_configured_process_adapter(
+            &conn,
+            run_input(
+                root.path(),
+                obligation,
+                instance,
+                contract,
+                &CancellationToken::new(),
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(output.attempt.status, AttemptStatus::Failed);
+        assert_eq!(output.attempt.exit["exit_code"], 9);
+        assert_eq!(
+            output.receipt_value["proof_gaps"],
+            json!(["product_failed"])
+        );
+        assert_eq!(output.receipt_value["observations"][0]["outcome"], "failed");
+        assert_attempt_count(&conn, 1);
+        assert_receipt_count(&conn, 1);
+    }
+
+    #[test]
     fn configured_process_run_persists_observed_output_bounds_per_stream() {
         let conn = conn();
         let root = tempdir().unwrap();
@@ -4323,7 +4451,7 @@ mod tests {
         .unwrap();
         let mut execution = execution_contract("sh", vec!["-c", "true"], 5000);
         execution.payload_schema.schema_ref =
-            "schema://planr.structured_observation_results.v1".to_string();
+            "schema://planr.structured_observation_results.v2".to_string();
         let target: TargetBinding =
             serde_json::from_value(json!({"kind": "process", "uri": "local://process"})).unwrap();
         let environment: EnvironmentBinding =
@@ -4337,12 +4465,14 @@ mod tests {
         };
         let repository_root = Path::new(".");
         let digest = sha256_json_digest(&serde_json::to_value(&execution).unwrap()).unwrap();
+        let request_id = "ereq-current";
+        let request_digest = DIGEST_C;
         let valid_observations = json!([
             {
                 "requirement_id": "obs-visible",
                 "type": "example.process.stdout",
                 "actual": {
-                    "schema_ref": "schema://planr.structured_observation_results.v1",
+                    "schema_ref": "schema://planr.structured_observation_results.v2",
                     "visible": true
                 }
             },
@@ -4350,14 +4480,16 @@ mod tests {
                 "requirement_id": "obs-console",
                 "type": "example.process.stdout",
                 "actual": {
-                    "schema_ref": "schema://planr.structured_observation_results.v1",
+                    "schema_ref": "schema://planr.structured_observation_results.v2",
                     "error_count": 0
                 }
             }
         ]);
         let payload = |observations: Value| {
             json!({
-                "schema_version": "planr.structured_observation_results.v1",
+                "schema_version": "planr.structured_observation_results.v2",
+                "request_id": request_id,
+                "request_digest": request_digest,
                 "target": serde_json::to_value(&target).unwrap(),
                 "observed_target": {
                     "kind": "process",
@@ -4380,6 +4512,8 @@ mod tests {
                     environment: &environment,
                     fixture_disclosure: &fixture_disclosure,
                     repository_root,
+                    adapter_request_id: request_id,
+                    adapter_request_digest: request_digest,
                 },
                 &raw_result_for_stdout(&payload(valid_observations.clone()).to_string(), false),
             )
@@ -4390,6 +4524,11 @@ mod tests {
                 "missing id",
                 payload(json!([valid_observations[0].clone()])).to_string(),
             ),
+            ("recording without observations", {
+                let mut value = payload(json!([]));
+                value["recording_directory"] = json!(".browser-harness/recordings/run-1");
+                value.to_string()
+            }),
             (
                 "duplicate id",
                 payload(json!([
@@ -4405,7 +4544,7 @@ mod tests {
                         "requirement_id": "obs-visible",
                         "type": "example.process.other",
                         "actual": {
-                            "schema_ref": "schema://planr.structured_observation_results.v1",
+                            "schema_ref": "schema://planr.structured_observation_results.v2",
                             "visible": true
                         }
                     },
@@ -4425,21 +4564,6 @@ mod tests {
                 ]))
                 .to_string(),
             ),
-            (
-                "expected mismatch",
-                payload(json!([
-                    {
-                        "requirement_id": "obs-visible",
-                        "type": "example.process.stdout",
-                        "actual": {
-                            "schema_ref": "schema://planr.structured_observation_results.v1",
-                            "visible": false
-                        }
-                    },
-                    valid_observations[1].clone()
-                ]))
-                .to_string(),
-            ),
             ("malformed", "{".to_string()),
             (
                 "log-prefixed",
@@ -4454,7 +4578,7 @@ mod tests {
                         "requirement_id": "obs-extra",
                         "type": "example.process.stdout",
                         "actual": {
-                            "schema_ref": "schema://planr.structured_observation_results.v1"
+                            "schema_ref": "schema://planr.structured_observation_results.v2"
                         }
                     }
                 ]))
@@ -4485,6 +4609,16 @@ mod tests {
                 value["execution_contract_digest"] = json!(DIGEST_A);
                 value.to_string()
             }),
+            ("wrong request id", {
+                let mut value = payload(valid_observations.clone());
+                value["request_id"] = json!("ereq-replayed");
+                value.to_string()
+            }),
+            ("wrong request digest", {
+                let mut value = payload(valid_observations.clone());
+                value["request_digest"] = json!(DIGEST_A);
+                value.to_string()
+            }),
         ] {
             assert!(
                 strict_structured_observation_results(
@@ -4496,6 +4630,8 @@ mod tests {
                         environment: &environment,
                         fixture_disclosure: &fixture_disclosure,
                         repository_root,
+                        adapter_request_id: request_id,
+                        adapter_request_digest: request_digest,
                     },
                     &raw_result_for_stdout(&stdout, false),
                 )
@@ -4503,6 +4639,38 @@ mod tests {
                 "{label} should fail closed"
             );
         }
+        let mismatch = payload(json!([
+            {
+                "requirement_id": "obs-visible",
+                "type": "example.process.stdout",
+                "actual": {
+                    "schema_ref": "schema://planr.structured_observation_results.v2",
+                    "visible": false
+                }
+            },
+            valid_observations[1].clone()
+        ]));
+        let mismatch = strict_structured_observation_results(
+            &obligation,
+            &execution,
+            &BTreeMap::new(),
+            StructuredObservationContext {
+                target: &target,
+                environment: &environment,
+                fixture_disclosure: &fixture_disclosure,
+                repository_root,
+                adapter_request_id: request_id,
+                adapter_request_digest: request_digest,
+            },
+            &raw_result_for_stdout(&mismatch.to_string(), false),
+        )
+        .unwrap_err();
+        assert!(
+            mismatch
+                .downcast_ref::<StructuredObservationSemanticMismatch>()
+                .is_some(),
+            "{mismatch}"
+        );
         assert!(
             strict_structured_observation_results(
                 &obligation,
@@ -4513,6 +4681,8 @@ mod tests {
                     environment: &environment,
                     fixture_disclosure: &fixture_disclosure,
                     repository_root,
+                    adapter_request_id: request_id,
+                    adapter_request_digest: request_digest,
                 },
                 &raw_result_for_stdout(&payload(valid_observations).to_string(), true),
             )
@@ -4520,6 +4690,96 @@ mod tests {
             .to_string()
             .contains("truncated")
         );
+    }
+
+    #[test]
+    fn supervised_adapter_request_is_exact_provider_neutral_and_self_bound() {
+        let obligation = obligation();
+        let execution = execution_contract("sh", vec!["-c", "true"], 5000);
+        let target: TargetBinding =
+            serde_json::from_value(json!({"kind": "process", "uri": "local://process"})).unwrap();
+        let environment: EnvironmentBinding =
+            serde_json::from_value(json!({"kind": "local", "id": "dev-shell", "digest": DIGEST_B}))
+                .unwrap();
+        let fixture_disclosure = FixtureDisclosure {
+            fixtures_used: false,
+            mocks_used: false,
+            fixture_refs: None,
+            mock_refs: None,
+        };
+        let execution_binding = json!({
+            "schema_version": "planr.evidence.execution-binding.v2",
+            "run_index_digest": DIGEST_A,
+            "run_index": 0,
+            "obligation_id": obligation.id,
+            "target": serde_json::to_value(&target).unwrap(),
+            "requirement_ids": [obligation.observations[0].id.as_str()]
+        });
+        let retry = ResolvedRetryLineage {
+            retry_of: None,
+            attempt_number: 1,
+            max_attempts: 1,
+            previous_attempt_ids: vec![],
+            value: json!({
+                "attempt_number": 1,
+                "max_attempts": 1,
+                "previous_attempt_ids": []
+            }),
+        };
+        let contract_digest =
+            sha256_json_digest(&serde_json::to_value(&execution).unwrap()).unwrap();
+
+        let request = sealed_adapter_request(
+            &obligation,
+            &target,
+            &environment,
+            &fixture_disclosure,
+            &execution.payload_schema,
+            &contract_digest,
+            &execution_binding,
+            &retry,
+        )
+        .unwrap();
+        let decoded: Value = serde_json::from_slice(&request.stdin).unwrap();
+        assert_eq!(decoded, request.value);
+        assert_eq!(decoded["schema_version"], EVIDENCE_ADAPTER_REQUEST_V1);
+        assert_eq!(decoded["request_id"], request.id);
+        assert_eq!(decoded["request_digest"], request.digest);
+        assert_eq!(
+            decoded["requirements"],
+            serde_json::to_value(&obligation.observations).unwrap()
+        );
+        assert_eq!(decoded["target"], serde_json::to_value(&target).unwrap());
+        assert_eq!(
+            decoded["environment"],
+            serde_json::to_value(&environment).unwrap()
+        );
+        assert_eq!(decoded["execution_binding"], execution_binding);
+        let mut digest_preimage = decoded.clone();
+        digest_preimage
+            .as_object_mut()
+            .unwrap()
+            .remove("request_digest");
+        assert_eq!(
+            sha256_json_digest(&digest_preimage).unwrap(),
+            request.digest
+        );
+        assert!(decoded.get("provider").is_none());
+        assert!(decoded.get("adapter_kind").is_none());
+
+        let second = sealed_adapter_request(
+            &obligation,
+            &target,
+            &environment,
+            &fixture_disclosure,
+            &execution.payload_schema,
+            &contract_digest,
+            &execution_binding,
+            &retry,
+        )
+        .unwrap();
+        assert_ne!(second.id, request.id);
+        assert_ne!(second.digest, request.digest);
     }
 
     #[test]
@@ -4536,7 +4796,7 @@ mod tests {
         .unwrap();
         let mut execution = execution_contract("sh", vec!["-c", "true"], 5000);
         execution.payload_schema.schema_ref =
-            "schema://planr.structured_observation_results.v1".to_string();
+            "schema://planr.structured_observation_results.v2".to_string();
         let target: TargetBinding =
             serde_json::from_value(json!({"kind": "process", "uri": "local://process"})).unwrap();
         let environment: EnvironmentBinding =
@@ -4549,9 +4809,13 @@ mod tests {
             mock_refs: None,
         };
         let digest = sha256_json_digest(&serde_json::to_value(&execution).unwrap()).unwrap();
+        let request_id = "ereq-schema";
+        let request_digest = DIGEST_C;
         let payload = |visible: Value| {
             json!({
-                "schema_version": "planr.structured_observation_results.v1",
+                "schema_version": "planr.structured_observation_results.v2",
+                "request_id": request_id,
+                "request_digest": request_digest,
                 "target": serde_json::to_value(&target).unwrap(),
                 "observed_target": {
                     "kind": "process",
@@ -4594,6 +4858,8 @@ mod tests {
                 environment: &environment,
                 fixture_disclosure: &fixture_disclosure,
                 repository_root: Path::new("."),
+                adapter_request_id: request_id,
+                adapter_request_digest: request_digest,
             },
             &raw_result_for_stdout(&payload(json!(true)).to_string(), false),
         )
@@ -4609,6 +4875,8 @@ mod tests {
                 environment: &environment,
                 fixture_disclosure: &fixture_disclosure,
                 repository_root: Path::new("."),
+                adapter_request_id: request_id,
+                adapter_request_digest: request_digest,
             },
             &raw_result_for_stdout(&payload(json!("yes")).to_string(), false),
         )
@@ -4629,11 +4897,11 @@ mod tests {
         obligation.observations[0].expected = json!({"visible": true});
         let mut instance = instance();
         instance.observed_payload_contract.schema_ref =
-            "schema://planr.structured_observation_results.v1".to_string();
+            "schema://planr.structured_observation_results.v2".to_string();
         let cancellation = CancellationToken::new();
         let mut contract = execution_contract("sh", vec!["-c", "printf 'not json'"], 5000);
         contract.payload_schema.schema_ref =
-            "schema://planr.structured_observation_results.v1".to_string();
+            "schema://planr.structured_observation_results.v2".to_string();
         seed(&conn, &obligation, &instance, &contract);
 
         let output = run_configured_process_adapter(
@@ -4661,6 +4929,62 @@ mod tests {
             json!(["verifier_failed"])
         );
         assert_eq!(output.receipt_value["observations"][0]["outcome"], "failed");
+        assert_attempt_count(&conn, 1);
+        assert_receipt_count(&conn, 1);
+    }
+
+    #[test]
+    fn configured_process_run_classifies_structured_postcondition_mismatch_as_product_finding() {
+        let conn = conn();
+        let root = tempdir().unwrap();
+        let mut obligation = obligation();
+        obligation.observations[0].expected = json!({"contains": "ready"});
+        let mut instance = instance();
+        instance.observed_payload_contract.schema_ref =
+            STRUCTURED_OBSERVATION_RESULTS_V2_SCHEMA_REF.to_string();
+        let script = format!(
+            r#"set -eu
+request=$(cat)
+request_id=$(printf '%s' "$request" | sed -E 's/.*"request_id":"([^"]+)".*/\1/')
+request_digest=$(printf '%s' "$request" | sed -E 's/.*"request_digest":"([^"]+)".*/\1/')
+execution_contract_digest=$(printf '%s' "$request" | sed -E 's/.*"execution_contract_digest":"([^"]+)".*/\1/')
+printf '{{"schema_version":"planr.structured_observation_results.v2","request_id":"%s","request_digest":"%s","target":{{"kind":"process","uri":"local://process"}},"observed_target":{{"kind":"process","initial_uri":"local://process","final_uri":"local://process"}},"environment":{{"kind":"local","id":"dev-shell","digest":"{DIGEST_B}"}},"execution_contract_digest":"%s","fixture_disclosure":{{"fixtures_used":false,"mocks_used":false}},"observations":[{{"requirement_id":"obs-process","type":"example.process.stdout","actual":{{"schema_ref":"schema://planr.structured_observation_results.v2","contains":"not-ready"}}}}]}}' "$request_id" "$request_digest" "$execution_contract_digest"
+"#
+        );
+        let mut contract = execution_contract("sh", vec!["-c", &script], 5000);
+        contract.payload_schema.schema_ref =
+            STRUCTURED_OBSERVATION_RESULTS_V2_SCHEMA_REF.to_string();
+        seed(&conn, &obligation, &instance, &contract);
+        let cancellation = CancellationToken::new();
+        let mut input = run_input(root.path(), obligation, instance, contract, &cancellation);
+        input.fixture_disclosure = FixtureDisclosure {
+            fixtures_used: false,
+            mocks_used: false,
+            fixture_refs: None,
+            mock_refs: None,
+        };
+
+        let output = run_configured_process_adapter(&conn, input).unwrap();
+
+        assert_eq!(output.attempt.status, AttemptStatus::Failed);
+        assert_eq!(output.attempt.exit["error"], "target_mismatch");
+        assert_eq!(
+            output.attempt.raw_result["planr_adapter_gap_reasons"],
+            json!(["target_mismatch"])
+        );
+        assert!(
+            output.attempt.raw_result["structured_observation_error"]
+                .as_str()
+                .unwrap()
+                .contains("does not satisfy expected predicate"),
+            "{}",
+            output.attempt.raw_result
+        );
+        assert_eq!(output.receipt_value["observations"][0]["outcome"], "failed");
+        assert_eq!(
+            output.receipt_value["proof_gaps"],
+            json!(["target_mismatch"])
+        );
         assert_attempt_count(&conn, 1);
         assert_receipt_count(&conn, 1);
     }

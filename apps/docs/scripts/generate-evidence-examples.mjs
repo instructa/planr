@@ -154,23 +154,18 @@ async function freePort() {
   return port;
 }
 
-async function findChrome() {
-  const candidates = [
-    process.env.PLANR_TEST_CHROME,
-    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-    '/usr/bin/google-chrome',
-    '/usr/bin/chromium',
-    '/usr/bin/chromium-browser',
-  ].filter(Boolean);
-  for (const candidate of candidates) {
-    try {
-      await access(candidate, constants.X_OK);
-      return candidate;
-    } catch {}
+async function findHeadlessBrowser() {
+  const configured = process.env.PLANR_TEST_HEADLESS_BROWSER;
+  if (!configured) {
+    throw new Error('set PLANR_TEST_HEADLESS_BROWSER to a dedicated headless_shell executable');
   }
-  throw new Error(
-    'real browser evidence example requires Chrome/Chromium; set PLANR_TEST_CHROME to an executable path',
-  );
+  const executable = await pathRealpath(configured);
+  const allowed = new Set(['chrome-headless-shell', 'chromium-headless-shell', 'headless_shell']);
+  if (executable.includes('.app/Contents/MacOS/') || !allowed.has(path.basename(executable))) {
+    throw new Error('PLANR_TEST_HEADLESS_BROWSER must never point to a GUI browser app');
+  }
+  await access(executable, constants.X_OK);
+  return executable;
 }
 
 async function createPlan(workspace, title) {
@@ -251,7 +246,7 @@ async function writeBrowserCdpSpec(workspace, port, debugPort, chromePath) {
   const helperPath = path.join(workspace, relativeHelper);
   const source = await readFile(sourcePath, 'utf8');
   const helper = source.replace(
-    '__PLANR_CHROME_PATH__',
+    '__PLANR_HEADLESS_BROWSER_PATH__',
     chromePath.replaceAll('\\', '\\\\').replaceAll('"', '\\"'),
   );
   await mkdir(path.dirname(helperPath), { recursive: true });
@@ -260,7 +255,7 @@ async function writeBrowserCdpSpec(workspace, port, debugPort, chromePath) {
   const envelopeSchema = {
     schema_version: 'evidence.contract.v1',
     type: 'planr.structured_observation_results',
-    schema_ref: 'schema://planr.structured_observation_results.v1',
+    schema_ref: 'schema://planr.structured_observation_results.v2',
     json_schema: { type: 'object' },
   };
   const observationSchemas = [
@@ -329,7 +324,7 @@ async function writeBrowserCdpSpec(workspace, port, debugPort, chromePath) {
     supported_surfaces: ['local-process', 'chrome-cdp'],
     supported_observations: payloadSchemas,
     supported_interactions: ['render', 'click', 'navigate', 'reload', 'network_observe', 'console_observe'],
-    supported_artifacts: ['stdout', 'planr.structured_observation_results.v1'],
+    supported_artifacts: ['stdout', 'planr.structured_observation_results.v2'],
     runtime_targets: [{ kind: 'browser', id: 'chrome-cdp' }],
     provenance_path: 'planr_observed_execution',
     permissions: { network: 'loopback', filesystem: 'read_workspace', browser: 'chrome-cdp' },
@@ -449,7 +444,7 @@ try {
     throw new Error('Evidence docs example generation launches the local Chrome/CDP proof; rerun with --live.');
   }
 
-  const chromePath = await findChrome();
+  const chromePath = await findHeadlessBrowser();
   const apiPort = await startFixtureServer();
   const api = await disposableWorkspace('api-only');
   workspaces.push(api);

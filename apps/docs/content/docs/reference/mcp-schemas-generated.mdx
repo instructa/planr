@@ -1501,6 +1501,31 @@ Check active Evidence obligations, payload schemas, registered capabilities, and
 }
 ```
 
+## `planr_evidence_verify`
+
+Lease and execute the complete binding Evidence phase for one plan without another model turn
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "description": "Plan id",
+      "type": "string"
+    },
+    "scope": {
+      "const": "plan",
+      "type": "string"
+    }
+  },
+  "required": [
+    "scope",
+    "id"
+  ],
+  "type": "object"
+}
+```
+
 ## `planr_evidence_recover_settlement`
 
 Recover exact verified maker continuation, complete an exact stranded verified continuation, backfill proven risk-review obligation lineage, or reconcile a proven superseded historical invalidation
@@ -1920,6 +1945,30 @@ Complete a leased durable ReviewGate attempt
     },
     "verdict": {
       "description": "Verdict: complete/accepted or changes-requested",
+      "type": "string"
+    }
+  },
+  "required": [
+    "review_gate_id"
+  ],
+  "type": "object"
+}
+```
+
+## `planr_review_gate_release`
+
+Relinquish a leased final-product ReviewGate without recording a verdict
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "reason": {
+      "description": "Bounded relinquish reason",
+      "type": "string"
+    },
+    "review_gate_id": {
+      "description": "Leased final-product ReviewGate id",
       "type": "string"
     }
   },

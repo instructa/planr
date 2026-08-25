@@ -21,11 +21,18 @@ Evidence Contract v1 is Planr's local-first contract for proving acceptance crit
 - Route Audit remains the owner of requested, resolved, and effective routing evidence. Evidence may consume a mapped provenance view, but it must not copy requested route declarations into effective execution proof.
 - Agent Profiles, model-routing capability classes, usage-policy capability classes, MCP protocol capabilities, and context tags are dispatch or protocol metadata. They are not verification capability instances and do not prove runtime availability.
 - Planr logs remain narrative and supporting records. A `kind = verification` log is a claim that can be referenced, but it never satisfies a binding observation.
-- A repository without a binding Evidence policy and without binding plan obligations is explicitly non-binding. A binding plan is `binding_unsatisfied` unless its authoritative active obligations match the declared build-plan criterion set exactly: zero, partial, duplicate, or undeclared bindings all fail closed. Planr returns a hold before leasing or creating a FeatureRun, persists a capability hold when an existing run reaches readiness, rejects coverage settlement, closure, final review, and stop activation, and never substitutes logs or an empty receipt lineage.
+- A repository without a binding Evidence policy and without binding plan obligations is explicitly non-binding. A binding plan is `binding_unsatisfied` unless its authoritative active obligations match the declared build-plan criterion set exactly: zero, partial, duplicate, or undeclared bindings all fail closed. Planr returns a hold before leasing or creating a FeatureRun, persists a capability hold when an existing run reaches readiness, rejects coverage settlement, closure, and stop activation, and never substitutes logs or an empty receipt lineage.
 - Migration is the sole obligation-materialization path. It is explicit, plan-scoped, previewable, idempotent, and accepts only an exact declared criterion binding set before materializing ordinary immutable `ProofObligation` rows. It must not rewrite plans, logs, reviews, artifacts, or historical claims.
 - Planr artifacts remain files or references with digests. An artifact alone is not trusted evidence unless a trusted receipt binds it to the source revision, target, environment, execution identity, observation results, and policy.
 
 ## Binding Execution Orchestration
+
+The normal public success path is one plan-scoped `evidence verify` broker call. The caller identity
+must differ from the responsible maker. Planr uses that identity for the verifier lease, readiness
+admission, adapter execution, coverage evaluation, and FeatureRun settlement. A coordinator or host
+must not spawn another model to perform this mechanical Evidence phase. The lower-level readiness
+and run services remain diagnostic and application primitives; they do not define a second trusted
+workflow.
 
 Before verification admission, FeatureRun source freeze is legal only when no open ordinary
 implementation outcome remains. Planned `code`, `fix`, `docs`, and `test` share the one domain-owned
@@ -82,15 +89,15 @@ freeze. A verification map item is a zero-or-one projection. If one item is pick
 the verifier, settlement closes and logs it in the same transaction; if none exists, settlement
 performs zero item/log mutations. A ready unleased verification item remains fail-closed. The
 transition always reconciles the verification budget wall, applies `VerificationPassed` to
-`SourceFrozen` (or `Implementation` if ordinary work reopened), persists/releases roles through the
-canonical repository transaction, and emits one event shape with nullable `item_id` and `log_id`.
+`Complete` when no ordinary work remains (or `Implementation` if ordinary work reopened),
+persists/releases roles through the canonical repository transaction, and emits one event shape
+with nullable `item_id` and `log_id`. Binding coverage settlement returns `next_action: none` on
+completion and creates no final ReviewGate. `planr plan final-review` is a non-binding-plan flow.
 
-Binding final-review admission is item-independent: it requires the post-settlement SourceFrozen
-run, an intact active freeze, and satisfied coverage whose accepted receipt/source binding exactly
-matches that freeze. Terminal `non_repeatable_one_shot` exhaustion is also zero-or-one item inside
-the trusted attempt/receipt transaction. Attempt/receipt persistence, budget reconciliation,
-FeatureRun cancellation, and verifier release always commit atomically; item failure/logging occurs
-only when one active projection is present, and ready-unleased remains fail-closed.
+Terminal `non_repeatable_one_shot` exhaustion is also zero-or-one item inside the trusted
+attempt/receipt transaction. Attempt/receipt persistence, budget reconciliation, FeatureRun
+cancellation, and verifier release always commit atomically; item failure/logging occurs only when
+one active projection is present, and ready-unleased remains fail-closed.
 
 Post-receipt ProductFinding repair remains distinct from pre-receipt admission repair. The
 application resolves the verification map item as an optional current plan-path projection for
@@ -175,6 +182,9 @@ Required fields:
 - `id`, `schema_version`, `version`, `adapter_kind`, `adapter_digest`.
 - Supported surfaces, observation type/schema/digest triples, interactions, artifacts, runtime targets, provenance path, permissions, costs, determinism, repeatability, independence, blind spots, and availability probe contract.
 - When a capability explicitly declares `repeatability = non_repeatable_one_shot`, Planr derives `max_attempts = 1`; any conflicting caller declaration is rejected before launch. Before the adapter can spawn, Planr atomically claims one durable allowance scoped to the active FeatureRun source freeze. That claim survives process, receipt, or settlement failure, so every later fresh initial, retry, or concurrent contender for the freeze is rejected without spawning. Its committed non-passing attempt (`attempt_index + 1 = max_attempts`), including `product_failed`, atomically exhausts that FeatureRun verification allowance with the attempt and receipt. Planr records `verification_attempts_exhausted`, releases the verifier lease, exposes no next verification action, and does not create a product-finding repair or replay path. A projected verification item is optional: when active it is failed/logged atomically; when absent there is no item/log mutation; when ready but unleased the transaction fails closed. Missing or other repeatability values never infer one-shot behavior.
+- Every other capability also defaults to `max_attempts = 1`. A manifest may explicitly admit a larger bounded value only for a repeatable execution contract. Planr never starts a second attempt merely because a verifier or environment failure was returned; a later execution requires a fresh canonical invocation after the reported external state has materially changed.
+- A fresh canonical invocation may append a superseding admission for the same exact active source freeze only when the previously admitted run-index digest already has both a durable Evidence attempt and receipt. The previous admission and execution history remain immutable. A conflicting admission with no execution receipt is pre-receipt state and remains rejected; it cannot bypass Verification Admission Repair.
+- When source is stale after such a receipt, one canonical broker invocation may perform exactly one observed refresh: invalidate and preserve the old freeze and receipt bindings, release the exact verifier lease, freeze the current source, reacquire verification, and seal again. The broker does not repeat this transition if the replacement source becomes stale.
 - Process adapters declare a closed `availability_probe.kind = process` contract with executable name, arguments, optional working directory, timeout, stdout/stderr byte limits, and the payload schema binding for emitted observations.
 
 A manifest is a claim about what a method can observe. It is not proof that the method is available now.

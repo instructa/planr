@@ -22,16 +22,15 @@ empty pick, or budget. Planr rolls its internal three-outcome ExecutionBatch ato
 that boundary is not a host stop.
 Within that run, do not run binding Evidence readiness, collection, or an opportunistic live smoke for a
 mutable implementation item. Use ordinary changed-file checks, keep the same maker
-through stable source freeze, write a compact durable handoff only at a genuine stop, and stop. A fresh
-verification-only worker first leases `planr pick --plan <plan-id> --work-type verification --json`,
-then runs readiness under that same identity and executes only `readiness.run_index.repository_path`.
+through stable source freeze, write a compact durable handoff only at a genuine stop, and stop. The
+coordinator runs the handoff packet's `commands.verify` command without another model.
 Product source remains read-only by the canonical Evidence SOURCE_PATHS digest.
-`planr evidence run` enforces that digest before trusted receipt commit; source
+`planr evidence verify` enforces that digest before trusted receipt commit; source
 mismatch records a failed non-covering attempt and zero new trusted receipts.
 When `mode` is `finding_repair`, repair the named findings for the same ReviewGate,
 log the changed files and commands on its scoped outcome, resolve those finding ids,
 and stop for re-review. No review or fix map item exists. Product findings require
-coordinator re-freeze and leased readiness before selective Evidence replay unless a material review requires
+coordinator re-freeze and another brokered verify call before selective Evidence replay unless a material review requires
 exact-source Evidence earlier.
 Log changed files and the real verification commands you ran. Settle ordinary outcomes
 with `planr done --next` inside the authorized run and plain `planr done` when standalone;

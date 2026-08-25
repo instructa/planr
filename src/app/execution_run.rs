@@ -1,5 +1,6 @@
 use super::App;
 use super::feature_run_evidence::{BudgetUsageReport, FeatureRunBudgetAdmission};
+use super::proof::PlanEvidenceAuthority;
 use super::repository::execution_run::{
     ExecutionRunRepository, PersistedFeatureRun, ReviewGateKind, ReviewGateRecord,
     ReviewGateStatus, ReviewScopeKind, RunOutcomeRecord,
@@ -327,6 +328,17 @@ impl App {
         }))
     }
     pub(crate) fn final_product_review_clause_value(&self, plan_id: &str) -> Result<Value> {
+        if self.plan_evidence_authority(plan_id)? != PlanEvidenceAuthority::NonBinding {
+            return Ok(json!({
+                "clause": "final_product_review_complete",
+                "pass": false,
+                "required": false,
+                "detail": "binding plans close through exact-source trusted Evidence coverage",
+                "open": [],
+                "review_gates": [],
+                "next": null,
+            }));
+        }
         let projection = self.final_product_review_projection_value(plan_id)?;
         let entries = projection["review_gates"]
             .as_array()
@@ -3095,7 +3107,9 @@ mod tests {
             },
         )
         .unwrap();
-        repository.save_feature_run(&frozen, persisted.revision).unwrap();
+        repository
+            .save_feature_run(&frozen, persisted.revision)
+            .unwrap();
         repository
             .create_review_gate(&ReviewGateRecord {
                 id: "gate-review-budget-hold".into(),
@@ -3135,9 +3149,11 @@ mod tests {
         assert!(held.role_owners.iter().any(|owner| {
             owner.role == RunRole::Reviewer && owner.worker_id == "reviewer-budget-held"
         }));
-        assert!(repository
-            .review_attempts("gate-review-budget-hold")
-            .unwrap()
-            .is_empty());
+        assert!(
+            repository
+                .review_attempts("gate-review-budget-hold")
+                .unwrap()
+                .is_empty()
+        );
     }
 }

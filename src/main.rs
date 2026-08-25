@@ -46,10 +46,7 @@ fn main() {
         let json_mode = env::args().any(|arg| arg == "--json");
         if json_mode {
             let message = err.to_string();
-            let mut error = json!({"code": infer_error_code(&message), "message": message});
-            if let Some(readiness) = err.downcast_ref::<app::VerificationPickReadinessError>() {
-                error["details"] = readiness.details();
-            }
+            let error = json!({"code": infer_error_code(&message), "message": message});
             let _ = print_json(&json!({"error": error}));
         } else {
             eprintln!("error: {err:#}");

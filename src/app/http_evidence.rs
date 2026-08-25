@@ -133,6 +133,16 @@ impl App {
                         .and_then(|id| self.evidence_readiness_value(scope, id))
                 }),
             ),
+            ("POST", "/v1/evidence/verify") => http_evidence_json(
+                "evidence.verify",
+                http_evidence_scope(body_json).and_then(|scope| {
+                    body_json
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| anyhow!("missing id"))
+                        .and_then(|id| self.evidence_verify_value(scope, id))
+                }),
+            ),
             ("POST", "/v1/evidence/recover-settlement") => http_evidence_json(
                 "evidence.recover_settlement",
                 self.recover_verification_settlement_value(

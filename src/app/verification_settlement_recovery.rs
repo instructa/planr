@@ -268,7 +268,17 @@ impl App {
             },
         )
         .map_err(|violation| anyhow!("verified_continuation_transition:{violation:?}"))?;
-        repository.save_feature_run(&frozen, persisted.revision)?;
+        let complete = apply_phase_transition(
+            &frozen,
+            &PhaseTransition {
+                to: FeatureRunPhase::Complete,
+                cause: PhaseTransitionCause::VerificationPassed,
+                reference: format!("evidence_coverage:{coverage_id}"),
+                owner: None,
+            },
+        )
+        .map_err(|violation| anyhow!("verified_continuation_complete_transition:{violation:?}"))?;
+        repository.save_feature_run(&complete, persisted.revision)?;
         self.record_event(
             "verified_continuation_completed",
             Some(final_item_id),
@@ -288,8 +298,8 @@ impl App {
         )?;
         Ok(Some(json!({
             "transition": "verified_continuation_complete",
-            "phase": "source_frozen",
-            "next_action": format!("planr plan final-review {}", request.plan_id),
+            "phase": "complete",
+            "next_action": "none",
             "freeze_id": freeze.id,
             "receipt_id": request.receipt_id,
             "coverage_id": coverage_id,

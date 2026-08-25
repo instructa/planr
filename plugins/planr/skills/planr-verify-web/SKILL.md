@@ -7,46 +7,31 @@ description: Frozen-source live verification for a web FeatureRun. Consumes a ca
 
 Prove the frozen feature runs. Planr owns the evidence contract and capability selection; the host executes the configured method. Never install or configure browser infrastructure on behalf of this skill.
 
-## Lease The Typed Verification Packet
+## Run The Typed Verification Packet
 
-Use a fresh verifier identity distinct from the responsible maker:
+Keep verification in the coordinator. Use one stable worker identity that differs from the responsible maker. Do not spawn another model.
 
 ```bash
-export PLANR_WORKER_ID="verifier-web-1"
-planr pick --plan <plan-id> --work-type verification --json
+PLANR_WORKER_ID="coordinator-verifier-1" planr evidence verify --scope plan --id <plan-id> --json
 ```
 
-This typed pick is the verifier's first action. Continue only when `work_packet.kind` is `verification`. Treat its `execution_state`, `source_freeze`, and `verification_lease` as the complete runtime contract. Product source is read-only for this pass; only Planr runtime state, receipts, logs, and artifacts may be written.
+This command leases verification, probes readiness, seals the run index, executes the configured adapter, evaluates coverage, and settles the FeatureRun. Product source is read-only. Only Planr runtime state, receipts, logs, and artifacts may change.
 
 Require `planr.execution_state.v2`; its budget and absolute deadline are opaque supplied authority. Skills must not recompute budget policy. If the selected adapter cannot honor required capability or the packet is held, stop with that exact classification.
 
-Run readiness before starting the configured method:
+If readiness is blocked, do not choose another unregistered tool or downgrade the observation. The FeatureRun enters a capability hold. Report the returned gap and `next_action`, then stop. Repair the policy, schema, adapter digest, runtime registration, or permissions before you run the same verify command again.
 
-```bash
-planr evidence readiness --scope plan --id <plan-id> --json
-```
+## Target Lifecycle
 
-Read the returned `readiness.run_index.repository_path` and preserve it exactly. It is the only executable Evidence input; do not derive a path from the digest or substitute a repository-authored obligation, declarative index, or remembered filename.
-
-If readiness is blocked, do not choose a different unregistered tool or downgrade the observation. The FeatureRun enters a capability hold; report the returned gap and `next_action`, then stop. Repairing policy, schema, adapter digest, runtime registration, or permissions and rerunning the same readiness command is the only resume path.
-
-## Dev Server
-
-After the typed pick and leased readiness, detect a running dev server and use it. Never start a second instance. Only start one (in the background, and stop it afterwards) when none is running and the loop is unattended.
+The configured Evidence adapter owns target startup, connection, and cleanup. Do not manually start a duplicate browser or application process unless the sealed work packet explicitly declares an externally managed target.
 
 ## Run The Verification
 
-Exercise the flow the item changed — not the homepage. Interact, assert on rendered output, capture a screenshot when the tier supports it.
+Exercise the flow the item changed — not the homepage. Interact and assert on the required rendered output. Capture a screenshot only for a visual criterion or failure diagnostics.
 
-Use only the repository capability selected by the active obligation to create trusted Evidence, then evaluate coverage:
+Use only the repository capability selected by the active obligation. Read `object.coverage`, `object.feature_run_verification_settlement`, and `object.verification_broker` from the verify result. Do not issue per-criterion coverage or explain commands on the normal path. They are diagnostic commands for a known gap, and `--scope criterion` accepts a criterion id, never a requirement id.
 
-```bash
-planr evidence run --input <exact-readiness.run_index.repository_path>
-planr evidence coverage --scope criterion --id <criterion-id>
-planr evidence explain --scope criterion --id <criterion-id>
-```
-
-The observation contract decides what must be proved. Native Browser, CDP, Playwright, Computer Use, and HTTP probes are configurable methods, not interchangeable fallbacks. HTTP can fully prove an HTTP criterion but cannot satisfy rendered interaction, persistence, accessibility, console, or visual observations it never captured. `planr evidence run` checks the canonical `SOURCE_PATHS` digest inside the transaction; a mismatch records a failed non-covering attempt and commits zero trusted receipts.
+The observation contract decides what must be proved. Native Browser, CDP, Playwright, Computer Use, and HTTP probes are configurable methods, not interchangeable fallbacks. HTTP can prove an HTTP criterion but cannot satisfy rendered interaction, persistence, accessibility, console, or visual observations it never captured. `planr evidence verify` checks the canonical `SOURCE_PATHS` digest inside the transaction. A mismatch records a failed non-covering attempt and commits zero trusted receipts.
 
 Attach screenshots or traces as artifacts on the item:
 
@@ -55,16 +40,16 @@ planr artifact add "verify-web screenshot" --item <item-id> --path <screenshot-p
 planr artifact add "verify-web recording" --item <item-id> --path <recording.mp4> --kind video
 ```
 
-The replay contract and trusted method identity are mandatory. The reviewer validates the receipt and reruns it only when it is cheap, missing, failing, or explicitly high-risk; a verification that cannot be replayed when needed is not evidence. A successful bounded live smoke joins the existing coherent FeatureRun/ReviewGate boundary and does not automatically trigger another full build or gate replay.
+The replay contract and trusted method identity are mandatory. A successful bounded live verification closes a Binding Evidence FeatureRun directly when all ordinary outcomes and coverage are settled. It does not trigger another model, reviewer, build, or bookkeeping gate. An explicitly required material ReviewGate remains independent of this normal closure path.
 
 For a deployment oracle, require an approved deployment decision before the deploy begins. After deployment, keep the live check bounded to the changed routes, content, or interaction and record the deployed source/receipt identity in the summary.
 
 ## When Verification Is Impossible
 
-No configured capability or unreachable runtime: do not fake it and do not downgrade silently. Readiness records the capability hold; preserve that exact classification.
+If no configured capability is available or the runtime is unreachable, do not fake Evidence or downgrade it. The broker records the capability hold. Preserve that exact classification.
 
 ```bash
-planr evidence readiness --scope plan --id <plan-id> --json
+planr evidence verify --scope plan --id <plan-id> --json
 planr context add "verification hold: <readiness gap code and capability>" --tag blocker
 ```
 
@@ -72,6 +57,6 @@ Then stop until the reported capability contract is repaired. A manual approval 
 
 ## Outcome
 
-- Pass: trusted receipts satisfy coverage and the FeatureRun advances toward its single final independent ReviewGate. Do not call `planr done`; the implementation outcome was already settled before source freeze.
-- Product failure: Planr routes a product finding back to the responsible maker. The maker receives an outcome repair packet, fixes only the finding, then readiness re-freezes the source and the verifier selectively reruns only invalidated Evidence.
-- Verifier or environment failure: record the non-covering attempt and stop. It is not protected product risk and must not open an ad hoc ReviewGate.
+- Pass: the same `evidence verify --json` result reports satisfied plan coverage and a complete FeatureRun settlement. Do not call `planr done`; the implementation outcome was already settled before source freeze.
+- Product failure: Planr routes a product finding back to the responsible maker. The maker receives an outcome repair packet and fixes only the finding. The coordinator then re-freezes the source and calls `evidence verify` for only invalidated Evidence.
+- Verifier or environment failure: record the non-covering attempt and stop immediately. Do not retry, create a new verifier lease, or open an ad hoc ReviewGate. A later run is allowed only after the reported capability or environment state has materially changed.

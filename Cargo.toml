@@ -19,6 +19,10 @@ path = "src/main.rs"
 name = "planr-complete-binding-authority"
 path = "src/bin/planr-complete-binding-authority.rs"
 
+[[bin]]
+name = "planr-browser-harness-adapter"
+path = "src/bin/planr-browser-harness-adapter.rs"
+
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }

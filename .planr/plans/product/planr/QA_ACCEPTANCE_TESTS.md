@@ -47,15 +47,18 @@ Planr needs fast deterministic tests around graph correctness, plan parsing, MCP
 - REQ-QA-EVIDENCE-004: Host capture and process execution consume the same sealed subset while canonical coverage alone combines per-requirement receipts.
 - REQ-QA-EVIDENCE-005: One invariant covers itemless/item-backed pre-receipt repair equivalence, pre-seal absent-digest and post-seal exact-digest validation, stale optimistic rollback/proven idempotence, original-maker next generations, the public CLI projection, durable post-rollback readiness hold, and zero Evidence attempt/receipt/coverage/ProductFinding writes.
 - REQ-QA-EVIDENCE-006: No executable v1, first-observation, all-target-equality, item-keyed `pick release --repair`, item-required pre-receipt owner, compatibility, fallback, alias, or migration owner remains.
-- REQ-QA-EVIDENCE-007: Itemless satisfied exact-source plan coverage settles Verification to
-  SourceFrozen with zero item/log writes and nullable event fields; one active item closes/logs in
-  the same transaction; ready-unleased rejects without partial mutation.
-- REQ-QA-EVIDENCE-008: Binding final review creates and returns non-Accepted gates only from
-  SourceFrozen when satisfied accepted receipt/source binding equals the intact freeze, rejects the
-  Verification-phase fail-open, and re-shows the same Accepted gate from Complete with
-  `created=false` only after that stored exact binding still matches.
+- REQ-QA-EVIDENCE-007: Itemless satisfied exact-source plan coverage settles Verification directly
+  to Complete with zero item/log writes and nullable event fields; one active item closes/logs in
+  the same transaction; ready-unleased rejects without partial mutation. The same plan-scoped
+  `evidence verify --json` result leases one identity and contains canonical coverage and terminal
+  settlement, with no verifier agent, second coverage command, reviewer turn, or bookkeeping item.
+- REQ-QA-EVIDENCE-008: A binding plan creates no final product ReviewGate after satisfied Evidence,
+  returns `next_action: none`, and rejects `planr plan final-review`; the non-binding create-or-show
+  flow and explicit material/risk ReviewGates remain unchanged.
 - REQ-QA-EVIDENCE-009: Terminal one-shot exhaustion atomically commits attempt/receipt plus run
   cancellation itemlessly, optionally fails/logs one active item, and rejects ready-unleased state.
+  Repeatable Evidence defaults to one attempt; a verifier/environment failure stops without an
+  automatic coordinator retry, while an explicit bounded repeatable contract may admit more.
 - REQ-QA-EVIDENCE-010: One invariant covers itemless/item-backed post-receipt ProductFinding
   routing, maker packet, settlement, idempotent replay, selective-replay handoff, and conditional
   verifier-item release. It proves matching run/freeze/batch/maker/obligation results, null item

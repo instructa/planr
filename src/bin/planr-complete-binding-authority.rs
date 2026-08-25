@@ -1,9 +1,8 @@
 use serde_json::{Value, json};
 use std::env;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::process::{Command, ExitCode};
 
-const TARGET_ENV: &str = "PLANR_EVIDENCE_TARGET_JSON";
 const ADAPTER_SOURCE_ARG: &str = "src/bin/planr-complete-binding-authority.rs";
 
 struct FocusedSignal {
@@ -35,12 +34,33 @@ fn main() -> ExitCode {
         return fail(message);
     }
 
-    let Ok(target_json) = env::var(TARGET_ENV) else {
+    let mut request_json = String::new();
+    if let Err(error) = std::io::stdin().read_to_string(&mut request_json) {
+        return fail(format!("reading Planr Evidence adapter request: {error}"));
+    }
+    if request_json.trim().is_empty() {
         println!("{}", json!({ "probe": true }));
         return ExitCode::SUCCESS;
+    }
+    let request = match serde_json::from_str::<Value>(&request_json) {
+        Ok(request)
+            if request.get("schema_version").and_then(Value::as_str)
+                == Some("planr.evidence.adapter-request.v1") =>
+        {
+            request
+        }
+        Ok(_) => return fail("unsupported Planr Evidence adapter request".to_string()),
+        Err(error) => {
+            return fail(format!(
+                "Planr Evidence adapter request must be JSON: {error}"
+            ));
+        }
+    };
+    let Some(target) = request.get("target") else {
+        return fail("Planr Evidence adapter request is missing target".to_string());
     };
 
-    match run_target_signal(&target_json) {
+    match run_target_signal(target) {
         Ok(payload) => {
             println!("{payload}");
             ExitCode::SUCCESS
@@ -61,9 +81,7 @@ fn validate_adapter_args() -> Result<(), String> {
     }
 }
 
-fn run_target_signal(target_json: &str) -> Result<Value, String> {
-    let target = serde_json::from_str::<Value>(target_json)
-        .map_err(|error| format!("{TARGET_ENV} must be JSON: {error}"))?;
+fn run_target_signal(target: &Value) -> Result<Value, String> {
     let signal = target
         .get("uri")
         .and_then(Value::as_str)
@@ -84,9 +102,6 @@ fn run_target_signal(target_json: &str) -> Result<Value, String> {
             "--exact",
             "--test-threads=1",
         ])
-        .env_remove("PLANR_EVIDENCE_TARGET_JSON")
-        .env_remove("PLANR_EVIDENCE_ENVIRONMENT_JSON")
-        .env_remove("PLANR_EVIDENCE_EXECUTION_CONTRACT_DIGEST")
         .env("CARGO_TERM_COLOR", "never")
         .output()
         .map_err(|error| error.to_string())?;

@@ -373,15 +373,20 @@ impl App {
         if reviewer.is_empty() || reason.is_empty() {
             bail!("review_gate_relinquish_requires_reviewer_and_reason:{gate_id}");
         }
-        self.conn.execute_batch("BEGIN IMMEDIATE; SAVEPOINT relinquish_review_gate")?;
+        self.conn
+            .execute_batch("BEGIN IMMEDIATE; SAVEPOINT relinquish_review_gate")?;
         let result = (|| {
             let repository = ExecutionRunRepository::new(&self.conn);
             let gate = repository.review_gate(gate_id)?;
-            if gate.kind != ReviewGateKind::FinalProduct || gate.status != ReviewGateStatus::Leased {
+            if gate.kind != ReviewGateKind::FinalProduct || gate.status != ReviewGateStatus::Leased
+            {
                 bail!("review_gate_relinquish_requires_leased_final_product:{gate_id}");
             }
             let persisted = repository.feature_run(&gate.run_id)?;
-            let lease = persisted.run.role_owners.iter()
+            let lease = persisted
+                .run
+                .role_owners
+                .iter()
                 .find(|owner| owner.role == RunRole::Reviewer)
                 .ok_or_else(|| anyhow!("review_gate_missing_reviewer_lease:{gate_id}"))?;
             if lease.worker_id != reviewer {
@@ -398,17 +403,34 @@ impl App {
                 },
             )
             .map_err(|violation| anyhow!("review_gate_relinquish_transition:{violation:?}"))?;
-            repository.set_review_gate_status(gate_id, ReviewGateStatus::Leased, ReviewGateStatus::Pending)?;
+            repository.set_review_gate_status(
+                gate_id,
+                ReviewGateStatus::Leased,
+                ReviewGateStatus::Pending,
+            )?;
             repository.save_feature_run(&released, persisted.revision)?;
-            self.record_event("review_gate_relinquished", Some(&gate.scope_id), json!({
-                "gate_id": gate_id, "run_id": gate.run_id, "reviewer_worker_id": reviewer,
-                "lease_generation": generation, "reason": reason,
-            }))?;
+            self.record_event(
+                "review_gate_relinquished",
+                Some(&gate.scope_id),
+                json!({
+                    "gate_id": gate_id, "run_id": gate.run_id, "reviewer_worker_id": reviewer,
+                    "lease_generation": generation, "reason": reason,
+                }),
+            )?;
             Ok(self.canonical_execution_state_value(&gate.run_id, Some(gate_id))?)
         })();
         match result {
-            Ok(value) => { self.conn.execute_batch("RELEASE relinquish_review_gate; COMMIT")?; Ok(value) }
-            Err(error) => { let _ = self.conn.execute_batch("ROLLBACK TO relinquish_review_gate; RELEASE relinquish_review_gate; ROLLBACK"); Err(error) }
+            Ok(value) => {
+                self.conn
+                    .execute_batch("RELEASE relinquish_review_gate; COMMIT")?;
+                Ok(value)
+            }
+            Err(error) => {
+                let _ = self.conn.execute_batch(
+                    "ROLLBACK TO relinquish_review_gate; RELEASE relinquish_review_gate; ROLLBACK",
+                );
+                Err(error)
+            }
         }
     }
 

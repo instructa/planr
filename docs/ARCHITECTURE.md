@@ -61,7 +61,7 @@ Every live worker decision is a typed work packet:
 
 - `kind: "outcome"` is ordinary maker work; `mode: "finding_repair"` returns named findings to the same responsible maker and ReviewGate without creating a fix item.
 - `kind: "review_gate"` is independently leased checker work. Attempts and findings remain children of that gate, never graph items.
-- `kind: "verification"` is a fresh verifier lease over a frozen canonical source digest. Product source is read-only; trusted Evidence can commit only through the source-checked Evidence transaction.
+- `kind: "verification"` is a coordinator-owned verifier lease over a frozen canonical source digest. Product source is read-only; trusted Evidence can commit only through the source-checked Evidence transaction. The coordinator calls `evidence verify` without another model.
 - Releasing verification is an application-owned transition: the item lease, FeatureRun verifier role, and verification budget reconcile atomically back to `source_frozen`. `pick release --repair <reference>` additionally invalidates the frozen candidate and routes a fresh repair batch to the recorded maker; the failed verifier lease is never resumed.
 - An accepted material checkpoint is source-bound after any product or admission repair. Repair settlement preserves the prior attempt, reopens the same gate with the active freeze revision/digest and repair-obligation lineage, and leaves verification unleaseable until a fresh independent acceptance of that exact binding.
 - `kind: "hold"` is an admission or capability stop. A driver must report its classification and next action; it cannot reinterpret the hold as permission to replace the maker, weaken verification, or open an ad hoc review.

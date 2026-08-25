@@ -928,6 +928,54 @@ impl<'conn> ExecutionRunRepository<'conn> {
         Ok((role_admissions + one_shot_admissions, attempts, receipts))
     }
 
+    pub(crate) fn sealed_run_index_execution_activity(
+        &self,
+        project_id: &str,
+        plan_id: &str,
+        run_index_digest: &str,
+    ) -> Result<(u64, u64)> {
+        let attempts = self.conn.query_row(
+            "SELECT COUNT(*) FROM evidence_attempts AS attempts
+             JOIN proof_obligations AS obligations ON obligations.id = attempts.obligation_id
+             WHERE attempts.project_id = ?1 AND obligations.plan_id = ?2
+               AND json_extract(attempts.attempt_json, '$.raw_result.execution_binding.run_index_digest') = ?3",
+            params![project_id, plan_id, run_index_digest],
+            |row| row.get::<_, u64>(0),
+        )?;
+        let receipts = self.conn.query_row(
+            "SELECT COUNT(*) FROM evidence_receipts AS receipts
+             JOIN evidence_attempts AS attempts ON attempts.id = receipts.attempt_id
+             JOIN proof_obligations AS obligations ON obligations.id = attempts.obligation_id
+             WHERE receipts.project_id = ?1 AND obligations.plan_id = ?2
+               AND json_extract(attempts.attempt_json, '$.raw_result.execution_binding.run_index_digest') = ?3",
+            params![project_id, plan_id, run_index_digest],
+            |row| row.get::<_, u64>(0),
+        )?;
+        Ok((attempts, receipts))
+    }
+
+    pub(crate) fn sealed_run_index_receipt_ids(
+        &self,
+        project_id: &str,
+        plan_id: &str,
+        run_index_digest: &str,
+    ) -> Result<Vec<String>> {
+        let mut statement = self.conn.prepare(
+            "SELECT receipts.id FROM evidence_receipts AS receipts
+             JOIN evidence_attempts AS attempts ON attempts.id = receipts.attempt_id
+             JOIN proof_obligations AS obligations ON obligations.id = attempts.obligation_id
+             WHERE receipts.project_id = ?1 AND obligations.plan_id = ?2
+               AND json_extract(attempts.attempt_json, '$.raw_result.execution_binding.run_index_digest') = ?3
+             ORDER BY receipts.created_at, receipts.id",
+        )?;
+        statement
+            .query_map(params![project_id, plan_id, run_index_digest], |row| {
+                row.get::<_, String>(0)
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
     pub(crate) fn create_feature_run(
         &self,
         project_id: &str,

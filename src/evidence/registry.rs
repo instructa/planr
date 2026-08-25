@@ -4,7 +4,8 @@ use super::adapter_signal::{AdapterBoundarySignal, adapter_boundary_signal_from_
 use super::model::{
     AttemptStatus, CapabilityAvailability, CapabilityAvailabilityStatus, EnvironmentBinding,
     EvidenceId, ObservedPayloadContract, PayloadSchemaBinding, PermissionState, ProbeCheck,
-    ProbeResult, ProcessExecutionContract, ProvenanceSourceKind, SchemaVersion, Sha256Digest,
+    ProbeResult, ProcessExecutionContract, ProvenanceSourceKind, STRUCTURED_OBSERVATION_RESULTS_V2,
+    STRUCTURED_OBSERVATION_RESULTS_V2_SCHEMA_REF, SchemaVersion, Sha256Digest,
     VerificationCapabilityInstance, VerificationCapabilityManifest,
 };
 use crate::canonical_json::{sha256_json_digest, sha256_prefixed_bytes};
@@ -549,15 +550,15 @@ impl CapabilityRegistry {
         if manifest
             .supported_artifacts
             .iter()
-            .any(|artifact| artifact == "planr.structured_observation_results.v1")
+            .any(|artifact| artifact == STRUCTURED_OBSERVATION_RESULTS_V2)
             && (declaration.execution_contract.payload_schema.schema_ref
-                != "schema://planr.structured_observation_results.v1"
+                != STRUCTURED_OBSERVATION_RESULTS_V2_SCHEMA_REF
                 || manifest
                     .availability_probe
                     .execution
                     .payload_schema
                     .schema_ref
-                    != "schema://planr.structured_observation_results.v1")
+                    != STRUCTURED_OBSERVATION_RESULTS_V2_SCHEMA_REF)
         {
             mismatches.push(
                 "structured observation results require the Planr structured envelope as the execution payload schema"
@@ -871,7 +872,7 @@ fn execution_payload_schema_matches(
     candidate: &PayloadSchemaBinding,
     supported: &[PayloadSchemaBinding],
 ) -> bool {
-    candidate.schema_ref == "schema://planr.structured_observation_results.v1"
+    candidate.schema_ref == STRUCTURED_OBSERVATION_RESULTS_V2_SCHEMA_REF
         || payload_schema_matches(candidate, supported)
 }
 
@@ -1150,6 +1151,7 @@ fn run_process_probe(
         cwd: &cwd,
         argv: &argv,
         env,
+        stdin: None,
         timeout: Duration::from_millis(execution.timeout_ms),
         output_limit_bytes: usize::MAX,
         stdout_limit_bytes: Some(
@@ -1346,7 +1348,7 @@ fn capability_instance(
     let schema_ref = payload_schema.schema_ref.clone();
     let mut observation_types = Vec::with_capacity(manifest.supported_observations.len());
     for supported in &manifest.supported_observations {
-        if schema_ref != "schema://planr.structured_observation_results.v1"
+        if schema_ref != STRUCTURED_OBSERVATION_RESULTS_V2_SCHEMA_REF
             && supported.schema_ref != schema_ref
         {
             bail!("manifest supported_observations must share the availability probe schema_ref");
@@ -1523,12 +1525,16 @@ fn current_compatible_capability_instance(
             .availability_probe
             .execution
             .payload_schema;
+        let expected_observation_types =
+            observation_type_set(&capability.manifest.supported_observations);
+        let observed_observation_types = instance
+            .observed_payload_contract
+            .observation_types
+            .iter()
+            .map(|observed| observed.as_str().to_string())
+            .collect::<BTreeSet<_>>();
         if instance.observed_payload_contract.schema_ref != payload_schema.schema_ref
-            || !instance
-                .observed_payload_contract
-                .observation_types
-                .iter()
-                .any(|observed| observed.as_str() == payload_schema.observation_type.as_str())
+            || observed_observation_types != expected_observation_types
         {
             miss_reason = CapabilityInstanceResolutionReason::ReprobedRegistrationMismatch;
             continue;
@@ -2262,7 +2268,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let mut manifest_value = manifest_value("cargo", vec!["--version"], 1024);
         manifest_value["supported_artifacts"] =
-            json!(["stdout", "planr.structured_observation_results.v1"]);
+            json!(["stdout", "planr.structured_observation_results.v2"]);
         let digest = write_manifest(dir.path(), &manifest_value);
         let registration = registration_for_manifest(&digest, &manifest_value);
 
@@ -2560,6 +2566,70 @@ mod tests {
                 .is_err(),
             "same manifest id/version with a changed digest must not reuse stale instances"
         );
+    }
+
+    #[test]
+    fn registry_reuses_structured_envelope_instance_with_inner_observation_types() {
+        let dir = tempdir().unwrap();
+        let mut manifest_value = manifest_value("cargo", vec!["--version"], 1024);
+        let envelope = json!({
+            "type": "planr.structured_observation_results",
+            "schema_ref": "schema://planr.structured_observation_results.v2",
+            "schema_digest": SCHEMA_DIGEST
+        });
+        manifest_value["supported_observations"] = json!([{
+            "type": "com.planr.web.dom_state",
+            "schema_ref": "schema://com.planr.web.dom_state.v1",
+            "schema_digest": SCHEMA_DIGEST
+        }]);
+        manifest_value["supported_artifacts"] =
+            json!(["stdout", "planr.structured_observation_results.v2"]);
+        manifest_value["availability_probe"]["execution"]["payload_schema"] = envelope.clone();
+        let digest = write_manifest(dir.path(), &manifest_value);
+        let mut registration = registration_for_manifest(&digest, &manifest_value);
+        registration["execution_contract"]["payload_schema"] = envelope;
+        let conn = conn();
+        let mut registry = CapabilityRegistry::from_manifests_and_adapter_registrations(
+            dir.path(),
+            [],
+            &[registration],
+        );
+        assert!(
+            registry.diagnostics().is_empty(),
+            "{:?}",
+            registry.diagnostics()
+        );
+
+        let first = registry
+            .current_or_probe_and_store(&conn, dir.path(), "vcap-test-process-v1", runtime())
+            .unwrap();
+        assert!(!first.reused);
+        assert_eq!(
+            first.instance.observed_payload_contract.schema_ref,
+            "schema://planr.structured_observation_results.v2"
+        );
+        assert_eq!(
+            first.instance.observed_payload_contract.observation_types[0].as_str(),
+            "com.planr.web.dom_state"
+        );
+
+        let second = registry
+            .current_or_probe_and_store(&conn, dir.path(), "vcap-test-process-v1", runtime())
+            .unwrap();
+        assert!(second.reused);
+        assert_eq!(
+            second.reason,
+            CapabilityInstanceResolutionReason::ReusedCurrent
+        );
+        assert_eq!(second.instance.id, first.instance.id);
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM verification_capability_instances WHERE manifest_id = 'vcap-test-process-v1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
     }
 
     #[test]
