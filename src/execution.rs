@@ -152,12 +152,7 @@ pub(crate) fn run_bounded_process(input: BoundedProcessInput<'_>) -> Result<Boun
             .take()
             .expect("piped child stdin must be available");
         let bytes = bytes.to_vec();
-        thread::spawn(move || -> Result<()> {
-            stdin
-                .write_all(&bytes)
-                .context("writing bounded process stdin")?;
-            Ok(())
-        })
+        thread::spawn(move || stdin.write_all(&bytes))
     });
     let stdout = child.stdout.take().context("capturing child stdout")?;
     let stderr = child.stderr.take().context("capturing child stderr")?;
@@ -206,9 +201,7 @@ pub(crate) fn run_bounded_process(input: BoundedProcessInput<'_>) -> Result<Boun
     let stdout = join_drain(stdout_handle)?;
     let stderr = join_drain(stderr_handle)?;
     if let Some(handle) = stdin_handle {
-        handle
-            .join()
-            .map_err(|_| anyhow::anyhow!("bounded process stdin writer panicked"))??;
+        join_stdin_writer(handle)?;
     }
     let output_limit_exceeded = output_exceeded.load(Ordering::SeqCst)
         || stdout.truncated
@@ -352,6 +345,19 @@ fn join_drain(handle: thread::JoinHandle<Result<DrainedOutput>>) -> Result<Drain
         .map_err(|_| anyhow::anyhow!("output drain thread panicked"))?
 }
 
+fn join_stdin_writer(handle: thread::JoinHandle<std::io::Result<()>>) -> Result<()> {
+    match handle
+        .join()
+        .map_err(|_| anyhow::anyhow!("bounded process stdin writer panicked"))?
+    {
+        Ok(()) => Ok(()),
+        // Peer closure is an observed adapter outcome, not a broker outage. A
+        // trusted structured pass must still echo the sealed request binding.
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        Err(error) => Err(error).context("writing bounded process stdin"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -431,6 +437,35 @@ mod tests {
 
         assert_eq!(output.exit_code, Some(0));
         assert_eq!(output.stdout_excerpt, "sealed request\n");
+    }
+
+    #[test]
+    fn bounded_process_preserves_exit_when_child_closes_stdin_without_reading() {
+        let cwd = tempfile::tempdir().unwrap();
+        let argv = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "exec 0<&-; sleep 0.05; exit 9".to_string(),
+        ];
+        let cancellation = CancellationToken::new();
+        let request = vec![b'x'; 1024 * 1024];
+
+        let output = run_bounded_process(BoundedProcessInput {
+            cwd: cwd.path(),
+            argv: &argv,
+            env: Vec::new(),
+            stdin: Some(&request),
+            timeout: Duration::from_secs(1),
+            output_limit_bytes: 64,
+            stdout_limit_bytes: None,
+            stderr_limit_bytes: None,
+            cancellation: &cancellation,
+        })
+        .unwrap();
+
+        assert_eq!(output.exit_code, Some(9));
+        assert!(!output.timed_out);
+        assert!(!output.interrupted);
     }
 
     #[test]

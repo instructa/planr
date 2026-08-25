@@ -21,6 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Recover readiness failures and ProductFindings through bounded typed transitions while preserving immutable source, receipt, retry, and review lineage.
 - Retire a stranded Verification FeatureRun when its current item status or owner no longer matches the verifier lease, and restore the exact observed item state without direct database repair.
 - Stop pre-cancelled Evidence processes before spawn so interrupted work cannot execute adapter side effects or race into an unavailable result.
+- Preserve the observed adapter exit when a fast child closes stdin without reading the sealed request, instead of misclassifying the completed process as unavailable because of a benign broken pipe.
 
 ## [1.10.0-alpha.7] - 2026-08-15
 
