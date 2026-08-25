@@ -105,6 +105,27 @@ impl std::fmt::Display for BoundedProcessError {
 impl std::error::Error for BoundedProcessError {}
 
 pub(crate) fn run_bounded_process(input: BoundedProcessInput<'_>) -> Result<BoundedProcessOutput> {
+    if input.cancellation.is_cancelled() {
+        let empty_digest = sha256_prefixed(&[]);
+        return Ok(BoundedProcessOutput {
+            argv: input.argv.to_vec(),
+            exit_code: None,
+            timed_out: false,
+            interrupted: true,
+            output_limit_exceeded: false,
+            stdout_digest: empty_digest.clone(),
+            stderr_digest: empty_digest,
+            stdout_excerpt: String::new(),
+            stderr_excerpt: String::new(),
+            stdout_bytes: 0,
+            stderr_bytes: 0,
+            stdout_truncated: false,
+            stderr_truncated: false,
+            #[cfg(test)]
+            process_tree_term_grace_sleeps: 0,
+        });
+    }
+
     let mut command = Command::new(&input.argv[0]);
     command
         .args(&input.argv[1..])
@@ -419,7 +440,7 @@ mod tests {
         assert!(!timed_out.interrupted);
 
         let cwd = tempfile::tempdir().unwrap();
-        let argv = vec!["sleep".to_string(), "1".to_string()];
+        let argv = vec!["planr-cancelled-process-must-not-spawn".to_string()];
         let cancellation = CancellationToken::new();
         cancellation.cancel();
         let interrupted = run_bounded_process(BoundedProcessInput {

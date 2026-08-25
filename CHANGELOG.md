@@ -20,6 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Complete binding FeatureRuns directly from exact satisfied coverage, without synthetic verification items, mandatory final reviews, post-coverage bookkeeping, or unchanged-environment retry loops.
 - Recover readiness failures and ProductFindings through bounded typed transitions while preserving immutable source, receipt, retry, and review lineage.
 - Retire a stranded Verification FeatureRun when its current item status or owner no longer matches the verifier lease, and restore the exact observed item state without direct database repair.
+- Stop pre-cancelled Evidence processes before spawn so interrupted work cannot execute adapter side effects or race into an unavailable result.
 
 ## [1.10.0-alpha.7] - 2026-08-15
 
