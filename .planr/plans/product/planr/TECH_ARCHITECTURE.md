@@ -79,6 +79,13 @@ Compatible budget-hold resolution is a separate `app/feature_run_evidence` lifec
 - FeatureRun handoff, verifier admission, coverage settlement, audit, accepted-risk handoff, and stop activation consume that classification. Non-binding final-review admission rejects binding authority. No path infers authority from an empty coverage list or verification logs.
 - Explicit Evidence migration remains the sole obligation writer and accepts only the exact declared criterion set. An incomplete or invalid binding set becomes a durable capability hold, not a compatibility route.
 
+`app/evidence` also owns the explicit from-plan compiler. It reads the checked criterion identities
+and optional closed `evidence.bindings[]` preset references, resolves each selected `ProofPreset`
+against the policy's one schema registration per observation type, and creates an in-memory
+`planr.evidence.migration.v1` value. It then invokes the existing atomic migration. Compilation is
+never implicit in plan check, pick, readiness, audit, review, or verification. CLI, MCP, HTTP,
+skills, Evals, and adapters cannot own this expansion or construct payload-schema bindings.
+
 Binding execution has one additional ownership chain. `app/evidence` partitions each canonical
 obligation by exact target and seals `planr.evidence.run-index.v2`; every run names one obligation,
 one target, and a sorted non-empty requirement subset. Admission recomputes the canonical partition

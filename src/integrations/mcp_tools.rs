@@ -332,9 +332,9 @@ pub fn mcp_tools() -> Vec<Value> {
         ),
         tool(
             "planr_evidence_migrate",
-            "Preview or apply explicit plan-scoped migration from legacy verification claims to binding Evidence obligations",
-            json!({"input": prop("object", "planr.evidence.migration.v1 payload with plan_id and obligations[]"), "apply": prop("boolean", "Apply the migration; omit or false for preview")}),
-            &["input"],
+            "Preview or apply an explicit plan-scoped Evidence migration. Use from_plan for checked build-plan preset bindings; input is the advanced full migration contract.",
+            json!({"from_plan": prop("string", "Build plan id whose named Evidence presets Planr should compile"), "input": prop("object", "Advanced planr.evidence.migration.v1 payload with plan_id and obligations[]"), "apply": prop("boolean", "Apply the migration; omit or false for preview")}),
+            &[],
         ),
         tool(
             "planr_evidence_classifications",

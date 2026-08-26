@@ -18,12 +18,8 @@ run an eval as routine loop work.
 
 ## Evidence admission guard
 
-Before product work that requires binding Evidence, inspect the repository's
-existing Evidence policy and configured capability. If either is absent, record
-the exact gap code, capability, and next action, then stop. Do not create or
-weaken an Evidence policy, schema, capability, adapter, migration, or run index
-to bypass a hold. Only the owner of explicitly requested verification
-infrastructure may repair that contract before product work resumes.
+Read and apply the canonical [Evidence ownership guard](../planr/SKILL.md#evidence-ownership-guard)
+before loop execution. Do not duplicate or reinterpret it here.
 
 ## Execute the loop
 

@@ -38,9 +38,10 @@ When the repository provides a versioned verification policy and source-bound re
 
 ## Durable Contract
 
-For plans with binding Evidence, require the repository owner to materialize obligations from the checked frontmatter criterion IDs through explicit `planr.evidence.migration.v1` migration before execution, then run readiness. Never write obligations directly or duplicate `app/proof` completeness rules in the goal contract. Store one contract per plan:
+For plans with binding Evidence, select existing repository named presets as described by `$planr-plan`, then let Planr Core compile and explicitly apply the exact migration before execution. Never write obligations, payload schemas, or full migration JSON directly, and never duplicate `app/proof` completeness rules in the goal contract. Store one contract per plan:
 
 ```bash
+planr evidence migrate --from-plan <plan-id> --apply
 planr evidence readiness --scope plan --id <plan-id>
 planr context add "GOAL CONTRACT <plan-id>: DONE when every in-scope item is closed with implementation evidence, explicitly required material reviews are complete, approvals are clear, and canonical Evidence coverage proves <goal oracle>. Iteration budget: 10." --tag goal-contract
 ```

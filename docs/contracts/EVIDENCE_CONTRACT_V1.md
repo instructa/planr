@@ -7,6 +7,7 @@ Evidence Contract v1 is Planr's local-first contract for proving acceptance crit
 ## Ownership
 
 - Typed build-plan frontmatter owns authored criterion identity as one non-empty, unique, closed list of `{id, title}` entries. Acceptance prose is narrative only.
+- Optional build-plan `evidence.bindings[]` owns only exact `{criterion_id, preset_id}` references to repository policy. It does not own criterion identity, observation schemas, capability selection, provenance, coverage, or closure.
 - Explicit Evidence migration owns materialization of reviewed `ProofObligation` records bound to those declared criteria.
 - The Evidence domain owns `ProofObligation`, `ObservationRequirement`, `VerificationCapabilityManifest`, `VerificationCapabilityInstance`, `EvidenceAttempt`, `UntrustedEvidenceProposal`, `EvidenceReceipt`, `CoverageVerdict`, `EvidencePolicy`, `ProofPreset`, and `EvidenceWaiver`.
 - Planr assigns trusted provenance only from Planr-observed execution, verified host events, accepted MCP attestation, validated artifact import, or explicit approval-backed user attestation.
@@ -23,6 +24,7 @@ Evidence Contract v1 is Planr's local-first contract for proving acceptance crit
 - Planr logs remain narrative and supporting records. A `kind = verification` log is a claim that can be referenced, but it never satisfies a binding observation.
 - A repository without a binding Evidence policy and without binding plan obligations is explicitly non-binding. A binding plan is `binding_unsatisfied` unless its authoritative active obligations match the declared build-plan criterion set exactly: zero, partial, duplicate, or undeclared bindings all fail closed. Planr returns a hold before leasing or creating a FeatureRun, persists a capability hold when an existing run reaches readiness, rejects coverage settlement, closure, and stop activation, and never substitutes logs or an empty receipt lineage.
 - Migration is the sole obligation-materialization path. It is explicit, plan-scoped, previewable, idempotent, and accepts only an exact declared criterion binding set before materializing ordinary immutable `ProofObligation` rows. It must not rewrite plans, logs, reviews, artifacts, or historical claims.
+- `evidence migrate --from-plan` is an explicit migration input compiler, not a second writer. It resolves checked criterion preset references and the repository policy's deterministic observation-schema registrations into `planr.evidence.migration.v1`, then invokes the same atomic migration. It is never called implicitly by planning, picking, readiness, audit, review, or verification.
 - Planr artifacts remain files or references with digests. An artifact alone is not trusted evidence unless a trusted receipt binds it to the source revision, target, environment, execution identity, observation results, and policy.
 
 ## Binding Execution Orchestration
@@ -40,8 +42,8 @@ maker-compatible classification. An active source-frozen run that still has open
 has no verifier admission, Evidence attempt, or receipt for its immutable freeze is retired only by
 the typed `premature-source-freeze` transition. Retirement preserves the freeze and all Evidence
 history, releases active ordinary leases, and creates no successor. The repository-owned no-model
-`com.planr.premature_freeze.lifecycle.v1` capability is reserved for the final frozen-source HARDEN
-observation; registering it does not execute or satisfy that observation during BUILD.
+`com.planr.premature_freeze.lifecycle.v1` capability executes only through the canonical
+frozen-source Evidence path; registration alone does not execute or satisfy the observation.
 
 An active Verification FeatureRun whose current admission is absent or unequal across the active
 plan/run/revision, freeze, verifier worker/generation, optional item, or admitted/sealed run-index
@@ -51,9 +53,9 @@ status or worker does not match the verifier lease is
 optimistic transaction invalidates but preserves the freeze, ends or preserves-ended the referenced
 batch, releases exact roles, Verification reservations, and the exact observed optional item state,
 preserves every prior Evidence/history identity, emits one typed event, and creates no successor.
-Repetition reads that event and writes nothing. The
-repository-owned `com.planr.inconsistent_verification.retirement.v1` capability is registered during
-BUILD but first executes only after HARDEN supplies the exact focused invariant.
+Repetition reads that event and writes nothing. The repository-owned
+`com.planr.inconsistent_verification.retirement.v1` capability executes only through the canonical
+Evidence path backed by the exact focused invariant.
 
 `planr.evidence.run-index.v2` is the sole executable run-index shape. Readiness consumes canonical
 authoritative obligation rows and seals exactly one run for every distinct canonical target within
@@ -270,6 +272,11 @@ Gap coverage must match the verdict status:
 ### EvidencePolicy, ProofPreset, EvidenceWaiver
 
 Repository policy lives in `.planr/evidence.yaml`. It owns defaults, named presets, observation schema registrations, adapter registrations, trust/freshness/fixture/completion policy, and extension namespaces.
+
+Plan authors and agents select preset IDs only. Planr Core supplies each preset observation's
+`payload_schema` from the policy's single matching `observation_schema_registration`. Public
+from-plan callers must not submit or override that schema. Full migration input remains the
+advanced explicit path for custom and superseding obligations.
 
 Adapter registrations bind the manifest ID, repository-local manifest path, manifest digest, observation types, payload schema bindings, provenance path, and closed execution contract used by Planr-observed process adapters.
 

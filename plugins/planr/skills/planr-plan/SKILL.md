@@ -64,6 +64,32 @@ criteria:
 
 Keep the `## Acceptance Criteria` section as readable narrative, never an identity source. Do not infer criterion IDs from prose or decide obligation completeness in this skill; `plan check`, explicit Evidence migration, and the canonical `app/proof` authority own those decisions.
 
+For binding Evidence, inspect `planr evidence policy --json` and select existing named presets by
+their observation semantics. The repository policy and registered capability—not the provider or
+skill name in the user's prompt—own schemas and execution. If the policy default correctly covers
+every criterion, no extra frontmatter is needed. Otherwise author only preset references beside the
+closed criterion list:
+
+```yaml
+evidence:
+  bindings:
+    - criterion_id: criterion-api-health
+      preset_id: live-api-health
+```
+
+Never write `payload_schema`, adapter manifests, `ProofObligation` objects, or a full migration
+payload. After the build plan passes `plan check`, bind it explicitly and preflight readiness before
+building the map:
+
+```bash
+planr evidence migrate --from-plan <build-plan-id> --apply
+planr evidence readiness --scope plan --id <build-plan-id>
+planr map build --from <build-plan-id>
+```
+
+If compilation or readiness fails, report the exact gap and stop. Do not replace trusted Evidence
+with a prompt claim or continue into a paid implementation run.
+
 ## Route-Aware Tagging
 
 Before writing the task list, check whether the project declares model routing: `planr agents list --json`. If routes exist, their `work_type` selectors are the project's use-case vocabulary (e.g. `frontend`, `backend`, `design`) — and tagging is your job, not the user's; never ask a human to name work types.
@@ -79,7 +105,7 @@ Match by the task's actual work (UI/components/styling -> a `frontend` route, AP
 
 ## Done
 
-Planning is complete only when `planr plan check <plan-id>` passes and the next command is clear: split further, build map, or ask the user for a blocking decision.
+Planning is complete only when `planr plan check <plan-id>` passes, binding plans have applied their Core-compiled preset migration and passed readiness, and the next command is clear: split further, build map, or ask the user for a blocking decision.
 
 When the map is built, linked, and tagged, end by naming the execution handoff explicitly — the user should never have to guess the next prompt: `Use $planr-loop on plan <build-plan-id>. Stop condition: all items closed, canonical Evidence coverage holds, and any explicitly required material reviews are complete.` (On hosts with a /goal primitive, `$planr-goal` wraps the same loop for long-running autonomous runs.)
 

@@ -73,6 +73,15 @@ Presets are authoring conveniences. Obligations are the durable, reviewed record
 Use presets when several criteria share the same observation shape. Materialize obligations when a plan becomes binding:
 
 ```bash
+planr evidence migrate --from-plan <plan-id> --json
+planr evidence migrate --from-plan <plan-id> --apply --json
+```
+
+Planr Core resolves each selected preset observation to its repository-registered payload schema.
+The build plan stores only `{criterion_id, preset_id}` references; users and agents do not author
+`payload_schema`. Use full migration input only for custom or superseding obligations:
+
+```bash
 planr evidence migrate --input migration.json --json
 planr evidence migrate --input migration.json --apply --json
 planr evidence obligation list --plan <plan-id> --json

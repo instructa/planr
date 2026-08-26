@@ -26,8 +26,9 @@ impl App {
             )),
             "planr_evidence_migrate" => Ok(mcp_evidence_json(
                 "evidence.migrate",
-                super::evidence::evidence_migration_request(&args)
-                    .and_then(|(input, apply)| self.evidence_migration_value(input, apply)),
+                super::evidence::evidence_migration_request(&args).and_then(|(source, apply)| {
+                    self.execute_evidence_migration_request(source, apply)
+                }),
             )),
             "planr_evidence_classifications" => Ok(mcp_evidence_json(
                 "evidence.classifications",

@@ -285,7 +285,7 @@ fn binding_unsatisfied_proof_status(
     authority: &PlanEvidenceAuthorityEvaluation,
 ) -> Value {
     let next_action = format!(
-        "create planr.evidence.migration.v1 payload with plan_id {plan_id}, then run planr evidence migrate --input <migration-file-for-plan-{plan_id}> --apply"
+        "run planr evidence migrate --from-plan {plan_id} --apply, then run planr evidence readiness --scope plan --id {plan_id}"
     );
     json!({
         "scope": {"kind": "plan", "id": plan_id},

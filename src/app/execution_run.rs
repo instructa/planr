@@ -408,7 +408,7 @@ impl App {
                 "binding_evidence_obligations_missing:{item_id}; next action: {}",
                 hold["next_action"]
                     .as_str()
-                    .unwrap_or("planr evidence migrate --input <migration-file> --apply")
+                    .unwrap_or("planr evidence migrate --from-plan <plan-id> --apply")
             );
         }
         let Some(plan_path) = item.plan_path.as_deref() else {

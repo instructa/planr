@@ -63,7 +63,7 @@ Planr needs fast deterministic tests around graph correctness, plan parsing, MCP
   routing, maker packet, settlement, idempotent replay, selective-replay handoff, and conditional
   verifier-item release. It proves matching run/freeze/batch/maker/obligation results, null item
   projection with zero item writes, item-independent durable settlement, and zero new receipts.
-- REQ-QA-EVIDENCE-011: A separate HARDEN contract admits exactly one existing-file invariant named
+- REQ-QA-EVIDENCE-011: The canonical E2E suite owns the existing-file invariant named
   `inconsistent_verification_restart_retires_atomically_and_successor_starts_only_on_ordinary_pick`.
   It proves healthy rejection, every current admission inequality, atomic freeze/batch/role/
   reservation/optional-item effects, preserved Evidence/history identity, idempotent retry, zero

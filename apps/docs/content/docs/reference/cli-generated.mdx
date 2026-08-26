@@ -2053,15 +2053,16 @@ Options:
 ```text
 Preview or apply explicit pre-Evidence plan migration into binding Evidence obligations
 
-Usage: planr evidence migrate [OPTIONS] --input <INPUT>
+Usage: planr evidence migrate [OPTIONS]
 
 Options:
-      --db <DB>        Path to Planr SQLite database
-      --input <INPUT>  JSON file containing a planr.evidence.migration.v1 payload
-      --apply          Apply the migration. Omit for dry-run preview
-      --json           Emit JSON output
-      --no-color       Disable color in human output
-  -h, --help           Print help
+      --db <DB>                Path to Planr SQLite database
+      --input <INPUT>          JSON file containing a planr.evidence.migration.v1 payload
+      --from-plan <FROM_PLAN>  Compile the checked build plan's criterion preset bindings into the canonical migration
+      --json                   Emit JSON output
+      --apply                  Apply the migration. Omit for dry-run preview
+      --no-color               Disable color in human output
+  -h, --help                   Print help
 ```
 
 #### `planr evidence classifications`

@@ -136,8 +136,15 @@ pub(crate) struct EvidenceCoverageArgs {
 #[derive(Args, Debug)]
 pub(crate) struct EvidenceMigrationArgs {
     /// JSON file containing a planr.evidence.migration.v1 payload.
-    #[arg(long)]
-    pub(crate) input: PathBuf,
+    #[arg(
+        long,
+        conflicts_with = "from_plan",
+        required_unless_present = "from_plan"
+    )]
+    pub(crate) input: Option<PathBuf>,
+    /// Compile the checked build plan's criterion preset bindings into the canonical migration.
+    #[arg(long, conflicts_with = "input", required_unless_present = "input")]
+    pub(crate) from_plan: Option<String>,
     /// Apply the migration. Omit for dry-run preview.
     #[arg(long)]
     pub(crate) apply: bool,

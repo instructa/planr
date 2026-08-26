@@ -13,8 +13,9 @@ use crate::cli::{
 use crate::evidence::model::{
     ArtifactRef, CapabilityBinding, EvidenceAttempt, EvidenceDomainError, EvidenceReceipt,
     ObservationRequirement, ObservationResult, RawResultRef,
-    STRUCTURED_OBSERVATION_RESULTS_V2_SCHEMA_REF, SandboxLimits, SandboxState, Sha256Digest,
-    TrustedProvenance, TrustedReceiptInput, VantagePoint, build_trusted_receipt,
+    STRUCTURED_OBSERVATION_RESULTS_V2_SCHEMA_REF, SandboxLimits, SandboxState,
+    SchemaReferenceBinding, SchemaVersion, Sha256Digest, TrustedProvenance, TrustedReceiptInput,
+    VantagePoint, build_trusted_receipt,
 };
 use crate::evidence::{
     AttemptStatus, CapabilityRegistry, CapabilityRuntimeContext, EnvironmentBinding, EvidenceId,
@@ -38,6 +39,7 @@ use crate::evidence::{
     policy::{
         capture_repository_snapshot, load_repository_observation_schema,
         parse_evidence_policy_yaml, parse_trusted_receipt_binding,
+        validate_repository_observation_schemas,
     },
 };
 use crate::execution::{BoundedProcessInput, CancellationToken, run_bounded_process};
@@ -45,10 +47,12 @@ use crate::execution_run::{
     ExecutionBatch, ExecutionBatchStatus, FeatureRunPhase, PhaseTransition, PhaseTransitionCause,
     RoleOwner, RunRole, VerificationAdmissionRepairReason, apply_phase_transition,
 };
+use crate::planpack::{build_plan_criteria, parse_plan_metadata};
 use crate::util::short_id;
 use anyhow::{Context, Result, anyhow, bail};
 use builtins::BuiltInEvidenceCatalog;
 use rusqlite::{OptionalExtension, params};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use std::cell::RefCell;
 use std::fmt;
@@ -371,10 +375,20 @@ impl App {
                 )
             }
             EvidenceCommand::Migrate(args) => {
-                let value = read_json_file(&args.input)?;
+                let result = match (&args.input, &args.from_plan) {
+                    (Some(input), None) => read_json_file(input)
+                        .and_then(|value| self.evidence_migration_value(value, args.apply)),
+                    (None, Some(plan_id)) => {
+                        self.evidence_migration_from_plan_value(plan_id, args.apply)
+                    }
+                    _ => Err(EvidenceCommandError::bad_request(
+                        "evidence migrate requires exactly one of --input or --from-plan",
+                    )
+                    .into()),
+                };
                 (
                     "evidence.migrate",
-                    self.evidence_migration_value(value, args.apply),
+                    result,
                     if args.apply {
                         "evidence migration applied".to_string()
                     } else {
@@ -675,6 +689,196 @@ impl App {
                 Err(error)
             }
         }
+    }
+
+    /// Compile human-scale build-plan preset references into the sole explicit
+    /// migration contract, then delegate all persistence to that migration.
+    pub(crate) fn evidence_migration_from_plan_value(
+        &self,
+        plan_id: &str,
+        apply: bool,
+    ) -> Result<Value> {
+        let input = self.compile_evidence_migration_from_plan_value(plan_id)?;
+        let mut result = self.evidence_migration_value(input, apply)?;
+        if let Some(object) = result.as_object_mut() {
+            object.insert(
+                "compiled_from".to_string(),
+                json!({"kind": "build_plan_presets", "plan_id": plan_id}),
+            );
+            object.insert(
+                "next_action".to_string(),
+                json!(if apply {
+                    format!("run planr evidence readiness --scope plan --id {plan_id}")
+                } else {
+                    format!("run planr evidence migrate --from-plan {plan_id} --apply")
+                }),
+            );
+        }
+        Ok(result)
+    }
+
+    pub(crate) fn execute_evidence_migration_request(
+        &self,
+        source: EvidenceMigrationRequestSource,
+        apply: bool,
+    ) -> Result<Value> {
+        match source {
+            EvidenceMigrationRequestSource::Input(input) => {
+                self.evidence_migration_value(input, apply)
+            }
+            EvidenceMigrationRequestSource::FromPlan(plan_id) => {
+                self.evidence_migration_from_plan_value(&plan_id, apply)
+            }
+        }
+    }
+
+    fn compile_evidence_migration_from_plan_value(&self, plan_id: &str) -> Result<Value> {
+        let plan = self.get_plan(plan_id)?;
+        if plan.stage != "build" {
+            return Err(EvidenceCommandError::bad_request(
+                "evidence --from-plan requires a build plan",
+            )
+            .into());
+        }
+        let checked = self.plan_check_value(plan_id)?;
+        if checked["ok"].as_bool() != Some(true) {
+            let diagnostics = checked["warnings"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|warning| warning["message"].as_str())
+                .collect::<Vec<_>>()
+                .join("; ");
+            return Err(EvidenceCommandError::bad_request(format!(
+                "evidence --from-plan requires a checked build plan: {diagnostics}"
+            ))
+            .into());
+        }
+        let (frontmatter, parse_status) = parse_plan_metadata(Path::new(&plan.path));
+        if parse_status != "ok" {
+            return Err(EvidenceCommandError::bad_request(format!(
+                "build plan frontmatter is invalid: {}",
+                frontmatter["error"]
+                    .as_str()
+                    .unwrap_or("unknown parse error")
+            ))
+            .into());
+        }
+        let criteria = build_plan_criteria(&frontmatter).map_err(|problems| {
+            EvidenceCommandError::bad_request(format!(
+                "build plan criteria are invalid: {}",
+                problems.join("; ")
+            ))
+        })?;
+        let document = self.evidence_policy_document()?.ok_or_else(|| {
+            EvidenceCommandError::bad_request(
+                "evidence --from-plan requires a valid .planr/evidence.yaml",
+            )
+        })?;
+        validate_repository_observation_schemas(&self.root, &document).map_err(|diagnostics| {
+            EvidenceCommandError::bad_request(format!(
+                "evidence policy schemas are invalid: {diagnostics}"
+            ))
+        })?;
+        if document.policy.defaults["binding"].as_bool() != Some(true) {
+            return Err(EvidenceCommandError::bad_request(
+                "evidence --from-plan requires repository policy defaults.binding=true",
+            )
+            .into());
+        }
+        let default_preset_id =
+            document.policy.defaults["preset_id"]
+                .as_str()
+                .ok_or_else(|| {
+                    EvidenceCommandError::bad_request(
+                        "repository Evidence policy defaults.preset_id must be a string",
+                    )
+                })?;
+        let selected_presets = plan_evidence_preset_bindings(
+            &frontmatter,
+            criteria.iter().map(|criterion| criterion.id.as_str()),
+            default_preset_id,
+        )?;
+
+        let schemas_by_type = document
+            .policy
+            .observation_schema_registrations
+            .iter()
+            .filter_map(|registration| {
+                Some((
+                    registration.get("type")?.as_str()?.to_string(),
+                    registration.get("schema_ref")?.as_str()?.to_string(),
+                ))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let presets_by_id = document
+            .policy
+            .named_presets
+            .iter()
+            .map(|preset| (preset.id.as_str(), preset))
+            .collect::<BTreeMap<_, _>>();
+
+        let mut obligations = Vec::with_capacity(criteria.len());
+        for criterion in criteria {
+            let preset_id = selected_presets.get(&criterion.id).ok_or_else(|| {
+                EvidenceCommandError::bad_request(format!(
+                    "missing Evidence preset binding for criterion {}",
+                    criterion.id
+                ))
+            })?;
+            let preset = presets_by_id.get(preset_id.as_str()).ok_or_else(|| {
+                EvidenceCommandError::bad_request(format!(
+                    "unknown Evidence preset {preset_id} for criterion {}",
+                    criterion.id
+                ))
+            })?;
+            let mut observations = preset.observations.clone();
+            for observation in &mut observations {
+                let observation_type = observation.observation_type.as_str();
+                let schema_ref = schemas_by_type.get(observation_type).ok_or_else(|| {
+                    EvidenceCommandError::bad_request(format!(
+                        "Evidence preset {preset_id} observation {} has no deterministic schema registration for {observation_type}",
+                        observation.id.as_str()
+                    ))
+                })?;
+                match observation.payload_schema.as_ref() {
+                    Some(existing) if existing.schema_ref != *schema_ref => {
+                        return Err(EvidenceCommandError::bad_request(format!(
+                            "Evidence preset {preset_id} observation {} payload schema {} conflicts with registered schema {schema_ref}",
+                            observation.id.as_str(),
+                            existing.schema_ref
+                        ))
+                        .into());
+                    }
+                    Some(_) => {}
+                    None => {
+                        observation.payload_schema = Some(SchemaReferenceBinding {
+                            schema_ref: schema_ref.clone(),
+                        });
+                    }
+                }
+            }
+            obligations.push(ProofObligation {
+                id: EvidenceId::parse(format!("pob-{plan_id}-{}", criterion.id))?,
+                schema_version: SchemaVersion::v1(),
+                criterion_id: EvidenceId::parse(criterion.id)?,
+                plan_id: EvidenceId::parse(plan_id)?,
+                item_id: None,
+                title: criterion.title,
+                binding: true,
+                observations,
+                fixture_policy: document.policy.fixture_policy.clone(),
+                freshness_policy: document.policy.freshness_policy.clone(),
+                assurance_policy: document.policy.trust_policy.clone(),
+                supersedes: None,
+            });
+        }
+
+        Ok(json!({
+            "schema_version": "planr.evidence.migration.v1",
+            "plan_id": plan_id,
+            "obligations": obligations,
+        }))
     }
 
     fn evidence_migration_value_inner(&self, value: Value, apply: bool) -> Result<Value> {
@@ -4556,6 +4760,75 @@ pub(crate) fn evidence_success_envelope(command: &str, object: Value) -> Value {
     })
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AuthoredPlanEvidence {
+    bindings: Vec<AuthoredPlanEvidenceBinding>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AuthoredPlanEvidenceBinding {
+    criterion_id: String,
+    preset_id: String,
+}
+
+fn plan_evidence_preset_bindings<'a>(
+    frontmatter: &Value,
+    criterion_ids: impl Iterator<Item = &'a str>,
+    default_preset_id: &str,
+) -> Result<BTreeMap<String, String>> {
+    let criterion_ids = criterion_ids.map(str::to_string).collect::<BTreeSet<_>>();
+    let Some(authored) = frontmatter.get("evidence") else {
+        return Ok(criterion_ids
+            .into_iter()
+            .map(|criterion_id| (criterion_id, default_preset_id.to_string()))
+            .collect());
+    };
+    let authored: AuthoredPlanEvidence = serde_json::from_value(authored.clone()).map_err(|error| {
+        EvidenceCommandError::bad_request(format!(
+            "build plan frontmatter evidence must contain only bindings[] of criterion_id and preset_id: {error}"
+        ))
+    })?;
+    let mut selected = BTreeMap::new();
+    for binding in authored.bindings {
+        if binding.criterion_id.trim().is_empty() || binding.preset_id.trim().is_empty() {
+            return Err(EvidenceCommandError::bad_request(
+                "build plan Evidence binding criterion_id and preset_id must be non-empty",
+            )
+            .into());
+        }
+        if selected
+            .insert(binding.criterion_id.clone(), binding.preset_id)
+            .is_some()
+        {
+            return Err(EvidenceCommandError::bad_request(format!(
+                "duplicate Evidence preset binding for criterion {}",
+                binding.criterion_id
+            ))
+            .into());
+        }
+    }
+    let selected_ids = selected.keys().cloned().collect::<BTreeSet<_>>();
+    let missing = criterion_ids
+        .difference(&selected_ids)
+        .cloned()
+        .collect::<Vec<_>>();
+    let undeclared = selected_ids
+        .difference(&criterion_ids)
+        .cloned()
+        .collect::<Vec<_>>();
+    if !missing.is_empty() || !undeclared.is_empty() {
+        return Err(EvidenceCommandError::bad_request(format!(
+            "build plan Evidence bindings must match declared criteria exactly (missing: {}; undeclared: {})",
+            if missing.is_empty() { "none".to_string() } else { missing.join(",") },
+            if undeclared.is_empty() { "none".to_string() } else { undeclared.join(",") },
+        ))
+        .into());
+    }
+    Ok(selected)
+}
+
 pub(crate) fn evidence_error_envelope(command: &str, error: &anyhow::Error) -> Value {
     let message = error.to_string();
     let code = evidence_error_code(error, &message);
@@ -4575,12 +4848,22 @@ pub(crate) fn evidence_error_code(error: &anyhow::Error, message: &str) -> &'sta
         .unwrap_or_else(|| crate::util::infer_error_code(message))
 }
 
-pub(crate) fn evidence_migration_request(value: &Value) -> Result<(Value, bool)> {
+pub(crate) enum EvidenceMigrationRequestSource {
+    Input(Value),
+    FromPlan(String),
+}
+
+pub(crate) fn evidence_migration_request(
+    value: &Value,
+) -> Result<(EvidenceMigrationRequestSource, bool)> {
     let object = value.as_object().ok_or_else(|| {
         EvidenceCommandError::bad_request("evidence migrate request must be a JSON object")
     })?;
-    if object.contains_key("input") || object.contains_key("apply") {
-        let allowed = BTreeSet::from(["input", "apply"]);
+    if object.contains_key("input")
+        || object.contains_key("from_plan")
+        || object.contains_key("apply")
+    {
+        let allowed = BTreeSet::from(["input", "from_plan", "apply"]);
         let unknown = object
             .keys()
             .filter(|key| !allowed.contains(key.as_str()))
@@ -4593,15 +4876,34 @@ pub(crate) fn evidence_migration_request(value: &Value) -> Result<(Value, bool)>
             ))
             .into());
         }
-        let input = object.get("input").cloned().ok_or_else(|| {
-            EvidenceCommandError::bad_request("evidence migrate request requires input")
-        })?;
-        if !input.is_object() {
-            return Err(EvidenceCommandError::bad_request(
-                "evidence migrate request input must be a JSON object",
-            )
-            .into());
-        }
+        let source = match (object.get("input"), object.get("from_plan")) {
+            (Some(input), None) if input.is_object() => {
+                EvidenceMigrationRequestSource::Input(input.clone())
+            }
+            (Some(_), None) => {
+                return Err(EvidenceCommandError::bad_request(
+                    "evidence migrate request input must be a JSON object",
+                )
+                .into());
+            }
+            (None, Some(from_plan)) => {
+                let from_plan = from_plan
+                    .as_str()
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        EvidenceCommandError::bad_request(
+                            "evidence migrate request from_plan must be a non-empty string",
+                        )
+                    })?;
+                EvidenceMigrationRequestSource::FromPlan(from_plan.to_string())
+            }
+            _ => {
+                return Err(EvidenceCommandError::bad_request(
+                    "evidence migrate request requires exactly one of input or from_plan",
+                )
+                .into());
+            }
+        };
         let apply = match object.get("apply") {
             Some(value) => value.as_bool().ok_or_else(|| {
                 EvidenceCommandError::bad_request(
@@ -4610,9 +4912,9 @@ pub(crate) fn evidence_migration_request(value: &Value) -> Result<(Value, bool)>
             })?,
             None => false,
         };
-        Ok((input, apply))
+        Ok((source, apply))
     } else {
-        Ok((value.clone(), false))
+        Ok((EvidenceMigrationRequestSource::Input(value.clone()), false))
     }
 }
 
@@ -5439,6 +5741,66 @@ where
 mod tests {
     use super::*;
     use std::time::Instant;
+
+    #[test]
+    fn plan_evidence_preset_binding_shape_is_closed_exact_and_defaultable() {
+        let defaults = plan_evidence_preset_bindings(
+            &json!({}),
+            ["criterion-a", "criterion-b"].into_iter(),
+            "default-live",
+        )
+        .unwrap();
+        assert_eq!(defaults["criterion-a"], "default-live");
+        assert_eq!(defaults["criterion-b"], "default-live");
+
+        let exact = plan_evidence_preset_bindings(
+            &json!({"evidence": {"bindings": [
+                {"criterion_id": "criterion-a", "preset_id": "browser-a"},
+                {"criterion_id": "criterion-b", "preset_id": "api-b"}
+            ]}}),
+            ["criterion-a", "criterion-b"].into_iter(),
+            "default-live",
+        )
+        .unwrap();
+        assert_eq!(exact["criterion-a"], "browser-a");
+        assert_eq!(exact["criterion-b"], "api-b");
+
+        for (frontmatter, message) in [
+            (
+                json!({"evidence": {"bindings": [
+                    {"criterion_id": "criterion-a", "preset_id": "browser-a"}
+                ]}}),
+                "missing: criterion-b",
+            ),
+            (
+                json!({"evidence": {"bindings": [
+                    {"criterion_id": "criterion-a", "preset_id": "browser-a"},
+                    {"criterion_id": "criterion-a", "preset_id": "browser-b"}
+                ]}}),
+                "duplicate Evidence preset binding",
+            ),
+            (
+                json!({"evidence": {"bindings": [
+                    {"criterion_id": "criterion-a", "preset_id": "browser-a"},
+                    {"criterion_id": "criterion-b", "preset_id": "api-b"},
+                    {"criterion_id": "criterion-c", "preset_id": "foreign"}
+                ]}}),
+                "undeclared: criterion-c",
+            ),
+            (
+                json!({"evidence": {"bindings": [], "payload_schema": {}}}),
+                "unknown field",
+            ),
+        ] {
+            let error = plan_evidence_preset_bindings(
+                &frontmatter,
+                ["criterion-a", "criterion-b"].into_iter(),
+                "default-live",
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains(message), "{error}");
+        }
+    }
 
     #[test]
     fn public_evidence_input_rejects_agent_supplied_attempt_and_receipt_objects() {

@@ -25,8 +25,9 @@ impl App {
             ),
             ("POST", "/v1/evidence/migrate") => http_evidence_json(
                 "evidence.migrate",
-                super::evidence::evidence_migration_request(body_json)
-                    .and_then(|(input, apply)| self.evidence_migration_value(input, apply)),
+                super::evidence::evidence_migration_request(body_json).and_then(
+                    |(source, apply)| self.execute_evidence_migration_request(source, apply),
+                ),
             ),
             ("GET", "/v1/evidence/classifications") => http_evidence_json(
                 "evidence.classifications",

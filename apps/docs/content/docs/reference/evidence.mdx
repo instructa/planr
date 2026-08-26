@@ -27,6 +27,8 @@ planr evidence coverage --scope item --id <item-id> --json
 planr evidence coverage --scope plan --id <plan-id> --json
 planr evidence explain --scope plan --id <plan-id> --json
 planr evidence readiness --scope plan --id <plan-id> --json
+planr evidence migrate --from-plan <plan-id> --json
+planr evidence migrate --from-plan <plan-id> --apply --json
 planr evidence migrate --input migration.json --json
 planr evidence migrate --input migration.json --apply --json
 planr evidence classifications --json
@@ -34,7 +36,9 @@ planr evidence classifications --json
 
 Exit code `0` means the command succeeded and the Evidence verdict is passing or informational. Exit code `2` is an unsatisfied Evidence verdict. Exit code `3` is blocked. Exit code `1` is request or execution error. The JSON envelope carries `schema`, `command`, `ok`, `object` or `error`, and `exit.code`.
 
-`planr evidence migrate --apply` is the only public writer for proof obligations. Obligation CLI, MCP, and HTTP surfaces are read-only.
+Applied migration is the only public writer for proof obligations. `--from-plan` compiles checked
+criterion preset references into the same migration before applying it; it is not a second writer.
+Obligation CLI, MCP, and HTTP surfaces are read-only.
 
 ## MCP Tools
 
@@ -112,14 +116,37 @@ These fields are rejected in public run input because only Planr can construct t
 
 ## Migration
 
-Migration turns pre-Evidence plan criteria into immutable `ProofObligation` rows.
+The normal path compiles checked build-plan criteria and repository-owned named presets into
+immutable `ProofObligation` rows:
+
+```yaml
+criteria:
+  - id: criterion-live-search
+    title: Live search results render
+evidence:
+  bindings:
+    - criterion_id: criterion-live-search
+      preset_id: browser-live-search
+```
+
+```bash
+planr evidence migrate --from-plan <plan-id> --json
+planr evidence migrate --from-plan <plan-id> --apply --json
+```
+
+The repository policy supplies the observation schema and registered capability. Users, planning
+skills, and benchmark runners do not write `payload_schema`. If `evidence.bindings` is omitted, the
+repository default preset applies to every criterion. When present, the binding list must match the
+declared criterion set exactly.
+
+Repository owners can still provide a full migration for custom or superseding obligations:
 
 ```bash
 planr evidence migrate --input migration.json --json
 planr evidence migrate --input migration.json --apply --json
 ```
 
-Preview is the default and does not write obligations. Apply is idempotent: duplicate IDs, lineage collisions, cross-project containment, and changed immutable fields are reported instead of silently rewriting history. Migration does not rewrite plans, logs, reviews, artifacts, or legacy claims.
+Preview is the default and does not write obligations. Apply is idempotent: duplicate IDs, lineage collisions, cross-project containment, and changed immutable fields are reported instead of silently rewriting history. Compilation and migration do not rewrite plans, logs, reviews, artifacts, or legacy claims.
 
 ## Verify a binding plan
 

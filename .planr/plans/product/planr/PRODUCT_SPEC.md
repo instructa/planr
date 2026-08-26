@@ -111,6 +111,12 @@ Planr turns broad product ideas and coding work into a coherent flow: product pl
   preserves the freeze, ends or preserves-ended the batch, releases exact roles/reservations and
   the exact observed optional item state, preserves all Evidence/history identities, emits one
   event, and creates no successor. Ordinary pick alone may later create a successor.
+- REQ-PROD-EVIDENCE-016: A checked build plan may reference repository-owned named Evidence presets
+  through a separate exact criterion binding list. The explicit `evidence migrate --from-plan`
+  application compiles those references and the policy's deterministic observation-schema
+  registrations into `planr.evidence.migration.v1`, then delegates to the sole migration writer.
+  Users, skills, benchmark runners, CLI, MCP, and HTTP never author `payload_schema`; missing,
+  duplicate, undeclared, unknown-preset, or unresolved-schema bindings fail atomically before work.
 
 ## Ordinary Outcomes And Premature Source-Freeze Recovery
 

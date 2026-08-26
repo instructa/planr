@@ -8,7 +8,8 @@ These tasks are implementation-ready work items for coding agents. They intentio
 
 Keep `src/execution_run.rs` as the single classification and transition owner. Treat planned code/fix/docs/test as ordinary implementation outcomes everywhere settlement, pick, handoff, freeze, verification continuation, and recovery need maker compatibility. Diagnose only an active premature freeze with open ordinary outcomes and zero verification activity; atomically retire the run, end batch/roles, release active ordinary leases, preserve ready/pending work plus freeze/history, and expose the typed result through CLI and MCP. Successor creation stays on ordinary pick. Add no stale-source alias, code-only semantic list, database repair, compatibility reader, plan-specific path, or adapter/UI policy owner.
 
-Acceptance: BUILD compilation and ownership evidence pass without test edits; one public code-to-fix lifecycle invariant is admitted separately in HARDEN through the registered no-model capability.
+Acceptance: compilation and ownership checks pass, and the canonical E2E suite proves the public
+code-to-fix lifecycle through the registered no-model capability.
 
 ## Alpha 6 Binding Evidence Hard Cut
 
@@ -16,7 +17,7 @@ Acceptance: BUILD compilation and ownership evidence pass without test edits; on
 
 Keep typed build-plan frontmatter as criterion identity authority and `app/proof` as the sole completeness owner; reject zero, partial, duplicate, and undeclared binding sets before implementation, readiness, coverage settlement, and closure; persist a capability hold when verifier readiness fails; remove claim-log, partial-row, and empty-lineage compatibility authority; retain explicit migration as the only obligation writer.
 
-Acceptance: `cargo check --lib` passes, followed by one focused lifecycle invariant in the separate hardening phase.
+Acceptance: `cargo check --lib` and the focused lifecycle invariant pass.
 
 ## Binding Evidence Multi-Target And Itemless Repair Hard Cut
 
@@ -62,8 +63,8 @@ verifier/environment failure. Always reconcile budget and persist phase/role cha
 `execution_run` pure, coverage unchanged, and add no item synthesis, alternate API, compatibility
 path, direct DB path, or plan exception.
 
-Acceptance: BUILD compiles the relevant binaries without tracked-test edits or test execution; one
-separate HARDEN invariant in existing `tests/e2e.rs` covers itemless pass settlement with direct
+Acceptance: the relevant binaries compile, and the existing canonical invariant in `tests/e2e.rs`
+covers itemless pass settlement with direct
 binding completion and no final ReviewGate, terminal exhaustion, and ready-unleased failure through
 the registered no-model capability.
 
@@ -79,8 +80,8 @@ table through repository-owned schema evolution; add no sentinel, dual column, c
 coercion, fallback, or direct database repair. Preserve pure transitions, repository atomicity,
 ProductFinding classification, selective obligations, and zero receipt creation.
 
-Acceptance: one Sol-only BUILD compile and open-item progress log are followed by a separate HARDEN
-contract admitting at most one invariant to one existing test file within 100 added lines.
+Acceptance: compilation passes, the open-item progress log is recorded, and the smallest focused
+invariant is consolidated into the existing canonical test suite.
 
 ## Canonical Inconsistent Verification Retirement
 
@@ -90,11 +91,11 @@ Keep exact current-invariant classification and pure retirement in `execution_ru
 diagnosis in `app/feature_run_evidence`, one immediate repository transaction, and one
 execution-state projection. Hard-cut missing/stale admission and surface-local policy. Preserve all
 Evidence/history, invalidate but retain the freeze, finish exact runtime ownership, create no
-successor, and register only the future deterministic no-model capability. BUILD edits no tests and
-executes no Evidence; HARDEN separately owns the one exact existing-file invariant.
+successor, and register only the future deterministic no-model capability. Verification uses the
+one exact existing-file invariant through the canonical Evidence path.
 
-Acceptance: `cargo check --bin planr` passes under the BUILD contract, the schema/manifest digests
-are registered, ownership audit has one winner per layer, and BUILD stops before HARDEN.
+Acceptance: `cargo check --bin planr` and the focused invariant pass, the schema/manifest digests
+are registered, and the ownership audit has one winner per layer.
 
 ## V1.1 Differentiation
 

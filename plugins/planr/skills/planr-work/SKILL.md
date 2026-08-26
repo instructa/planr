@@ -5,11 +5,8 @@ description: Execute one Planr outcome item to evidence-backed settlement in its
 
 # Planr Work
 
-Before product implementation that requires binding Evidence, inspect the
-repository's existing Evidence policy and configured capability. If either is
-absent, record the exact gap code, capability, and next action, then stop. Do not
-create or weaken verification infrastructure to bypass the hold unless repairing
-that infrastructure is the explicit task.
+Read and apply the canonical [Evidence ownership guard](../planr/SKILL.md#evidence-ownership-guard)
+before product implementation. Do not duplicate or reinterpret it here.
 
 Use this for one picked item at a time.
 

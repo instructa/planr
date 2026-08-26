@@ -13703,7 +13703,7 @@ fn evidence_migration_explicitly_binds_pre_evidence_plans_without_rewriting_clai
     let pre_audit_human = run_human(&["plan", "audit", &plan_id]);
     assert!(
         pre_audit_human.contains(&format!(
-            "planr evidence migrate --input <migration-file-for-plan-{plan_id}> --apply"
+            "planr evidence migrate --from-plan {plan_id} --apply"
         )),
         "{pre_audit_human}"
     );
@@ -14588,6 +14588,175 @@ fn complete_binding_plan_criteria_contract_rejects_invalid_identity_sets() {
 }
 
 #[test]
+fn evidence_from_plan_compiles_named_presets_through_the_canonical_migration() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join(".planr/planr.sqlite");
+    let db_arg = db.to_str().unwrap().to_string();
+    write_evidence_policy_fixture(dir.path());
+    init_git_repo(dir.path());
+    init_evidence_project(dir.path(), &db, "From Plan Evidence Compilation");
+    let run = |args: &[&str]| -> Value {
+        single_json_document(
+            &planr()
+                .current_dir(dir.path())
+                .args(["--db", &db_arg, "--json"])
+                .args(args)
+                .assert()
+                .success()
+                .get_output()
+                .stdout,
+        )
+    };
+    let run_failure = |args: &[&str]| -> Value {
+        single_json_document(
+            &planr()
+                .current_dir(dir.path())
+                .args(["--db", &db_arg, "--json"])
+                .args(args)
+                .assert()
+                .failure()
+                .get_output()
+                .stdout,
+        )
+    };
+
+    let product = run(&["plan", "new", "From Plan Product"]);
+    let build = run(&[
+        "plan",
+        "split",
+        product["plan"]["id"].as_str().unwrap(),
+        "--slice",
+        "Preset-bound Evidence",
+    ]);
+    let plan_id = build["plan"]["id"].as_str().unwrap().to_string();
+    let build_path = build["plan"]["path"].as_str().unwrap();
+    let build_scaffold = fs::read_to_string(build_path).unwrap();
+    let criteria_start = build_scaffold.find("criteria:\n").unwrap();
+    fs::write(
+        build_path,
+        format!(
+            "{}criteria:\n  - id: criterion-live-health\n    title: Live health is observed\nevidence:\n  bindings:\n    - criterion_id: criterion-live-health\n      preset_id: health\n---\n\n# Preset-bound Evidence\n\n## Scope Decision\n\nCompile repository presets.\n\n## Verification\n\nUse the registered health capability.\n\n## Acceptance Criteria\n\nThe compiled obligation owns the registered schema.\n\n### TASK-001: Compile Evidence\n\nApply the named preset.\n",
+            &build_scaffold[..criteria_start]
+        ),
+    )
+    .unwrap();
+    let checked = run(&["plan", "check", &plan_id]);
+    assert_eq!(checked["ok"], true, "{checked}");
+
+    let preview = run(&["evidence", "migrate", "--from-plan", &plan_id]);
+    assert_evidence_envelope(&preview, "evidence.migrate", true);
+    assert_eq!(preview["object"]["dry_run"], true, "{preview}");
+    assert_eq!(preview["object"]["summary"]["create"], 1, "{preview}");
+    assert_eq!(
+        preview["object"]["compiled_from"]["kind"], "build_plan_presets",
+        "{preview}"
+    );
+    assert_eq!(
+        preview["object"]["next_action"],
+        format!("run planr evidence migrate --from-plan {plan_id} --apply")
+    );
+    assert!(
+        run(&["evidence", "obligation", "list", "--plan", &plan_id])["object"]["obligations"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "preview must not materialize obligations"
+    );
+
+    let mcp_preview = mcp_tool(
+        dir.path(),
+        &db,
+        901,
+        "planr_evidence_migrate",
+        json!({"from_plan": plan_id}),
+    );
+    assert_eq!(mcp_preview["object"]["summary"]["create"], 1);
+    assert_eq!(mcp_preview["object"]["dry_run"], true);
+    let both_sources = mcp_tool_response(
+        dir.path(),
+        &db,
+        902,
+        "planr_evidence_migrate",
+        json!({"from_plan": plan_id, "input": {}}),
+    );
+    assert_mcp_evidence_error(
+        &both_sources,
+        "evidence.migrate",
+        "bad_request",
+        "requires exactly one of input or from_plan",
+    );
+
+    let applied = run(&["evidence", "migrate", "--from-plan", &plan_id, "--apply"]);
+    assert_eq!(applied["object"]["status"], "applied", "{applied}");
+    assert_eq!(applied["object"]["summary"]["create"], 1, "{applied}");
+    assert_eq!(
+        applied["object"]["next_action"],
+        format!("run planr evidence readiness --scope plan --id {plan_id}")
+    );
+    let obligations = run(&["evidence", "obligation", "list", "--plan", &plan_id]);
+    let obligation = &obligations["object"]["obligations"][0];
+    assert_eq!(obligation["criterion_id"], "criterion-live-health");
+    assert_eq!(
+        obligation["observations"][0]["type"],
+        "com.example.health.status"
+    );
+    assert_eq!(
+        obligation["observations"][0]["payload_schema"]["schema_ref"],
+        "schema://com.example.health.status"
+    );
+    let reapplied = run(&["evidence", "migrate", "--from-plan", &plan_id, "--apply"]);
+    assert_eq!(reapplied["object"]["summary"]["unchanged"], 1);
+    assert_eq!(reapplied["object"]["summary"]["create"], 0);
+
+    let invalid_product = run(&["plan", "new", "Invalid Preset Product"]);
+    let invalid_build = run(&[
+        "plan",
+        "split",
+        invalid_product["plan"]["id"].as_str().unwrap(),
+        "--slice",
+        "Unknown preset",
+    ]);
+    let invalid_plan_id = invalid_build["plan"]["id"].as_str().unwrap().to_string();
+    let invalid_build_path = invalid_build["plan"]["path"].as_str().unwrap();
+    let invalid_scaffold = fs::read_to_string(invalid_build_path).unwrap();
+    let invalid_criteria_start = invalid_scaffold.find("criteria:\n").unwrap();
+    fs::write(
+        invalid_build_path,
+        format!(
+            "{}criteria:\n  - id: criterion-unknown-preset\n    title: Unknown preset fails closed\nevidence:\n  bindings:\n    - criterion_id: criterion-unknown-preset\n      preset_id: missing-preset\n---\n\n# Unknown preset\n\n## Scope Decision\n\nReject unknown policy references.\n\n## Verification\n\nCheck atomic failure.\n\n## Acceptance Criteria\n\nNo obligation is created.\n\n### TASK-001: Reject Evidence\n\nFail before mutation.\n",
+            &invalid_scaffold[..invalid_criteria_start]
+        ),
+    )
+    .unwrap();
+    let invalid = run_failure(&[
+        "evidence",
+        "migrate",
+        "--from-plan",
+        &invalid_plan_id,
+        "--apply",
+    ]);
+    assert_evidence_error(
+        &invalid,
+        "evidence.migrate",
+        "bad_request",
+        "unknown Evidence preset missing-preset",
+    );
+    assert!(
+        run(&[
+            "evidence",
+            "obligation",
+            "list",
+            "--plan",
+            &invalid_plan_id,
+        ])["object"]["obligations"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "invalid preset compilation must be atomic"
+    );
+}
+
+#[test]
 fn complete_binding_authority_requires_the_exact_declared_criterion_set() {
     let dir = tempdir().unwrap();
     let db = dir.path().join(".planr/planr.sqlite");
@@ -14867,7 +15036,10 @@ fn complete_binding_single_owner_inventory_keeps_adapter_at_boundary() {
     assert!(
         plan_skill.contains("readable narrative, never an identity source")
             && plan_skill.contains("Do not infer criterion IDs from prose")
-            && goal_skill.contains("Never write obligations directly")
+            && plan_skill.contains("planr evidence migrate --from-plan <build-plan-id> --apply")
+            && plan_skill.contains("Never write `payload_schema`")
+            && goal_skill.contains("Never write obligations, payload schemas")
+            && goal_skill.contains("planr evidence migrate --from-plan <plan-id> --apply")
             && goal_skill.contains("duplicate `app/proof` completeness rules"),
         "Planr skills must delegate identity and completeness to canonical owners"
     );

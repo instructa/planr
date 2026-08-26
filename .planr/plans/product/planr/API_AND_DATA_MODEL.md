@@ -17,6 +17,13 @@ Eval Contract v1, including the additive v1.1 efficiency-evidence amendment, is 
 
 `PlanEvidenceAuthority = nonbinding | binding_unsatisfied | binding_active` is a derived application value, not stored mutable state. Typed build-plan frontmatter owns the declared criterion IDs. `nonbinding` requires no binding repository policy and no binding plan obligations. `binding_unsatisfied` means a binding plan's authoritative active obligations do not exactly match its declared criterion set, including zero, partial, duplicate, or undeclared bindings. `binding_active` means the sets match exactly. Only `binding_active` can enter verification; only `nonbinding` can use the direct source-frozen final-review route.
 
+An optional build-plan `evidence.bindings[]` list contains only `{criterion_id, preset_id}` and must
+match the declared criterion set exactly when present. It does not own criterion identity or any
+trusted state. `planr evidence migrate --from-plan <plan-id> [--apply]`, MCP
+`planr_evidence_migrate {from_plan, apply}`, and `POST /v1/evidence/migrate` reuse one application
+compiler. The compiler resolves policy-owned preset observations and schema registrations into the
+existing explicit migration contract; the existing migration remains the sole obligation writer.
+
 ### FeatureRunBudgetContract
 
 `schema = planr.feature_run_budget_contract.v2`; run id; persisted UTC run-start anchor and clock basis; explicit `bounded | unbounded` mode; optional complete wall-seconds/tool-call/token limits and five-phase allocations; per-dimension metering requirements; canonical SHA-256 digest. The contract is insert-only and is created in the same transaction as its FeatureRun. Bounded mode requires positive limits and an exact allocation of each dimension across maker, verification, review, repair, and release. Unbounded mode has neither limits nor phase reserves.
