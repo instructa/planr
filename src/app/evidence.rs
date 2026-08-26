@@ -1392,6 +1392,14 @@ impl App {
             );
         }
         if let Some(execution_state) = self.canonical_execution_state_for_plan_value(id)?
+            && execution_state["phase"] == "implementation"
+            && ExecutionRunRepository::new(&self.conn)
+                .open_ordinary_outcome_ids(id)?
+                .is_empty()
+        {
+            self.freeze_feature_run_source_value(id)?;
+        }
+        if let Some(execution_state) = self.canonical_execution_state_for_plan_value(id)?
             && execution_state["phase"] == "held"
             && execution_state["feature_run"]["hold_reason"] == "capability"
         {
@@ -1490,7 +1498,8 @@ impl App {
                 EvidenceCommandError::internal("passed readiness has no sealed run index")
             })?;
         let run_index_digest = run_index["run_index_digest"].clone();
-        let mut result = self.evidence_run_value(run_index)?;
+        let full_result = self.evidence_run_value(run_index)?;
+        let mut result = compact_verification_broker_result(&full_result);
         result["verification_broker"] = json!({
             "plan_id": id,
             "stage": "settled",
@@ -4497,6 +4506,46 @@ fn evidence_run_index_verdict(results: &[Value]) -> &'static str {
     verdict
 }
 
+fn compact_verification_broker_result(full: &Value) -> Value {
+    let results = full["results"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|result| {
+            json!({
+                "verdict": result["verdict"],
+                "attempt_id": result["attempt"]["id"],
+                "receipt_id": result["receipt"]["id"],
+                "receipt_digest": result["receipt_digest"],
+                "obligation_id": result["attempt"]["obligation_id"],
+                "reused": result["reused"],
+                "product_finding": result["product_finding"],
+                "terminal_exhaustion": result["terminal_exhaustion"],
+            })
+        })
+        .collect::<Vec<_>>();
+    let coverage = &full["coverage"];
+    json!({
+        "schema_version": "planr.evidence.verification-result.v1",
+        "status": full["status"],
+        "verdict": full["verdict"],
+        "run_index_digest": full["run_index_digest"],
+        "results": results,
+        "coverage": {
+            "status": coverage["status"],
+            "canonical_projection": coverage["canonical_projection"],
+            "gaps": coverage["gaps"],
+        },
+        "feature_run_verification_settlement": full["feature_run_verification_settlement"],
+        "terminal_exhaustion": full["terminal_exhaustion"],
+        "durable_records": {
+            "attempts": "planr evidence attempts --obligation <obligation-id> --json",
+            "receipts": "planr evidence receipts --obligation <obligation-id> --json",
+            "coverage": "planr evidence coverage --scope plan --id <plan-id> --json",
+        },
+    })
+}
+
 pub(crate) fn evidence_success_envelope(command: &str, object: Value) -> Value {
     json!({
         "schema": "planr.evidence.command.v1",
@@ -5481,6 +5530,34 @@ mod tests {
             evidence_run_verdict(AttemptStatus::Failed, &exit, &json!({})),
             "failed"
         );
+    }
+
+    #[test]
+    fn verification_broker_result_is_compact_and_points_to_durable_records() {
+        let compact = compact_verification_broker_result(&json!({
+            "status": "passed",
+            "verdict": "passed",
+            "run_index_digest": "sha256:run",
+            "results": [{
+                "verdict": "passed",
+                "attempt": {"id": "attempt-1", "obligation_id": "pob-1", "raw_result": {"large": "payload"}},
+                "receipt": {"id": "receipt-1", "observations": [{"large": "payload"}]},
+                "receipt_digest": "sha256:receipt",
+                "reused": false,
+                "product_finding": null,
+                "terminal_exhaustion": null
+            }],
+            "coverage": {"status": "satisfied", "canonical_projection": {"pass": true}, "gaps": []},
+            "feature_run_verification_settlement": {"status": "settled"},
+            "terminal_exhaustion": null
+        }));
+        assert_eq!(compact["results"][0]["attempt_id"], "attempt-1");
+        assert_eq!(compact["results"][0]["receipt_id"], "receipt-1");
+        assert_eq!(compact["coverage"]["status"], "satisfied");
+        let encoded = serde_json::to_string(&compact).unwrap();
+        assert!(!encoded.contains("raw_result"));
+        assert!(!encoded.contains("observations"));
+        assert!(encoded.len() < 1500, "{encoded}");
     }
 
     #[test]

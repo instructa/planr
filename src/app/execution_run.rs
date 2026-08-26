@@ -894,7 +894,7 @@ impl App {
         &self,
         input: OutcomeSettlement<'_>,
     ) -> Result<OutcomeSettlementTransition> {
-        let Some(persisted) = self.ensure_outcome_feature_run(input.item_id)? else {
+        let Some(mut persisted) = self.ensure_outcome_feature_run(input.item_id)? else {
             return Ok(OutcomeSettlementTransition::freshly_recorded(
                 json!({"kind": "outcome", "transition": "legacy_unplanned"}),
                 input.materiality,
@@ -932,7 +932,10 @@ impl App {
             bail!("feature_run_not_accepting_outcomes:{}", persisted.run.id);
         }
         if persisted.run.batch_outcome_count >= DEFAULT_BATCH_OUTCOME_CAP {
-            bail!("feature_run_batch_cap_reached:{}", persisted.run.id);
+            self.roll_feature_run_batch_value(&persisted.run.plan_id, &worker_id())?;
+            persisted = self
+                .ensure_outcome_feature_run(input.item_id)?
+                .ok_or_else(|| anyhow!("feature_run_missing_after_batch_roll"))?;
         }
         let maker = persisted
             .run
@@ -2280,20 +2283,6 @@ mod tests {
             })
             .expect("third settlement");
         assert_eq!(third["transition"], "batch_cap_reached");
-        let run_id = third["run_id"].as_str().unwrap();
-        let before = ExecutionRunRepository::new(&app.conn)
-            .feature_run(run_id)
-            .expect("run before roll");
-        let rolled = app
-            .roll_feature_run_batch_value("plan-a", &worker_id())
-            .expect("same-maker roll");
-        assert_eq!(rolled["reason"], "same_maker_batch_rolled");
-        assert_eq!(rolled["ended_batch"]["replacement"], Value::Null);
-        assert_eq!(rolled["feature_run"]["batch_outcome_count"], 0);
-        assert_eq!(
-            rolled["feature_run"]["role_owners"],
-            json!(before.run.role_owners)
-        );
         let fourth = app
             .settle_feature_run_outcome(OutcomeSettlement {
                 item_id: "item-d",
@@ -2305,6 +2294,10 @@ mod tests {
         assert_eq!(fourth["transition"], "continue_batch");
         assert_eq!(fourth["batch_outcome_count"], 1);
         assert_ne!(fourth["batch_id"], third["batch_id"]);
+        let persisted = ExecutionRunRepository::new(&app.conn)
+            .feature_run(third["run_id"].as_str().unwrap())
+            .expect("run after automatic roll");
+        assert_eq!(persisted.run.role_owners[0].worker_id, worker_id());
         assert_eq!(
             app.conn
                 .query_row("SELECT COUNT(*) FROM review_gates", [], |row| row

@@ -1,0 +1,30 @@
+{
+  "schema_version": "planr.evidence.adapter-request.v1",
+  "request_id": "ereq-form-live",
+  "request_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "execution_contract_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "target": { "kind": "browser", "uri": "http://127.0.0.1:43128/form.html" },
+  "environment": { "kind": "local", "id": "browser-local", "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" },
+  "fixture_disclosure": { "fixtures_used": false, "mocks_used": false },
+  "result_contract": { "schema_ref": "schema://planr.structured_observation_results.v2" },
+  "requirements": [
+    {
+      "id": "obs-form-state",
+      "type": "com.planr.web.dom_state",
+      "subject": "#status",
+      "expected": { "text": "Pikachu:electric", "visible": true },
+      "target": { "kind": "browser", "uri": "http://127.0.0.1:43128/form.html" },
+      "payload_schema": { "schema_ref": "schema://com.planr.web.dom_state.v1" },
+      "execution_method": {
+        "kind": "agent_skill",
+        "skill": "browser-harness",
+        "result_schema": { "schema_ref": "planr.evidence.agent-skill-result.v1" }
+      },
+      "state_transitions": [
+        { "action": "fill", "subject": "#name", "value": "Pikachu" },
+        { "action": "select", "subject": "#type", "value": "electric" },
+        { "action": "click", "role": "button", "name": "Apply" }
+      ]
+    }
+  ]
+}

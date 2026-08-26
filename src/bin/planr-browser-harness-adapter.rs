@@ -39,6 +39,32 @@ def click_accessible(role, name):
     y = sum(quad[1::2]) / 4
     click_at_xy(x, y)
 
+def set_control(selector, value, action):
+    expression = (
+        "(()=>{const e=document.querySelector(" + json.dumps(selector) + ");"
+        "if(!e)return {ok:false,reason:'missing'};"
+        "if(e.disabled)return {ok:false,reason:'disabled'};"
+        "const action=" + json.dumps(action) + ";"
+        "if(action==='fill'&&!['INPUT','TEXTAREA'].includes(e.tagName))"
+        "return {ok:false,reason:'not-fillable'};"
+        "if(action==='select'&&e.tagName!=='SELECT')"
+        "return {ok:false,reason:'not-select'};"
+        "const value=" + json.dumps(value) + ";"
+        "if(action==='select'&&![...e.options].some(o=>o.value===value&&!o.disabled))"
+        "return {ok:false,reason:'option-unavailable'};"
+        "const prototype=e.tagName==='SELECT'?HTMLSelectElement.prototype:"
+        "e.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;"
+        "const setter=Object.getOwnPropertyDescriptor(prototype,'value').set;"
+        "setter.call(e,value);"
+        "e.dispatchEvent(new Event('input',{bubbles:true}));"
+        "e.dispatchEvent(new Event('change',{bubbles:true}));"
+        "return {ok:e.value===value,value:e.value};})()"
+    )
+    result = js(expression)
+    if not result or not result.get("ok"):
+        reason = (result or {}).get("reason", "unknown")
+        raise RuntimeError(f"{action} failed for {selector!r}: {reason}")
+
 def observe(selector):
     expression = (
         "(()=>{const e=document.querySelector(" + json.dumps(selector) + ");"
@@ -62,7 +88,11 @@ try:
     if transitions:
         activate_tab(tab)
     for transition in transitions:
-        click_accessible(transition["role"], transition["name"])
+        action = transition["action"]
+        if action == "click":
+            click_accessible(transition["role"], transition["name"])
+        else:
+            set_control(transition["subject"], transition["value"], action)
 
     observations = []
     statuses = []
@@ -309,25 +339,48 @@ fn validate_transitions(transitions: &Value) -> Result<()> {
     let transitions = transitions
         .as_array()
         .context("Browser Harness state_transitions must be an array")?;
+    if transitions.len() > 64 {
+        bail!("Browser Harness supports at most 64 state transitions per batch");
+    }
     for transition in transitions {
         let object = transition
             .as_object()
             .context("Browser Harness state transition must be an object")?;
-        if object.len() != 3
-            || object.get("action").and_then(Value::as_str) != Some("click")
-            || object
-                .get("role")
-                .and_then(Value::as_str)
-                .is_none_or(str::is_empty)
-            || object
-                .get("name")
-                .and_then(Value::as_str)
-                .is_none_or(str::is_empty)
-        {
-            bail!("Browser Harness supports only click transitions with role and name");
+        match object.get("action").and_then(Value::as_str) {
+            Some("click") => {
+                if object.len() != 3
+                    || !bounded_nonempty_string(object.get("role"), 128)
+                    || !bounded_nonempty_string(object.get("name"), 512)
+                {
+                    bail!("Browser Harness click transitions require only action, role, and name");
+                }
+            }
+            Some("fill" | "select") => {
+                if object.len() != 3
+                    || !bounded_nonempty_string(object.get("subject"), 1024)
+                    || !bounded_string(object.get("value"), 4096)
+                {
+                    bail!(
+                        "Browser Harness fill/select transitions require only action, subject, and value"
+                    );
+                }
+            }
+            _ => bail!("Browser Harness supports only click, fill, and select transitions"),
         }
     }
     Ok(())
+}
+
+fn bounded_nonempty_string(value: Option<&Value>, max_len: usize) -> bool {
+    value
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.is_empty() && value.len() <= max_len)
+}
+
+fn bounded_string(value: Option<&Value>, max_len: usize) -> bool {
+    value
+        .and_then(Value::as_str)
+        .is_some_and(|value| value.len() <= max_len)
 }
 
 fn browser_script(request: &Value) -> Result<String> {
@@ -403,7 +456,11 @@ mod tests {
                     "skill": "browser-harness",
                     "result_schema": {"schema_ref": "planr.evidence.agent-skill-result.v1"}
                 },
-                "state_transitions": [{"action": "click", "role": "button", "name": "Advance"}]
+                "state_transitions": [
+                    {"action": "fill", "subject": "#name", "value": "Pikachu"},
+                    {"action": "select", "subject": "#type", "value": "electric"},
+                    {"action": "click", "role": "button", "name": "Advance"}
+                ]
             }]
         })
     }
@@ -414,6 +471,7 @@ mod tests {
         validate_request(&request).unwrap();
         let script = browser_script(&request).unwrap();
         assert!(script.contains("click_accessible"));
+        assert!(script.contains("set_control"));
         assert!(script.contains("if transitions:\n        activate_tab(tab)"));
         assert!(script.contains("ereq-test"));
         assert!(!script.contains("capture_screenshot"));
@@ -426,6 +484,15 @@ mod tests {
         let mut wrong_action = request();
         wrong_action["requirements"][0]["state_transitions"][0]["action"] = json!("eval");
         assert!(validate_request(&wrong_action).is_err());
+
+        let mut extra_fill_key = request();
+        extra_fill_key["requirements"][0]["state_transitions"][0]["arbitrary"] = json!("code");
+        assert!(validate_request(&extra_fill_key).is_err());
+
+        let mut unbounded_value = request();
+        unbounded_value["requirements"][0]["state_transitions"][0]["value"] =
+            json!("x".repeat(4097));
+        assert!(validate_request(&unbounded_value).is_err());
 
         let mut wrong_type = request();
         wrong_type["requirements"][0]["type"] = json!("com.planr.web.visual_state");

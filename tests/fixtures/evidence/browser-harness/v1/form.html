@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8"><title>Planr Browser Evidence Fixture</title></head>
+  <body>
+    <label for="name">Name</label>
+    <input id="name" value="">
+    <label for="type">Type</label>
+    <select id="type">
+      <option value="normal">Normal</option>
+      <option value="electric">Electric</option>
+    </select>
+    <button id="apply" type="button">Apply</button>
+    <p id="status">Waiting</p>
+    <script>
+      document.querySelector("#apply").addEventListener("click", () => {
+        const name = document.querySelector("#name").value;
+        const type = document.querySelector("#type").value;
+        document.querySelector("#status").textContent = `${name}:${type}`;
+      });
+    </script>
+  </body>
+</html>

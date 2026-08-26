@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- Extend the shipped Browser Harness Evidence adapter with bounded `fill` and `select` transitions alongside accessibility-based clicks, so real form workflows can be verified in one supervised browser session without project-specific runner scripts.
+- Return a compact model-facing verification result while retaining complete Attempts, Receipts, coverage, and retrieval commands as durable Planr records.
+
+### Fixed
+
+- Automatically roll a maker into a fresh execution batch when the three-outcome batch cap is reached instead of failing the next settlement.
+- Freeze a completed implementation automatically when binding Evidence starts, avoiding a separate transition after the final ordinary outcome closes.
+
 ## [1.10.0-alpha.9] - 2026-08-26
 
 ### Changed

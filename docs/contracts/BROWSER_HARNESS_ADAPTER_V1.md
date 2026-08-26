@@ -17,9 +17,9 @@ Each requirement uses these fields:
 - `expected.text`: The exact trimmed `textContent`, if text is required.
 - `expected.visible`: The required rendered visibility, if visibility is
   required.
-- `state_transitions`: A shared array of click actions for the batch. Each
-  action has `action = "click"`, an accessibility `role`, and an accessibility
-  `name`.
+- `state_transitions`: A shared array of at most 64 closed actions for the
+  batch. A `click` action has an accessibility `role` and `name`. A `fill` or
+  `select` action has a CSS selector `subject` and a string `value`.
 
 All requirements in one batch must use the same transition array and the same
 optional execution method. The adapter rejects arbitrary actions, arbitrary
@@ -33,8 +33,10 @@ starts `browser-harness` once and sends one generated Python program over
 stdin. The program completes these steps in one browser session:
 
 1. Open the bound HTTP or HTTPS target.
-2. Find each click target in the accessibility tree by its role and name.
-3. Click the center of the target's CDP box model.
+2. Apply bounded fill and select actions through native DOM value setters and
+   input/change events.
+3. Find each click target in the accessibility tree by its role and name, then
+   click the center of its CDP box model.
 4. Read each DOM postcondition until it passes or the five-second observation
    window ends.
 5. Return one structured result for the full requirement batch.
@@ -73,3 +75,11 @@ observation is the retained proof for a non-visual criterion.
 The adapter does not advertise a visual observation type. Planr therefore
 rejects it during capability matching for a visual requirement. A recording or
 screenshot cannot upgrade `com.planr.web.dom_state` into visual Evidence.
+
+## Canonical live fixture
+
+`tests/fixtures/evidence/browser-harness/v1/form.html` and
+`form-request.json` exercise the provider-free live boundary: one existing HTTP
+target, one Browser Harness session, bounded fill/select/click actions, and one
+structured DOM postcondition. The fixture requires a dedicated headless browser
+endpoint and never starts a model provider.
