@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.10.0-alpha.10] - 2026-08-26
+
 ### Changed
 
 - Extend the shipped Browser Harness Evidence adapter with bounded `fill` and `select` transitions alongside accessibility-based clicks, so real form workflows can be verified in one supervised browser session without project-specific runner scripts.
@@ -694,7 +696,8 @@ Initial Planr product release.
 - Tag-driven release pipeline with multi-target builds (darwin/linux, arm64/x86_64) and Homebrew tap automation.
 - Skill workflow documentation for Codex, Claude Code, Cursor, and MCP-only clients.
 
-[Unreleased]: https://github.com/instructa/planr/compare/v1.10.0-alpha.9...HEAD
+[Unreleased]: https://github.com/instructa/planr/compare/v1.10.0-alpha.10...HEAD
+[1.10.0-alpha.10]: https://github.com/instructa/planr/compare/v1.10.0-alpha.9...v1.10.0-alpha.10
 [1.10.0-alpha.9]: https://github.com/instructa/planr/compare/v1.10.0-alpha.8...v1.10.0-alpha.9
 [1.10.0-alpha.8]: https://github.com/instructa/planr/compare/v1.10.0-alpha.7...v1.10.0-alpha.8
 [1.10.0-alpha.7]: https://github.com/instructa/planr/compare/v1.10.0-alpha.6...v1.10.0-alpha.7
