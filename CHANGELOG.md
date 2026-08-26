@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.10.0-alpha.12] - 2026-08-26
+
+### Added
+
+- Add an optional provider-neutral supervised target lifecycle to repository Evidence adapter registrations. Projects declare one exact process command and bounded loopback readiness check; omitting it preserves externally managed targets.
+
+### Fixed
+
+- Start the declared product target only after Evidence admission, wait for readiness before adapter execution, and tear down its complete process tree on every exit path.
+- Fail closed when the target cannot start, exits early, misses readiness, or was already reachable before Planr launched it, instead of reporting a downstream browser/schema mismatch or trusting the wrong local server.
+
 ## [1.10.0-alpha.11] - 2026-08-26
 
 ### Added
@@ -712,7 +723,8 @@ Initial Planr product release.
 - Tag-driven release pipeline with multi-target builds (darwin/linux, arm64/x86_64) and Homebrew tap automation.
 - Skill workflow documentation for Codex, Claude Code, Cursor, and MCP-only clients.
 
-[Unreleased]: https://github.com/instructa/planr/compare/v1.10.0-alpha.11...HEAD
+[Unreleased]: https://github.com/instructa/planr/compare/v1.10.0-alpha.12...HEAD
+[1.10.0-alpha.12]: https://github.com/instructa/planr/compare/v1.10.0-alpha.11...v1.10.0-alpha.12
 [1.10.0-alpha.11]: https://github.com/instructa/planr/compare/v1.10.0-alpha.10...v1.10.0-alpha.11
 [1.10.0-alpha.10]: https://github.com/instructa/planr/compare/v1.10.0-alpha.9...v1.10.0-alpha.10
 [1.10.0-alpha.9]: https://github.com/instructa/planr/compare/v1.10.0-alpha.8...v1.10.0-alpha.9
