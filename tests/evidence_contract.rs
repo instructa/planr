@@ -149,7 +149,12 @@ fn validate_observation_requirement(value: &Value, errors: &mut Vec<String>, lab
     }
 }
 
-fn validate_process_execution_contract(value: &Value, errors: &mut Vec<String>, label: &str) {
+fn validate_process_execution_contract(
+    value: &Value,
+    errors: &mut Vec<String>,
+    label: &str,
+    allow_target_lifecycle: bool,
+) {
     required(
         value,
         errors,
@@ -172,6 +177,37 @@ fn validate_process_execution_contract(value: &Value, errors: &mut Vec<String>, 
             .is_none_or(|value| value < 1)
         {
             errors.push(format!("{label}.{limit} must be positive"));
+        }
+    }
+    if let Some(target) = field(value, "target_lifecycle") {
+        if !allow_target_lifecycle {
+            errors.push(format!("{label}.target_lifecycle is not allowed"));
+            return;
+        }
+        required(target, errors, &["kind", "executable", "args", "readiness"]);
+        if field(target, "kind") != Some(&Value::String("supervised_process".to_string())) {
+            errors.push(format!(
+                "{label}.target_lifecycle.kind must be supervised_process"
+            ));
+        }
+        let readiness = field(target, "readiness");
+        if readiness.and_then(|value| field(value, "kind"))
+            != Some(&Value::String("tcp".to_string()))
+        {
+            errors.push(format!(
+                "{label}.target_lifecycle.readiness.kind must be tcp"
+            ));
+        }
+        for limit in ["timeout_ms", "poll_interval_ms"] {
+            if readiness
+                .and_then(|value| field(value, limit))
+                .and_then(Value::as_i64)
+                .is_none_or(|value| value < 1)
+            {
+                errors.push(format!(
+                    "{label}.target_lifecycle.readiness.{limit} must be positive"
+                ));
+            }
         }
     }
 }
@@ -292,6 +328,7 @@ fn validate_capability_manifest(value: &Value, errors: &mut Vec<String>) {
             execution,
             errors,
             "VerificationCapabilityManifest.availability_probe.execution",
+            false,
         ),
         None => errors.push("availability_probe.execution is required".to_string()),
     }
@@ -792,6 +829,7 @@ fn validate_policy(value: &Value, errors: &mut Vec<String>) {
                 execution,
                 errors,
                 "EvidencePolicy.adapter_registrations[].execution_contract",
+                true,
             );
         } else {
             errors.push("adapter registrations require execution_contract".to_string());
@@ -867,6 +905,41 @@ fn evidence_contract_examples_match_schema_and_semantics() {
             path.display()
         );
     }
+}
+
+#[test]
+fn evidence_contract_scopes_supervised_target_lifecycle_to_repository_adapters() {
+    let validator = evidence_schema_validator();
+    let lifecycle = json!({
+        "kind": "supervised_process",
+        "executable": "pnpm",
+        "args": ["preview", "--host", "127.0.0.1", "--port", "4173", "--strictPort"],
+        "working_directory": ".",
+        "readiness": {
+            "kind": "tcp",
+            "timeout_ms": 15000,
+            "poll_interval_ms": 50
+        }
+    });
+    let mut policy = read_json(
+        &root().join("docs/contracts/fixtures/evidence/v1/examples/evidence-policy.json"),
+    );
+    policy["adapter_registrations"][0]["execution_contract"]["target_lifecycle"] =
+        lifecycle.clone();
+    assert!(
+        schema_errors(&validator, &policy).is_empty(),
+        "repository adapter registration must admit the canonical target lifecycle"
+    );
+    assert!(validate_contract(&policy).is_empty());
+
+    let mut manifest = read_json(&root().join(
+        "docs/contracts/fixtures/evidence/v1/examples/verification-capability-manifest.json",
+    ));
+    manifest["availability_probe"]["execution"]["target_lifecycle"] = lifecycle;
+    assert!(
+        !schema_errors(&validator, &manifest).is_empty(),
+        "capability availability probe must not launch the product target"
+    );
 }
 
 #[test]

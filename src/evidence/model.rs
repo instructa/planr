@@ -812,7 +812,13 @@ impl AvailabilityProbeContract {
                 "availability_probe.kind",
             ));
         }
-        self.execution.validate()
+        self.execution.validate()?;
+        if self.execution.target_lifecycle.is_some() {
+            return Err(EvidenceDomainError::InvalidTrustedBinding(
+                "availability_probe.execution.target_lifecycle",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -832,6 +838,12 @@ pub(crate) struct ProcessExecutionContract {
     pub stdout_limit_bytes: u64,
     pub stderr_limit_bytes: u64,
     pub payload_schema: PayloadSchemaBinding,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_supervised_target_lifecycle_without_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub target_lifecycle: Option<SupervisedTargetLifecycle>,
 }
 
 impl ProcessExecutionContract {
@@ -863,7 +875,89 @@ impl ProcessExecutionContract {
                 "availability_probe.execution.stderr_limit_bytes",
             ));
         }
+        if let Some(target_lifecycle) = &self.target_lifecycle {
+            target_lifecycle.validate()?;
+        }
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SupervisedTargetLifecycle {
+    pub kind: String,
+    pub executable: String,
+    pub args: Vec<String>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_string_without_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub working_directory: Option<String>,
+    pub readiness: TargetReadinessContract,
+}
+
+impl SupervisedTargetLifecycle {
+    fn validate(&self) -> Result<(), EvidenceDomainError> {
+        if self.kind != "supervised_process" {
+            return Err(EvidenceDomainError::InvalidTrustedBinding(
+                "execution.target_lifecycle.kind",
+            ));
+        }
+        require_non_empty(&self.executable, "execution.target_lifecycle.executable")?;
+        if let Some(working_directory) = &self.working_directory {
+            require_non_empty(
+                working_directory,
+                "execution.target_lifecycle.working_directory",
+            )?;
+        }
+        self.readiness.validate()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TargetReadinessContract {
+    pub kind: String,
+    pub timeout_ms: u64,
+    pub poll_interval_ms: u64,
+}
+
+impl TargetReadinessContract {
+    fn validate(&self) -> Result<(), EvidenceDomainError> {
+        if self.kind != "tcp" {
+            return Err(EvidenceDomainError::InvalidTrustedBinding(
+                "execution.target_lifecycle.readiness.kind",
+            ));
+        }
+        if self.timeout_ms < 1 {
+            return Err(EvidenceDomainError::InvalidTrustedBinding(
+                "execution.target_lifecycle.readiness.timeout_ms",
+            ));
+        }
+        if self.poll_interval_ms < 1 || self.poll_interval_ms > self.timeout_ms {
+            return Err(EvidenceDomainError::InvalidTrustedBinding(
+                "execution.target_lifecycle.readiness.poll_interval_ms",
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn deserialize_optional_supervised_target_lifecycle_without_null<'de, D>(
+    deserializer: D,
+) -> Result<Option<SupervisedTargetLifecycle>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    match value {
+        None | Some(Value::Null) => Err(serde::de::Error::custom(
+            "execution.target_lifecycle must be omitted instead of null",
+        )),
+        Some(value) => serde_json::from_value(value)
+            .map(Some)
+            .map_err(serde::de::Error::custom),
     }
 }
 

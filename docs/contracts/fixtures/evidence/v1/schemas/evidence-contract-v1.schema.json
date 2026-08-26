@@ -81,6 +81,60 @@
         }
       }
     },
+    "TargetReadinessContract": {
+      "type": "object",
+      "required": [
+        "kind",
+        "timeout_ms",
+        "poll_interval_ms"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "tcp"
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "poll_interval_ms": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "SupervisedTargetLifecycle": {
+      "type": "object",
+      "required": [
+        "kind",
+        "executable",
+        "args",
+        "readiness"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "supervised_process"
+        },
+        "executable": {
+          "type": "string",
+          "minLength": 1
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "working_directory": {
+          "type": "string",
+          "minLength": 1
+        },
+        "readiness": {
+          "$ref": "#/$defs/TargetReadinessContract"
+        }
+      }
+    },
     "ProcessExecutionContract": {
       "type": "object",
       "required": [
@@ -125,6 +179,9 @@
         },
         "payload_schema": {
           "$ref": "#/$defs/PayloadSchemaBinding"
+        },
+        "target_lifecycle": {
+          "$ref": "#/$defs/SupervisedTargetLifecycle"
         }
       }
     },
@@ -140,7 +197,18 @@
           "const": "process"
         },
         "execution": {
-          "$ref": "#/$defs/ProcessExecutionContract"
+          "allOf": [
+            {
+              "$ref": "#/$defs/ProcessExecutionContract"
+            },
+            {
+              "not": {
+                "required": [
+                  "target_lifecycle"
+                ]
+              }
+            }
+          ]
         }
       }
     },

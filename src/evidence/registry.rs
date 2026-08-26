@@ -854,6 +854,25 @@ fn validate_process_execution_contract(execution: &ProcessExecutionContract) -> 
     {
         bail!("process probe must declare non-zero timeout and output limits");
     }
+    if let Some(target) = &execution.target_lifecycle {
+        if target.kind != "supervised_process" {
+            bail!("target lifecycle kind must be supervised_process");
+        }
+        validate_executable_name(&target.executable)?;
+        if target.args.iter().any(|argument| argument.contains('\0')) {
+            bail!("target lifecycle arguments must not contain NUL bytes");
+        }
+        if let Some(working_directory) = &target.working_directory {
+            validate_repository_relative_path(working_directory)?;
+        }
+        if target.readiness.kind != "tcp"
+            || target.readiness.timeout_ms == 0
+            || target.readiness.poll_interval_ms == 0
+            || target.readiness.poll_interval_ms > target.readiness.timeout_ms
+        {
+            bail!("target lifecycle must declare bounded TCP readiness");
+        }
+    }
     Ok(())
 }
 

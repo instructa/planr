@@ -6,8 +6,9 @@ use super::model::{
     EnvironmentBinding, EvidenceAttempt, EvidenceId, FixtureDisclosure, GapReason,
     ObservationResult, PayloadSchemaBinding, ProcessExecutionContract, ProofObligation,
     RawResultRef, STRUCTURED_OBSERVATION_RESULTS_V2, STRUCTURED_OBSERVATION_RESULTS_V2_SCHEMA_REF,
-    SandboxLimits, SandboxState, SchemaVersion, Sha256Digest, TargetBinding, TrustedProvenance,
-    TrustedReceiptInput, VantagePoint, VerificationCapabilityInstance, build_trusted_receipt,
+    SandboxLimits, SandboxState, SchemaVersion, Sha256Digest, SupervisedTargetLifecycle,
+    TargetBinding, TrustedProvenance, TrustedReceiptInput, VantagePoint,
+    VerificationCapabilityInstance, build_trusted_receipt,
 };
 use super::policy::{
     EvidenceRepositorySnapshot, capture_repository_snapshot, trusted_receipt_binding_value,
@@ -15,6 +16,7 @@ use super::policy::{
 use crate::canonical_json::{sha256_json_digest, sha256_prefixed_bytes};
 use crate::execution::{
     BoundedProcessError, BoundedProcessInput, BoundedProcessOutput, CancellationToken,
+    SupervisedProcess, SupervisedProcessInput, spawn_supervised_process,
 };
 use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -24,8 +26,10 @@ use std::{
     env,
     error::Error,
     fmt, fs,
+    net::{TcpStream, ToSocketAddrs},
     path::{Component, Path, PathBuf},
-    time::Duration,
+    thread,
+    time::{Duration, Instant},
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use uuid::Uuid;
@@ -341,8 +345,22 @@ pub(crate) fn run_configured_process_adapter_guarded(
     }))?;
     before_adapter_launch(conn)?;
     let started_at = timestamp();
-    let output = match &resolved {
-        ResolvedProcessRunResolution::Runnable(resolved) => {
+    let target_runtime = match &resolved {
+        ResolvedProcessRunResolution::Runnable(_) => prepare_target_runtime(
+            input.repository_root,
+            input.execution_contract.target_lifecycle.as_ref(),
+            &input.target,
+            &input.env,
+            input.cancellation,
+        )?,
+        ResolvedProcessRunResolution::Unavailable(_, _) => {
+            PreparedTargetRuntime::External(json!({"mode": "not_started"}))
+        }
+    };
+    let target_allows_adapter =
+        !matches!(&target_runtime, PreparedTargetRuntime::Unavailable { .. });
+    let output = match (&resolved, target_allows_adapter) {
+        (ResolvedProcessRunResolution::Runnable(resolved), true) => {
             Some(crate::execution::run_bounded_process(BoundedProcessInput {
                 cwd: &resolved.cwd,
                 argv: &resolved.argv,
@@ -359,23 +377,35 @@ pub(crate) fn run_configured_process_adapter_guarded(
                 cancellation: input.cancellation,
             }))
         }
-        ResolvedProcessRunResolution::Unavailable(_, _) => None,
+        _ => None,
     };
-    let ended_at = timestamp();
     let attempt_id = attempt_id(
         input.obligation.id.as_str(),
         capability_instance.id.as_str(),
         &started_at,
     );
-    let mut process_result = match (&resolved, output) {
-        (ResolvedProcessRunResolution::Runnable(resolved), Some(output)) => {
+    let mut process_result = match (&resolved, output, target_allows_adapter) {
+        (ResolvedProcessRunResolution::Runnable(resolved), Some(output), true) => {
             attempt_result(output, resolved)?
         }
-        (ResolvedProcessRunResolution::Unavailable(resolved, reason), None) => {
+        (ResolvedProcessRunResolution::Unavailable(resolved, reason), None, _) => {
             unavailable_process_error_result(reason.clone(), resolved)?
+        }
+        (ResolvedProcessRunResolution::Runnable(_), None, false) => {
+            target_unavailable_process_error_result("target runtime was unavailable".to_string())?
         }
         _ => unreachable!("resolved process state and execution output diverged"),
     };
+    let (target_runtime_record, target_runtime_failure) = finalize_target_runtime(target_runtime)?;
+    process_result
+        .raw_result
+        .as_object_mut()
+        .context("configured process result must be an object")?
+        .insert("target_runtime".to_string(), target_runtime_record);
+    if let Some(reason) = target_runtime_failure {
+        mark_target_unavailable(&mut process_result, reason)?;
+    }
+    let ended_at = timestamp();
     let validated_observation_results = if process_result.status == AttemptStatus::Passed {
         if requires_structured_observation_results(&input.execution_contract) {
             match strict_structured_observation_results(
@@ -960,20 +990,50 @@ impl ResolvedProcessRun {
         execution: &ProcessExecutionContract,
         env_overrides: &BTreeMap<String, String>,
     ) -> Result<Self> {
-        validate_executable_name(&execution.executable)?;
-        validate_args(&execution.args)?;
+        Self::resolve_command(
+            repository_root,
+            &execution.executable,
+            &execution.args,
+            execution.working_directory.as_deref(),
+            env_overrides,
+        )
+    }
+
+    fn resolve_target(
+        repository_root: &Path,
+        target: &SupervisedTargetLifecycle,
+        env_overrides: &BTreeMap<String, String>,
+    ) -> Result<Self> {
+        Self::resolve_command(
+            repository_root,
+            &target.executable,
+            &target.args,
+            target.working_directory.as_deref(),
+            env_overrides,
+        )
+    }
+
+    fn resolve_command(
+        repository_root: &Path,
+        requested_executable: &str,
+        args: &[String],
+        working_directory: Option<&str>,
+        env_overrides: &BTreeMap<String, String>,
+    ) -> Result<Self> {
+        validate_executable_name(requested_executable)?;
+        validate_args(args)?;
         validate_env(env_overrides)?;
-        let cwd = if let Some(working_directory) = execution.working_directory.as_deref() {
+        let cwd = if let Some(working_directory) = working_directory {
             contained_repository_path(repository_root, working_directory)?
         } else {
             canonical_repository_root(repository_root)?
         };
         let path_value =
             env::var("PATH").context("PATH is required to resolve process executable")?;
-        let executable = resolve_executable(&execution.executable, &path_value)?;
-        let mut argv = Vec::with_capacity(execution.args.len() + 1);
+        let executable = resolve_executable(requested_executable, &path_value)?;
+        let mut argv = Vec::with_capacity(args.len() + 1);
         argv.push(executable.path.to_string_lossy().to_string());
-        argv.extend(execution.args.clone());
+        argv.extend(args.iter().cloned());
         let mut env = env_overrides.clone();
         env.insert("PATH".to_string(), path_value.clone());
         let command_identity = json!({
@@ -983,7 +1043,7 @@ impl ResolvedProcessRun {
             "env_digest": sha256_json_digest(&json!({
                 "env": env,
                 "executable": {
-                    "requested": execution.executable,
+                    "requested": requested_executable,
                     "path": executable.path.to_string_lossy(),
                     "path_digest": executable.path_digest,
                     "content_digest": executable.content_digest,
@@ -1005,19 +1065,53 @@ impl ResolvedProcessRun {
         env_overrides: &BTreeMap<String, String>,
         reason: &str,
     ) -> Result<Self> {
-        validate_executable_name(&execution.executable)?;
-        validate_args(&execution.args)?;
+        Self::unresolved_command(
+            repository_root,
+            &execution.executable,
+            &execution.args,
+            execution.working_directory.as_deref(),
+            env_overrides,
+            reason,
+        )
+    }
+
+    fn unresolved_target(
+        repository_root: &Path,
+        target: &SupervisedTargetLifecycle,
+        env_overrides: &BTreeMap<String, String>,
+        reason: &str,
+    ) -> Result<Self> {
+        Self::unresolved_command(
+            repository_root,
+            &target.executable,
+            &target.args,
+            target.working_directory.as_deref(),
+            env_overrides,
+            reason,
+        )
+    }
+
+    fn unresolved_command(
+        repository_root: &Path,
+        requested_executable: &str,
+        args: &[String],
+        working_directory: Option<&str>,
+        env_overrides: &BTreeMap<String, String>,
+        reason: &str,
+    ) -> Result<Self> {
+        validate_executable_name(requested_executable)?;
+        validate_args(args)?;
         validate_env(env_overrides)?;
-        let cwd = if let Some(working_directory) = execution.working_directory.as_deref() {
+        let cwd = if let Some(working_directory) = working_directory {
             contained_repository_path(repository_root, working_directory)?
         } else {
             canonical_repository_root(repository_root)?
         };
         let path_value =
             env::var("PATH").context("PATH is required to resolve process executable")?;
-        let mut argv = Vec::with_capacity(execution.args.len() + 1);
-        argv.push(execution.executable.clone());
-        argv.extend(execution.args.clone());
+        let mut argv = Vec::with_capacity(args.len() + 1);
+        argv.push(requested_executable.to_string());
+        argv.extend(args.iter().cloned());
         let mut env = env_overrides.clone();
         env.insert("PATH".to_string(), path_value.clone());
         let command_identity = json!({
@@ -1031,7 +1125,7 @@ impl ResolvedProcessRun {
             "env_digest": sha256_json_digest(&json!({
                 "env": env,
                 "executable": {
-                    "requested": execution.executable,
+                    "requested": requested_executable,
                     "error": reason,
                 },
                 "path_digest": sha256_prefixed_bytes(path_value.as_bytes()),
@@ -1117,6 +1211,304 @@ fn validate_file_argument_path(argument: &str) -> Result<()> {
 enum ResolvedProcessRunResolution {
     Runnable(ResolvedProcessRun),
     Unavailable(ResolvedProcessRun, String),
+}
+
+enum PreparedTargetRuntime {
+    External(Value),
+    Ready {
+        process: SupervisedProcess,
+        record: Value,
+    },
+    Unavailable {
+        reason: String,
+        record: Value,
+    },
+}
+
+fn prepare_target_runtime(
+    repository_root: &Path,
+    lifecycle: Option<&SupervisedTargetLifecycle>,
+    target: &TargetBinding,
+    env_overrides: &BTreeMap<String, String>,
+    cancellation: &CancellationToken,
+) -> Result<PreparedTargetRuntime> {
+    let Some(lifecycle) = lifecycle else {
+        return Ok(PreparedTargetRuntime::External(json!({"mode": "external"})));
+    };
+    let endpoint = match loopback_target_endpoint(target) {
+        Ok(endpoint) => endpoint,
+        Err(error) => {
+            return Ok(PreparedTargetRuntime::Unavailable {
+                reason: error.to_string(),
+                record: json!({
+                    "mode": "supervised_process",
+                    "readiness": {
+                        "kind": lifecycle.readiness.kind,
+                        "status": "unavailable",
+                        "error": error.to_string(),
+                    }
+                }),
+            });
+        }
+    };
+    if endpoint.connect() {
+        let reason = format!(
+            "target endpoint {} was already reachable before supervised launch",
+            endpoint.label
+        );
+        return Ok(PreparedTargetRuntime::Unavailable {
+            reason: reason.clone(),
+            record: json!({
+                "mode": "supervised_process",
+                "readiness": {
+                    "kind": lifecycle.readiness.kind,
+                    "endpoint": endpoint.label,
+                    "status": "unavailable",
+                    "error": reason,
+                }
+            }),
+        });
+    }
+    let resolved =
+        match ResolvedProcessRun::resolve_target(repository_root, lifecycle, env_overrides) {
+            Ok(resolved) => resolved,
+            Err(error) if is_missing_process_executable(&error) => {
+                let reason = error.to_string();
+                let unresolved = ResolvedProcessRun::unresolved_target(
+                    repository_root,
+                    lifecycle,
+                    env_overrides,
+                    &reason,
+                )?;
+                return Ok(PreparedTargetRuntime::Unavailable {
+                    reason: reason.clone(),
+                    record: json!({
+                        "mode": "supervised_process",
+                        "command": unresolved.command_identity,
+                        "readiness": {
+                            "kind": lifecycle.readiness.kind,
+                            "endpoint": endpoint.label,
+                            "status": "unavailable",
+                            "error": reason,
+                        }
+                    }),
+                });
+            }
+            Err(error) => return Err(error),
+        };
+    let command_identity = resolved.command_identity.clone();
+    let mut process = match spawn_supervised_process(SupervisedProcessInput {
+        cwd: &resolved.cwd,
+        argv: &resolved.argv,
+        env: resolved.env_for_process(),
+    }) {
+        Ok(process) => process,
+        Err(error) => {
+            let reason = error.to_string();
+            return Ok(PreparedTargetRuntime::Unavailable {
+                reason: reason.clone(),
+                record: json!({
+                    "mode": "supervised_process",
+                    "command": command_identity,
+                    "readiness": {
+                        "kind": lifecycle.readiness.kind,
+                        "endpoint": endpoint.label,
+                        "status": "unavailable",
+                        "error": reason,
+                    }
+                }),
+            });
+        }
+    };
+    let process_id = process.id();
+    let readiness_started = Instant::now();
+    let deadline = readiness_started + Duration::from_millis(lifecycle.readiness.timeout_ms);
+    let poll_interval = Duration::from_millis(lifecycle.readiness.poll_interval_ms);
+    loop {
+        if cancellation.is_cancelled() {
+            let reason = "target readiness was cancelled".to_string();
+            let exit = process.stop()?;
+            return Ok(PreparedTargetRuntime::Unavailable {
+                reason: reason.clone(),
+                record: json!({
+                    "mode": "supervised_process",
+                    "command": command_identity,
+                    "process_id": process_id,
+                    "readiness": {
+                        "kind": lifecycle.readiness.kind,
+                        "endpoint": endpoint.label,
+                        "status": "unavailable",
+                        "error": reason,
+                    },
+                    "teardown": supervised_exit_value(exit),
+                }),
+            });
+        }
+        if let Some(exit) = process.try_wait()? {
+            let reason = "target process exited before readiness".to_string();
+            return Ok(PreparedTargetRuntime::Unavailable {
+                reason: reason.clone(),
+                record: json!({
+                    "mode": "supervised_process",
+                    "command": command_identity,
+                    "process_id": process_id,
+                    "readiness": {
+                        "kind": lifecycle.readiness.kind,
+                        "endpoint": endpoint.label,
+                        "status": "unavailable",
+                        "error": reason,
+                    },
+                    "process_exit": supervised_exit_value(exit),
+                }),
+            });
+        }
+        if endpoint.connect() {
+            return Ok(PreparedTargetRuntime::Ready {
+                process,
+                record: json!({
+                    "mode": "supervised_process",
+                    "command": command_identity,
+                    "process_id": process_id,
+                    "readiness": {
+                        "kind": lifecycle.readiness.kind,
+                        "endpoint": endpoint.label,
+                        "status": "ready",
+                        "elapsed_ms": readiness_started.elapsed().as_millis(),
+                    }
+                }),
+            });
+        }
+        if Instant::now() >= deadline {
+            let reason = format!(
+                "target did not become ready at {} within {} ms",
+                endpoint.label, lifecycle.readiness.timeout_ms
+            );
+            let exit = process.stop()?;
+            return Ok(PreparedTargetRuntime::Unavailable {
+                reason: reason.clone(),
+                record: json!({
+                    "mode": "supervised_process",
+                    "command": command_identity,
+                    "process_id": process_id,
+                    "readiness": {
+                        "kind": lifecycle.readiness.kind,
+                        "endpoint": endpoint.label,
+                        "status": "unavailable",
+                        "error": reason,
+                        "elapsed_ms": readiness_started.elapsed().as_millis(),
+                    },
+                    "teardown": supervised_exit_value(exit),
+                }),
+            });
+        }
+        thread::sleep(poll_interval);
+    }
+}
+
+struct LoopbackTargetEndpoint {
+    label: String,
+    addresses: Vec<std::net::SocketAddr>,
+}
+
+impl LoopbackTargetEndpoint {
+    fn connect(&self) -> bool {
+        self.addresses
+            .iter()
+            .any(|address| TcpStream::connect_timeout(address, Duration::from_millis(100)).is_ok())
+    }
+}
+
+fn loopback_target_endpoint(target: &TargetBinding) -> Result<LoopbackTargetEndpoint> {
+    let uri = target
+        .uri
+        .as_deref()
+        .context("supervised target requires target.uri")?;
+    let (scheme, remainder) = uri
+        .split_once("://")
+        .context("supervised target URI must contain a scheme")?;
+    if !matches!(scheme, "http" | "https") {
+        bail!("supervised target URI must use http or https");
+    }
+    let authority = remainder
+        .split(['/', '?', '#'])
+        .next()
+        .filter(|authority| !authority.is_empty())
+        .context("supervised target URI must contain an authority")?;
+    if authority.contains('@') {
+        bail!("supervised target URI must not contain user information");
+    }
+    let default_port = if scheme == "https" { 443 } else { 80 };
+    let (host, port) = if let Some(bracketed) = authority.strip_prefix('[') {
+        let (host, suffix) = bracketed
+            .split_once(']')
+            .context("supervised target URI has an invalid IPv6 authority")?;
+        let port = suffix
+            .strip_prefix(':')
+            .map(str::parse::<u16>)
+            .transpose()
+            .context("supervised target URI port is invalid")?
+            .unwrap_or(default_port);
+        (host, port)
+    } else if let Some((host, port)) = authority.rsplit_once(':') {
+        let port = port
+            .parse::<u16>()
+            .context("supervised target URI port is invalid")?;
+        (host, port)
+    } else {
+        (authority, default_port)
+    };
+    if !matches!(host, "127.0.0.1" | "localhost" | "::1") {
+        bail!("supervised target readiness is restricted to loopback hosts");
+    }
+    let addresses = (host, port)
+        .to_socket_addrs()
+        .context("resolving supervised target loopback address")?
+        .filter(|address| address.ip().is_loopback())
+        .collect::<Vec<_>>();
+    if addresses.is_empty() {
+        bail!("supervised target URI did not resolve to a loopback address");
+    }
+    Ok(LoopbackTargetEndpoint {
+        label: format!("{host}:{port}"),
+        addresses,
+    })
+}
+
+fn supervised_exit_value(exit: crate::execution::SupervisedProcessExit) -> Value {
+    json!({
+        "exit_code": exit.exit_code,
+        "signal": exit.signal,
+    })
+}
+
+fn finalize_target_runtime(runtime: PreparedTargetRuntime) -> Result<(Value, Option<String>)> {
+    match runtime {
+        PreparedTargetRuntime::External(record) => Ok((record, None)),
+        PreparedTargetRuntime::Unavailable { reason, record } => Ok((record, Some(reason))),
+        PreparedTargetRuntime::Ready {
+            mut process,
+            mut record,
+        } => {
+            let early_exit = process.try_wait()?;
+            let exit = process.stop()?;
+            let record = record
+                .as_object_mut()
+                .context("target runtime record must be an object")?;
+            record.insert("teardown".to_string(), supervised_exit_value(exit));
+            if let Some(early_exit) = early_exit {
+                record.insert(
+                    "process_exit".to_string(),
+                    supervised_exit_value(early_exit),
+                );
+                record["readiness"]["status"] = json!("lost");
+                return Ok((
+                    Value::Object(record.clone()),
+                    Some("target process exited before Evidence adapter completion".to_string()),
+                ));
+            }
+            Ok((Value::Object(record.clone()), None))
+        }
+    }
 }
 
 impl ResolvedProcessRunResolution {
@@ -1394,6 +1786,45 @@ fn unavailable_process_error_result(
         raw_result,
         artifacts: vec![],
         output_bounds,
+    })
+}
+
+fn target_unavailable_process_error_result(reason: String) -> Result<AdapterProcessResult> {
+    let empty_digest = sha256_prefixed_bytes(&[]);
+    let exit = json!({
+        "exit_code": null,
+        "signal": null,
+        "error": "target_unavailable"
+    });
+    let raw_result = json!({
+        "kind": "target_runtime_error",
+        "digest": sha256_json_digest(&json!({
+            "exit": exit,
+            "error_reason": reason,
+        }))?,
+        "exit": exit,
+        "error_reason": reason,
+        "planr_adapter_gap_reasons": ["external_dependency_unavailable"],
+        "stdout_digest": empty_digest,
+        "stderr_digest": empty_digest,
+        "stdout_bytes": 0,
+        "stderr_bytes": 0,
+        "stdout_truncated": false,
+        "stderr_truncated": false
+    });
+    Ok(AdapterProcessResult {
+        status: AttemptStatus::Failed,
+        exit,
+        stdout_digest: empty_digest.clone(),
+        stderr_digest: empty_digest,
+        raw_result,
+        artifacts: vec![],
+        output_bounds: json!({
+            "stdout_bytes": 0,
+            "stderr_bytes": 0,
+            "stdout_truncated": false,
+            "stderr_truncated": false,
+        }),
     })
 }
 
@@ -2048,6 +2479,32 @@ fn mark_structured_observation_failure(
             "stderr_digest": process_result.stderr_digest,
             "exit": process_result.exit,
             "structured_observation_error": raw.get("structured_observation_error"),
+        }))?;
+        raw.insert("digest".to_string(), Value::String(digest));
+    }
+    Ok(())
+}
+
+fn mark_target_unavailable(process_result: &mut AdapterProcessResult, error: String) -> Result<()> {
+    process_result.status = AttemptStatus::Failed;
+    process_result.exit = json!({
+        "exit_code": null,
+        "signal": null,
+        "error": "target_unavailable",
+    });
+    if let Some(raw) = process_result.raw_result.as_object_mut() {
+        raw.insert("exit".to_string(), process_result.exit.clone());
+        raw.insert(
+            "planr_adapter_gap_reasons".to_string(),
+            json!(["external_dependency_unavailable"]),
+        );
+        raw.insert("target_runtime_error".to_string(), Value::String(error));
+        let digest = sha256_json_digest(&json!({
+            "stdout_digest": process_result.stdout_digest,
+            "stderr_digest": process_result.stderr_digest,
+            "exit": process_result.exit,
+            "target_runtime": raw.get("target_runtime"),
+            "target_runtime_error": raw.get("target_runtime_error"),
         }))?;
         raw.insert("digest".to_string(), Value::String(digest));
     }
@@ -2744,9 +3201,11 @@ mod tests {
         instance: &VerificationCapabilityInstance,
         canonical_execution_contract: &ProcessExecutionContract,
     ) {
+        let mut availability_execution_contract = canonical_execution_contract.clone();
+        availability_execution_contract.target_lifecycle = None;
         let adapter_binding = json!({
             "schema_version": "planr.process_adapter.binding.v1",
-            "execution_contract": canonical_execution_contract,
+            "execution_contract": availability_execution_contract,
             "file_arguments": [],
         });
         let adapter_digest = sha256_json_digest(&adapter_binding).unwrap();
@@ -2768,7 +3227,7 @@ mod tests {
             "repeatability": "repeatable",
             "independence": "unit test process adapter",
             "blind_spots": [],
-            "availability_probe": {"kind": "process", "execution": canonical_execution_contract},
+            "availability_probe": {"kind": "process", "execution": availability_execution_contract},
         });
         let manifest_digest = sha256_json_digest(&manifest).unwrap();
         conn.execute(
@@ -4999,6 +5458,171 @@ printf '{{"schema_version":"planr.structured_observation_results.v2","request_id
         );
         assert_attempt_count(&conn, 1);
         assert_receipt_count(&conn, 1);
+    }
+
+    #[test]
+    fn supervised_target_startup_failure_is_not_a_schema_mismatch() {
+        let root = tempdir().unwrap();
+        let lifecycle: SupervisedTargetLifecycle = serde_json::from_value(json!({
+            "kind": "supervised_process",
+            "executable": "node",
+            "args": ["-e", "process.exit(3)"],
+            "working_directory": ".",
+            "readiness": {
+                "kind": "tcp",
+                "timeout_ms": 1000,
+                "poll_interval_ms": 10
+            }
+        }))
+        .unwrap();
+        let target = TargetBinding {
+            kind: "browser".to_string(),
+            uri: Some("http://127.0.0.1:9/".to_string()),
+            digest: None,
+            deployment_id: None,
+        };
+        let cancellation = CancellationToken::new();
+
+        let runtime = prepare_target_runtime(
+            root.path(),
+            Some(&lifecycle),
+            &target,
+            &BTreeMap::new(),
+            &cancellation,
+        )
+        .unwrap();
+        let (record, failure) = finalize_target_runtime(runtime).unwrap();
+        let failure = failure.expect("exited target must fail readiness");
+        let mut result = target_unavailable_process_error_result(failure.clone()).unwrap();
+        result.raw_result["target_runtime"] = record;
+        mark_target_unavailable(&mut result, failure).unwrap();
+
+        assert_eq!(result.status, AttemptStatus::Failed);
+        assert_eq!(result.exit["error"], "target_unavailable");
+        assert_eq!(
+            proof_gaps(result.status, &result.exit, &result.raw_result),
+            vec![GapReason::ExternalDependencyUnavailable]
+        );
+        assert!(
+            result
+                .raw_result
+                .get("structured_observation_error")
+                .is_none(),
+            "{:#}",
+            result.raw_result
+        );
+    }
+
+    #[test]
+    fn supervised_target_rejects_a_preexisting_listener_before_process_resolution() {
+        let root = tempdir().unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let lifecycle: SupervisedTargetLifecycle = serde_json::from_value(json!({
+            "kind": "supervised_process",
+            "executable": "definitely-missing-planr-target-command",
+            "args": [],
+            "working_directory": ".",
+            "readiness": {
+                "kind": "tcp",
+                "timeout_ms": 1000,
+                "poll_interval_ms": 10
+            }
+        }))
+        .unwrap();
+        let target = input_target(port);
+        let cancellation = CancellationToken::new();
+
+        let runtime = prepare_target_runtime(
+            root.path(),
+            Some(&lifecycle),
+            &target,
+            &BTreeMap::new(),
+            &cancellation,
+        )
+        .unwrap();
+        let (record, failure) = finalize_target_runtime(runtime).unwrap();
+
+        assert!(
+            failure
+                .as_deref()
+                .is_some_and(|reason| reason.contains("already reachable before supervised launch"))
+        );
+        assert_eq!(record["readiness"]["status"], "unavailable");
+        assert!(record.get("process_id").is_none());
+    }
+
+    #[test]
+    fn configured_adapter_executes_against_a_supervised_target_and_persists_runtime_evidence() {
+        let conn = conn();
+        let root = tempdir().unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let target_value = json!({
+            "kind": "browser",
+            "uri": format!("http://127.0.0.1:{port}/")
+        });
+        let mut obligation = obligation();
+        obligation.observations[0].target = target_value.clone();
+        let instance = instance();
+        let mut contract =
+            execution_contract("sh", vec!["-c", "printf '{\"contains\":\"ready\"}'"], 5000);
+        contract.target_lifecycle = Some(
+            serde_json::from_value(json!({
+                "kind": "supervised_process",
+                "executable": "node",
+                "args": [
+                    "-e",
+                    format!("require('node:http').createServer((_,res)=>res.end('ok')).listen({port},'127.0.0.1')")
+                ],
+                "working_directory": ".",
+                "readiness": {
+                    "kind": "tcp",
+                    "timeout_ms": 5000,
+                    "poll_interval_ms": 10
+                }
+            }))
+            .unwrap(),
+        );
+        seed(&conn, &obligation, &instance, &contract);
+        let cancellation = CancellationToken::new();
+        let mut input = run_input(root.path(), obligation, instance, contract, &cancellation);
+        input.target = serde_json::from_value(target_value.clone()).unwrap();
+        input.execution_binding["target"] = target_value;
+
+        let output = run_configured_process_adapter(&conn, input).unwrap();
+
+        assert_eq!(output.attempt.status, AttemptStatus::Passed);
+        assert_eq!(
+            output.attempt.raw_result["target_runtime"]["readiness"]["status"],
+            "ready"
+        );
+        assert!(
+            output.attempt.raw_result["target_runtime"]["teardown"].is_object(),
+            "{}",
+            output.attempt.raw_result
+        );
+        assert_eq!(output.receipt_value["proof_gaps"], json!([]));
+        assert_eq!(output.receipt_value["observations"][0]["outcome"], "passed");
+        let endpoint = loopback_target_endpoint(&input_target(port)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while endpoint.connect() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            !endpoint.connect(),
+            "target survived trusted Evidence settlement"
+        );
+    }
+
+    fn input_target(port: u16) -> TargetBinding {
+        TargetBinding {
+            kind: "browser".to_string(),
+            uri: Some(format!("http://127.0.0.1:{port}/")),
+            digest: None,
+            deployment_id: None,
+        }
     }
 
     fn raw_result_for_stdout(stdout: &str, truncated: bool) -> Value {

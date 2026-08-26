@@ -47,6 +47,91 @@ pub(crate) struct BoundedProcessInput<'a> {
     pub(crate) cancellation: &'a CancellationToken,
 }
 
+#[derive(Debug)]
+pub(crate) struct SupervisedProcessInput<'a> {
+    pub(crate) cwd: &'a Path,
+    pub(crate) argv: &'a [String],
+    pub(crate) env: Vec<(&'a str, String)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SupervisedProcessExit {
+    pub(crate) exit_code: Option<i32>,
+    pub(crate) signal: Option<i32>,
+}
+
+#[derive(Debug)]
+pub(crate) struct SupervisedProcess {
+    child: Child,
+    term_grace_sleeps: ProcessTreeTermGraceSleeps,
+    stopped: bool,
+}
+
+impl SupervisedProcess {
+    pub(crate) fn id(&self) -> u32 {
+        self.child.id()
+    }
+
+    pub(crate) fn try_wait(&mut self) -> Result<Option<SupervisedProcessExit>> {
+        self.child
+            .try_wait()
+            .map(|status| status.map(supervised_process_exit))
+            .context("polling supervised process")
+    }
+
+    pub(crate) fn stop(mut self) -> Result<SupervisedProcessExit> {
+        let exit = self.stop_in_place()?;
+        self.stopped = true;
+        Ok(exit)
+    }
+
+    fn stop_in_place(&mut self) -> Result<SupervisedProcessExit> {
+        if let Some(status) = self.child.try_wait()? {
+            return Ok(supervised_process_exit(status));
+        }
+        terminate_process_tree(&mut self.child, &self.term_grace_sleeps);
+        let status = self
+            .child
+            .wait()
+            .context("waiting for supervised process")?;
+        Ok(supervised_process_exit(status))
+    }
+}
+
+impl Drop for SupervisedProcess {
+    fn drop(&mut self) {
+        if !self.stopped {
+            let _ = self.stop_in_place();
+            self.stopped = true;
+        }
+    }
+}
+
+pub(crate) fn spawn_supervised_process(
+    input: SupervisedProcessInput<'_>,
+) -> Result<SupervisedProcess> {
+    let mut command = Command::new(&input.argv[0]);
+    command
+        .args(&input.argv[1..])
+        .env_clear()
+        .current_dir(input.cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    for (name, value) in input.env {
+        command.env(name, value);
+    }
+    configure_process_group(&mut command);
+    let child = command
+        .spawn()
+        .with_context(|| format!("spawning supervised process {}", input.argv[0]))?;
+    Ok(SupervisedProcess {
+        child,
+        term_grace_sleeps: ProcessTreeTermGraceSleeps::new(),
+        stopped: false,
+    })
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct BoundedProcessOutput {
     pub(crate) argv: Vec<String>,
@@ -355,6 +440,20 @@ fn join_stdin_writer(handle: thread::JoinHandle<std::io::Result<()>>) -> Result<
         // trusted structured pass must still echo the sealed request binding.
         Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
         Err(error) => Err(error).context("writing bounded process stdin"),
+    }
+}
+
+fn supervised_process_exit(status: ExitStatus) -> SupervisedProcessExit {
+    #[cfg(unix)]
+    let signal = {
+        use std::os::unix::process::ExitStatusExt;
+        status.signal()
+    };
+    #[cfg(not(unix))]
+    let signal = None;
+    SupervisedProcessExit {
+        exit_code: status.code(),
+        signal,
     }
 }
 
