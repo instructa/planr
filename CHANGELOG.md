@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.10.0-alpha.11] - 2026-08-26
+
+### Added
+
+- Add `planr evidence migrate --from-plan <build-plan-id>` across CLI, MCP, and HTTP. Planr compiles checked criterion preset bindings into the canonical Evidence migration.
+
+### Changed
+
+- Resolve observation schemas from the repository Evidence policy so agents and installed browser skills never author `payload_schema` or full proof obligations.
+- Remove the retired Proofloop run-contract workflow and its stale single-session choreography test. Canonical Rust E2E tests now own the remaining skill and Evidence invariants.
+
+### Fixed
+
+- Fail closed before obligation persistence when a build plan, preset binding, schema registration, or Evidence policy is missing or inconsistent.
+- Return Evidence readiness as the immediate next action after a compiled migration is applied.
+
 ## [1.10.0-alpha.10] - 2026-08-26
 
 ### Changed
@@ -696,7 +712,8 @@ Initial Planr product release.
 - Tag-driven release pipeline with multi-target builds (darwin/linux, arm64/x86_64) and Homebrew tap automation.
 - Skill workflow documentation for Codex, Claude Code, Cursor, and MCP-only clients.
 
-[Unreleased]: https://github.com/instructa/planr/compare/v1.10.0-alpha.10...HEAD
+[Unreleased]: https://github.com/instructa/planr/compare/v1.10.0-alpha.11...HEAD
+[1.10.0-alpha.11]: https://github.com/instructa/planr/compare/v1.10.0-alpha.10...v1.10.0-alpha.11
 [1.10.0-alpha.10]: https://github.com/instructa/planr/compare/v1.10.0-alpha.9...v1.10.0-alpha.10
 [1.10.0-alpha.9]: https://github.com/instructa/planr/compare/v1.10.0-alpha.8...v1.10.0-alpha.9
 [1.10.0-alpha.8]: https://github.com/instructa/planr/compare/v1.10.0-alpha.7...v1.10.0-alpha.8
