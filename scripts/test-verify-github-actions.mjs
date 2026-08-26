@@ -24,6 +24,9 @@ const prepareReleaseScript = path.join(fixtureScripts, "prepare-release-candidat
 const releaseContractScript = path.join(fixtureScripts, "release-contract.mjs");
 const releaseScript = path.join(fixtureScripts, "release.sh");
 const localSecurityScript = path.join(fixtureScripts, "security-local.sh");
+const fixtureTests = path.join(fixtureRoot, "tests");
+const hostCapabilityTest = path.join(fixtureTests, "host_capability_experiment.rs");
+const evidenceContractTest = path.join(fixtureTests, "evidence_contract.rs");
 
 function runVerifier() {
   return spawnSync(process.execPath, [verifier], {
@@ -34,6 +37,7 @@ function runVerifier() {
 
 try {
   await mkdir(fixtureScripts, { recursive: true });
+  await mkdir(fixtureTests, { recursive: true });
   await cp(path.join(repoRoot, "scripts", "verify-github-actions.mjs"), verifier);
   await cp(path.join(repoRoot, "scripts", "build-linux-release.sh"), linuxBuildScript);
   await cp(path.join(repoRoot, "scripts", "linux-release-builder.Dockerfile"), linuxBuilderDockerfile);
@@ -44,13 +48,15 @@ try {
   await cp(path.join(repoRoot, "scripts", "release-contract.mjs"), releaseContractScript);
   await cp(path.join(repoRoot, "scripts", "release.sh"), releaseScript);
   await cp(path.join(repoRoot, "scripts", "security-local.sh"), localSecurityScript);
+  await cp(path.join(repoRoot, "tests", "host_capability_experiment.rs"), hostCapabilityTest);
+  await cp(path.join(repoRoot, "tests", "evidence_contract.rs"), evidenceContractTest);
   await cp(path.join(repoRoot, "package.json"), fixturePackageJson);
   await cp(path.join(repoRoot, ".github", "workflows"), fixtureWorkflows, { recursive: true });
 
   const baseline = runVerifier();
   assert.equal(baseline.status, 0, `baseline workflow fixture must pass:\n${baseline.stderr}`);
 
-  const fixtureFiles = [releaseWorkflow, ciWorkflow, linuxReceiptsWorkflow, linuxBuildScript, linuxBuilderDockerfile, linuxVerifyScript, publicLifecycleScript, buildReleaseScript, prepareReleaseScript, releaseContractScript, releaseScript, localSecurityScript, fixturePackageJson];
+  const fixtureFiles = [releaseWorkflow, ciWorkflow, linuxReceiptsWorkflow, linuxBuildScript, linuxBuilderDockerfile, linuxVerifyScript, publicLifecycleScript, buildReleaseScript, prepareReleaseScript, releaseContractScript, releaseScript, localSecurityScript, fixturePackageJson, hostCapabilityTest, evidenceContractTest];
   const baselineSources = new Map(
     await Promise.all(fixtureFiles.map(async (file) => [file, await readFile(file, "utf8")])),
   );
@@ -130,6 +136,18 @@ try {
     (value) => value.replace('cp "$built_browser_adapter" "$target_dir/planr-browser-harness-adapter"', "true"),
     /release artifacts must contain the Browser Harness adapter/u,
     "missing Browser Harness adapter release artifact",
+  );
+  await expectRejected(
+    hostCapabilityTest,
+    (value) => `${value}\n// .arg("scripts/build-release.sh")\n`,
+    /cargo test must not execute release archive or npm package assembly/u,
+    "nested release build in Rust tests",
+  );
+  await expectRejected(
+    evidenceContractTest,
+    (value) => `${value}\n// Command::new("cargo").arg("check")\n`,
+    /cargo test must not launch isolated Cargo compile probes/u,
+    "nested Cargo compile probe in Rust tests",
   );
   await expectRejected(
     prepareReleaseScript,

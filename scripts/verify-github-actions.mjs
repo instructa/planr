@@ -17,6 +17,7 @@ const expectedActions = new Map([
   ["actions/setup-node", { sha: "820762786026740c76f36085b0efc47a31fe5020", version: "v7.0.0", runtime: "node24" }],
   ["actions/upload-artifact", { sha: "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", version: "v7.0.1", runtime: "node24" }],
   ["actions/download-artifact", { sha: "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", version: "v8.0.1", runtime: "node24" }],
+  ["actions/cache", { sha: "55cc8345863c7cc4c66a329aec7e433d2d1c52a9", version: "v6.1.0", runtime: "node24" }],
 ]);
 
 const workflowFiles = (await readdir(workflowsRoot))
@@ -73,7 +74,7 @@ for (const [file, source] of [...workflowSources, ...releaseBoundarySources]) {
 for (const [action, expected] of expectedActions) {
   assert.ok(seen.has(action), `expected workflow action is missing: ${action}`);
   if (expected.runtime === "node24") {
-    assert.match(expected.version, /^v(?:7|8)\./u, `${action} must remain on its Node 24 major`);
+    assert.match(expected.version, /^v(?:6|7|8)\./u, `${action} must remain on its reviewed Node 24 major`);
   }
 }
 
@@ -91,6 +92,8 @@ const linuxBuilderDockerfile = await readFile(path.join(repoRoot, "scripts", "li
 const linuxVerifyScript = await readFile(path.join(repoRoot, "scripts", "verify-linux-release-artifact.sh"), "utf8");
 const buildReleaseScript = await readFile(path.join(repoRoot, "scripts", "build-release.sh"), "utf8");
 const publicLifecycleScript = await readFile(path.join(repoRoot, "scripts", "verify-public-lifecycle.sh"), "utf8");
+const hostCapabilityTestSource = await readFile(path.join(repoRoot, "tests", "host_capability_experiment.rs"), "utf8");
+const evidenceContractTestSource = await readFile(path.join(repoRoot, "tests", "evidence_contract.rs"), "utf8");
 for (const target of ["darwin-arm64", "darwin-x86_64", "linux-x86_64", "linux-arm64"]) {
   assert.ok(releaseWorkflow.includes(`target: ${target}`), `release matrix must include ${target}`);
 }
@@ -194,7 +197,7 @@ for (const [jobHeader, condition] of [
   assert.notEqual(start, -1, `PR CI must contain ${jobHeader.trim()}`);
   assert.ok(ciWorkflow.slice(start, start + 240).includes(condition), `${jobHeader.trim()} must use its router output`);
 }
-assert.doesNotMatch(ciWorkflow, /(?:secrets\.|actions\/cache@|\bcache:)\b/u, "PR CI dependency acceleration must not consume secrets or masquerade as evidence");
+assert.doesNotMatch(ciWorkflow, /secrets\./u, "PR CI dependency acceleration must not consume secrets");
 assert.doesNotMatch(ciWorkflow, /docs:verify-shell|Verify browser interactions|google-chrome/u, "automatic CI must remain free of the retired blanket browser suite");
 const docsStart = ciWorkflow.indexOf("\n  docs:\n");
 const docsEnd = ciWorkflow.indexOf("\n  quality:\n", docsStart);
@@ -205,6 +208,30 @@ assert.match(docsJob, /name: reviewed-docs-\$\{\{ github\.sha \}\}/u, "docs CI m
 for (const artifactPath of ["apps/docs/out", ".planr/ci/selection.json", ".planr/receipts/docs.json"]) {
   assert.ok(docsJob.includes(artifactPath), `docs CI artifact must include ${artifactPath}`);
 }
+const qualityStart = ciWorkflow.indexOf("\n  quality:\n");
+const qualityEnd = ciWorkflow.indexOf("\n  release-contracts:\n", qualityStart);
+const qualityJob = ciWorkflow.slice(qualityStart, qualityEnd);
+assert.equal((qualityJob.match(/actions\/cache@/g) ?? []).length, 1, "quality CI must restore one reviewed Rust cache");
+for (const cachePath of ["~/.cargo/registry", "~/.cargo/git", "target"]) {
+  assert.ok(qualityJob.includes(cachePath), `quality CI Rust cache must include ${cachePath}`);
+}
+assert.match(qualityJob, /hashFiles\('Cargo\.lock'\)/u, "quality CI cache must be invalidated by Cargo.lock");
+assert.doesNotMatch(qualityJob, /fail-on-cache-miss|save-always/u, "quality CI cache must remain an acceleration only");
+const releaseContractsStart = ciWorkflow.indexOf("\n  release-contracts:\n");
+const releaseContractsEnd = ciWorkflow.indexOf("\n  linux-portability:\n", releaseContractsStart);
+const releaseContractsJob = ciWorkflow.slice(releaseContractsStart, releaseContractsEnd);
+assert.doesNotMatch(releaseContractsJob, /cargo (?:build|test|check|clippy)/u, "release-contract CI must not duplicate Rust compilation");
+assert.equal((releaseContractsJob.match(/npm pack --dry-run/g) ?? []).length, 1, "release-contract CI must inspect npm contents exactly once");
+assert.doesNotMatch(
+  hostCapabilityTestSource,
+  /\.arg\("scripts\/build-release\.sh"\)|"pack",\s*"--pack-destination"/u,
+  "cargo test must not execute release archive or npm package assembly",
+);
+assert.doesNotMatch(
+  evidenceContractTestSource,
+  /Command::new\("cargo"\)[\s\S]{0,600}\.arg\("check"\)/u,
+  "cargo test must not launch isolated Cargo compile probes",
+);
 const summaryStart = ciWorkflow.indexOf("\n  summary:\n");
 assert.notEqual(summaryStart, -1, "PR CI must contain one stable summary job");
 const summaryJob = ciWorkflow.slice(summaryStart);
@@ -219,6 +246,7 @@ const portabilityStart = ciWorkflow.indexOf("\n  linux-portability:\n");
 const portabilityEnd = ciWorkflow.indexOf("\n  linux-portability-checksums:\n", portabilityStart);
 const portabilityJob = ciWorkflow.slice(portabilityStart, portabilityEnd);
 assert.doesNotMatch(portabilityJob, /secrets\./u, "PR Linux portability CI must not consume secrets");
+assert.doesNotMatch(portabilityJob, /actions\/cache@/u, "release evidence must not depend on the quality acceleration cache");
 assert.equal((portabilityJob.match(/run-linux-target/g) ?? []).length, 1, "the native matrix must invoke each target runner exactly once");
 assert.match(portabilityJob, /^            \.planr\/receipts\/\$\{\{ matrix\.target \}\}\.json$/mu, "PR Linux portability CI must upload each native target receipt");
 const portabilityAggregate = ciWorkflow.slice(portabilityEnd, summaryStart);

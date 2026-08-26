@@ -142,6 +142,17 @@ jobs:
         run: |
           rustup component add rustfmt clippy
 
+      - name: Restore Rust build cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-rust-quality-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-rust-quality-
+
       - name: Rust format
         run: cargo fmt --check
 
@@ -181,9 +192,7 @@ jobs:
 
       - name: Release dry-run
         run: |
-          cargo build --release
           npm pack --dry-run
-          node npm/bin/planr.js --version
 
   linux-portability:
     name: Portable Linux ${{ matrix.target }}

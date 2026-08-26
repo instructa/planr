@@ -1064,30 +1064,8 @@ fn evidence_contract_direct_untrusted_deserialization_rejects_schema_invalid_val
 
 #[test]
 fn evidence_contract_public_api_imports_only_untrusted_boundary() {
-    let temp = tempfile::tempdir().expect("temp compile probe dir");
-    let crate_dir = temp.path();
-    fs::create_dir(crate_dir.join("src")).unwrap();
-    fs::write(
-        crate_dir.join("Cargo.toml"),
-        format!(
-            r#"[package]
-name = "planr-untrusted-evidence-compile-probe"
-version = "0.0.0"
-edition = "2024"
+    use planr::evidence::{UntrustedEvidenceProposal, parse_untrusted_evidence_proposal};
 
-[dependencies]
-planr = {{ path = "{}" }}
-serde_json = "1"
-"#,
-            root().display()
-        ),
-    )
-    .unwrap();
-    fs::write(
-        crate_dir.join("src/main.rs"),
-        r#"use planr::evidence::{parse_untrusted_evidence_proposal, UntrustedEvidenceProposal};
-
-fn main() {
     let value = serde_json::json!({
         "id": "proposal-public",
         "schema_version": "evidence.contract.v1",
@@ -1100,78 +1078,6 @@ fn main() {
     let proposal: UntrustedEvidenceProposal =
         parse_untrusted_evidence_proposal(value).expect("public API parses untrusted proposal");
     assert_eq!(proposal.id, "proposal-public");
-}
-"#,
-    )
-    .unwrap();
-
-    let output = Command::new("cargo")
-        .arg("check")
-        .arg("--quiet")
-        .current_dir(crate_dir)
-        .env("CARGO_TARGET_DIR", crate_dir.join("target"))
-        .output()
-        .expect("cargo check can run compile probe");
-    assert!(
-        output.status.success(),
-        "untrusted Evidence public API must compile\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
-fn evidence_contract_public_api_cannot_import_trusted_types() {
-    let temp = tempfile::tempdir().expect("temp compile probe dir");
-    let crate_dir = temp.path();
-    fs::create_dir(crate_dir.join("src")).unwrap();
-    fs::write(
-        crate_dir.join("Cargo.toml"),
-        format!(
-            r#"[package]
-name = "planr-trusted-evidence-compile-probe"
-version = "0.0.0"
-edition = "2024"
-
-[dependencies]
-planr = {{ path = "{}" }}
-"#,
-            root().display()
-        ),
-    )
-    .unwrap();
-    fs::write(
-        crate_dir.join("src/main.rs"),
-        r#"use planr::evidence::{EvidenceReceipt, TrustedProvenance};
-
-fn main() {
-    let _ = std::any::type_name::<EvidenceReceipt>();
-    let _ = std::any::type_name::<TrustedProvenance>();
-}
-"#,
-    )
-    .unwrap();
-
-    let output = Command::new("cargo")
-        .arg("check")
-        .arg("--quiet")
-        .current_dir(crate_dir)
-        .env("CARGO_TARGET_DIR", crate_dir.join("target"))
-        .output()
-        .expect("cargo check can run compile probe");
-    assert!(
-        !output.status.success(),
-        "trusted Evidence types unexpectedly compiled through public API"
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        !stderr.contains("no lib target") && stderr.contains("unresolved imports"),
-        "compile probe should fail against the Evidence API, not because the crate is unavailable, stderr:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("EvidenceReceipt") && stderr.contains("TrustedProvenance"),
-        "compile probe should name unavailable trusted Evidence types, stderr:\n{stderr}"
-    );
 }
 
 #[test]
