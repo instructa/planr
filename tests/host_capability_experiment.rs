@@ -1452,6 +1452,7 @@ fn host_capability_experiment_validator_boundary_fails_closed() {
 
     let release_script = fs::read_to_string(repo_root().join("scripts/build-release.sh")).unwrap();
     for expected in [
+        "planr-browser-harness-adapter",
         "scripts/planr-host-capability-validator",
         "scripts/host-capability-experiment.mjs",
         "scripts/host-capability-runtime",
@@ -1462,8 +1463,9 @@ fn host_capability_experiment_validator_boundary_fails_closed() {
         );
     }
     assert!(
-        release_script
-            .contains("tar -czf \"../$asset\" planr scripts README.md LICENSE.md SHA256SUMS"),
+        release_script.contains(
+            "tar -czf \"../$asset\" planr planr-browser-harness-adapter scripts README.md LICENSE.md SHA256SUMS"
+        ),
         "release tarball must include runtime scripts without test fixtures"
     );
 
@@ -2060,6 +2062,13 @@ fn host_capability_release_archive_replays_without_validator_override() {
         "release checksums failed: {}",
         String::from_utf8_lossy(&checksum.stderr)
     );
+    let adapter_identity = Command::new(extract.path().join("planr-browser-harness-adapter"))
+        .arg("--identity")
+        .output()
+        .expect("release Browser Harness adapter must run");
+    assert!(adapter_identity.status.success());
+    let adapter_identity: Value = serde_json::from_slice(&adapter_identity.stdout).unwrap();
+    assert_eq!(adapter_identity["adapter"], "planr-browser-harness-adapter");
     let capture = tempdir().unwrap();
     let capture_out = fs::canonicalize(capture.path())
         .unwrap()
@@ -2105,11 +2114,17 @@ fn host_capability_npm_package_replays_with_native_validator_bytes() {
     fs::create_dir_all(&native_dir).unwrap();
     fs::copy(env!("CARGO_BIN_EXE_planr"), native_dir.join("planr")).unwrap();
     fs::copy(
+        env!("CARGO_BIN_EXE_planr-browser-harness-adapter"),
+        native_dir.join("planr-browser-harness-adapter"),
+    )
+    .unwrap();
+    fs::copy(
         env!("CARGO_BIN_EXE_planr-host-capability-validator"),
         native_dir.join("planr-host-capability-validator"),
     )
     .unwrap();
     make_executable(&native_dir.join("planr"));
+    make_executable(&native_dir.join("planr-browser-harness-adapter"));
     make_executable(&native_dir.join("planr-host-capability-validator"));
 
     let pack_dir = tempdir().unwrap();
@@ -2138,6 +2153,12 @@ fn host_capability_npm_package_replays_with_native_validator_bytes() {
     for expected in [
         format!("npm/native/{}/planr", native_target()),
         format!(
+            "npm/native/{}/planr-browser-harness-adapter",
+            native_target()
+        ),
+        "npm/bin/native-launcher.js".to_string(),
+        "npm/bin/planr-browser-harness-adapter.js".to_string(),
+        format!(
             "npm/native/{}/planr-host-capability-validator",
             native_target()
         ),
@@ -2158,6 +2179,19 @@ fn host_capability_npm_package_replays_with_native_validator_bytes() {
         files.iter().all(|file| !file.starts_with("tests/")),
         "npm package must not include test fixture paths; files={files:?}"
     );
+
+    let adapter_identity = Command::new("node")
+        .current_dir(package)
+        .args(["npm/bin/planr-browser-harness-adapter.js", "--identity"])
+        .output()
+        .expect("packaged Browser Harness adapter wrapper must run");
+    assert!(
+        adapter_identity.status.success(),
+        "packaged Browser Harness adapter wrapper failed: {}",
+        String::from_utf8_lossy(&adapter_identity.stderr)
+    );
+    let adapter_identity: Value = serde_json::from_slice(&adapter_identity.stdout).unwrap();
+    assert_eq!(adapter_identity["adapter"], "planr-browser-harness-adapter");
 
     let tarball = fs::read_dir(pack_dir.path())
         .unwrap()

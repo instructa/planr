@@ -59,6 +59,8 @@ try:
         raise RuntimeError("target did not finish loading")
     initial = page_info()["url"]
     transitions = requirements[0].get("state_transitions") or []
+    if transitions:
+        activate_tab(tab)
     for transition in transitions:
         click_accessible(transition["role"], transition["name"])
 
@@ -134,6 +136,30 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<()> {
+    match std::env::args().nth(1).as_deref() {
+        Some("--identity") => {
+            println!(
+                "{}",
+                json!({
+                    "schema_version": "planr.evidence.adapter-identity.v1",
+                    "adapter": "planr-browser-harness-adapter",
+                    "adapter_version": env!("CARGO_PKG_VERSION"),
+                    "protocol": REQUEST_SCHEMA,
+                })
+            );
+            return Ok(());
+        }
+        Some("--version") | Some("-V") => {
+            println!(
+                "planr-browser-harness-adapter {}",
+                env!("CARGO_PKG_VERSION")
+            );
+            return Ok(());
+        }
+        Some(argument) => bail!("unsupported argument: {argument}"),
+        None => {}
+    }
+
     let mut input = String::new();
     std::io::stdin()
         .read_to_string(&mut input)
@@ -388,6 +414,7 @@ mod tests {
         validate_request(&request).unwrap();
         let script = browser_script(&request).unwrap();
         assert!(script.contains("click_accessible"));
+        assert!(script.contains("if transitions:\n        activate_tab(tab)"));
         assert!(script.contains("ereq-test"));
         assert!(!script.contains("capture_screenshot"));
         assert!(!script.contains("start_recording"));

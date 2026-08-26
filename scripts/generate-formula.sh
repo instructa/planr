@@ -61,7 +61,7 @@ class Planr < Formula
   end
 
   def install
-    bin.install "planr"
+    bin.install "planr", "planr-browser-harness-adapter"
   end
 
   test do

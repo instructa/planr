@@ -58,13 +58,16 @@ if [ -n "$cargo_target" ]; then
   cargo build --release --target "$cargo_target"
   built_bin="$cargo_target_dir/$cargo_target/release/planr"
   built_validator="$cargo_target_dir/$cargo_target/release/planr-host-capability-validator"
+  built_browser_adapter="$cargo_target_dir/$cargo_target/release/planr-browser-harness-adapter"
 else
   cargo build --release
   built_bin="$cargo_target_dir/release/planr"
   built_validator="$cargo_target_dir/release/planr-host-capability-validator"
+  built_browser_adapter="$cargo_target_dir/release/planr-browser-harness-adapter"
 fi
 
 cp "$built_bin" "$target_dir/planr"
+cp "$built_browser_adapter" "$target_dir/planr-browser-harness-adapter"
 mkdir -p "$target_dir/scripts"
 cp "$built_validator" "$target_dir/scripts/planr-host-capability-validator"
 cp scripts/host-capability-experiment.mjs "$target_dir/scripts/"
@@ -73,14 +76,14 @@ cp README.md LICENSE.md "$target_dir/"
 
 (
   cd "$target_dir"
-  find planr scripts README.md LICENSE.md -type f -print | LC_ALL=C sort | while IFS= read -r file; do
+  find planr planr-browser-harness-adapter scripts README.md LICENSE.md -type f -print | LC_ALL=C sort | while IFS= read -r file; do
     sha256_tool "$file"
   done > SHA256SUMS
 )
 
 (
   cd "$target_dir"
-  tar -czf "../$asset" planr scripts README.md LICENSE.md SHA256SUMS
+  tar -czf "../$asset" planr planr-browser-harness-adapter scripts README.md LICENSE.md SHA256SUMS
 )
 
 # Aggregate checksums over every asset present in dist/ so multi-target

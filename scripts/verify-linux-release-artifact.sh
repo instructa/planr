@@ -45,6 +45,7 @@ for required in \
   README.md \
   SHA256SUMS \
   planr \
+  planr-browser-harness-adapter \
   scripts/host-capability-experiment.mjs \
   scripts/planr-host-capability-validator \
   scripts/host-capability-runtime/v1/schemas/host-capability-observed-raw.schema.json \
@@ -56,7 +57,7 @@ do
     exit 1
   fi
 done
-unexpected_members="$(printf '%s\n' "$actual_members" | grep -Ev '^(LICENSE.md|README.md|SHA256SUMS|planr|scripts/|scripts/host-capability-experiment\.mjs|scripts/planr-host-capability-validator|scripts/host-capability-runtime/|scripts/host-capability-runtime/v1/|scripts/host-capability-runtime/v1/schemas/|scripts/host-capability-runtime/v1/schemas/host-capability-(observed-raw|expected-manifest|provenance)\.schema\.json)$' || true)"
+unexpected_members="$(printf '%s\n' "$actual_members" | grep -Ev '^(LICENSE.md|README.md|SHA256SUMS|planr|planr-browser-harness-adapter|scripts/|scripts/host-capability-experiment\.mjs|scripts/planr-host-capability-validator|scripts/host-capability-runtime/|scripts/host-capability-runtime/v1/|scripts/host-capability-runtime/v1/schemas/|scripts/host-capability-runtime/v1/schemas/host-capability-(observed-raw|expected-manifest|provenance)\.schema\.json)$' || true)"
 if [ -n "$unexpected_members" ]; then
   echo "release tarball contains unexpected paths:" >&2
   printf '%s\n' "$unexpected_members" >&2
@@ -69,10 +70,12 @@ tar -xzf "$asset" -C "$extract"
 )
 
 binary="$extract/planr"
+browser_adapter="$extract/planr-browser-harness-adapter"
 validator="$extract/scripts/planr-host-capability-validator"
 test -x "$binary"
+test -x "$browser_adapter"
 test -x "$validator"
-for executable in "$binary" "$validator"; do
+for executable in "$binary" "$browser_adapter" "$validator"; do
   file "$executable" | grep -Eq 'ELF 64-bit.*(x86-64|ARM aarch64)'
   if readelf -l "$executable" | grep -q 'INTERP'; then
     echo "Linux release binary has a dynamic program interpreter: $executable" >&2
@@ -92,6 +95,8 @@ reported="$($binary --version)"
 test "$reported" = "planr $version"
 validator_identity="$($validator --identity)"
 printf '%s\n' "$validator_identity" | grep -q '"validator":"planr-host-capability-validator"'
+browser_adapter_identity="$($browser_adapter --identity)"
+printf '%s\n' "$browser_adapter_identity" | grep -q '"adapter":"planr-browser-harness-adapter"'
 
 docker run --rm \
   --platform "$docker_platform" \
@@ -108,13 +113,20 @@ npm_fixture="$verify_root/npm-fixture"
 mkdir -p "$npm_fixture/npm/bin" "$npm_fixture/npm/native/$target"
 cp package.json "$npm_fixture/package.json"
 cp npm/bin/planr.js "$npm_fixture/npm/bin/planr.js"
+cp npm/bin/native-launcher.js "$npm_fixture/npm/bin/native-launcher.js"
+cp npm/bin/planr-browser-harness-adapter.js "$npm_fixture/npm/bin/planr-browser-harness-adapter.js"
 cp "$binary" "$npm_fixture/npm/native/$target/planr"
+cp "$browser_adapter" "$npm_fixture/npm/native/$target/planr-browser-harness-adapter"
 cp "$validator" "$npm_fixture/npm/native/$target/planr-host-capability-validator"
 chmod 755 "$npm_fixture/npm/native/$target/planr"
+chmod 755 "$npm_fixture/npm/native/$target/planr-browser-harness-adapter"
 chmod 755 "$npm_fixture/npm/native/$target/planr-host-capability-validator"
 cmp "$binary" "$npm_fixture/npm/native/$target/planr"
+cmp "$browser_adapter" "$npm_fixture/npm/native/$target/planr-browser-harness-adapter"
 cmp "$validator" "$npm_fixture/npm/native/$target/planr-host-capability-validator"
 npm_reported="$(cd "$npm_fixture" && node npm/bin/planr.js --version)"
 test "$npm_reported" = "planr $version"
+browser_adapter_reported="$(cd "$npm_fixture" && node npm/bin/planr-browser-harness-adapter.js --version)"
+test "$browser_adapter_reported" = "planr-browser-harness-adapter $version"
 
-echo "linux_release_verification=passed target=$target linkage=static-musl runtime=alpine-3.20.8 lifecycle=passed npm_bytes=identical validator_bytes=identical"
+echo "linux_release_verification=passed target=$target linkage=static-musl runtime=alpine-3.20.8 lifecycle=passed npm_bytes=identical adapter_bytes=identical validator_bytes=identical"

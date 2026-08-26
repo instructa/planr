@@ -84,31 +84,40 @@ verify_archive() {
   echo "verified checksum for $asset"
 }
 
-install_binary() {
+install_executable() {
   source_bin="$1"
+  executable_name="$2"
 
   if [ ! -f "$source_bin" ]; then
-    echo "planr binary not found at $source_bin" >&2
+    echo "$executable_name binary not found at $source_bin" >&2
     exit 1
   fi
 
   mkdir -p "$bin_dir"
-  cp "$source_bin" "$bin_dir/planr"
-  chmod 755 "$bin_dir/planr"
+  cp "$source_bin" "$bin_dir/$executable_name"
+  chmod 755 "$bin_dir/$executable_name"
 }
 
 local_release_bin=""
+local_browser_adapter_bin=""
 if [ "${PLANR_DOWNLOAD:-0}" != "1" ] && [ -f Cargo.toml ] && command -v cargo >/dev/null 2>&1; then
   cargo_target_dir="$(cargo metadata --no-deps --format-version 1 | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p' | head -n 1)"
   if [ -n "$cargo_target_dir" ]; then
     local_release_bin="$cargo_target_dir/release/planr"
+    local_browser_adapter_bin="$cargo_target_dir/release/planr-browser-harness-adapter"
   fi
 fi
 
 if [ -n "${PLANR_BIN:-}" ]; then
-  install_binary "$PLANR_BIN"
+  install_executable "$PLANR_BIN" planr
+  if [ -n "${PLANR_BROWSER_HARNESS_ADAPTER_BIN:-}" ]; then
+    install_executable "$PLANR_BROWSER_HARNESS_ADAPTER_BIN" planr-browser-harness-adapter
+  fi
 elif [ -n "$local_release_bin" ] && [ -f "$local_release_bin" ]; then
-  install_binary "$local_release_bin"
+  install_executable "$local_release_bin" planr
+  if [ -f "$local_browser_adapter_bin" ]; then
+    install_executable "$local_browser_adapter_bin" planr-browser-harness-adapter
+  fi
 else
   target="${PLANR_TARGET:-$(detect_target)}"
   asset="planr-$target.tar.gz"
@@ -136,9 +145,16 @@ else
     exit 1
   fi
 
-  install_binary "$release_bin"
+  install_executable "$release_bin" planr
+  release_browser_adapter="$(find "$tmp_dir" -type f -name planr-browser-harness-adapter | head -n 1)"
+  if [ -n "$release_browser_adapter" ]; then
+    install_executable "$release_browser_adapter" planr-browser-harness-adapter
+  fi
 fi
 
 echo "installed planr to $bin_dir/planr"
+if [ -x "$bin_dir/planr-browser-harness-adapter" ]; then
+  echo "installed Browser Harness adapter to $bin_dir/planr-browser-harness-adapter"
+fi
 echo "No global Codex, Claude Code, Cursor, or shell config was edited."
 echo "Run: planr doctor --client all"

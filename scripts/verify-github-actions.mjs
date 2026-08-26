@@ -89,10 +89,16 @@ const linuxReceiptsWorkflow = await readFile(path.join(workflowsRoot, "linux-rec
 const linuxBuildScript = await readFile(path.join(repoRoot, "scripts", "build-linux-release.sh"), "utf8");
 const linuxBuilderDockerfile = await readFile(path.join(repoRoot, "scripts", "linux-release-builder.Dockerfile"), "utf8");
 const linuxVerifyScript = await readFile(path.join(repoRoot, "scripts", "verify-linux-release-artifact.sh"), "utf8");
+const buildReleaseScript = await readFile(path.join(repoRoot, "scripts", "build-release.sh"), "utf8");
 const publicLifecycleScript = await readFile(path.join(repoRoot, "scripts", "verify-public-lifecycle.sh"), "utf8");
 for (const target of ["darwin-arm64", "darwin-x86_64", "linux-x86_64", "linux-arm64"]) {
   assert.ok(releaseWorkflow.includes(`target: ${target}`), `release matrix must include ${target}`);
 }
+assert.match(
+  buildReleaseScript,
+  /cp "\$built_browser_adapter" "\$target_dir\/planr-browser-harness-adapter"/u,
+  "release artifacts must contain the Browser Harness adapter",
+);
 for (const [target, rustTarget, runner] of [
   ["linux-x86_64", "x86_64-unknown-linux-musl", "ubuntu-24.04"],
   ["linux-arm64", "aarch64-unknown-linux-musl", "ubuntu-24.04-arm"],
@@ -140,14 +146,24 @@ assert.match(
 assert.match(linuxVerifyScript, /cmp "\$binary" "\$npm_fixture\/npm\/native\/\$target\/planr"/u, "npm fixture must contain the exact extracted artifact bytes");
 assert.match(
   linuxVerifyScript,
+  /cmp "\$browser_adapter" "\$npm_fixture\/npm\/native\/\$target\/planr-browser-harness-adapter"/u,
+  "npm fixture must contain the exact extracted Browser Harness adapter bytes",
+);
+assert.match(
+  linuxVerifyScript,
   /cmp "\$validator" "\$npm_fixture\/npm\/native\/\$target\/planr-host-capability-validator"/u,
   "npm fixture must contain the exact extracted validator bytes",
 );
 assert.match(linuxVerifyScript, /node npm\/bin\/planr\.js --version/u, "Linux verification must execute the npm wrapper over bundled bytes");
 assert.ok(releaseWorkflow.includes("npm/native/$target/planr-host-capability-validator"), "npm publish must bundle validator binaries per target");
+assert.ok(releaseWorkflow.includes("npm/native/$target/planr-browser-harness-adapter"), "npm publish must bundle Browser Harness adapter binaries per target");
 assert.ok(
   releaseWorkflow.includes("./npm/native/linux-x86_64/planr-host-capability-validator --identity"),
   "npm publish must smoke-test the bundled validator",
+);
+assert.ok(
+  releaseWorkflow.includes("./npm/native/linux-x86_64/planr-browser-harness-adapter --identity"),
+  "npm publish must smoke-test the bundled Browser Harness adapter",
 );
 for (const command of ["project init", "plan new", "plan split", "map build", "pick", "done", "export"]) {
   assert.ok(publicLifecycleScript.includes(command), `public lifecycle must exercise ${command}`);

@@ -234,6 +234,8 @@ jobs:
             mkdir -p "extract/$target" "npm/native/$target"
             tar -xzf "assets/planr-$target.tar.gz" -C "extract/$target"
             install -m 755 "extract/$target/planr" "npm/native/$target/planr"
+            install -m 755 "extract/$target/planr-browser-harness-adapter" \
+              "npm/native/$target/planr-browser-harness-adapter"
             install -m 755 "extract/$target/scripts/planr-host-capability-validator" \
               "npm/native/$target/planr-host-capability-validator"
           done
@@ -243,7 +245,9 @@ jobs:
             exit 1
           fi
           ./npm/native/linux-x86_64/planr-host-capability-validator --identity >/dev/null
+          ./npm/native/linux-x86_64/planr-browser-harness-adapter --identity >/dev/null
           node npm/bin/planr.js --version
+          node npm/bin/planr-browser-harness-adapter.js --version
 
       - name: Publish to npm
         env:

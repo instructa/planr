@@ -202,6 +202,7 @@ cat dist/planr-*/SHA256SUMS
 The artifact contains:
 
 - `planr`
+- `planr-browser-harness-adapter`
 - `scripts/host-capability-experiment.mjs`
 - `scripts/host-capability-runtime/v1/schemas/*.schema.json`
 - `scripts/planr-host-capability-validator`
@@ -228,6 +229,8 @@ npm pack --dry-run
 The package must include:
 
 - `npm/bin/planr.js`
+- `npm/bin/planr-browser-harness-adapter.js`
+- `npm/bin/native-launcher.js`
 - `scripts/host-capability-experiment.mjs`
 - `scripts/host-capability-runtime/v1/schemas/*.schema.json`
 - `scripts/planr-host-capability-validator`
@@ -237,7 +240,7 @@ The package must include:
 - `README.md`
 - `LICENSE.md`
 
-`npm/native/` platform binaries exist only in the `npm-publish` CI job; the local dry-run does not include them.
+`npm/native/` platform binaries exist only in the `npm-publish` CI job. The published package includes `planr`, `planr-browser-harness-adapter`, and `planr-host-capability-validator` for each platform. The local dry-run does not include these binaries.
 
 ## Install Smoke
 

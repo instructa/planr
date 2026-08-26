@@ -194,7 +194,7 @@ try {
   check(!httpPage.includes('`/v1/evidence`'), 'HTTP reference does not advertise unsupported root /v1/evidence route');
 
   const configPage = await readFile(path.join(docsRoot, 'content', 'docs', 'reference', 'configuration-and-storage.mdx'), 'utf8');
-  const envNames = ['PLANR_DB', 'PLANR_WORKER_ID', 'PLANR_SESSION_ID', 'PLANR_PROFILE', 'PLANR_NATIVE_BIN', 'PLANR_BIN', 'PLANR_DOWNLOAD', 'PLANR_REPO', 'PLANR_VERSION', 'PLANR_TARGET', 'PLANR_RELEASE_BASE_URL', 'PLANR_SKIP_CHECKSUM'];
+  const envNames = ['PLANR_DB', 'PLANR_WORKER_ID', 'PLANR_SESSION_ID', 'PLANR_PROFILE', 'PLANR_NATIVE_BIN', 'PLANR_BROWSER_HARNESS_ADAPTER_BIN', 'PLANR_BIN', 'PLANR_DOWNLOAD', 'PLANR_REPO', 'PLANR_VERSION', 'PLANR_TARGET', 'PLANR_RELEASE_BASE_URL', 'PLANR_SKIP_CHECKSUM'];
   for (const name of envNames) check(configPage.includes(`\`${name}\``), `configuration reference covers ${name}`);
 
   const schemaSource = await readFile(path.join(repositoryRoot, 'src', 'storage', 'schema.rs'), 'utf8');

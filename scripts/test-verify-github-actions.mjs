@@ -126,6 +126,12 @@ try {
     "Grok model call in release build script",
   );
   await expectRejected(
+    buildReleaseScript,
+    (value) => value.replace('cp "$built_browser_adapter" "$target_dir/planr-browser-harness-adapter"', "true"),
+    /release artifacts must contain the Browser Harness adapter/u,
+    "missing Browser Harness adapter release artifact",
+  );
+  await expectRejected(
     prepareReleaseScript,
     (value) => `${value}\ngrok mcp doctor\n`,
     /must not contain xAI credentials, Grok installation\/auth, or live model execution/u,
@@ -197,6 +203,12 @@ try {
     (value) => value.replace("cmp \"$binary\" \"$npm_fixture/npm/native/$target/planr\"", "true"),
     /must contain the exact extracted artifact bytes/u,
     "missing npm byte identity check",
+  );
+  await expectRejected(
+    linuxVerifyScript,
+    (value) => value.replace("cmp \"$browser_adapter\" \"$npm_fixture/npm/native/$target/planr-browser-harness-adapter\"", "true"),
+    /must contain the exact extracted Browser Harness adapter bytes/u,
+    "missing npm Browser Harness adapter byte identity check",
   );
   await expectRejected(
     linuxVerifyScript,

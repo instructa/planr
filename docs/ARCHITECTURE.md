@@ -117,10 +117,10 @@ The frozen product contract lives in `docs/contracts/EVAL_CONTRACT_V1.md` until 
 
 Planr remains a single crate for V1 because:
 
-- there is one deployable binary and no separate service or reusable library boundary;
+- one crate owns the CLI and its optional companion executables;
 - the current behavior contract is tighter when CLI, MCP, HTTP, storage, and docs ship together;
 - module-level ownership gives the needed architecture separation without duplicating Cargo settings or release packaging;
-- npm, release, and external consumer tests assume one native binary named `planr`.
+- npm, release, and external consumer tests treat `planr` as the product entry point. They also package provider-specific companion executables when Planr ships them.
 
 A Cargo workspace was tried and reverted: it produced anemic crates whose only job was being a layer, plus re-export shims in the binary. A workspace should be introduced only after a concrete deployable, reuse, compilation, or team ownership boundary exists and package/release scripts are updated in the same change.
 

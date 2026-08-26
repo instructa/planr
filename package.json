@@ -9,10 +9,11 @@
   },
   "type": "module",
   "bin": {
-    "planr": "npm/bin/planr.js"
+    "planr": "npm/bin/planr.js",
+    "planr-browser-harness-adapter": "npm/bin/planr-browser-harness-adapter.js"
   },
   "files": [
-    "npm/bin/planr.js",
+    "npm/bin",
     "npm/native",
     "scripts/host-capability-experiment.mjs",
     "scripts/host-capability-runtime",
