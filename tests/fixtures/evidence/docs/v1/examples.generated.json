@@ -2,7 +2,7 @@
   "schema_version": "planr.evidence_docs_examples.v1",
   "generated_by": "apps/docs/scripts/generate-evidence-examples.mjs",
   "candidate_binary": "target/debug/planr",
-  "evidence_schema_digest": "sha256:6c23a7d943f7689dfa1219cf10adf88848f70bfc5b47b88807f79df10ae22e07",
+  "evidence_schema_digest": "sha256:6a529edd7c47a0628777560253d4c775163d421f2b981dd50b779f587badf6d8",
   "host_matrix_digest": "sha256:dc4365247b11919b60b3bd4e922f60e63619eb1d58060d01655b6e05044a4df0",
   "cases": [
     {
