@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.10.0-alpha.9] - 2026-08-26
+
+### Changed
+
+- Ship `planr-browser-harness-adapter` with GitHub release archives and the npm package. The download installer and future stable Homebrew formulas install the adapter beside `planr`.
+- Use one shared npm native launcher for the Planr CLI and the Browser Harness adapter.
+
+### Fixed
+
+- Activate the selected browser tab before an Evidence batch sends input. This lets Browser Harness apply real clicks when Chrome opens the target in a background tab.
+
 ## [1.10.0-alpha.8] - 2026-08-25
 
 ### Changed
@@ -673,7 +684,8 @@ Initial Planr product release.
 - Tag-driven release pipeline with multi-target builds (darwin/linux, arm64/x86_64) and Homebrew tap automation.
 - Skill workflow documentation for Codex, Claude Code, Cursor, and MCP-only clients.
 
-[Unreleased]: https://github.com/instructa/planr/compare/v1.10.0-alpha.8...HEAD
+[Unreleased]: https://github.com/instructa/planr/compare/v1.10.0-alpha.9...HEAD
+[1.10.0-alpha.9]: https://github.com/instructa/planr/compare/v1.10.0-alpha.8...v1.10.0-alpha.9
 [1.10.0-alpha.8]: https://github.com/instructa/planr/compare/v1.10.0-alpha.7...v1.10.0-alpha.8
 [1.10.0-alpha.7]: https://github.com/instructa/planr/compare/v1.10.0-alpha.6...v1.10.0-alpha.7
 [1.10.0-alpha.6]: https://github.com/instructa/planr/compare/v1.10.0-alpha.5...v1.10.0-alpha.6
