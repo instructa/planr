@@ -94,6 +94,10 @@ const buildReleaseScript = await readFile(path.join(repoRoot, "scripts", "build-
 const publicLifecycleScript = await readFile(path.join(repoRoot, "scripts", "verify-public-lifecycle.sh"), "utf8");
 const hostCapabilityTestSource = await readFile(path.join(repoRoot, "tests", "host_capability_experiment.rs"), "utf8");
 const evidenceContractTestSource = await readFile(path.join(repoRoot, "tests", "evidence_contract.rs"), "utf8");
+assert.match(releaseWorkflow, /^  workflow_dispatch:\n    inputs:\n      tag:\n/mu, "release workflow must support recovery for an existing immutable tag");
+assert.match(releaseWorkflow, /tag:\n        description: Existing immutable release tag to publish\n        required: true\n        type: string/u, "manual release recovery must require an explicit tag");
+assert.equal((releaseWorkflow.match(/ref: \$\{\{ inputs\.tag \|\| github\.ref \}\}/g) ?? []).length, 4, "every release checkout must bind to the selected tag");
+assert.doesNotMatch(releaseWorkflow, /TAG: \$\{\{ github\.ref_name \}\}/u, "release jobs must not ignore the manually selected tag");
 for (const target of ["darwin-arm64", "darwin-x86_64", "linux-x86_64", "linux-arm64"]) {
   assert.ok(releaseWorkflow.includes(`target: ${target}`), `release matrix must include ${target}`);
 }

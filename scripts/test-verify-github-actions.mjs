@@ -82,6 +82,13 @@ try {
 
   await expectRejected(
     releaseWorkflow,
+    (value) => value.replace(/  workflow_dispatch:\n    inputs:\n      tag:\n        description: Existing immutable release tag to publish\n        required: true\n        type: string\n/u, ""),
+    /must support recovery for an existing immutable tag/u,
+    "missing manual immutable-tag release recovery",
+  );
+
+  await expectRejected(
+    releaseWorkflow,
     (value) => value.replace(smokeMarker, `${smokeMarker}        if: always()\n`),
     /must be unconditional for every matrix target/u,
     "conditional same-runner smoke",
