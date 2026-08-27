@@ -3085,6 +3085,12 @@ END;
                 attempt_json("failed", "1", "null", "\"assertion_failed\""),
             ),
             (
+                "attempt-valid-target-unavailable",
+                "failed",
+                Some(1),
+                attempt_json("failed", "1", "null", "\"target_unavailable\""),
+            ),
+            (
                 "attempt-valid-timed-out",
                 "timed_out",
                 None,

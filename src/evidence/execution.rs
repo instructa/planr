@@ -1791,11 +1791,7 @@ fn unavailable_process_error_result(
 
 fn target_unavailable_process_error_result(reason: String) -> Result<AdapterProcessResult> {
     let empty_digest = sha256_prefixed_bytes(&[]);
-    let exit = json!({
-        "exit_code": null,
-        "signal": null,
-        "error": "target_unavailable"
-    });
+    let exit = target_unavailable_exit();
     let raw_result = json!({
         "kind": "target_runtime_error",
         "digest": sha256_json_digest(&json!({
@@ -2487,11 +2483,7 @@ fn mark_structured_observation_failure(
 
 fn mark_target_unavailable(process_result: &mut AdapterProcessResult, error: String) -> Result<()> {
     process_result.status = AttemptStatus::Failed;
-    process_result.exit = json!({
-        "exit_code": null,
-        "signal": null,
-        "error": "target_unavailable",
-    });
+    process_result.exit = target_unavailable_exit();
     if let Some(raw) = process_result.raw_result.as_object_mut() {
         raw.insert("exit".to_string(), process_result.exit.clone());
         raw.insert(
@@ -2509,6 +2501,14 @@ fn mark_target_unavailable(process_result: &mut AdapterProcessResult, error: Str
         raw.insert("digest".to_string(), Value::String(digest));
     }
     Ok(())
+}
+
+fn target_unavailable_exit() -> Value {
+    json!({
+        "exit_code": 1,
+        "signal": null,
+        "error": "target_unavailable",
+    })
 }
 
 fn mark_ordinary_observation_verifier_failure(
@@ -5461,56 +5461,88 @@ printf '{{"schema_version":"planr.structured_observation_results.v2","request_id
     }
 
     #[test]
-    fn supervised_target_startup_failure_is_not_a_schema_mismatch() {
+    fn supervised_target_startup_failure_persists_as_a_non_passing_execution() {
+        let conn = conn();
         let root = tempdir().unwrap();
-        let lifecycle: SupervisedTargetLifecycle = serde_json::from_value(json!({
-            "kind": "supervised_process",
-            "executable": "node",
-            "args": ["-e", "process.exit(3)"],
-            "working_directory": ".",
-            "readiness": {
-                "kind": "tcp",
-                "timeout_ms": 1000,
-                "poll_interval_ms": 10
-            }
-        }))
-        .unwrap();
-        let target = TargetBinding {
-            kind: "browser".to_string(),
-            uri: Some("http://127.0.0.1:9/".to_string()),
-            digest: None,
-            deployment_id: None,
-        };
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let target_value = json!({
+            "kind": "browser",
+            "uri": format!("http://127.0.0.1:{port}/")
+        });
+        let mut obligation = obligation();
+        obligation.observations[0].target = target_value.clone();
+        let instance = instance();
+        let mut contract =
+            execution_contract("sh", vec!["-c", "printf '{\"contains\":\"ready\"}'"], 5000);
+        contract.target_lifecycle = Some(
+            serde_json::from_value(json!({
+                "kind": "supervised_process",
+                "executable": "node",
+                "args": ["-e", "process.exit(3)"],
+                "working_directory": ".",
+                "readiness": {
+                    "kind": "tcp",
+                    "timeout_ms": 1000,
+                    "poll_interval_ms": 10
+                }
+            }))
+            .unwrap(),
+        );
+        seed(&conn, &obligation, &instance, &contract);
         let cancellation = CancellationToken::new();
+        let mut input = run_input(root.path(), obligation, instance, contract, &cancellation);
+        input.target = serde_json::from_value(target_value.clone()).unwrap();
+        input.execution_binding["target"] = target_value;
 
-        let runtime = prepare_target_runtime(
-            root.path(),
-            Some(&lifecycle),
-            &target,
-            &BTreeMap::new(),
-            &cancellation,
-        )
-        .unwrap();
-        let (record, failure) = finalize_target_runtime(runtime).unwrap();
-        let failure = failure.expect("exited target must fail readiness");
-        let mut result = target_unavailable_process_error_result(failure.clone()).unwrap();
-        result.raw_result["target_runtime"] = record;
-        mark_target_unavailable(&mut result, failure).unwrap();
+        let output = run_configured_process_adapter(&conn, input).unwrap();
 
-        assert_eq!(result.status, AttemptStatus::Failed);
-        assert_eq!(result.exit["error"], "target_unavailable");
+        assert_eq!(output.attempt.status, AttemptStatus::Failed);
+        assert_eq!(output.attempt.exit["exit_code"], 1);
+        assert_eq!(output.attempt.exit["error"], "target_unavailable");
         assert_eq!(
-            proof_gaps(result.status, &result.exit, &result.raw_result),
+            proof_gaps(
+                output.attempt.status,
+                &output.attempt.exit,
+                &output.attempt.raw_result,
+            ),
             vec![GapReason::ExternalDependencyUnavailable]
         );
+        assert_eq!(
+            output.attempt.raw_result["target_runtime"]["readiness"]["status"],
+            "unavailable"
+        );
+        assert_eq!(
+            output.attempt.raw_result["target_runtime"]["process_exit"]["exit_code"],
+            3
+        );
         assert!(
-            result
+            output
+                .attempt
                 .raw_result
                 .get("structured_observation_error")
                 .is_none(),
             "{:#}",
-            result.raw_result
+            output.attempt.raw_result
         );
+        assert_eq!(
+            output.receipt_value["proof_gaps"],
+            json!(["external_dependency_unavailable"])
+        );
+        assert_eq!(output.receipt_value["observations"][0]["outcome"], "failed");
+        assert_attempt_count(&conn, 1);
+        assert_receipt_count(&conn, 1);
+        let persisted: String = conn
+            .query_row(
+                "SELECT attempt_json FROM evidence_attempts WHERE id = ?1",
+                [output.attempt.id.as_str()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let persisted: Value = serde_json::from_str(&persisted).unwrap();
+        assert_eq!(persisted["status"], "failed");
+        assert_eq!(persisted["exit"], target_unavailable_exit());
     }
 
     #[test]
