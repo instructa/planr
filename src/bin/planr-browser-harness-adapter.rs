@@ -506,7 +506,7 @@ fn validate_request(request: &Value) -> Result<()> {
     Ok(())
 }
 
-fn resolve_transitions<'a>(requirements: &'a [Value]) -> Result<&'a Value> {
+fn resolve_transitions(requirements: &[Value]) -> Result<&Value> {
     let mut declaration: Option<(&str, &Value)> = None;
     let mut references = Vec::new();
     for requirement in requirements {
