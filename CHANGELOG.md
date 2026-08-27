@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Add the Browser Harness V2 Evidence contract for one supervised browser session with structured per-requirement observations and no mandatory success recording.
+
+### Changed
+
+- Run an optional product target only from an explicit repository command after Evidence admission, then stop its complete process group before settlement.
+- Batch compatible Browser Harness criteria into one adapter execution and return compact passing or non-passing receipt counts to the invoking agent.
+
+### Fixed
+
+- Persist target startup and readiness failures as one failed attempt and trusted non-passing receipt without automatic repair, refreeze, replay, or retry.
+- Preserve mixed requirement coverage and route a trusted failed observation to one typed `ProductFinding` with selective replay metadata.
+- Keep a supervised Unix process leader unreaped until process-group teardown, which prevents a reused process-group ID from targeting an unrelated process.
+- Separate adapter environment authorization from public classification. Browser CDP endpoints remain protected while public low-entropy configuration does not corrupt structured results.
+- Preserve the declared Rust 1.85 minimum by pinning the compatible `time` release and removing newer let-chain syntax from all shipped binaries.
+
 ## [1.10.0-alpha.13] - 2026-08-27
 
 ### Fixed

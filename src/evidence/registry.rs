@@ -3,10 +3,10 @@
 use super::adapter_signal::{AdapterBoundarySignal, adapter_boundary_signal_from_process_output};
 use super::model::{
     AttemptStatus, CapabilityAvailability, CapabilityAvailabilityStatus, EnvironmentBinding,
-    EvidenceId, ObservedPayloadContract, PayloadSchemaBinding, PermissionState, ProbeCheck,
-    ProbeResult, ProcessExecutionContract, ProvenanceSourceKind, STRUCTURED_OBSERVATION_RESULTS_V2,
-    STRUCTURED_OBSERVATION_RESULTS_V2_SCHEMA_REF, SchemaVersion, Sha256Digest,
-    VerificationCapabilityInstance, VerificationCapabilityManifest,
+    EvidenceId, NamespacedIdentifier, ObservedPayloadContract, PayloadSchemaBinding,
+    PermissionState, ProbeCheck, ProbeResult, ProcessExecutionContract, ProvenanceSourceKind,
+    STRUCTURED_OBSERVATION_RESULTS_V2, STRUCTURED_OBSERVATION_RESULTS_V2_SCHEMA_REF, SchemaVersion,
+    Sha256Digest, VerificationCapabilityInstance, VerificationCapabilityManifest,
 };
 use crate::canonical_json::{sha256_json_digest, sha256_prefixed_bytes};
 use crate::execution::{BoundedProcessInput, CancellationToken, run_bounded_process};
@@ -137,6 +137,23 @@ impl CapabilityRegistry {
         self.capabilities.values()
     }
 
+    pub(crate) fn capabilities_supporting<'a>(
+        &'a self,
+        observation_type: &'a NamespacedIdentifier,
+        schema_ref: &'a str,
+    ) -> impl Iterator<Item = &'a RegisteredCapability> + 'a {
+        self.capabilities.values().filter(move |capability| {
+            capability
+                .manifest
+                .supported_observations
+                .iter()
+                .any(|binding| {
+                    binding.observation_type == *observation_type
+                        && binding.schema_ref == schema_ref
+                })
+        })
+    }
+
     pub(crate) fn diagnostics(&self) -> Vec<CapabilityRegistryDiagnostic> {
         let mut diagnostics = self.diagnostics.clone();
         diagnostics.extend(self.runtime_diagnostics.values().cloned());
@@ -243,8 +260,7 @@ impl CapabilityRegistry {
             .capabilities
             .get(manifest_id)
             .with_context(|| format!("capability manifest {manifest_id} is not registered"))?;
-        let command_resolution =
-            ProbeCommandResolution::capture(&capability.manifest.availability_probe.execution);
+        let command_resolution = ProbeCommandResolution::capture(capability)?;
         store_capability_manifest(conn, capability)?;
         let now = timestamp();
         let probe_execution_id = probe_execution_id(
@@ -333,8 +349,7 @@ impl CapabilityRegistry {
             .capabilities
             .get(manifest_id)
             .with_context(|| format!("capability manifest {manifest_id} is not registered"))?;
-        let command_resolution =
-            ProbeCommandResolution::capture(&capability.manifest.availability_probe.execution);
+        let command_resolution = ProbeCommandResolution::capture(capability)?;
         store_capability_manifest(conn, capability)?;
         let runtime_key = RuntimeAvailabilityKey::new(
             capability,
@@ -659,7 +674,16 @@ impl CapabilityRegistry {
 }
 
 fn validate_manifest_runtime_permissions(manifest: &VerificationCapabilityManifest) -> Result<()> {
-    manifest_permission_state(manifest).map(|_| ())
+    let permissions = manifest_permission_state(manifest)?;
+    let adapter_environment_names = manifest_adapter_environment_names(manifest)?;
+    if !adapter_environment_names.is_empty()
+        && permissions.secrets.as_deref() != Some("host_allowlist")
+    {
+        bail!(
+            "permissions.secrets must equal host_allowlist when permissions.environment reads host variables"
+        );
+    }
+    Ok(())
 }
 
 fn validate_manifest_payload_projection(manifest: &VerificationCapabilityManifest) -> Result<()> {
@@ -978,6 +1002,154 @@ fn captured_path_env() -> Option<String> {
     env::var("PATH").ok()
 }
 
+const ADAPTER_ENV_PERMISSION_PREFIX: &str = "read_env:";
+const HOST_ADAPTER_ENV_ALLOWLIST: &str = "PLANR_ADAPTER_ENV_ALLOWLIST";
+const HOST_ADAPTER_PUBLIC_ENV_ALLOWLIST: &str = "PLANR_ADAPTER_PUBLIC_ENV_ALLOWLIST";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CapturedAdapterEnvironment {
+    pub(crate) values: BTreeMap<String, String>,
+    pub(crate) durable_output_redactions: BTreeMap<String, String>,
+    pub(crate) binding: Value,
+}
+
+pub(crate) fn capture_manifest_adapter_environment(
+    manifest: &VerificationCapabilityManifest,
+) -> Result<CapturedAdapterEnvironment> {
+    let names = manifest_adapter_environment_names(manifest)?;
+    let authorized_names = host_adapter_environment_allowlist()?;
+    let unauthorized = names
+        .iter()
+        .filter(|name| !authorized_names.contains(*name))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unauthorized.is_empty() {
+        bail!(
+            "adapter environment names are not authorized by host {HOST_ADAPTER_ENV_ALLOWLIST}: {}",
+            unauthorized.join(",")
+        );
+    }
+    let values = names
+        .iter()
+        .filter_map(|name| captured_adapter_env_var(name).map(|value| (name.clone(), value)))
+        .collect::<BTreeMap<_, _>>();
+    let public_names = host_adapter_public_environment_allowlist()?
+        .into_iter()
+        .filter(|name| names.binary_search(name).is_ok())
+        .collect::<BTreeSet<_>>();
+    let durable_output_redactions = values
+        .iter()
+        .filter(|(name, _)| !public_names.contains(*name))
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let binding = json!({
+        "schema_version": "planr.evidence.adapter-environment.v1",
+        "names": names,
+        "public_names": public_names,
+        "value_digest": sha256_json_digest(&json!(values))?,
+    });
+    Ok(CapturedAdapterEnvironment {
+        values,
+        durable_output_redactions,
+        binding,
+    })
+}
+
+fn manifest_adapter_environment_names(
+    manifest: &VerificationCapabilityManifest,
+) -> Result<Vec<String>> {
+    let names = manifest
+        .permissions
+        .get("environment")
+        .map(|permission| {
+            let permission = permission
+                .as_str()
+                .context("permissions.environment must be a string")?;
+            let declared = permission
+                .strip_prefix(ADAPTER_ENV_PERMISSION_PREFIX)
+                .context("permissions.environment must use read_env:NAME[,NAME] when declared")?;
+            if declared.is_empty() {
+                bail!("permissions.environment read_env allowlist must not be empty");
+            }
+            let mut names = declared
+                .split(',')
+                .map(str::trim)
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            names.sort();
+            names.dedup();
+            for name in &names {
+                validate_forwarded_environment_name(name)?;
+            }
+            Ok::<_, anyhow::Error>(names)
+        })
+        .transpose()?
+        .unwrap_or_default();
+    Ok(names)
+}
+
+fn validate_forwarded_environment_name(name: &str) -> Result<()> {
+    if name.is_empty()
+        || name.starts_with("PLANR_")
+        || !name.chars().all(|character| {
+            character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
+        })
+    {
+        bail!("permissions.environment contains invalid or reserved environment name {name}");
+    }
+    Ok(())
+}
+
+fn host_adapter_environment_allowlist() -> Result<BTreeSet<String>> {
+    host_adapter_environment_names(HOST_ADAPTER_ENV_ALLOWLIST)
+}
+
+fn host_adapter_public_environment_allowlist() -> Result<BTreeSet<String>> {
+    host_adapter_environment_names(HOST_ADAPTER_PUBLIC_ENV_ALLOWLIST)
+}
+
+fn host_adapter_environment_names(variable: &str) -> Result<BTreeSet<String>> {
+    let Some(raw) = captured_adapter_env_var(variable) else {
+        return Ok(BTreeSet::new());
+    };
+    if raw.trim().is_empty() {
+        return Ok(BTreeSet::new());
+    }
+    raw.split(',')
+        .map(str::trim)
+        .map(|name| {
+            validate_forwarded_environment_name(name)?;
+            Ok(name.to_string())
+        })
+        .collect()
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_ADAPTER_ENV: std::cell::RefCell<Option<BTreeMap<String, String>>> = const { std::cell::RefCell::new(None) };
+}
+
+fn captured_adapter_env_var(name: &str) -> Option<String> {
+    #[cfg(test)]
+    {
+        if let Some(values) = TEST_ADAPTER_ENV.with(|slot| slot.borrow().clone()) {
+            return values.get(name).cloned();
+        }
+    }
+    env::var(name).ok()
+}
+
+#[cfg(test)]
+fn with_captured_adapter_env_override<T>(
+    values: BTreeMap<String, String>,
+    f: impl FnOnce() -> T,
+) -> T {
+    let previous = TEST_ADAPTER_ENV.with(|slot| slot.replace(Some(values)));
+    let result = f();
+    TEST_ADAPTER_ENV.with(|slot| slot.replace(previous));
+    result
+}
+
 #[cfg(test)]
 fn with_captured_path_env_override<T>(path: String, f: impl FnOnce() -> T) -> T {
     let previous = TEST_PATH_ENV.with(|slot| slot.replace(Some(path)));
@@ -993,28 +1165,35 @@ struct ProbeCommandResolution {
     path_digest: String,
     resolved: Option<ResolvedProbeExecutable>,
     error: Option<String>,
+    adapter_environment: CapturedAdapterEnvironment,
 }
 
 impl ProbeCommandResolution {
-    fn capture(execution: &ProcessExecutionContract) -> Self {
+    fn capture(capability: &RegisteredCapability) -> Result<Self> {
+        let execution = &capability.manifest.availability_probe.execution;
+        let adapter_environment = capture_manifest_adapter_environment(&capability.manifest)?;
         let path = captured_path_env();
         let path_digest = sha256_prefixed_bytes(path.as_deref().unwrap_or("").as_bytes());
-        match resolve_probe_executable(&execution.executable, path.as_deref()) {
-            Ok(resolved) => Self {
-                executable: execution.executable.clone(),
-                path_value: path,
-                path_digest,
-                resolved: Some(resolved),
-                error: None,
+        Ok(
+            match resolve_probe_executable(&execution.executable, path.as_deref()) {
+                Ok(resolved) => Self {
+                    executable: execution.executable.clone(),
+                    path_value: path,
+                    path_digest,
+                    resolved: Some(resolved),
+                    error: None,
+                    adapter_environment,
+                },
+                Err(error) => Self {
+                    executable: execution.executable.clone(),
+                    path_value: path,
+                    path_digest,
+                    resolved: None,
+                    error: Some(error.to_string()),
+                    adapter_environment,
+                },
             },
-            Err(error) => Self {
-                executable: execution.executable.clone(),
-                path_value: path,
-                path_digest,
-                resolved: None,
-                error: Some(error.to_string()),
-            },
-        }
+        )
     }
 
     fn identity(&self) -> Value {
@@ -1023,6 +1202,7 @@ impl ProbeCommandResolution {
             "path_digest": self.path_digest,
             "resolved": self.resolved.as_ref().map(ResolvedProbeExecutable::identity),
             "error": self.error,
+            "adapter_environment": self.adapter_environment.binding,
         })
     }
 }
@@ -1162,7 +1342,12 @@ fn run_process_probe(
     let mut argv = Vec::with_capacity(execution.args.len() + 1);
     argv.push(resolved_executable.path.to_string_lossy().to_string());
     argv.extend(execution.args.clone());
-    let mut env = Vec::new();
+    let mut env = command_resolution
+        .adapter_environment
+        .values
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.clone()))
+        .collect::<Vec<_>>();
     if let Some(path) = &command_resolution.path_value {
         env.push(("PATH", path.clone()));
     }
@@ -1826,6 +2011,54 @@ mod tests {
             "provenance_path": manifest["provenance_path"],
             "execution_contract": repository_execution_contract_for(manifest)
         })
+    }
+
+    #[test]
+    fn capability_support_selection_excludes_unrelated_manifest_schemas() {
+        let root = tempdir().unwrap();
+        let matching: VerificationCapabilityManifest =
+            serde_json::from_value(manifest_value_with_id(
+                "vcap-matching",
+                "cargo",
+                vec!["--version"],
+                1024,
+                1024,
+                5000,
+            ))
+            .unwrap();
+        let mut unrelated_value = manifest_value_with_id(
+            "vcap-unrelated",
+            "cargo",
+            vec!["--version"],
+            1024,
+            1024,
+            5000,
+        );
+        unrelated_value["supported_observations"][0]["type"] = json!("planr.test.other");
+        unrelated_value["supported_observations"][0]["schema_ref"] = json!("planr.test.other@v1");
+        unrelated_value["supported_observations"][0]["schema_digest"] = json!(OTHER_SCHEMA_DIGEST);
+        unrelated_value["availability_probe"]["execution"]["payload_schema"]["type"] =
+            json!("planr.test.other");
+        unrelated_value["availability_probe"]["execution"]["payload_schema"]["schema_ref"] =
+            json!("planr.test.other@v1");
+        unrelated_value["availability_probe"]["execution"]["payload_schema"]["schema_digest"] =
+            json!(OTHER_SCHEMA_DIGEST);
+        let unrelated: VerificationCapabilityManifest =
+            serde_json::from_value(unrelated_value).unwrap();
+        let registry = CapabilityRegistry::from_manifests_and_adapter_registrations(
+            root.path(),
+            [matching, unrelated],
+            &[],
+        );
+        let observation_type: NamespacedIdentifier =
+            serde_json::from_value(json!("planr.test.output")).unwrap();
+
+        let selected = registry
+            .capabilities_supporting(&observation_type, "planr.test.output@v1")
+            .map(|capability| capability.manifest.id.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(selected, vec!["vcap-matching"]);
     }
 
     fn repository_execution_contract_for(manifest: &Value) -> Value {
@@ -3282,8 +3515,8 @@ mod tests {
     fn registry_valid_optional_permissions_round_trip_exactly() {
         let dir = tempdir().unwrap();
         let mut manifest_value = manifest_value("cargo", vec!["--version"], 1024);
-        manifest_value["permissions"]["environment"] = json!("read_env:PATH");
-        manifest_value["permissions"]["secrets"] = json!("none");
+        manifest_value["permissions"]["environment"] = json!("read_env:TEST_RUNTIME_PATH");
+        manifest_value["permissions"]["secrets"] = json!("host_allowlist");
         let digest = write_manifest(dir.path(), &manifest_value);
         let mut registry = CapabilityRegistry::from_manifests_and_adapter_registrations(
             dir.path(),
@@ -3291,17 +3524,237 @@ mod tests {
             &[registration_for_manifest(&digest, &manifest_value)],
         );
 
-        let instance = registry
-            .probe_and_store(&conn(), dir.path(), "vcap-test-process-v1", runtime())
-            .unwrap();
+        let instance = with_captured_adapter_env_override(
+            BTreeMap::from([
+                (
+                    HOST_ADAPTER_ENV_ALLOWLIST.to_string(),
+                    "TEST_RUNTIME_PATH".to_string(),
+                ),
+                ("TEST_RUNTIME_PATH".to_string(), "runtime-a".to_string()),
+            ]),
+            || {
+                registry
+                    .probe_and_store(&conn(), dir.path(), "vcap-test-process-v1", runtime())
+                    .unwrap()
+            },
+        );
 
         assert_eq!(instance.permissions.network, "none");
         assert_eq!(instance.permissions.filesystem, "read_workspace");
         assert_eq!(
             instance.permissions.environment.as_deref(),
-            Some("read_env:PATH")
+            Some("read_env:TEST_RUNTIME_PATH")
         );
-        assert_eq!(instance.permissions.secrets.as_deref(), Some("none"));
+        assert_eq!(
+            instance.permissions.secrets.as_deref(),
+            Some("host_allowlist")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn registry_forwards_only_declared_adapter_environment_and_binds_value_drift() {
+        let dir = tempdir().unwrap();
+        let mut manifest_value =
+            manifest_value("sh", vec!["-c", "test -n \"$TEST_BROWSER_ENDPOINT\""], 1024);
+        manifest_value["permissions"]["environment"] = json!("read_env:TEST_BROWSER_ENDPOINT");
+        manifest_value["permissions"]["secrets"] = json!("host_allowlist");
+        let digest = write_manifest(dir.path(), &manifest_value);
+        let mut registry = CapabilityRegistry::from_manifests_and_adapter_registrations(
+            dir.path(),
+            [],
+            &[registration_for_manifest(&digest, &manifest_value)],
+        );
+        let conn = conn();
+
+        let first = with_captured_adapter_env_override(
+            BTreeMap::from([
+                (
+                    HOST_ADAPTER_ENV_ALLOWLIST.to_string(),
+                    "TEST_BROWSER_ENDPOINT".to_string(),
+                ),
+                (
+                    "TEST_BROWSER_ENDPOINT".to_string(),
+                    "http://127.0.0.1:49222".to_string(),
+                ),
+                ("TEST_UNDECLARED".to_string(), "must-not-leak".to_string()),
+            ]),
+            || {
+                registry
+                    .current_or_probe_and_store(
+                        &conn,
+                        dir.path(),
+                        "vcap-test-process-v1",
+                        runtime(),
+                    )
+                    .unwrap()
+            },
+        );
+        let first_environment = first.instance.environment.digest.as_str().to_string();
+        assert_eq!(
+            first.instance.availability.status,
+            CapabilityAvailabilityStatus::Available
+        );
+
+        let second = with_captured_adapter_env_override(
+            BTreeMap::from([
+                (
+                    HOST_ADAPTER_ENV_ALLOWLIST.to_string(),
+                    "TEST_BROWSER_ENDPOINT".to_string(),
+                ),
+                (
+                    "TEST_BROWSER_ENDPOINT".to_string(),
+                    "http://127.0.0.1:49333".to_string(),
+                ),
+            ]),
+            || {
+                registry
+                    .current_or_probe_and_store(
+                        &conn,
+                        dir.path(),
+                        "vcap-test-process-v1",
+                        runtime(),
+                    )
+                    .unwrap()
+            },
+        );
+
+        assert!(!second.reused);
+        assert_eq!(
+            second.reason,
+            CapabilityInstanceResolutionReason::ReprobedEnvironmentMismatch
+        );
+        assert_ne!(
+            first_environment,
+            second.instance.environment.digest.as_str(),
+            "adapter connection drift must produce a new environment binding"
+        );
+        let capture = with_captured_adapter_env_override(
+            BTreeMap::from([
+                (
+                    HOST_ADAPTER_ENV_ALLOWLIST.to_string(),
+                    "TEST_BROWSER_ENDPOINT".to_string(),
+                ),
+                (
+                    "TEST_BROWSER_ENDPOINT".to_string(),
+                    "http://127.0.0.1:49333".to_string(),
+                ),
+                ("TEST_UNDECLARED".to_string(), "must-not-leak".to_string()),
+            ]),
+            || capture_manifest_adapter_environment(&manifest(manifest_value.clone())).unwrap(),
+        );
+        assert_eq!(
+            capture.values,
+            BTreeMap::from([(
+                "TEST_BROWSER_ENDPOINT".to_string(),
+                "http://127.0.0.1:49333".to_string(),
+            )])
+        );
+        assert_eq!(capture.durable_output_redactions, capture.values);
+        assert!(!capture.binding.to_string().contains("49333"));
+        assert!(!capture.binding.to_string().contains("must-not-leak"));
+        let public_capture = with_captured_adapter_env_override(
+            BTreeMap::from([
+                (
+                    HOST_ADAPTER_ENV_ALLOWLIST.to_string(),
+                    "TEST_BROWSER_ENDPOINT".to_string(),
+                ),
+                (
+                    HOST_ADAPTER_PUBLIC_ENV_ALLOWLIST.to_string(),
+                    "TEST_BROWSER_ENDPOINT".to_string(),
+                ),
+                (
+                    "TEST_BROWSER_ENDPOINT".to_string(),
+                    "http://127.0.0.1:49333".to_string(),
+                ),
+            ]),
+            || capture_manifest_adapter_environment(&manifest(manifest_value)).unwrap(),
+        );
+        assert!(public_capture.durable_output_redactions.is_empty());
+        assert_eq!(
+            public_capture.binding["public_names"],
+            json!(["TEST_BROWSER_ENDPOINT"])
+        );
+        assert!(!public_capture.binding.to_string().contains("49333"));
+    }
+
+    #[test]
+    fn registry_rejects_reserved_adapter_environment_names_before_probe() {
+        let dir = tempdir().unwrap();
+        let marker = dir.path().join("reserved-env-probe-ran.marker");
+        let script = format!("touch {}", marker.display());
+        let mut manifest_value = manifest_value("sh", vec!["-c", &script], 1024);
+        manifest_value["permissions"]["environment"] = json!("read_env:PLANR_FORGED");
+        manifest_value["permissions"]["secrets"] = json!("host_allowlist");
+        let digest = write_manifest(dir.path(), &manifest_value);
+        let registry = CapabilityRegistry::from_manifests_and_adapter_registrations(
+            dir.path(),
+            [],
+            &[registration_for_manifest(&digest, &manifest_value)],
+        );
+
+        assert!(
+            registry
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("invalid or reserved"))
+        );
+        assert!(
+            !marker.exists(),
+            "invalid environment permission ran its probe"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn registry_rejects_unapproved_or_unacknowledged_adapter_environment_before_probe() {
+        let dir = tempdir().unwrap();
+        let marker = dir.path().join("unapproved-env-probe-ran.marker");
+        let script = format!("touch {}", marker.display());
+        let mut unapproved = manifest_value("sh", vec!["-c", &script], 1024);
+        unapproved["permissions"]["environment"] = json!("read_env:AWS_SECRET_ACCESS_KEY");
+        unapproved["permissions"]["secrets"] = json!("host_allowlist");
+        let digest = write_manifest(dir.path(), &unapproved);
+        let mut registry = CapabilityRegistry::from_manifests_and_adapter_registrations(
+            dir.path(),
+            [],
+            &[registration_for_manifest(&digest, &unapproved)],
+        );
+
+        let error = with_captured_adapter_env_override(
+            BTreeMap::from([
+                (
+                    HOST_ADAPTER_ENV_ALLOWLIST.to_string(),
+                    "UNRELATED_SAFE_VALUE".to_string(),
+                ),
+                (
+                    "AWS_SECRET_ACCESS_KEY".to_string(),
+                    "must-not-leak".to_string(),
+                ),
+            ]),
+            || {
+                registry
+                    .probe_and_store(&conn(), dir.path(), "vcap-test-process-v1", runtime())
+                    .unwrap_err()
+            },
+        );
+        assert!(error.to_string().contains("not authorized by host"));
+        assert!(!marker.exists(), "unapproved environment probe ran");
+
+        let mut unacknowledged = unapproved;
+        unacknowledged["permissions"]["secrets"] = json!("none");
+        let digest = write_manifest(dir.path(), &unacknowledged);
+        let registry = CapabilityRegistry::from_manifests_and_adapter_registrations(
+            dir.path(),
+            [],
+            &[registration_for_manifest(&digest, &unacknowledged)],
+        );
+        assert!(registry.diagnostics().iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("permissions.secrets must equal host_allowlist")
+        }));
+        assert!(!marker.exists(), "unacknowledged environment probe ran");
     }
 
     #[cfg(unix)]
@@ -3771,7 +4224,7 @@ mod tests {
             })
             .unwrap(),
             &registry.repository_root_digest,
-            &ProbeCommandResolution::capture(&capability.manifest.availability_probe.execution),
+            &ProbeCommandResolution::capture(&capability).unwrap(),
         )
         .unwrap();
         registry

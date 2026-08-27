@@ -847,10 +847,17 @@
           "$ref": "#/$defs/JsonObject"
         },
         "state_transitions": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/JsonObject"
-          }
+          "oneOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/JsonObject"
+              }
+            },
+            {
+              "$ref": "#/$defs/JsonObject"
+            }
+          ]
         },
         "persistence": {
           "$ref": "#/$defs/JsonObject"

@@ -2782,6 +2782,7 @@ process.stdout.write(JSON.stringify(result));
                     mock_refs: None,
                 },
                 env,
+                durable_output_redactions: BTreeMap::new(),
                 retry_of: None,
                 attempt_index: 0,
                 max_attempts: 1,

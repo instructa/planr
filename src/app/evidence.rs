@@ -21,7 +21,7 @@ use crate::evidence::{
     AttemptStatus, CapabilityRegistry, CapabilityRuntimeContext, EnvironmentBinding, EvidenceId,
     FixtureDisclosure, GapReason, ProcessExecutionContract, ProofObligation, ProvenanceSourceKind,
     TargetBinding, ValidatedArtifactImportRepository, VerificationCapabilityInstance,
-    VerificationCapabilityManifest,
+    VerificationCapabilityManifest, capture_manifest_adapter_environment,
     coverage::{
         AuthoritativeObligationBindingRow, CoverageEvaluation,
         authoritative_obligation_bindings_for_scope, authoritative_obligation_ids_for_scope,
@@ -580,10 +580,22 @@ impl App {
     }
 
     fn probe_registry_capabilities(&self, registry: &mut CapabilityRegistry) -> Result<Value> {
+        self.probe_selected_registry_capabilities(registry, None)
+    }
+
+    fn probe_selected_registry_capabilities(
+        &self,
+        registry: &mut CapabilityRegistry,
+        selected_manifest_ids: Option<&BTreeSet<String>>,
+    ) -> Result<Value> {
         let runtime = self.default_capability_runtime();
         let mut probes = Vec::new();
         let resolved_adapter_digests = registry
             .capabilities()
+            .filter(|capability| {
+                selected_manifest_ids
+                    .is_none_or(|selected| selected.contains(capability.manifest.id.as_str()))
+            })
             .filter_map(|capability| {
                 let execution = capability.repository_execution_contract.as_ref()?;
                 let projection = resolve_process_run(&self.root, execution, &BTreeMap::new())
@@ -597,6 +609,10 @@ impl App {
             .collect::<BTreeMap<_, _>>();
         let manifest_ids = registry
             .capabilities()
+            .filter(|capability| {
+                selected_manifest_ids
+                    .is_none_or(|selected| selected.contains(capability.manifest.id.as_str()))
+            })
             .map(|capability| capability.manifest.id.as_str().to_string())
             .collect::<Vec<_>>();
         for manifest_id in manifest_ids {
@@ -1394,7 +1410,6 @@ impl App {
         })?;
         let builtins = BuiltInEvidenceCatalog::load()?;
         let mut registry = self.evidence_registry_from_policy(&document)?;
-        let probe = self.probe_registry_capabilities(&mut registry)?;
         let project = self.default_project()?;
         let active = authoritative_obligation_bindings_for_scope(
             &self.conn,
@@ -1403,6 +1418,22 @@ impl App {
             id,
         )
         .map_err(|error| anyhow!("{error}"))?;
+        let selected_manifest_ids = active
+            .iter()
+            .flat_map(|row| row.observations.iter())
+            .filter_map(|observation| {
+                observation
+                    .payload_schema
+                    .as_ref()
+                    .map(|schema| (observation, schema))
+            })
+            .flat_map(|(observation, schema)| {
+                registry.capabilities_supporting(&observation.observation_type, &schema.schema_ref)
+            })
+            .map(|capability| capability.manifest.id.as_str().to_string())
+            .collect::<BTreeSet<_>>();
+        let probe =
+            self.probe_selected_registry_capabilities(&mut registry, Some(&selected_manifest_ids))?;
         // The registry projection retains every repository diagnostic, but
         // readiness blocks only on capabilities needed by this active scope.
         let mut gaps = Vec::new();
@@ -1451,17 +1482,10 @@ impl App {
                     })),
                 }
                 let matching = registry
-                    .capabilities()
-                    .filter(|capability| {
-                        capability
-                            .manifest
-                            .supported_observations
-                            .iter()
-                            .any(|binding| {
-                                binding.observation_type == observation.observation_type
-                                    && binding.schema_ref == payload_schema.schema_ref
-                            })
-                    })
+                    .capabilities_supporting(
+                        &observation.observation_type,
+                        &payload_schema.schema_ref,
+                    )
                     .collect::<Vec<_>>();
                 if matching.is_empty() {
                     gaps.push(json!({
@@ -1595,33 +1619,35 @@ impl App {
                 EvidenceCommandError::bad_request("evidence verify requires --scope plan").into(),
             );
         }
-        if let Some(execution_state) = self.canonical_execution_state_for_plan_value(id)?
-            && execution_state["phase"] == "implementation"
-            && ExecutionRunRepository::new(&self.conn)
-                .open_ordinary_outcome_ids(id)?
-                .is_empty()
-        {
-            self.freeze_feature_run_source_value(id)?;
-        }
-        if let Some(execution_state) = self.canonical_execution_state_for_plan_value(id)?
-            && execution_state["phase"] == "held"
-            && execution_state["feature_run"]["hold_reason"] == "capability"
-        {
-            if execution_state["verification_admission_repair"].is_null() {
-                return Err(EvidenceCommandError::conflict(format!(
-                    "capability-held verification has no canonical repair request for plan {id}"
-                ))
-                .into());
+        if let Some(execution_state) = self.canonical_execution_state_for_plan_value(id)? {
+            if execution_state["phase"] == "implementation"
+                && ExecutionRunRepository::new(&self.conn)
+                    .open_ordinary_outcome_ids(id)?
+                    .is_empty()
+            {
+                self.freeze_feature_run_source_value(id)?;
             }
-            return Ok(json!({
-                "status": "blocked",
-                "verification_broker": {
-                    "plan_id": id,
-                    "stage": "repair",
-                },
-                "repair_request": execution_state["verification_admission_repair"],
-                "execution_state": execution_state,
-            }));
+        }
+        if let Some(execution_state) = self.canonical_execution_state_for_plan_value(id)? {
+            if execution_state["phase"] == "held"
+                && execution_state["feature_run"]["hold_reason"] == "capability"
+            {
+                if execution_state["verification_admission_repair"].is_null() {
+                    return Err(EvidenceCommandError::conflict(format!(
+                        "capability-held verification has no canonical repair request for plan {id}"
+                    ))
+                    .into());
+                }
+                return Ok(json!({
+                    "status": "blocked",
+                    "verification_broker": {
+                        "plan_id": id,
+                        "stage": "repair",
+                    },
+                    "repair_request": execution_state["verification_admission_repair"],
+                    "execution_state": execution_state,
+                }));
+            }
         }
         let pick = self
             .verification_work_packet_value(id, false)?
@@ -1844,6 +1870,8 @@ impl App {
                     .repository_execution_contract
                     .as_ref()
                     .unwrap_or(&capability.manifest.availability_probe.execution);
+                let adapter_environment =
+                    capture_manifest_adapter_environment(&capability.manifest)?;
                 let selected_agent_skill = selected
                     .iter()
                     .find_map(|observation| observation.execution_method.as_ref())
@@ -1870,6 +1898,7 @@ impl App {
                     "capability_instance_id": instance_id,
                     "target": target,
                     "environment": instance.environment,
+                    "adapter_environment": adapter_environment.binding,
                     "execution_contract": execution_contract,
                     "fixture_disclosure": {
                         "fixtures_used": false,
@@ -1929,6 +1958,7 @@ impl App {
         instance: &VerificationCapabilityInstance,
     ) -> Result<(Value, Value)> {
         ensure_capability_manifest_instance_identity(manifest, instance)?;
+        let adapter_environment = capture_manifest_adapter_environment(manifest)?;
         let [(target, requirement_ids)] = canonical_target_partitions(&obligation.observations)?
             .try_into()
             .map_err(|_: Vec<_>| {
@@ -1962,6 +1992,7 @@ impl App {
                     "capability_instance_id": instance.id.as_str(),
                     "target": target,
                     "environment": instance.environment,
+                    "adapter_environment": adapter_environment.binding,
                     "execution_contract": manifest.availability_probe.execution,
                     "fixture_disclosure": {
                         "fixtures_used": false,
@@ -2111,14 +2142,11 @@ impl App {
                 product_findings.is_empty(),
                 validated.execution_binding,
             )?;
-            let product_failed = result["receipt"]["proof_gaps"]
-                .as_array()
-                .is_some_and(|gaps| {
-                    gaps.iter().any(|gap| {
-                        gap.as_str() == Some("product_failed")
-                            || gap.get("reason").and_then(Value::as_str) == Some("product_failed")
-                    })
-                });
+            let product_failed = trusted_product_failure(
+                result["attempt"]["status"].as_str(),
+                &result["attempt"]["exit"],
+                &result["receipt"],
+            );
             let terminally_exhausted = !result["terminal_exhaustion"].is_null();
             if product_failed && !terminally_exhausted {
                 let lease = result["feature_run_lease"].as_object().ok_or_else(|| {
@@ -2376,6 +2404,14 @@ impl App {
                 capability,
                 capability_instance_id,
             )?;
+            let current_adapter_environment =
+                capture_manifest_adapter_environment(&resolved.manifest)?;
+            if input.get("adapter_environment") != Some(&current_adapter_environment.binding) {
+                return Err(EvidenceCommandError::conflict(
+                    "sealed run-index adapter environment is stale",
+                )
+                .into());
+            }
             bindings.push(ValidatedRunIndexEntry {
                 execution_binding,
                 instance: resolved.instance,
@@ -2709,6 +2745,13 @@ impl App {
                 .map_err(|error| EvidenceCommandError::bad_request(error.to_string()))?;
         let instance = self.load_capability_instance(&instance_id)?;
         let manifest = self.load_capability_manifest(&instance_id)?;
+        let adapter_environment = capture_manifest_adapter_environment(&manifest)?;
+        if value.get("adapter_environment") != Some(&adapter_environment.binding) {
+            return Err(EvidenceCommandError::conflict(
+                "sealed Evidence adapter environment is stale",
+            )
+            .into());
+        }
         let execution_contract: ProcessExecutionContract =
             serde_json::from_value(value.get("execution_contract").cloned().ok_or_else(|| {
                 EvidenceCommandError::bad_request("sealed evidence run requires execution_contract")
@@ -2777,22 +2820,14 @@ impl App {
                 serde_json::from_value(value)
                     .map_err(|error| EvidenceCommandError::bad_request(error.to_string()))
             })?;
-        let env = value
-            .get("env")
-            .and_then(Value::as_object)
-            .map(|object| {
-                object
-                    .iter()
-                    .map(|(key, value)| {
-                        value
-                            .as_str()
-                            .map(|value| (key.clone(), value.to_string()))
-                            .ok_or_else(|| anyhow!("env.{key} must be a string"))
-                    })
-                    .collect::<Result<BTreeMap<_, _>>>()
-            })
-            .transpose()?
-            .unwrap_or_default();
+        if value.get("env").is_some() {
+            return Err(EvidenceCommandError::bad_request(
+                "Evidence adapter env is Core-owned and must not be supplied",
+            )
+            .into());
+        }
+        let durable_output_redactions = adapter_environment.durable_output_redactions;
+        let env = adapter_environment.values;
         if env.keys().any(|key| key.starts_with("PLANR_FIXTURE_"))
             && !fixture_disclosure.fixtures_used
         {
@@ -2907,6 +2942,7 @@ impl App {
                 environment,
                 fixture_disclosure,
                 env,
+                durable_output_redactions,
                 retry_of,
                 attempt_index,
                 max_attempts,
@@ -2923,26 +2959,24 @@ impl App {
             &output.attempt.exit,
             &output.attempt.raw_result,
         );
-        if verdict == "passed"
-            && let Some(binding) = hermetic_reuse.as_ref()
-            && let Some(receipt_id) = output.receipt_value["id"].as_str()
-        {
-            self.store_hermetic_reuse(
-                &project.id,
-                &obligation_id,
-                output.attempt.id.as_str(),
-                receipt_id,
-                binding,
-            )?;
+        if verdict == "passed" {
+            if let Some(binding) = hermetic_reuse.as_ref() {
+                if let Some(receipt_id) = output.receipt_value["id"].as_str() {
+                    self.store_hermetic_reuse(
+                        &project.id,
+                        &obligation_id,
+                        output.attempt.id.as_str(),
+                        receipt_id,
+                        binding,
+                    )?;
+                }
+            }
         }
-        let product_failed = output.receipt_value["proof_gaps"]
-            .as_array()
-            .is_some_and(|gaps| {
-                gaps.iter().any(|gap| {
-                    gap.as_str() == Some("product_failed")
-                        || gap.get("reason").and_then(Value::as_str) == Some("product_failed")
-                })
-            });
+        let product_failed = trusted_product_failure(
+            Some(output.attempt.status.as_str()),
+            &output.attempt.exit,
+            &output.receipt_value,
+        );
         let product_finding =
             if product_failed && route_product_finding && terminal_settlement.borrow().is_none() {
                 lease
@@ -3926,9 +3960,10 @@ impl App {
         if matches!(scope, EvidenceCoverageScope::Plan)
             && coverage.status.as_str() == "satisfied"
             && !coverage.receipt_digests.is_empty()
-            && let Some(settlement) = self.settle_feature_run_after_plan_coverage(id)?
         {
-            value["feature_run_verification_settlement"] = settlement;
+            if let Some(settlement) = self.settle_feature_run_after_plan_coverage(id)? {
+                value["feature_run_verification_settlement"] = settlement;
+            }
         }
         Ok(value)
     }
@@ -4747,6 +4782,24 @@ fn evidence_run_verdict(status: AttemptStatus, exit: &Value, raw_result: &Value)
         .to_string()
 }
 
+fn trusted_product_failure(
+    attempt_status: Option<&str>,
+    attempt_exit: &Value,
+    receipt: &Value,
+) -> bool {
+    attempt_status == Some(AttemptStatus::Failed.as_str())
+        && attempt_exit.get("error").and_then(Value::as_str) == Some("product_failed")
+        && receipt.get("receipt_status").and_then(Value::as_str) == Some("trusted")
+        && receipt
+            .get("observations")
+            .and_then(Value::as_array)
+            .is_some_and(|observations| {
+                observations.iter().any(|observation| {
+                    observation.get("outcome").and_then(Value::as_str) == Some("failed")
+                })
+            })
+}
+
 fn should_settle_terminal_exhaustion(
     verdict: &str,
     has_feature_run_lease: bool,
@@ -4798,11 +4851,39 @@ fn compact_verification_broker_result(full: &Value) -> Value {
         .into_iter()
         .flatten()
         .map(|result| {
+            let receipt = &result["receipt"];
+            let observations = receipt["observations"]
+                .as_array()
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            let passing_observation_count = observations
+                .iter()
+                .filter(|observation| observation["outcome"] == "passed")
+                .count();
+            let failed_observation_count = observations
+                .iter()
+                .filter(|observation| observation["outcome"] == "failed")
+                .count();
+            let non_passing_observation_count =
+                observations.len().saturating_sub(passing_observation_count);
+            let receipt_status = receipt["receipt_status"].as_str().unwrap_or("missing");
+            let receipt_outcome = if receipt_status != "trusted" {
+                "missing"
+            } else if !observations.is_empty() && non_passing_observation_count == 0 {
+                "passing"
+            } else {
+                "non_passing"
+            };
             json!({
                 "verdict": result["verdict"],
                 "attempt_id": result["attempt"]["id"],
-                "receipt_id": result["receipt"]["id"],
+                "receipt_id": receipt["id"],
                 "receipt_digest": result["receipt_digest"],
+                "receipt_status": receipt_status,
+                "receipt_outcome": receipt_outcome,
+                "passing_observation_count": passing_observation_count,
+                "failed_observation_count": failed_observation_count,
+                "non_passing_observation_count": non_passing_observation_count,
                 "obligation_id": result["attempt"]["obligation_id"],
                 "reused": result["reused"],
                 "product_finding": result["product_finding"],
@@ -5242,11 +5323,11 @@ fn host_capability_harness_path() -> Result<PathBuf> {
     if let Ok(path) = std::env::var("PLANR_HOST_CAPABILITY_HARNESS") {
         candidates.push(PathBuf::from(path));
     }
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(bin_dir) = exe.parent()
-    {
-        candidates.push(bin_dir.join("scripts/host-capability-experiment.mjs"));
-        candidates.push(bin_dir.join("../scripts/host-capability-experiment.mjs"));
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(bin_dir) = exe.parent() {
+            candidates.push(bin_dir.join("scripts/host-capability-experiment.mjs"));
+            candidates.push(bin_dir.join("../scripts/host-capability-experiment.mjs"));
+        }
     }
     candidates.push(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts/host-capability-experiment.mjs"),
@@ -5985,7 +6066,11 @@ mod tests {
             "results": [{
                 "verdict": "passed",
                 "attempt": {"id": "attempt-1", "obligation_id": "pob-1", "raw_result": {"large": "payload"}},
-                "receipt": {"id": "receipt-1", "observations": [{"large": "payload"}]},
+                "receipt": {
+                    "id": "receipt-1",
+                    "receipt_status": "trusted",
+                    "observations": [{"outcome": "passed", "large": "payload"}]
+                },
                 "receipt_digest": "sha256:receipt",
                 "reused": false,
                 "product_finding": null,
@@ -5997,11 +6082,51 @@ mod tests {
         }));
         assert_eq!(compact["results"][0]["attempt_id"], "attempt-1");
         assert_eq!(compact["results"][0]["receipt_id"], "receipt-1");
+        assert_eq!(compact["results"][0]["receipt_status"], "trusted");
+        assert_eq!(compact["results"][0]["receipt_outcome"], "passing");
+        assert_eq!(compact["results"][0]["passing_observation_count"], 1);
+        assert_eq!(compact["results"][0]["failed_observation_count"], 0);
+        assert_eq!(compact["results"][0]["non_passing_observation_count"], 0);
         assert_eq!(compact["coverage"]["status"], "satisfied");
         let encoded = serde_json::to_string(&compact).unwrap();
         assert!(!encoded.contains("raw_result"));
         assert!(!encoded.contains("observations"));
         assert!(encoded.len() < 1500, "{encoded}");
+    }
+
+    #[test]
+    fn verification_broker_result_distinguishes_trusted_non_passing_receipt() {
+        let compact = compact_verification_broker_result(&json!({
+            "status": "failed",
+            "verdict": "failed",
+            "run_index_digest": "sha256:run",
+            "results": [{
+                "verdict": "failed",
+                "attempt": {"id": "attempt-1", "obligation_id": "pob-1"},
+                "receipt": {
+                    "id": "receipt-1",
+                    "receipt_status": "trusted",
+                    "observations": [
+                        {"requirement_id": "obs-one", "outcome": "passed"},
+                        {"requirement_id": "obs-two", "outcome": "failed"}
+                    ]
+                },
+                "receipt_digest": "sha256:receipt",
+                "reused": false,
+                "product_finding": {"requirement_ids": ["obs-two"]},
+                "terminal_exhaustion": null
+            }],
+            "coverage": {"status": "unsatisfied", "canonical_projection": {"pass": false}, "gaps": []},
+            "feature_run_verification_settlement": null,
+            "terminal_exhaustion": null
+        }));
+
+        assert_eq!(compact["results"][0]["receipt_status"], "trusted");
+        assert_eq!(compact["results"][0]["receipt_outcome"], "non_passing");
+        assert_eq!(compact["results"][0]["passing_observation_count"], 1);
+        assert_eq!(compact["results"][0]["failed_observation_count"], 1);
+        assert_eq!(compact["results"][0]["non_passing_observation_count"], 1);
+        assert_eq!(compact["coverage"]["status"], "unsatisfied");
     }
 
     #[test]

@@ -1,6 +1,8 @@
 # Browser Harness adapter v1
 
-Status: frozen for `planr-browser-harness-adapter` v1.
+Status: historical. The current adapter hard-cuts to
+`BROWSER_HARNESS_ADAPTER_V2.md`; it does not accept this v1 payload schema or
+its shared-action/final-observation execution shape.
 
 This reference defines Planr's first process adapter for the external
 `browser-harness` tool. The adapter implements
@@ -76,10 +78,7 @@ The adapter does not advertise a visual observation type. Planr therefore
 rejects it during capability matching for a visual requirement. A recording or
 screenshot cannot upgrade `com.planr.web.dom_state` into visual Evidence.
 
-## Canonical live fixture
+## Historical fixture
 
-`tests/fixtures/evidence/browser-harness/v1/form.html` and
-`form-request.json` exercise the provider-free live boundary: one existing HTTP
-target, one Browser Harness session, bounded fill/select/click actions, and one
-structured DOM postcondition. The fixture requires a dedicated headless browser
-endpoint and never starts a model provider.
+The executable v1 fixture was removed with the v2 hard cut. The maintained
+provider-free fixture lives under `tests/fixtures/evidence/browser-harness/v2/`.

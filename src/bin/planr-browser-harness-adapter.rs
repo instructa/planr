@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use std::{
+    collections::BTreeSet,
     io::{Read, Write},
     process::{Command, ExitCode, Stdio},
 };
@@ -8,28 +9,95 @@ use std::{
 const REQUEST_SCHEMA: &str = "planr.evidence.adapter-request.v1";
 const RESULT_SCHEMA: &str = "planr.structured_observation_results.v2";
 const OBSERVATION_TYPE: &str = "com.planr.web.dom_state";
-const OBSERVATION_SCHEMA: &str = "schema://com.planr.web.dom_state.v1";
+const OBSERVATION_SCHEMA: &str = "schema://com.planr.web.dom_state.v2";
 const RESULT_PREFIX: &str = "PLANR_EVIDENCE_RESULT_JSON=";
 
 const BROWSER_SCRIPT: &str = r#"
 import json
 import time
+from urllib.parse import urlsplit
 
 request = json.loads(__PLANR_REQUEST_JSON_STRING__)
 target = request["target"]
 requirements = request["requirements"]
+requirements_by_id = {requirement["id"]: requirement for requirement in requirements}
+scenario = next(
+    requirement["state_transitions"]
+    for requirement in requirements
+    if "scenario_id" in requirement["state_transitions"]
+)
+transitions = scenario["steps"]
+total_deadline = time.monotonic() + 15.0
+checkpoint_window_seconds = 0.75
+captured = {}
+storage_snapshots = {}
+runtime_errors = []
+external_requests = set()
+target_url = urlsplit(target["uri"])
+target_origin = f"{target_url.scheme}://{target_url.netloc}"
 
 def ax_value(node, field):
     value = node.get(field) or {}
     return value.get("value")
 
-def click_accessible(role, name):
+def ensure_time():
+    if time.monotonic() >= total_deadline:
+        raise RuntimeError("Browser Evidence scenario exceeded its single total deadline")
+
+def normalize(value):
+    return " ".join(str(value or "").split())
+
+def collect_events():
+    for event in drain_events():
+        method = event.get("method")
+        params = event.get("params") or {}
+        if method == "Runtime.exceptionThrown":
+            runtime_errors.append(method)
+        elif method == "Runtime.consoleAPICalled" and params.get("type") == "error":
+            runtime_errors.append(method)
+        elif method == "Log.entryAdded" and (params.get("entry") or {}).get("level") == "error":
+            runtime_errors.append(method)
+        elif method == "Network.requestWillBeSent":
+            url = ((params.get("request") or {}).get("url") or "")
+            parsed = urlsplit(url)
+            if parsed.scheme in ("http", "https") and f"{parsed.scheme}://{parsed.netloc}" != target_origin:
+                external_requests.add(url)
+
+def settle():
+    ensure_time()
+    js("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))")
+    collect_events()
+
+def click_accessible(role, name, scope_text=None):
+    if scope_text is not None:
+        expression = (
+            "(()=>{const norm=v=>(v||'').replace(/\\s+/g,' ').trim();"
+            "const role=" + json.dumps(role) + ";const name=" + json.dumps(name) + ";"
+            "const scope=" + json.dumps(scope_text) + ";"
+            "const visible=e=>!e.disabled&&e.getClientRects().length>0&&"
+            "getComputedStyle(e).visibility!=='hidden'&&getComputedStyle(e).display!=='none';"
+            "const candidates=[...document.querySelectorAll('button,a,[role=button],[role=link]')].map(e=>{"
+            "const actualRole=e.getAttribute('role')||(e.tagName==='A'?'link':'button');"
+            "const actualName=norm(e.getAttribute('aria-label')||e.textContent);"
+            "const roleMatches=role==='control'?['button','link'].includes(actualRole):actualRole===role;"
+            "if(!roleMatches||!actualName.includes(name)||!visible(e))return null;"
+            "let score=Number.MAX_SAFE_INTEGER;for(let node=e.parentElement;node&&node!==document.body;node=node.parentElement){"
+            "const text=norm(node.textContent);if(text.includes(scope))score=Math.min(score,text.length);}"
+            "return score===Number.MAX_SAFE_INTEGER?null:{e,score};}).filter(Boolean).sort((a,b)=>a.score-b.score);"
+            "if(candidates.length===0||(candidates.length>1&&candidates[0].score===candidates[1].score))"
+            "return {ok:false,count:candidates.length};candidates[0].e.click();return {ok:true,count:1};})()"
+        )
+        result = js(expression)
+        if not result or not result.get("ok"):
+            count = (result or {}).get("count", 0)
+            raise RuntimeError(f"expected one scoped accessible {role!r} named {name!r}, found {count}")
+        return
     nodes = cdp("Accessibility.getFullAXTree").get("nodes", [])
     matches = [
         node for node in nodes
         if not node.get("ignored")
-        and ax_value(node, "role") == role
-        and ax_value(node, "name") == name
+        and (ax_value(node, "role") == role or (role == "control" and ax_value(node, "role") in ("button", "link")))
+        and name in (ax_value(node, "name") or "")
         and node.get("backendDOMNodeId") is not None
     ]
     if len(matches) != 1:
@@ -39,19 +107,24 @@ def click_accessible(role, name):
     y = sum(quad[1::2]) / 4
     click_at_xy(x, y)
 
-def set_control(selector, value, action):
+def set_control(locator, value, action):
     expression = (
-        "(()=>{const e=document.querySelector(" + json.dumps(selector) + ");"
-        "if(!e)return {ok:false,reason:'missing'};"
+        "(()=>{const norm=v=>(v||'').replace(/\\s+/g,' ').trim();"
+        "const locator=" + json.dumps(locator) + ";let matches=[];"
+        "if(locator.subject){const e=document.querySelector(locator.subject);if(e)matches=[e];}"
+        "else{matches=[...document.querySelectorAll('label')].filter(l=>norm(l.textContent).toLowerCase().startsWith(locator.label.toLowerCase()))"
+        ".map(l=>l.control||l.querySelector('input,textarea,select')).filter(Boolean);}"
+        "if(matches.length!==1)return {ok:false,reason:'control-count',count:matches.length};"
+        "const e=matches[0];"
         "if(e.disabled)return {ok:false,reason:'disabled'};"
         "const action=" + json.dumps(action) + ";"
         "if(action==='fill'&&!['INPUT','TEXTAREA'].includes(e.tagName))"
         "return {ok:false,reason:'not-fillable'};"
         "if(action==='select'&&e.tagName!=='SELECT')"
         "return {ok:false,reason:'not-select'};"
-        "const value=" + json.dumps(value) + ";"
-        "if(action==='select'&&![...e.options].some(o=>o.value===value&&!o.disabled))"
-        "return {ok:false,reason:'option-unavailable'};"
+        "let value=" + json.dumps(value) + ";"
+        "if(action==='select'){const options=[...e.options].filter(o=>!o.disabled&&(o.value===value||norm(o.textContent)===value));"
+        "if(options.length!==1)return {ok:false,reason:'option-unavailable',count:options.length};value=options[0].value;}"
         "const prototype=e.tagName==='SELECT'?HTMLSelectElement.prototype:"
         "e.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;"
         "const setter=Object.getOwnPropertyDescriptor(prototype,'value').set;"
@@ -63,60 +136,167 @@ def set_control(selector, value, action):
     result = js(expression)
     if not result or not result.get("ok"):
         reason = (result or {}).get("reason", "unknown")
-        raise RuntimeError(f"{action} failed for {selector!r}: {reason}")
+        raise RuntimeError(f"{action} failed for {locator!r}: {reason}")
 
-def observe(selector):
+def select_values(labels):
+    expression = (
+        "(()=>{const norm=v=>(v||'').replace(/\\s+/g,' ').trim();const labels=" + json.dumps(labels) + ";"
+        "const result={};for(const name of labels){const matches=[...document.querySelectorAll('label')]"
+        ".filter(l=>norm(l.textContent).toLowerCase().startsWith(name.toLowerCase())).map(l=>l.control||l.querySelector('select')).filter(e=>e&&e.tagName==='SELECT');"
+        "if(matches.length===1){const option=matches[0].selectedOptions[0];result[name]=norm(option?.textContent||matches[0].value);}}"
+        "return result;})()"
+    )
+    return js(expression) or {}
+
+def accessibility_state():
+    expression = (
+        "(()=>{const visible=e=>!e.disabled&&e.getClientRects().length>0&&"
+        "getComputedStyle(e).visibility!=='hidden'&&getComputedStyle(e).display!=='none';"
+        "const controls=[...document.querySelectorAll('button,a,input,textarea,select')].filter(visible);"
+        "const name=e=>(e.getAttribute('aria-label')||e.getAttribute('title')||"
+        "(e.labels&&[...e.labels].map(l=>l.textContent).join(' '))||e.textContent||'').trim();"
+        "return {unnamed_controls:controls.filter(e=>!name(e)).length,"
+        "unlabelled_fields:controls.filter(e=>['INPUT','TEXTAREA','SELECT'].includes(e.tagName)&&!(e.labels&&e.labels.length)&&!e.getAttribute('aria-label')).length};})()"
+    )
+    return js(expression)
+
+def storage_state(expected, compare_snapshot):
+    if not isinstance(expected, dict):
+        return None
+    key = expected.get("key")
+    expression = (
+        "(()=>{const key=" + json.dumps(key) + ";const raw=localStorage.getItem(key);let parsed=null;"
+        "try{parsed=raw===null?null:JSON.parse(raw)}catch{}"
+        "return {raw,present:raw!==null,transaction_count:Array.isArray(parsed?.transactions)?parsed.transactions.length:null};})()"
+    )
+    observed = js(expression) or {"raw": None, "present": False, "transaction_count": None}
+    raw = observed.pop("raw", None)
+    observed["key"] = key
+    observed["matches_snapshot"] = (
+        compare_snapshot is not None
+        and compare_snapshot in storage_snapshots
+        and raw == storage_snapshots[compare_snapshot]
+    )
+    return observed
+
+def observe(requirement, compare_snapshot=None):
+    selector = requirement["subject"]
     expression = (
         "(()=>{const e=document.querySelector(" + json.dumps(selector) + ");"
         "if(!e)return null;"
         "const visible=typeof e.checkVisibility==='function'"
         "?e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})"
         ":!!(e.getClientRects().length&&getComputedStyle(e).visibility!=='hidden');"
-        "return {text:(e.textContent||'').trim(),visible};})()"
+        "return {text:(e.innerText||e.textContent||'').replace(/\\s+/g,' ').trim(),visible,"
+        "horizontal_overflow:document.documentElement.scrollWidth>document.documentElement.clientWidth};})()"
     )
-    return js(expression)
+    element = js(expression)
+    expected = requirement["expected"]
+    text = (element or {}).get("text")
+    contains = expected.get("contains_text") or []
+    excludes = expected.get("excludes_text") or []
+    collect_events()
+    return {
+        "schema_ref": requirement["payload_schema"]["schema_ref"],
+        "selector": selector,
+        "text": text,
+        "visible": (element or {}).get("visible", False),
+        "contains_text": [value for value in contains if value in (text or "")],
+        "excludes_text": [value for value in excludes if value not in (text or "")],
+        "storage": storage_state(expected.get("storage"), compare_snapshot),
+        "selected": select_values(list((expected.get("selected") or {}).keys())),
+        "accessibility": accessibility_state(),
+        "layout": {"horizontal_overflow": (element or {}).get("horizontal_overflow", False)},
+        "runtime": {
+            "error_count": len(runtime_errors),
+            "external_request_count": len(external_requests),
+        },
+    }
 
 def expected_matches(actual, expected):
-    return actual is not None and all(actual.get(key) == value for key, value in expected.items())
+    if isinstance(expected, dict):
+        return isinstance(actual, dict) and all(
+            key in actual and expected_matches(actual[key], value)
+            for key, value in expected.items()
+        )
+    return actual == expected
 
-tab = new_tab(target["uri"])
+def capture_checkpoint(transition):
+    requirement_ids = transition["requirements"]
+    compare_snapshot = transition.get("compare_storage_snapshot")
+    checkpoint_deadline = min(total_deadline, time.monotonic() + checkpoint_window_seconds)
+    latest = {}
+    while True:
+        latest = {
+            requirement_id: observe(requirements_by_id[requirement_id], compare_snapshot)
+            for requirement_id in requirement_ids
+        }
+        if all(expected_matches(latest[requirement_id], requirements_by_id[requirement_id]["expected"])
+               for requirement_id in requirement_ids):
+            break
+        if time.monotonic() >= checkpoint_deadline:
+            break
+        time.sleep(0.05)
+    captured.update(latest)
+
+tab = new_tab("about:blank")
 try:
-    if not wait_for_load():
+    cdp("Page.enable")
+    cdp("Runtime.enable")
+    cdp("Network.enable")
+    cdp("Log.enable")
+    drain_events()
+    cdp("Page.navigate", url=target["uri"])
+    if not wait_for_load(timeout=max(0.1, min(5.0, total_deadline - time.monotonic()))):
         raise RuntimeError("target did not finish loading")
     initial = page_info()["url"]
-    transitions = requirements[0].get("state_transitions") or []
-    if transitions:
-        activate_tab(tab)
+    activate_tab(tab)
     for transition in transitions:
+        ensure_time()
         action = transition["action"]
         if action == "click":
-            click_accessible(transition["role"], transition["name"])
-        else:
-            set_control(transition["subject"], transition["value"], action)
+            click_accessible(transition["role"], transition["name"], transition.get("scope_text"))
+            settle()
+        elif action in ("fill", "select"):
+            locator = {key: transition[key] for key in ("subject", "label") if key in transition}
+            set_control(locator, transition["value"], action)
+            settle()
+        elif action == "reset":
+            js("localStorage.removeItem(" + json.dumps(transition["storage_key"]) + ");sessionStorage.clear();true")
+            cdp("Page.navigate", url=target["uri"])
+            if not wait_for_load(timeout=max(0.1, min(5.0, total_deadline - time.monotonic()))):
+                raise RuntimeError("target did not finish loading after reset")
+            settle()
+        elif action == "snapshot_storage":
+            storage_snapshots[transition["snapshot"]] = js(
+                "localStorage.getItem(" + json.dumps(transition["storage_key"]) + ")"
+            )
+        elif action == "reload":
+            cdp("Page.reload", ignoreCache=True)
+            if not wait_for_load(timeout=max(0.1, min(5.0, total_deadline - time.monotonic()))):
+                raise RuntimeError("target did not finish loading after reload")
+            settle()
+        elif action == "viewport":
+            cdp("Emulation.setDeviceMetricsOverride", width=transition["width"], height=transition["height"], deviceScaleFactor=1, mobile=False)
+            settle()
+        elif action == "checkpoint":
+            capture_checkpoint(transition)
 
-    observations = []
-    statuses = []
-    for requirement in requirements:
-        deadline = time.monotonic() + 5.0
-        actual = None
-        while time.monotonic() < deadline:
-            actual = observe(requirement["subject"])
-            if expected_matches(actual, requirement["expected"]):
-                break
-            time.sleep(0.05)
-        passed = expected_matches(actual, requirement["expected"])
-        statuses.append(passed)
-        actual = actual or {"text": None, "visible": False}
-        observations.append({
+    if set(captured) != set(requirements_by_id):
+        raise RuntimeError("Browser Evidence scenario did not capture the exact sealed requirement set")
+    collect_events()
+    observations = [
+        {
             "requirement_id": requirement["id"],
             "type": requirement["type"],
-            "actual": {
-                "schema_ref": requirement["payload_schema"]["schema_ref"],
-                "selector": requirement["subject"],
-                "text": actual.get("text"),
-                "visible": actual.get("visible", False),
-            },
-        })
+            "actual": captured[requirement["id"]],
+        }
+        for requirement in requirements
+    ]
+    statuses = [
+        expected_matches(captured[requirement["id"]], requirement["expected"])
+        for requirement in requirements
+    ]
 
     result = {
         "schema_version": "planr.structured_observation_results.v2",
@@ -258,11 +438,19 @@ fn validate_request(request: &Value) -> Result<()> {
         .and_then(Value::as_array)
         .filter(|requirements| !requirements.is_empty())
         .context("Browser Harness adapter requires at least one requirement")?;
-    let expected_transitions = requirements[0]
-        .get("state_transitions")
-        .cloned()
-        .unwrap_or_else(|| json!([]));
-    validate_transitions(&expected_transitions)?;
+    let mut requirement_ids = BTreeSet::new();
+    for requirement in requirements {
+        let requirement_id = requirement
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .context("Browser Harness requirement needs a non-empty id")?;
+        if !requirement_ids.insert(requirement_id.to_string()) {
+            bail!("Browser Harness requirement IDs must be unique");
+        }
+    }
+    let transitions = resolve_transitions(requirements)?;
+    validate_transitions(transitions, &requirement_ids)?;
     let expected_method = requirements[0].get("execution_method");
     for requirement in requirements {
         if requirement.get("type").and_then(Value::as_str) != Some(OBSERVATION_TYPE) {
@@ -279,18 +467,9 @@ fn validate_request(request: &Value) -> Result<()> {
             .get("expected")
             .and_then(Value::as_object)
             .context("Browser Harness DOM-state requirement needs an expected object")?;
-        if expected.is_empty()
-            || expected
-                .keys()
-                .any(|key| !matches!(key.as_str(), "text" | "visible"))
-            || expected.get("text").is_some_and(|value| !value.is_string())
-            || expected
-                .get("visible")
-                .is_some_and(|value| !value.is_boolean())
-        {
-            bail!(
-                "Browser Harness DOM-state expected supports only string text and boolean visible"
-            );
+        validate_expected(expected)?;
+        if requirement.get("target") != request.get("target") {
+            bail!("Browser Harness requirement target must equal the sealed batch target");
         }
         if requirement
             .get("payload_schema")
@@ -299,14 +478,6 @@ fn validate_request(request: &Value) -> Result<()> {
             != Some(OBSERVATION_SCHEMA)
         {
             bail!("Browser Harness DOM-state requirement has the wrong payload schema");
-        }
-        if requirement
-            .get("state_transitions")
-            .cloned()
-            .unwrap_or_else(|| json!([]))
-            != expected_transitions
-        {
-            bail!("Browser Harness adapter requires one shared transition sequence per batch");
         }
         if requirement.get("execution_method") != expected_method {
             bail!("Browser Harness adapter requires one shared execution method per batch");
@@ -335,38 +506,294 @@ fn validate_request(request: &Value) -> Result<()> {
     Ok(())
 }
 
-fn validate_transitions(transitions: &Value) -> Result<()> {
+fn resolve_transitions<'a>(requirements: &'a [Value]) -> Result<&'a Value> {
+    let mut declaration: Option<(&str, &Value)> = None;
+    let mut references = Vec::new();
+    for requirement in requirements {
+        let state = requirement
+            .get("state_transitions")
+            .and_then(Value::as_object)
+            .context("Browser Harness requirement needs a closed state_transitions object")?;
+        match (
+            state.get("scenario_id"),
+            state.get("scenario_ref"),
+            state.get("steps"),
+        ) {
+            (Some(id), None, Some(steps)) if state.len() == 2 => {
+                let id = id
+                    .as_str()
+                    .filter(|id| !id.is_empty() && id.len() <= 128)
+                    .context("Browser Harness scenario_id must be a bounded non-empty string")?;
+                if declaration.replace((id, steps)).is_some() {
+                    bail!("Browser Harness batch must declare exactly one scenario");
+                }
+            }
+            (None, Some(reference), None) if state.len() == 1 => {
+                references.push(
+                    reference
+                        .as_str()
+                        .filter(|value| !value.is_empty() && value.len() <= 128)
+                        .context(
+                            "Browser Harness scenario_ref must be a bounded non-empty string",
+                        )?,
+                );
+            }
+            _ => bail!(
+                "Browser Harness state_transitions must be one scenario declaration or reference"
+            ),
+        }
+    }
+    let (scenario_id, steps) =
+        declaration.context("Browser Harness batch has no scenario declaration")?;
+    if references.iter().any(|reference| *reference != scenario_id) {
+        bail!("Browser Harness scenario references must resolve to the one batch declaration");
+    }
+    Ok(steps)
+}
+
+fn validate_expected(expected: &serde_json::Map<String, Value>) -> Result<()> {
+    if expected.is_empty()
+        || expected.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "text"
+                    | "visible"
+                    | "contains_text"
+                    | "excludes_text"
+                    | "storage"
+                    | "selected"
+                    | "accessibility"
+                    | "layout"
+                    | "runtime"
+            )
+        })
+    {
+        bail!("Browser Harness DOM-state expected contains unsupported fields");
+    }
+    if expected.get("text").is_some_and(|value| !value.is_string())
+        || expected
+            .get("visible")
+            .is_some_and(|value| !value.is_boolean())
+    {
+        bail!("Browser Harness DOM-state text/visible expectation has the wrong type");
+    }
+    for field in ["contains_text", "excludes_text"] {
+        if let Some(values) = expected.get(field) {
+            let values = values
+                .as_array()
+                .filter(|values| !values.is_empty() && values.len() <= 64)
+                .with_context(|| {
+                    format!("Browser Harness {field} must be a non-empty bounded array")
+                })?;
+            if values
+                .iter()
+                .any(|value| !bounded_nonempty_string(Some(value), 1024))
+            {
+                bail!("Browser Harness {field} entries must be bounded non-empty strings");
+            }
+        }
+    }
+    if let Some(storage) = expected.get("storage") {
+        let storage = storage
+            .as_object()
+            .context("Browser Harness storage expectation must be an object")?;
+        if storage.is_empty()
+            || storage.keys().any(|key| {
+                !matches!(
+                    key.as_str(),
+                    "key" | "present" | "transaction_count" | "matches_snapshot"
+                )
+            })
+            || !bounded_nonempty_string(storage.get("key"), 512)
+            || storage
+                .get("present")
+                .is_some_and(|value| !value.is_boolean())
+            || storage
+                .get("matches_snapshot")
+                .is_some_and(|value| !value.is_boolean())
+            || storage
+                .get("transaction_count")
+                .is_some_and(|value| value.as_u64().is_none())
+        {
+            bail!("Browser Harness storage expectation is invalid");
+        }
+    }
+    if let Some(selected) = expected.get("selected") {
+        let selected = selected
+            .as_object()
+            .filter(|selected| !selected.is_empty() && selected.len() <= 32)
+            .context("Browser Harness selected expectation must be a non-empty bounded object")?;
+        if selected.iter().any(|(label, value)| {
+            label.is_empty() || label.len() > 512 || !bounded_nonempty_string(Some(value), 512)
+        }) {
+            bail!("Browser Harness selected expectation labels and values must be bounded strings");
+        }
+    }
+    validate_bounded_count_object(
+        expected.get("accessibility"),
+        &["unnamed_controls", "unlabelled_fields"],
+        "accessibility",
+    )?;
+    if let Some(layout) = expected.get("layout") {
+        let layout = layout
+            .as_object()
+            .context("Browser Harness layout expectation must be an object")?;
+        if layout.is_empty()
+            || layout.keys().any(|key| key != "horizontal_overflow")
+            || layout
+                .get("horizontal_overflow")
+                .is_none_or(|value| !value.is_boolean())
+        {
+            bail!("Browser Harness layout expectation is invalid");
+        }
+    }
+    validate_bounded_count_object(
+        expected.get("runtime"),
+        &["error_count", "external_request_count"],
+        "runtime",
+    )?;
+    Ok(())
+}
+
+fn validate_bounded_count_object(
+    value: Option<&Value>,
+    allowed: &[&str],
+    name: &str,
+) -> Result<()> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    let object = value
+        .as_object()
+        .filter(|object| !object.is_empty())
+        .with_context(|| {
+            format!("Browser Harness {name} expectation must be a non-empty object")
+        })?;
+    if object
+        .iter()
+        .any(|(key, value)| !allowed.contains(&key.as_str()) || value.as_u64().is_none())
+    {
+        bail!("Browser Harness {name} expectation is invalid");
+    }
+    Ok(())
+}
+
+fn validate_transitions(transitions: &Value, requirement_ids: &BTreeSet<String>) -> Result<()> {
     let transitions = transitions
         .as_array()
         .context("Browser Harness state_transitions must be an array")?;
-    if transitions.len() > 64 {
-        bail!("Browser Harness supports at most 64 state transitions per batch");
+    if transitions.is_empty() || transitions.len() > 256 {
+        bail!("Browser Harness requires 1 to 256 state transitions per batch");
     }
+    let mut captured_requirement_ids = BTreeSet::new();
+    let mut snapshot_ids = BTreeSet::new();
     for transition in transitions {
         let object = transition
             .as_object()
             .context("Browser Harness state transition must be an object")?;
         match object.get("action").and_then(Value::as_str) {
             Some("click") => {
-                if object.len() != 3
+                if !(object.len() == 3 || object.len() == 4)
                     || !bounded_nonempty_string(object.get("role"), 128)
                     || !bounded_nonempty_string(object.get("name"), 512)
+                    || object
+                        .get("scope_text")
+                        .is_some_and(|value| !bounded_nonempty_string(Some(value), 1024))
+                    || object.keys().any(|key| {
+                        !matches!(key.as_str(), "action" | "role" | "name" | "scope_text")
+                    })
                 {
-                    bail!("Browser Harness click transitions require only action, role, and name");
+                    bail!("Browser Harness click transition is invalid");
                 }
             }
             Some("fill" | "select") => {
                 if object.len() != 3
-                    || !bounded_nonempty_string(object.get("subject"), 1024)
+                    || (bounded_nonempty_string(object.get("subject"), 1024)
+                        == bounded_nonempty_string(object.get("label"), 512))
                     || !bounded_string(object.get("value"), 4096)
+                    || object.keys().any(|key| {
+                        !matches!(key.as_str(), "action" | "subject" | "label" | "value")
+                    })
                 {
-                    bail!(
-                        "Browser Harness fill/select transitions require only action, subject, and value"
-                    );
+                    bail!("Browser Harness fill/select transition is invalid");
                 }
             }
-            _ => bail!("Browser Harness supports only click, fill, and select transitions"),
+            Some("reset") => {
+                if object.len() != 2 || !bounded_nonempty_string(object.get("storage_key"), 512) {
+                    bail!("Browser Harness reset transition is invalid");
+                }
+            }
+            Some("snapshot_storage") => {
+                if object.len() != 3
+                    || !bounded_nonempty_string(object.get("storage_key"), 512)
+                    || !bounded_nonempty_string(object.get("snapshot"), 128)
+                {
+                    bail!("Browser Harness snapshot_storage transition is invalid");
+                }
+                let snapshot = object["snapshot"].as_str().unwrap();
+                if !snapshot_ids.insert(snapshot.to_string()) {
+                    bail!("Browser Harness storage snapshot IDs must be unique");
+                }
+            }
+            Some("reload") => {
+                if object.len() != 1 {
+                    bail!("Browser Harness reload transition accepts no additional fields");
+                }
+            }
+            Some("viewport") => {
+                let width = object.get("width").and_then(Value::as_u64);
+                let height = object.get("height").and_then(Value::as_u64);
+                if object.len() != 3
+                    || width.is_none_or(|width| !(320..=2560).contains(&width))
+                    || height.is_none_or(|height| !(320..=2000).contains(&height))
+                {
+                    bail!("Browser Harness viewport transition is invalid");
+                }
+            }
+            Some("checkpoint") => {
+                if !(object.len() == 2 || object.len() == 3)
+                    || object.keys().any(|key| {
+                        !matches!(
+                            key.as_str(),
+                            "action" | "requirements" | "compare_storage_snapshot"
+                        )
+                    })
+                {
+                    bail!("Browser Harness checkpoint transition is invalid");
+                }
+                if let Some(snapshot) = object.get("compare_storage_snapshot") {
+                    let snapshot = snapshot
+                        .as_str()
+                        .filter(|snapshot| snapshot_ids.contains(*snapshot))
+                        .context("Browser Harness checkpoint references an unknown prior storage snapshot")?;
+                    if snapshot.len() > 128 {
+                        bail!("Browser Harness checkpoint snapshot ID is too long");
+                    }
+                }
+                let ids = object
+                    .get("requirements")
+                    .and_then(Value::as_array)
+                    .filter(|ids| !ids.is_empty() && ids.len() <= 64)
+                    .context(
+                        "Browser Harness checkpoint requires a non-empty bounded requirement list",
+                    )?;
+                for id in ids {
+                    let id = id
+                        .as_str()
+                        .filter(|id| requirement_ids.contains(*id))
+                        .context("Browser Harness checkpoint references an unknown requirement")?;
+                    if !captured_requirement_ids.insert(id.to_string()) {
+                        bail!(
+                            "Browser Harness checkpoint requirements must be captured exactly once"
+                        );
+                    }
+                }
+            }
+            _ => bail!("Browser Harness transition action is unsupported"),
         }
+    }
+    if &captured_requirement_ids != requirement_ids {
+        bail!("Browser Harness checkpoints must capture the exact sealed requirement set");
     }
     Ok(())
 }
@@ -456,11 +883,15 @@ mod tests {
                     "skill": "browser-harness",
                     "result_schema": {"schema_ref": "planr.evidence.agent-skill-result.v1"}
                 },
-                "state_transitions": [
-                    {"action": "fill", "subject": "#name", "value": "Pikachu"},
-                    {"action": "select", "subject": "#type", "value": "electric"},
-                    {"action": "click", "role": "button", "name": "Advance"}
-                ]
+                "state_transitions": {
+                    "scenario_id": "fixture-form-v2",
+                    "steps": [
+                        {"action": "fill", "label": "Name", "value": "Pikachu"},
+                        {"action": "select", "label": "Type", "value": "Electric"},
+                        {"action": "click", "role": "button", "name": "Advance"},
+                        {"action": "checkpoint", "requirements": ["obs-state"]}
+                    ]
+                }
             }]
         })
     }
@@ -472,8 +903,10 @@ mod tests {
         let script = browser_script(&request).unwrap();
         assert!(script.contains("click_accessible"));
         assert!(script.contains("set_control"));
-        assert!(script.contains("if transitions:\n        activate_tab(tab)"));
+        assert!(script.contains("capture_checkpoint"));
+        assert!(script.contains("total_deadline = time.monotonic() + 15.0"));
         assert!(script.contains("ereq-test"));
+        assert!(!script.contains("time.monotonic() + 5.0"));
         assert!(!script.contains("capture_screenshot"));
         assert!(!script.contains("start_recording"));
         assert!(!script.contains("stop_recording"));
@@ -482,21 +915,55 @@ mod tests {
     #[test]
     fn rejects_arbitrary_actions_and_observation_types() {
         let mut wrong_action = request();
-        wrong_action["requirements"][0]["state_transitions"][0]["action"] = json!("eval");
+        wrong_action["requirements"][0]["state_transitions"]["steps"][0]["action"] = json!("eval");
         assert!(validate_request(&wrong_action).is_err());
 
         let mut extra_fill_key = request();
-        extra_fill_key["requirements"][0]["state_transitions"][0]["arbitrary"] = json!("code");
+        extra_fill_key["requirements"][0]["state_transitions"]["steps"][0]["arbitrary"] =
+            json!("code");
         assert!(validate_request(&extra_fill_key).is_err());
 
         let mut unbounded_value = request();
-        unbounded_value["requirements"][0]["state_transitions"][0]["value"] =
+        unbounded_value["requirements"][0]["state_transitions"]["steps"][0]["value"] =
             json!("x".repeat(4097));
         assert!(validate_request(&unbounded_value).is_err());
 
         let mut wrong_type = request();
         wrong_type["requirements"][0]["type"] = json!("com.planr.web.visual_state");
         assert!(validate_request(&wrong_type).is_err());
+
+        let mut missing_checkpoint = request();
+        missing_checkpoint["requirements"][0]["state_transitions"]["steps"]
+            .as_array_mut()
+            .unwrap()
+            .pop();
+        assert!(validate_request(&missing_checkpoint).is_err());
+
+        let mut wrong_target = request();
+        wrong_target["requirements"][0]["target"]["uri"] = json!("http://127.0.0.1:3000/other");
+        assert!(validate_request(&wrong_target).is_err());
+    }
+
+    #[test]
+    fn accepts_one_scenario_declaration_with_exact_requirement_references() {
+        let mut request = request();
+        let mut second = request["requirements"][0].clone();
+        second["id"] = json!("obs-second");
+        second["state_transitions"] = json!({"scenario_ref": "fixture-form-v2"});
+        request["requirements"].as_array_mut().unwrap().push(second);
+        request["requirements"][0]["state_transitions"]["steps"][3]["requirements"] =
+            json!(["obs-state", "obs-second"]);
+        validate_request(&request).unwrap();
+
+        let mut unknown_reference = request.clone();
+        unknown_reference["requirements"][1]["state_transitions"]["scenario_ref"] =
+            json!("other-scenario");
+        assert!(validate_request(&unknown_reference).is_err());
+
+        let mut second_declaration = request;
+        second_declaration["requirements"][1]["state_transitions"] =
+            second_declaration["requirements"][0]["state_transitions"].clone();
+        assert!(validate_request(&second_declaration).is_err());
     }
 
     #[test]
@@ -513,7 +980,7 @@ mod tests {
     fn documented_dom_state_schema_accepts_the_adapter_payload() {
         let schema: Value = serde_json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/docs/contracts/schemas/com.planr.web.dom_state.v1.schema.json"
+            "/docs/contracts/schemas/com.planr.web.dom_state.v2.schema.json"
         )))
         .unwrap();
         let validator = jsonschema::draft202012::options().build(&schema).unwrap();
@@ -521,7 +988,14 @@ mod tests {
             "schema_ref": OBSERVATION_SCHEMA,
             "selector": "#status",
             "text": "B",
-            "visible": true
+            "visible": true,
+            "contains_text": ["B"],
+            "excludes_text": ["Error"],
+            "storage": null,
+            "selected": {},
+            "accessibility": {"unnamed_controls": 0, "unlabelled_fields": 0},
+            "layout": {"horizontal_overflow": false},
+            "runtime": {"error_count": 0, "external_request_count": 0}
         })));
     }
 }

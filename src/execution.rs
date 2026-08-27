@@ -63,6 +63,8 @@ pub(crate) struct SupervisedProcessExit {
 #[derive(Debug)]
 pub(crate) struct SupervisedProcess {
     child: Child,
+    process_group_id: u32,
+    observed_exit: Option<SupervisedProcessExit>,
     term_grace_sleeps: ProcessTreeTermGraceSleeps,
     stopped: bool,
 }
@@ -73,10 +75,10 @@ impl SupervisedProcess {
     }
 
     pub(crate) fn try_wait(&mut self) -> Result<Option<SupervisedProcessExit>> {
-        self.child
-            .try_wait()
-            .map(|status| status.map(supervised_process_exit))
-            .context("polling supervised process")
+        if self.observed_exit.is_none() {
+            self.observed_exit = observe_child_exit(&mut self.child)?;
+        }
+        Ok(self.observed_exit)
     }
 
     pub(crate) fn stop(mut self) -> Result<SupervisedProcessExit> {
@@ -86,15 +88,25 @@ impl SupervisedProcess {
     }
 
     fn stop_in_place(&mut self) -> Result<SupervisedProcessExit> {
-        if let Some(status) = self.child.try_wait()? {
-            return Ok(supervised_process_exit(status));
-        }
-        terminate_process_tree(&mut self.child, &self.term_grace_sleeps);
-        let status = self
+        let observed_exit = self.try_wait()?;
+        terminate_process_tree(
+            &mut self.child,
+            self.process_group_id,
+            &self.term_grace_sleeps,
+        );
+        let reaped_exit = self
             .child
             .wait()
+            .map(supervised_process_exit)
             .context("waiting for supervised process")?;
-        Ok(supervised_process_exit(status))
+        if let Some(observed_exit) = observed_exit {
+            if observed_exit != reaped_exit {
+                anyhow::bail!(
+                    "supervised process exit changed between non-reaping observation and reap"
+                );
+            }
+        }
+        Ok(reaped_exit)
     }
 }
 
@@ -125,8 +137,11 @@ pub(crate) fn spawn_supervised_process(
     let child = command
         .spawn()
         .with_context(|| format!("spawning supervised process {}", input.argv[0]))?;
+    let process_group_id = child.id();
     Ok(SupervisedProcess {
         child,
+        process_group_id,
+        observed_exit: None,
         term_grace_sleeps: ProcessTreeTermGraceSleeps::new(),
         stopped: false,
     })
@@ -231,6 +246,7 @@ pub(crate) fn run_bounded_process(input: BoundedProcessInput<'_>) -> Result<Boun
     let mut child = command
         .spawn()
         .with_context(|| format!("spawning {}", input.argv[0]))?;
+    let process_group_id = child.id();
     let stdin_handle = input.stdin.map(|bytes| {
         let mut stdin = child
             .stdin
@@ -258,23 +274,23 @@ pub(crate) fn run_bounded_process(input: BoundedProcessInput<'_>) -> Result<Boun
     let mut interrupted = false;
     let mut child_status: Option<ExitStatus> = None;
     loop {
-        if let Some(status) = child.try_wait()? {
-            child_status = Some(status);
-            terminate_process_tree(&mut child, &term_grace_sleeps);
+        if observe_child_exit(&mut child)?.is_some() {
+            terminate_process_tree(&mut child, process_group_id, &term_grace_sleeps);
+            child_status = Some(child.wait()?);
             break;
         }
         if input.cancellation.is_cancelled() {
             interrupted = true;
-            terminate_process_tree(&mut child, &term_grace_sleeps);
+            terminate_process_tree(&mut child, process_group_id, &term_grace_sleeps);
             break;
         }
         if output_exceeded.load(Ordering::SeqCst) {
-            terminate_process_tree(&mut child, &term_grace_sleeps);
+            terminate_process_tree(&mut child, process_group_id, &term_grace_sleeps);
             break;
         }
         if Instant::now() >= deadline {
             timed_out = true;
-            terminate_process_tree(&mut child, &term_grace_sleeps);
+            terminate_process_tree(&mut child, process_group_id, &term_grace_sleeps);
             break;
         }
         thread::sleep(Duration::from_millis(5));
@@ -394,8 +410,12 @@ impl ProcessTreeTermGraceSleeps {
 }
 
 #[cfg(unix)]
-fn terminate_process_tree(child: &mut Child, term_grace_sleeps: &ProcessTreeTermGraceSleeps) {
-    let process_group_id = child.id() as i32;
+fn terminate_process_tree(
+    _child: &mut Child,
+    process_group_id: u32,
+    term_grace_sleeps: &ProcessTreeTermGraceSleeps,
+) {
+    let process_group_id = process_group_id as i32;
     if !signal_process_group(process_group_id, libc::SIGTERM) {
         return;
     }
@@ -404,7 +424,11 @@ fn terminate_process_tree(child: &mut Child, term_grace_sleeps: &ProcessTreeTerm
 }
 
 #[cfg(not(unix))]
-fn terminate_process_tree(child: &mut Child, _term_grace_sleeps: &ProcessTreeTermGraceSleeps) {
+fn terminate_process_tree(
+    child: &mut Child,
+    _process_group_id: u32,
+    _term_grace_sleeps: &ProcessTreeTermGraceSleeps,
+) {
     let _ = child.kill();
 }
 
@@ -455,6 +479,54 @@ fn supervised_process_exit(status: ExitStatus) -> SupervisedProcessExit {
         exit_code: status.code(),
         signal,
     }
+}
+
+#[cfg(unix)]
+#[allow(unsafe_code)]
+fn observe_child_exit(child: &mut Child) -> Result<Option<SupervisedProcessExit>> {
+    let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+    // SAFETY: `info` points to writable siginfo_t storage, the child PID is
+    // owned by this process, and WNOWAIT deliberately preserves that identity
+    // until process-group teardown has completed and Child::wait reaps it.
+    let result = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            child.id() as libc::id_t,
+            info.as_mut_ptr(),
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+        )
+    };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error()).context("observing supervised process exit");
+    }
+    // SAFETY: waitid returned success and initialized the siginfo_t storage.
+    let info = unsafe { info.assume_init() };
+    // SAFETY: si_pid and si_status are valid for a SIGCHLD result from waitid.
+    let pid = unsafe { info.si_pid() };
+    if pid == 0 {
+        return Ok(None);
+    }
+    // SAFETY: si_status is valid for CLD_EXITED, CLD_KILLED, and CLD_DUMPED.
+    let status = unsafe { info.si_status() };
+    match info.si_code {
+        libc::CLD_EXITED => Ok(Some(SupervisedProcessExit {
+            exit_code: Some(status),
+            signal: None,
+        })),
+        libc::CLD_KILLED | libc::CLD_DUMPED => Ok(Some(SupervisedProcessExit {
+            exit_code: None,
+            signal: Some(status),
+        })),
+        code => anyhow::bail!("waitid returned unexpected child state {code}"),
+    }
+}
+
+#[cfg(not(unix))]
+fn observe_child_exit(child: &mut Child) -> Result<Option<SupervisedProcessExit>> {
+    child
+        .try_wait()
+        .map(|status| status.map(supervised_process_exit))
+        .context("polling supervised process")
 }
 
 #[cfg(test)]
@@ -702,6 +774,107 @@ mod tests {
         );
         let pid = read_published_pid(&pid_path);
         assert_process_is_gone(pid);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn supervised_process_stop_cleans_descendants_after_leader_exit() {
+        let cwd = tempfile::tempdir().unwrap();
+        let pid_path = cwd.path().join("supervised-grandchild.pid");
+        let script = format!(
+            "sh -c 'echo $$ > {}; trap \"\" TERM; while :; do sleep 1; done' & while [ ! -s {} ]; do sleep 0.01; done",
+            pid_path.display(),
+            pid_path.display()
+        );
+        let argv = vec!["sh".to_string(), "-c".to_string(), script];
+        let mut process = spawn_supervised_process(SupervisedProcessInput {
+            cwd: cwd.path(),
+            argv: &argv,
+            env: Vec::new(),
+        })
+        .unwrap();
+        let descendant_pid = read_published_pid(&pid_path);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let leader_exit = loop {
+            if let Some(exit) = process.try_wait().unwrap() {
+                break exit;
+            }
+            assert!(Instant::now() < deadline, "supervised leader did not exit");
+            thread::sleep(Duration::from_millis(10));
+        };
+
+        let stopped_exit = process.stop().unwrap();
+
+        assert_eq!(stopped_exit, leader_exit);
+        assert_eq!(stopped_exit.exit_code, Some(0));
+        assert_process_is_gone(descendant_pid);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn supervised_process_exit_observation_keeps_identity_anchored_until_cleanup() {
+        let cwd = tempfile::tempdir().unwrap();
+        let argv = vec!["sh".to_string(), "-c".to_string(), "exit 23".to_string()];
+        let mut process = spawn_supervised_process(SupervisedProcessInput {
+            cwd: cwd.path(),
+            argv: &argv,
+            env: Vec::new(),
+        })
+        .unwrap();
+        let pid = process.id();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let observed = loop {
+            if let Some(exit) = process.try_wait().unwrap() {
+                break exit;
+            }
+            assert!(Instant::now() < deadline, "supervised leader did not exit");
+            thread::sleep(Duration::from_millis(10));
+        };
+
+        assert_eq!(observed.exit_code, Some(23));
+        assert_waitid_observes_owned_child(pid);
+        assert_eq!(process.stop().unwrap(), observed);
+        assert_waitid_reports_no_child(pid);
+    }
+
+    #[cfg(unix)]
+    #[allow(unsafe_code)]
+    fn assert_waitid_observes_owned_child(pid: u32) {
+        let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+        // SAFETY: the test supplies writable siginfo_t storage for its child.
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid as libc::id_t,
+                info.as_mut_ptr(),
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        assert_eq!(result, 0, "{}", std::io::Error::last_os_error());
+        // SAFETY: successful waitid initialized the storage.
+        let info = unsafe { info.assume_init() };
+        // SAFETY: si_pid is valid for the SIGCHLD result.
+        assert_eq!(unsafe { info.si_pid() }, pid as libc::pid_t);
+    }
+
+    #[cfg(unix)]
+    #[allow(unsafe_code)]
+    fn assert_waitid_reports_no_child(pid: u32) {
+        let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+        // SAFETY: the test supplies writable siginfo_t storage for the PID.
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid as libc::id_t,
+                info.as_mut_ptr(),
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        assert_eq!(result, -1);
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ECHILD)
+        );
     }
 
     #[cfg(unix)]

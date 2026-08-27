@@ -42,10 +42,10 @@ impl App {
                 row.get::<_, String>(0)
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        if obligation_ids.is_empty()
-            && let Some(verification_item_id) = verification_item_id
-        {
-            bail!("risk_review_active_obligations_missing:{verification_item_id}");
+        if obligation_ids.is_empty() {
+            if let Some(verification_item_id) = verification_item_id {
+                bail!("risk_review_active_obligations_missing:{verification_item_id}");
+            }
         }
         Ok(obligation_ids)
     }

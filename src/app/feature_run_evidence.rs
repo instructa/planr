@@ -1696,10 +1696,10 @@ impl App {
     pub(crate) fn repair_work_packet_value(&self, plan_id: &str) -> Result<Option<Value>> {
         let project = self.default_project()?;
         let repository = ExecutionRunRepository::new(&self.conn);
-        if let Some(run) = repository.active_feature_run_for_plan(&project.id, plan_id)?
-            && let Some(hold) = self.premature_source_freeze_restart_hold_for_run(&run)?
-        {
-            return Ok(Some(hold));
+        if let Some(run) = repository.active_feature_run_for_plan(&project.id, plan_id)? {
+            if let Some(hold) = self.premature_source_freeze_restart_hold_for_run(&run)? {
+                return Ok(Some(hold));
+            }
         }
         if let Some(gate) = repository.repair_review_gate_for_plan(&project.id, plan_id)? {
             if gate.responsible_maker_id != worker_id() {
@@ -1724,56 +1724,56 @@ impl App {
                 "remaining": self.progress_value()?
             })));
         }
-        if let Some(run) = repository.active_feature_run_for_plan(&project.id, plan_id)?
-            && run.run.phase == FeatureRunPhase::Implementation
-        {
-            if let Some((latest, dispatch)) = self.pending_repair_settlement(&run.run.id)? {
-                let maker_worker_id = run
-                    .run
-                    .role_owners
-                    .iter()
-                    .find(|owner| owner.role == RunRole::Maker)
-                    .map(|owner| owner.worker_id.clone())
-                    .ok_or_else(|| anyhow!("feature_run_missing_maker:{}", run.run.id))?;
-                if maker_worker_id != worker_id() {
-                    return Ok(None);
-                }
-                let replay_obligation_ids = match dispatch {
-                    RepairSettlementDispatchMode::ProductFinding => {
-                        Some(self.product_repair_obligation_ids(&latest.affected_evidence_ids)?)
+        if let Some(run) = repository.active_feature_run_for_plan(&project.id, plan_id)? {
+            if run.run.phase == FeatureRunPhase::Implementation {
+                if let Some((latest, dispatch)) = self.pending_repair_settlement(&run.run.id)? {
+                    let maker_worker_id = run
+                        .run
+                        .role_owners
+                        .iter()
+                        .find(|owner| owner.role == RunRole::Maker)
+                        .map(|owner| owner.worker_id.clone())
+                        .ok_or_else(|| anyhow!("feature_run_missing_maker:{}", run.run.id))?;
+                    if maker_worker_id != worker_id() {
+                        return Ok(None);
                     }
-                    RepairSettlementDispatchMode::VerificationAdmission => None,
-                };
-                match self.admit_feature_run_budget(
-                    &run,
-                    BudgetPhase::Repair,
-                    &format!("repair:{}", run.run.id),
-                    &worker_id(),
-                    "repair.dispatch",
-                )? {
-                    FeatureRunBudgetAdmission::Held(hold) => return Ok(Some(hold)),
-                    FeatureRunBudgetAdmission::Reserved(_) => {}
+                    let replay_obligation_ids = match dispatch {
+                        RepairSettlementDispatchMode::ProductFinding => {
+                            Some(self.product_repair_obligation_ids(&latest.affected_evidence_ids)?)
+                        }
+                        RepairSettlementDispatchMode::VerificationAdmission => None,
+                    };
+                    match self.admit_feature_run_budget(
+                        &run,
+                        BudgetPhase::Repair,
+                        &format!("repair:{}", run.run.id),
+                        &worker_id(),
+                        "repair.dispatch",
+                    )? {
+                        FeatureRunBudgetAdmission::Held(hold) => return Ok(Some(hold)),
+                        FeatureRunBudgetAdmission::Reserved(_) => {}
+                    }
+                    let plan = self.get_plan(plan_id)?;
+                    let verification_item_id =
+                        self.ready_verification_item_for_plan_path(Some(plan.path.as_str()))?;
+                    let mut packet = json!({
+                        "kind": "outcome",
+                        "mode": match dispatch {
+                            RepairSettlementDispatchMode::ProductFinding => "product_finding_repair",
+                            RepairSettlementDispatchMode::VerificationAdmission => "verification_admission_repair",
+                        },
+                        "execution_state": self.canonical_execution_state_value(&run.run.id, None)?,
+                        "repair_id": latest.id,
+                        "responsible_maker_id": maker_worker_id,
+                        "verification_item_id": verification_item_id,
+                        "invalidation": latest,
+                    });
+                    if let Some(replay_obligation_ids) = replay_obligation_ids {
+                        packet["selective_replay_obligation_ids"] = json!(replay_obligation_ids);
+                    }
+                    return Ok(Some(json!({"work_packet": packet,
+                        "remaining": self.progress_value()?})));
                 }
-                let plan = self.get_plan(plan_id)?;
-                let verification_item_id =
-                    self.ready_verification_item_for_plan_path(Some(plan.path.as_str()))?;
-                let mut packet = json!({
-                    "kind": "outcome",
-                    "mode": match dispatch {
-                        RepairSettlementDispatchMode::ProductFinding => "product_finding_repair",
-                        RepairSettlementDispatchMode::VerificationAdmission => "verification_admission_repair",
-                    },
-                    "execution_state": self.canonical_execution_state_value(&run.run.id, None)?,
-                    "repair_id": latest.id,
-                    "responsible_maker_id": maker_worker_id,
-                    "verification_item_id": verification_item_id,
-                    "invalidation": latest,
-                });
-                if let Some(replay_obligation_ids) = replay_obligation_ids {
-                    packet["selective_replay_obligation_ids"] = json!(replay_obligation_ids);
-                }
-                return Ok(Some(json!({"work_packet": packet,
-                    "remaining": self.progress_value()?})));
             }
         }
         Ok(None)
@@ -2031,23 +2031,25 @@ impl App {
                     gate.kind == ReviewGateKind::RiskCheckpoint
                         && gate.status == ReviewGateStatus::Pending
                 })
-                && repository
+            {
+                if repository
                     .review_source_binding(&gate.id)?
                     .is_some_and(|binding| binding.freeze_id == existing.source_freeze_id)
-            {
-                return Ok(json!({
-                    "created": false,
-                    "work_packet": {
-                        "kind": "review_gate",
-                        "gate_id": gate.id,
-                        "repair_id": invalidation_id,
-                        "responsible_maker_id": worker_id(),
-                        "execution_state": self.canonical_execution_state_value(
-                            &persisted.run.id,
-                            Some(&gate.id),
-                        )?,
-                    },
-                }));
+                {
+                    return Ok(json!({
+                        "created": false,
+                        "work_packet": {
+                            "kind": "review_gate",
+                            "gate_id": gate.id,
+                            "repair_id": invalidation_id,
+                            "responsible_maker_id": worker_id(),
+                            "execution_state": self.canonical_execution_state_value(
+                                &persisted.run.id,
+                                Some(&gate.id),
+                            )?,
+                        },
+                    }));
+                }
             }
             let source_freeze = repository
                 .active_source_freeze(&existing.run_id)?
@@ -2275,11 +2277,12 @@ impl App {
             return Ok(Some(hold));
         }
         let current_verification = self.current_verification_diagnosis(&run)?;
-        if let Some(snapshot) = current_verification.as_ref()
-            && let Some(hold) =
+        if let Some(snapshot) = current_verification.as_ref() {
+            if let Some(hold) =
                 self.inconsistent_verification_restart_hold_for_run(&run, &snapshot.diagnosis)?
-        {
-            return Ok(Some(hold));
+            {
+                return Ok(Some(hold));
+            }
         }
         let verification_item_id = match current_verification.as_ref() {
             Some(snapshot) => snapshot
@@ -2822,11 +2825,12 @@ impl App {
             );
         }
         let repair_refreeze = !repository.invalidations(&persisted.run.id)?.is_empty();
-        if !repair_refreeze
-            && let Some(hold) =
+        if !repair_refreeze {
+            if let Some(hold) =
                 self.feature_run_budget_hold(&persisted, BudgetPhase::Implementation)?
-        {
-            return Ok(Some(hold));
+            {
+                return Ok(Some(hold));
+            }
         }
         let snapshot = capture_repository_snapshot(&self.root)
             .map_err(|error| anyhow!("capturing canonical source freeze: {error}"))?;
@@ -3644,8 +3648,11 @@ allow_overwrite = true
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "$id": "com.example.product.status@v1",
             "type": "object",
-            "required": ["status"],
-            "properties": {"status": {"const": "ready"}},
+            "required": ["schema_ref", "status"],
+            "properties": {
+                "schema_ref": {"const": "com.example.product.status@v1"},
+                "status": {"type": "string"}
+            },
             "additionalProperties": false
         });
         std::fs::write(&schema_path, serde_json::to_vec_pretty(&schema).unwrap()).unwrap();
@@ -3655,25 +3662,64 @@ allow_overwrite = true
             "schema_ref": "com.example.product.status@v1",
             "schema_digest": schema_digest
         });
+        let structured_payload_schema = json!({
+            "type": "planr.structured_observation_results",
+            "schema_ref": "schema://planr.structured_observation_results.v2",
+            "schema_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        });
+        let adapter_program = r#"
+let input = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', chunk => { input += chunk; });
+process.stdin.on('end', () => {
+  if (input.trim() === '') {
+    process.stdout.write(JSON.stringify({ status: 'ready' }));
+    return;
+  }
+  const request = JSON.parse(input);
+  process.stdout.write(JSON.stringify({
+    schema_version: 'planr.structured_observation_results.v2',
+    request_id: request.request_id,
+    request_digest: request.request_digest,
+    target: request.target,
+    observed_target: {
+      kind: request.target.kind,
+      initial_uri: request.target.uri,
+      final_uri: request.target.uri,
+    },
+    environment: request.environment,
+    execution_contract_digest: request.execution_contract_digest,
+    fixture_disclosure: request.fixture_disclosure,
+    observations: request.requirements.map(requirement => ({
+      requirement_id: requirement.id,
+      type: requirement.type,
+      actual: {
+        schema_ref: requirement.payload_schema.schema_ref,
+        status: 'not-ready',
+      },
+    })),
+  }));
+});
+"#;
         let execution = json!({
             "kind": "process",
-            "executable": "sh",
-            "args": ["-c", "exit 77"],
+            "executable": "node",
+            "args": ["-e", adapter_program],
             "working_directory": ".",
             "timeout_ms": 5000,
             "stdout_limit_bytes": 4096,
             "stderr_limit_bytes": 4096,
-            "payload_schema": payload_schema
+            "payload_schema": structured_payload_schema
         });
         let probe_execution = json!({
             "kind": "process",
-            "executable": "sh",
-            "args": ["-c", "printf ready"],
+            "executable": "node",
+            "args": ["-e", adapter_program],
             "working_directory": ".",
             "timeout_ms": 5000,
             "stdout_limit_bytes": 4096,
             "stderr_limit_bytes": 4096,
-            "payload_schema": payload_schema
+            "payload_schema": structured_payload_schema
         });
         let adapter_digest = crate::canonical_json::sha256_json_digest(&json!({
             "schema_version": "planr.process_adapter.binding.v1",
@@ -3690,7 +3736,7 @@ allow_overwrite = true
             "supported_surfaces": ["local-process"],
             "supported_observations": [payload_schema],
             "supported_interactions": ["process"],
-            "supported_artifacts": ["stdout"],
+            "supported_artifacts": ["stdout", "planr.structured_observation_results.v2"],
             "runtime_targets": [{"kind": "process", "id": "product-failure"}],
             "provenance_path": "planr_observed_execution",
             "permissions": {"network": "none", "filesystem": "read_workspace"},
@@ -3839,7 +3885,7 @@ allow_overwrite = true
         let readiness = app
             .evidence_readiness_value(crate::cli::EvidenceCoverageScope::Plan, "plan-a")
             .unwrap();
-        assert_eq!(readiness["status"], "passed");
+        assert_eq!(readiness["status"], "passed", "{readiness}");
         assert_eq!(
             readiness["run_index"]["schema_version"],
             "planr.evidence.run-index.v2"
@@ -5231,7 +5277,7 @@ allow_overwrite = true
         let readiness = app
             .evidence_readiness_value(crate::cli::EvidenceCoverageScope::Plan, "plan-a")
             .unwrap();
-        assert_eq!(readiness["status"], "passed");
+        assert_eq!(readiness["status"], "passed", "{readiness}");
         assert_eq!(readiness["run_index"]["runs"].as_array().unwrap().len(), 2);
 
         let result = app
@@ -5245,6 +5291,15 @@ allow_overwrite = true
         );
         assert_eq!(result["results"].as_array().unwrap().len(), 2);
         assert_eq!(result["results"][0]["verdict"], "failed");
+        assert_eq!(
+            result["results"][0]["attempt"]["exit"]["error"],
+            "product_failed"
+        );
+        assert_eq!(result["results"][0]["receipt"]["proof_gaps"], json!([]));
+        assert_eq!(
+            result["results"][0]["receipt"]["observations"][0]["outcome"],
+            "failed"
+        );
         assert_eq!(result["results"][1]["verdict"], "passed", "{result}");
         assert_eq!(
             app.conn
@@ -5258,6 +5313,16 @@ allow_overwrite = true
             .unwrap();
         assert_eq!(repaired.run.phase, FeatureRunPhase::Implementation);
         assert_eq!(repaired.run.role_owners[0].role, RunRole::Maker);
+        assert_eq!(
+            app.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM feature_run_evidence_invalidations",
+                    [],
+                    |row| row.get::<_, u64>(0),
+                )
+                .unwrap(),
+            1
+        );
     }
 
     fn seed_settlement_obligation(app: &App, policy_digest: &str) {

@@ -99,10 +99,12 @@ impl App {
         }
         if work_type.is_none_or(|value| {
             is_ordinary_implementation_work_type(&WorkType::from(value.to_string()))
-        }) && let Some(plan_id) = plan
-            && let Some(packet) = self.repair_work_packet_value(plan_id)?
-        {
-            return Ok(packet);
+        }) {
+            if let Some(plan_id) = plan {
+                if let Some(packet) = self.repair_work_packet_value(plan_id)? {
+                    return Ok(packet);
+                }
+            }
         }
         let plan_path = plan.map(|id| self.get_plan(id)).transpose()?;
         let filter = PickFilter {
@@ -140,11 +142,14 @@ impl App {
                 && work_type.is_some_and(|value| {
                     is_ordinary_implementation_work_type(&WorkType::from(value.to_string()))
                 })
-                && let Some(plan_id) = plan
-                && let Some(handoff) =
-                    self.resume_accepted_risk_verification_handoff_value(plan_id)?
             {
-                return Ok(handoff);
+                if let Some(plan_id) = plan {
+                    if let Some(handoff) =
+                        self.resume_accepted_risk_verification_handoff_value(plan_id)?
+                    {
+                        return Ok(handoff);
+                    }
+                }
             }
             let remaining = self.progress_value()?;
             let total = remaining["total"].as_i64().unwrap_or(0);

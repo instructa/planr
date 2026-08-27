@@ -1005,13 +1005,13 @@ fn validate_waivers(
         if expires_at.is_none() {
             diagnostics.push(diag(format!("{path}.expires_at"), "must be RFC3339"));
         }
-        if let (Some(created_at), Some(expires_at)) = (created_at, expires_at)
-            && expires_at <= created_at
-        {
-            diagnostics.push(diag(
-                format!("{path}.expires_at"),
-                "must be later than created_at",
-            ));
+        if let (Some(created_at), Some(expires_at)) = (created_at, expires_at) {
+            if expires_at <= created_at {
+                diagnostics.push(diag(
+                    format!("{path}.expires_at"),
+                    "must be later than created_at",
+                ));
+            }
         }
         for (observation_index, observation_id) in waiver.observation_ids.iter().enumerate() {
             if !observation_ids.contains(observation_id.as_str()) {
@@ -1161,13 +1161,13 @@ fn validate_scope_chain(
     let mut seen = BTreeSet::new();
     for layer in layers {
         let rank = scope_rank(&layer.scope.kind);
-        if let Some(previous_rank) = previous_rank
-            && rank < previous_rank
-        {
-            diagnostics.push(diag(
-                "layering_policy.layers",
-                "must be ordered goal -> plan -> item -> criterion",
-            ));
+        if let Some(previous_rank) = previous_rank {
+            if rank < previous_rank {
+                diagnostics.push(diag(
+                    "layering_policy.layers",
+                    "must be ordered goal -> plan -> item -> criterion",
+                ));
+            }
         }
         previous_rank = Some(rank);
         if !seen.insert(scope_identity(&layer.scope)) {

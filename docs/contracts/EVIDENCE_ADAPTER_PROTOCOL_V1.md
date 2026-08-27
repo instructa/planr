@@ -27,9 +27,39 @@ An availability probe starts the same executable with closed, empty stdin. The
 adapter can use that invocation to check runtime availability. A probe result
 cannot satisfy an Evidence requirement.
 
-Planr reserves the `PLANR_EVIDENCE_` environment variable namespace. An adapter
+Planr reserves the complete `PLANR_` environment variable namespace. An adapter
 request does not use environment variables for target, environment, or contract
 bindings.
+
+A process capability can declare `permissions.environment` as
+`read_env:NAME[,NAME]`. This repository-authored declaration is necessary but
+not sufficient. The host or user must independently include every requested
+name in `PLANR_ADAPTER_ENV_ALLOWLIST`; repository content cannot change that
+authorization. A manifest that reads host variables must also declare
+`permissions.secrets = host_allowlist` to acknowledge that values remain
+host-authorized even when a variable name appears non-secret.
+
+Planr captures only the intersection of the manifest request and the host
+authorization. The capability instance and sealed run index bind the variable
+names, the host's public/non-public classification, and a digest of the present
+values. Planr does not persist the values in that binding. At execution, Planr
+clears the process environment, adds `PATH`, and forwards the captured values. A
+changed value, classification, or host authorization invalidates the sealed run
+before the adapter starts. Requested names in the complete `PLANR_` namespace
+are invalid because only Planr Core can own that namespace.
+
+Forwarded values are non-public by default. The host may independently list
+known non-secret configuration names in `PLANR_ADAPTER_PUBLIC_ENV_ALLOWLIST`.
+This list does not authorize access; it must remain a subset of the names that
+the manifest requests and `PLANR_ADAPTER_ENV_ALLOWLIST` authorizes. Before
+result validation, Planr rejects an adapter result that exposes an exact
+non-public value, records `verifier_failed`, and redacts that value from durable
+stdout and stderr excerpts while retaining the digests of the observed output.
+Forwarded adapter values are never passed to a supervised target process.
+
+This allowlist configures the adapter transport. It does not replace the
+`target`, `environment`, or `execution_contract_digest` fields in the sealed
+request.
 
 ## `planr.evidence.adapter-request.v1`
 
@@ -85,10 +115,22 @@ provenance or coverage.
 Planr rejects the result if the process fails or if any required binding does
 not match. This includes a stale request ID, a stale request digest, a wrong
 target, a wrong environment, a wrong execution contract, missing observations,
-extra observations, a schema mismatch, and an unsatisfied expected predicate.
+extra observations, or a schema mismatch.
 
-Planr records the failed attempt. Planr does not create a trusted passing
-receipt from that result.
+An `actual` object that is valid for its registered payload schema but does not
+satisfy the requirement's expected predicate is a product observation, not a
+protocol rejection. Planr preserves that validated `actual`, assigns `failed`
+only to that observation, records `product_failed` for its coverage gap, and
+creates a trusted non-passing receipt. Other observations from the same exact
+execution retain their own validated outcomes. The containing attempt is
+failed when any selected observation fails.
+
+Planr records failed attempts. A runtime target binding failure is
+`target_mismatch`; malformed or schema-invalid observation data is
+`schema_mismatch`. Neither code may replace `product_failed`, and one failed
+observation may not contaminate sibling observations with a receipt-wide gap.
+No non-passing result can create a trusted passing receipt or satisfy complete
+coverage.
 
 ## Version transition
 

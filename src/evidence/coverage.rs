@@ -838,10 +838,10 @@ fn candidate_gaps(
         has_explicit_proof_gap = true;
         gaps.insert(canonical_gap(proof_gap));
     }
-    if !has_explicit_proof_gap
-        && let Some(outcome_gap) = outcome_gap(observation.get("outcome").and_then(Value::as_str))
-    {
-        gaps.insert(outcome_gap);
+    if !has_explicit_proof_gap {
+        if let Some(outcome_gap) = outcome_gap(observation.get("outcome").and_then(Value::as_str)) {
+            gaps.insert(outcome_gap);
+        }
     }
     if observation.get("predicate") != Some(&requirement.expected) {
         gaps.insert(GapReason::SchemaMismatch.as_str());
@@ -2866,6 +2866,98 @@ mod tests {
     }
 
     #[test]
+    fn one_trusted_receipt_preserves_mixed_requirement_coverage() {
+        let conn = conn();
+        seed_project(&conn);
+        seed_manifest(&conn, DIGEST_C);
+        seed_obligation(&conn, &["obs-one", "obs-two"]);
+        seed_receipt_with_observations_and_gaps(
+            &conn,
+            ReceiptSeed {
+                receipt_id: "receipt-mixed",
+                attempt_id: "attempt-mixed",
+                obligation_id: "obl-coverage",
+                manifest_id: "manifest-coverage",
+                instance_id: "instance-coverage",
+                observation_id: "obs-one",
+                status_code: 0,
+                manifest_digest: DIGEST_C,
+                fixtures_used: false,
+                outcome: AttemptStatus::Failed,
+            },
+            vec![
+                crate::evidence::model::ObservationResult {
+                    requirement_id: EvidenceId::parse("obs-one".to_string()).unwrap(),
+                    observation_type: "planr.test.coverage".parse().unwrap(),
+                    outcome: AttemptStatus::Passed,
+                    predicate: [("status".to_string(), json!(200))].into_iter().collect(),
+                    actual: [
+                        ("status".to_string(), json!(200)),
+                        ("schema_ref".to_string(), json!("planr.test.coverage@v1")),
+                    ]
+                    .into_iter()
+                    .collect(),
+                },
+                crate::evidence::model::ObservationResult {
+                    requirement_id: EvidenceId::parse("obs-two".to_string()).unwrap(),
+                    observation_type: "planr.test.coverage".parse().unwrap(),
+                    outcome: AttemptStatus::Failed,
+                    predicate: [("status".to_string(), json!(201))].into_iter().collect(),
+                    actual: [
+                        ("status".to_string(), json!(500)),
+                        ("schema_ref".to_string(), json!("planr.test.coverage@v1")),
+                    ]
+                    .into_iter()
+                    .collect(),
+                },
+            ],
+            &[],
+        );
+
+        let evaluation = evaluate_obligation_coverage(
+            &conn,
+            "p-evidence",
+            "obl-coverage",
+            "2026-07-29T00:00:02Z",
+        )
+        .unwrap();
+
+        assert_eq!(evaluation.status, CoverageStatus::Unsatisfied);
+        assert_eq!(evaluation.receipt_digests.len(), 1);
+        let observations = evaluation.verdict["observation_coverage"]
+            .as_array()
+            .unwrap();
+        let passed = observations
+            .iter()
+            .find(|entry| entry["requirement_id"] == "obs-one")
+            .unwrap();
+        let failed = observations
+            .iter()
+            .find(|entry| entry["requirement_id"] == "obs-two")
+            .unwrap();
+        assert_eq!(passed["status"], "covered");
+        assert_eq!(passed["covering_receipt_ids"], json!(["receipt-mixed"]));
+        assert_eq!(failed["status"], "unsatisfied");
+        assert_eq!(failed["gap_reasons"], json!(["product_failed"]));
+        assert_eq!(failed["attempted_receipt_ids"], json!(["receipt-mixed"]));
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM evidence_attempts", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM evidence_receipts", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+            1
+        );
+        assert_coverage_schema_valid(&evaluation.verdict);
+    }
+
+    #[test]
     fn explicit_all_applicable_pass_policy_keeps_mixed_active_results_inconclusive() {
         let conn = conn();
         seed_project(&conn);
@@ -3766,14 +3858,37 @@ mod tests {
         seed: ReceiptSeed<'_>,
         proof_gaps: &[&str],
     ) {
+        let observation = crate::evidence::model::ObservationResult {
+            requirement_id: EvidenceId::parse(seed.observation_id.to_string()).unwrap(),
+            observation_type: "planr.test.coverage".parse().unwrap(),
+            outcome: seed.outcome,
+            predicate: [("status".to_string(), json!(seed.status_code))]
+                .into_iter()
+                .collect(),
+            actual: [
+                ("status".to_string(), json!(seed.status_code)),
+                ("schema_ref".to_string(), json!("planr.test.coverage@v1")),
+            ]
+            .into_iter()
+            .collect(),
+        };
+        seed_receipt_with_observations_and_gaps(conn, seed, vec![observation], proof_gaps);
+    }
+
+    fn seed_receipt_with_observations_and_gaps(
+        conn: &Connection,
+        seed: ReceiptSeed<'_>,
+        observations: Vec<crate::evidence::model::ObservationResult>,
+        proof_gaps: &[&str],
+    ) {
         let ReceiptSeed {
             receipt_id,
             attempt_id,
             obligation_id,
             manifest_id,
             instance_id,
-            observation_id,
-            status_code,
+            observation_id: _,
+            status_code: _,
             manifest_digest,
             fixtures_used,
             outcome,
@@ -3850,20 +3965,7 @@ mod tests {
                 execution_id: attempt_id.to_string(),
                 tool_call_id: None,
             },
-            observations: vec![crate::evidence::model::ObservationResult {
-                requirement_id: EvidenceId::parse(observation_id.to_string()).unwrap(),
-                observation_type: "planr.test.coverage".parse().unwrap(),
-                outcome,
-                predicate: [("status".to_string(), json!(status_code))]
-                    .into_iter()
-                    .collect(),
-                actual: [
-                    ("status".to_string(), json!(status_code)),
-                    ("schema_ref".to_string(), json!("planr.test.coverage@v1")),
-                ]
-                .into_iter()
-                .collect(),
-            }],
+            observations,
             attempt_ids: vec![EvidenceId::parse(attempt_id.to_string()).unwrap()],
             retry_history: Vec::new(),
             artifacts: vec![ArtifactRef {
@@ -4180,15 +4282,15 @@ mod tests {
         let observation = coverage_to_value(coverage);
         let status = aggregate_observation_status(std::slice::from_ref(&observation));
         let mut validation = validation_scaffold("2026-07-29T00:00:00Z");
-        if observation_status != CoverageObservationStatus::Waived
-            && let Some(gap) = observation.get("gap_reason").and_then(Value::as_str)
-        {
-            push_validation_gap(
-                &mut validation,
-                validation_section_for_gap(gap),
-                gap,
-                &["receipt-one".to_string()],
-            );
+        if observation_status != CoverageObservationStatus::Waived {
+            if let Some(gap) = observation.get("gap_reason").and_then(Value::as_str) {
+                push_validation_gap(
+                    &mut validation,
+                    validation_section_for_gap(gap),
+                    gap,
+                    &["receipt-one".to_string()],
+                );
+            }
         }
         finalize_validation(
             &mut validation,

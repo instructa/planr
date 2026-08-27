@@ -14,17 +14,21 @@
       "subject": "#status",
       "expected": { "text": "Pikachu:electric", "visible": true },
       "target": { "kind": "browser", "uri": "http://127.0.0.1:43128/form.html" },
-      "payload_schema": { "schema_ref": "schema://com.planr.web.dom_state.v1" },
+      "payload_schema": { "schema_ref": "schema://com.planr.web.dom_state.v2" },
       "execution_method": {
         "kind": "agent_skill",
         "skill": "browser-harness",
         "result_schema": { "schema_ref": "planr.evidence.agent-skill-result.v1" }
       },
-      "state_transitions": [
-        { "action": "fill", "subject": "#name", "value": "Pikachu" },
-        { "action": "select", "subject": "#type", "value": "electric" },
-        { "action": "click", "role": "button", "name": "Apply" }
-      ]
+      "state_transitions": {
+        "scenario_id": "fixture-form-v2",
+        "steps": [
+          { "action": "fill", "label": "Name", "value": "Pikachu" },
+          { "action": "select", "label": "Type", "value": "Electric" },
+          { "action": "click", "role": "button", "name": "Apply" },
+          { "action": "checkpoint", "requirements": ["obs-form-state"] }
+        ]
+      }
     }
   ]
 }

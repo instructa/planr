@@ -190,7 +190,8 @@ Required fields:
 - A fresh canonical invocation may append a superseding admission for the same exact active source freeze only when the previously admitted run-index digest already has both a durable Evidence attempt and receipt. The previous admission and execution history remain immutable. A conflicting admission with no execution receipt is pre-receipt state and remains rejected; it cannot bypass Verification Admission Repair.
 - When source is stale after such a receipt, one canonical broker invocation may perform exactly one observed refresh: invalidate and preserve the old freeze and receipt bindings, release the exact verifier lease, freeze the current source, reacquire verification, and seal again. The broker does not repeat this transition if the replacement source becomes stale.
 - Process adapters declare a closed `availability_probe.kind = process` contract with executable name, arguments, optional working directory, timeout, stdout/stderr byte limits, and the payload schema binding for emitted observations.
-- A repository adapter registration may additionally declare one exact `execution_contract.target_lifecycle` with `kind = supervised_process`, a bare executable, arguments, an optional repository-relative working directory, and bounded TCP readiness. The repository or user owns that command; Planr never infers a framework or package manager. When omitted, the target remains externally managed. When present, Planr requires the sealed loopback endpoint to be unreachable before launch, resolves and starts the declared process only after Evidence admission, waits for that endpoint to become ready, runs the adapter, and tears down the complete target process tree on every exit path. Startup, readiness, or premature-exit failure produces a failed attempt with `external_dependency_unavailable`; it cannot satisfy coverage.
+- A process capability may declare `permissions.environment = read_env:NAME[,NAME]` together with `permissions.secrets = host_allowlist`. The host or user must independently authorize every requested name through `PLANR_ADAPTER_ENV_ALLOWLIST`; a repository declaration alone cannot expose a host value. Planr forwards only present values in that intersection to the Evidence adapter, never to a supervised product target. Forwarded values are non-public by default; the host may classify known non-secret configuration names through `PLANR_ADAPTER_PUBLIC_ENV_ALLOWLIST`, which never grants read access by itself. The capability environment and sealed run index bind the requested names, public classification, and a digest of the values. A value, classification, or authorization change makes the sealed adapter environment stale. The binding never stores raw values, the complete `PLANR_` namespace is reserved, and an adapter output that contains an exact non-public forwarded value fails closed and is redacted before result validation.
+- A repository adapter registration may additionally declare one exact `execution_contract.target_lifecycle` with `kind = supervised_process`, a bare executable, arguments, an optional repository-relative working directory, and bounded TCP readiness. The repository or user owns that command; Planr never infers a framework or package manager. When omitted, the target remains externally managed. When present, Planr requires the sealed loopback endpoint to be unreachable before launch, resolves and starts the declared process only after Evidence admission, waits for that endpoint to become ready, runs the adapter, and tears down the complete target process tree on every exit path. On Unix, Planr observes leader exit without reaping it, terminates the still-identity-anchored process group, and only then reaps the leader; it never signals a released numeric process-group ID. Startup, readiness, or premature-exit failure produces a failed attempt with `external_dependency_unavailable`; it cannot satisfy coverage.
 - Availability probes cannot declare a target lifecycle. They test only whether the Evidence capability itself is available and never start the product under verification.
 
 A manifest is a claim about what a method can observe. It is not proof that the method is available now.
@@ -246,6 +247,16 @@ Required fields:
 
 Receipts can satisfy coverage only when trusted, fresh, policy-compliant, target-matched, schema-valid, and observation-equivalent to the requirement.
 
+`receipt_status = trusted` describes provenance and binding integrity, not a
+passing product result. One Planr-observed execution may produce one trusted
+receipt with mixed observation outcomes. Every schema-valid `actual` is
+preserved and evaluated independently: a satisfied predicate is `passed`; an
+unsatisfied predicate is `failed` with the canonical `product_failed` coverage
+gap. Mixed siblings do not inherit that gap. Complete coverage remains
+unsatisfied until every binding observation is covered by a passing result.
+Target-binding errors remain `target_mismatch`; malformed or schema-invalid
+observation payloads remain `schema_mismatch`.
+
 ### CoverageVerdict
 
 The canonical coverage result for a criterion, item, plan, or goal.
@@ -295,6 +306,10 @@ Policy layers may strengthen lower-level requirements. Weakening requires an exp
 `EvidenceReceipt.receipt_status` values:
 
 - `trusted`, `rejected`, `untrusted`, `stale`, `superseded`.
+
+Receipt status and observation outcome are orthogonal. In particular,
+`trusted` never means `passed`; it can identify a trusted non-passing receipt
+whose validated observations include one or more `failed` outcomes.
 
 `VerificationCapabilityInstance.availability.status` values:
 

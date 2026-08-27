@@ -29,7 +29,9 @@ pub(crate) use model::{
     TargetBinding, VerificationCapabilityInstance, VerificationCapabilityManifest,
 };
 #[allow(unused_imports)]
-pub(crate) use registry::{CapabilityRegistry, CapabilityRuntimeContext};
+pub(crate) use registry::{
+    CapabilityRegistry, CapabilityRuntimeContext, capture_manifest_adapter_environment,
+};
 
 #[derive(Debug, Clone)]
 pub struct UntrustedArtifactRef {
