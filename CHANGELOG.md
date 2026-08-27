@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.10.0-alpha.13] - 2026-08-27
+
+### Fixed
+
+- Persist an unavailable supervised Evidence target as one valid failed attempt and trusted non-passing receipt, while retaining the target process's real exit separately for diagnostics.
+- Bind sealed plan-scoped Evidence runs to their exact active FeatureRun admission and verifier lease, rejecting unchanged replays, noncanonical or resealed run indexes, and any second adapter launch after settlement.
+- Preserve the public Evidence run path for plans that have never entered a FeatureRun while preventing completed FeatureRun plans from falling back to that compatibility path.
+
 ## [1.10.0-alpha.12] - 2026-08-26
 
 ### Added
@@ -723,7 +731,8 @@ Initial Planr product release.
 - Tag-driven release pipeline with multi-target builds (darwin/linux, arm64/x86_64) and Homebrew tap automation.
 - Skill workflow documentation for Codex, Claude Code, Cursor, and MCP-only clients.
 
-[Unreleased]: https://github.com/instructa/planr/compare/v1.10.0-alpha.12...HEAD
+[Unreleased]: https://github.com/instructa/planr/compare/v1.10.0-alpha.13...HEAD
+[1.10.0-alpha.13]: https://github.com/instructa/planr/compare/v1.10.0-alpha.12...v1.10.0-alpha.13
 [1.10.0-alpha.12]: https://github.com/instructa/planr/compare/v1.10.0-alpha.11...v1.10.0-alpha.12
 [1.10.0-alpha.11]: https://github.com/instructa/planr/compare/v1.10.0-alpha.10...v1.10.0-alpha.11
 [1.10.0-alpha.10]: https://github.com/instructa/planr/compare/v1.10.0-alpha.9...v1.10.0-alpha.10
