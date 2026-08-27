@@ -449,6 +449,39 @@ impl<'conn> ExecutionRunRepository<'conn> {
             .transpose()
     }
 
+    pub(crate) fn verification_admission_for_plan_run_index(
+        &self,
+        project_id: &str,
+        plan_id: &str,
+        run_index_digest: &str,
+    ) -> Result<Option<VerificationAdmissionRecord>> {
+        let mut statement = self.conn.prepare(
+            "SELECT payload FROM events
+             WHERE project_id = ?1
+               AND event_type = 'feature_run_verification_admitted'
+               AND json_extract(payload, '$.plan_id') = ?2
+               AND json_extract(payload, '$.run_index_digest') = ?3
+             ORDER BY id DESC",
+        )?;
+        let records = statement
+            .query_map(params![project_id, plan_id, run_index_digest], |row| {
+                row.get::<_, String>(0)
+            })?
+            .map(|payload| {
+                serde_json::from_str::<VerificationAdmissionRecord>(&payload?).map_err(Into::into)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let Some(current) = records.first() else {
+            return Ok(None);
+        };
+        if records.iter().skip(1).any(|candidate| {
+            candidate.run_id != current.run_id || candidate.freeze_id != current.freeze_id
+        }) {
+            bail!("verification_admission_run_index_ambiguous:{plan_id}:{run_index_digest}");
+        }
+        Ok(Some(current.clone()))
+    }
+
     pub(crate) fn current_verification_snapshot(
         &self,
         persisted: &PersistedFeatureRun,

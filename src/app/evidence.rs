@@ -2081,6 +2081,9 @@ impl App {
             .ok_or_else(|| EvidenceCommandError::bad_request("run-index scope.id is required"))?
             .to_string();
         let (declared_digest, validated_entries) = self.validate_sealed_run_index(&value)?;
+        if scope_kind == "plan" {
+            self.validate_feature_run_run_index_admission(&scope_id, &declared_digest)?;
+        }
         let runs = value["runs"]
             .as_array()
             .filter(|runs| !runs.is_empty())
@@ -2169,6 +2172,61 @@ impl App {
             response["coverage"] = coverage;
         }
         Ok(response)
+    }
+
+    fn validate_feature_run_run_index_admission(
+        &self,
+        plan_id: &str,
+        run_index_digest: &str,
+    ) -> Result<()> {
+        let project = self.default_project()?;
+        let repository = ExecutionRunRepository::new(&self.conn);
+        let admission = repository.verification_admission_for_plan_run_index(
+            &project.id,
+            plan_id,
+            run_index_digest,
+        )?;
+        let active = repository.active_feature_run_for_plan(&project.id, plan_id)?;
+        let Some(admission) = admission else {
+            if active.is_some() {
+                return Err(EvidenceCommandError::conflict(format!(
+                    "sealed run index {run_index_digest} is not the admitted FeatureRun verification for plan {plan_id}"
+                ))
+                .into());
+            }
+            return Ok(());
+        };
+        let Some(active) = active else {
+            return Err(EvidenceCommandError::conflict(format!(
+                "sealed FeatureRun Evidence allowance already consumed for plan {plan_id}"
+            ))
+            .into());
+        };
+        if active.run.id != admission.run_id {
+            return Err(EvidenceCommandError::conflict(format!(
+                "sealed FeatureRun Evidence allowance already consumed for prior run {}",
+                admission.run_id
+            ))
+            .into());
+        }
+        let lease = self
+            .resolve_feature_run_evidence_lease(&project.id, plan_id)?
+            .ok_or_else(|| {
+                EvidenceCommandError::conflict(format!(
+                    "sealed FeatureRun Evidence allowance already consumed for plan {plan_id}"
+                ))
+            })?;
+        if lease.run_id != admission.run_id
+            || lease.freeze_id != admission.freeze_id
+            || lease.verifier_worker_id != admission.verifier_worker_id
+            || lease.lease_generation != admission.verifier_lease_generation
+        {
+            return Err(EvidenceCommandError::conflict(format!(
+                "sealed run index {run_index_digest} no longer matches the active FeatureRun verification lease"
+            ))
+            .into());
+        }
+        self.validate_feature_run_evidence_lease(&self.conn, &lease)
     }
 
     fn validate_run_index_target_subsets(

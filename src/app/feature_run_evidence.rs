@@ -3859,6 +3859,45 @@ allow_overwrite = true
         probe_shell_script: &str,
         database_path: Option<PathBuf>,
     ) -> (tempfile::TempDir, App, String, Value) {
+        one_shot_verification_fixture_with_target(
+            shell_script,
+            probe_shell_script,
+            database_path,
+            None,
+        )
+    }
+
+    fn one_shot_target_unavailable_fixture() -> (tempfile::TempDir, App, String, Value) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        one_shot_verification_fixture_with_target(
+            "printf '{\"status\":\"ready\"}'",
+            "printf ready",
+            None,
+            Some((
+                json!({"kind": "process", "uri": format!("http://127.0.0.1:{port}/")}),
+                json!({
+                    "kind": "supervised_process",
+                    "executable": "sh",
+                    "args": ["-c", "exit 3"],
+                    "working_directory": ".",
+                    "readiness": {
+                        "kind": "tcp",
+                        "timeout_ms": 1000,
+                        "poll_interval_ms": 10
+                    }
+                }),
+            )),
+        )
+    }
+
+    fn one_shot_verification_fixture_with_target(
+        shell_script: &str,
+        probe_shell_script: &str,
+        database_path: Option<PathBuf>,
+        target_and_lifecycle: Option<(Value, Value)>,
+    ) -> (tempfile::TempDir, App, String, Value) {
         let root = tempfile::tempdir().unwrap();
         write_budget_policy(root.path());
         write_evidence_policy_with_probe(
@@ -3867,6 +3906,22 @@ allow_overwrite = true
             shell_script,
             probe_shell_script,
         );
+        let observation_target = target_and_lifecycle
+            .as_ref()
+            .map(|(target, _)| target.clone())
+            .unwrap_or_else(|| json!({"kind": "process", "uri": "local://ready"}));
+        if let Some((target, target_lifecycle)) = &target_and_lifecycle {
+            let policy_path = root.path().join(".planr/evidence.yaml");
+            let mut policy: Value =
+                serde_json::from_slice(&std::fs::read(&policy_path).unwrap()).unwrap();
+            policy["named_presets"][0]["observations"][0]["target"] = target.clone();
+            policy["adapter_registrations"][0]["execution_contract"]["target_lifecycle"] =
+                target_lifecycle.clone();
+            policy.as_object_mut().unwrap().remove("policy_digest");
+            let policy_digest = crate::canonical_json::sha256_json_digest(&policy).unwrap();
+            policy["policy_digest"] = json!(policy_digest);
+            std::fs::write(&policy_path, serde_json::to_vec_pretty(&policy).unwrap()).unwrap();
+        }
         initialize_git(root.path());
         let app = if let Some(database_path) = database_path {
             let conn = Connection::open(&database_path).unwrap();
@@ -3887,6 +3942,12 @@ allow_overwrite = true
         } else {
             test_app(root.path().to_path_buf())
         };
+        app.conn
+            .execute(
+                "UPDATE projects SET root_path = ?1 WHERE id = 'project-a'",
+                [root.path().to_string_lossy().as_ref()],
+            )
+            .unwrap();
         let plan_path = root.path().join("plan-a.md");
         std::fs::write(
             &plan_path,
@@ -3914,7 +3975,7 @@ allow_overwrite = true
                         "type": "com.example.ready.status",
                         "subject": "one-shot process",
                         "expected": {"status": "ready"},
-                        "target": {"kind": "process", "uri": "local://ready"},
+                        "target": observation_target,
                         "payload_schema": {"schema_ref": "com.example.ready.status@v1"}
                     }],"fixture_policy":{},"freshness_policy":{},"assurance_policy":{"retry_aggregation":"all_applicable_pass"}}]}), true).unwrap();
         let run = app
@@ -4837,6 +4898,67 @@ allow_overwrite = true
             .feature_run(&run_id)
             .unwrap();
         assert_eq!(persisted.run.phase, FeatureRunPhase::Cancelled);
+        assert!(persisted.run.role_owners.is_empty());
+    }
+
+    #[test]
+    fn target_startup_failure_blocks_coverage_and_atomically_settles_one_shot_run() {
+        let (_root, app, run_id, run_index) = one_shot_target_unavailable_fixture();
+
+        let result = app.evidence_run_value(run_index).unwrap();
+
+        assert_eq!(result["verdict"], "failed");
+        assert_eq!(result["coverage"]["status"], "blocked", "{result:#}");
+        assert_eq!(
+            result["terminal_exhaustion"]["status"],
+            "terminal_non_covering"
+        );
+        assert_eq!(
+            result["terminal_exhaustion"]["execution_state"]["reason_code"],
+            "verification_attempts_exhausted"
+        );
+        let execution = &result["results"][0];
+        assert_eq!(execution["attempt"]["status"], "failed");
+        assert_eq!(execution["attempt"]["exit"]["exit_code"], 1);
+        assert_eq!(execution["attempt"]["exit"]["error"], "target_unavailable");
+        assert_eq!(
+            execution["attempt"]["raw_result"]["target_runtime"]["process_exit"]["exit_code"],
+            3
+        );
+        assert_eq!(
+            execution["receipt"]["proof_gaps"],
+            json!(["external_dependency_unavailable"])
+        );
+        assert!(execution["product_finding"].is_null());
+        for table in ["evidence_attempts", "evidence_receipts"] {
+            assert_eq!(
+                app.conn
+                    .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                        row.get::<_, u64>(0)
+                    })
+                    .unwrap(),
+                1,
+                "{table}"
+            );
+        }
+        assert_eq!(
+            app.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM feature_run_evidence_invalidations",
+                    [],
+                    |row| row.get::<_, u64>(0),
+                )
+                .unwrap(),
+            0
+        );
+        let persisted = ExecutionRunRepository::new(&app.conn)
+            .feature_run(&run_id)
+            .unwrap();
+        assert_eq!(persisted.run.phase, FeatureRunPhase::Cancelled);
+        assert_eq!(
+            persisted.run.terminal_reason,
+            Some(FeatureRunTerminalReason::VerificationAttemptsExhausted)
+        );
         assert!(persisted.run.role_owners.is_empty());
     }
 
