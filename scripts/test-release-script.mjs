@@ -273,6 +273,7 @@ assert.deepEqual(
     "git diff --quiet -- pnpm-lock.yaml",
     "cargo build --quiet",
     "pnpm --filter @planr/docs reference:generate",
+    "pnpm --filter @planr/docs evidence-examples:generate",
     "pnpm --filter @planr/docs reference:check",
   ],
   "candidate preparation order drifted",

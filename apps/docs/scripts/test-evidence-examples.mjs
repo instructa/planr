@@ -21,6 +21,7 @@ assert.equal(
   false,
   'generated evidence docs examples must not leak the repository root',
 );
+assert.equal(fixtureText.includes('/Volumes/'), false, 'generated evidence docs examples must not leak external build paths');
 const fixture = JSON.parse(fixtureText);
 assert.equal(fixture.schema_version, 'planr.evidence_docs_examples.v1');
 assert.equal(fixture.host_matrix_digest, digest(await readFile(hostMatrixPath)));
@@ -54,7 +55,7 @@ for (const id of [
 
 assert.equal(byId.get('api-only-success').exit_code, 0);
 assert.equal(byId.get('api-only-success').output.run.object.verdict, 'passed');
-assert.equal(byId.get('api-only-success').output.run.object.schema_version, 'planr.evidence.run-index.result.v1');
+assert.equal(byId.get('api-only-success').output.run.object.schema_version, 'planr.evidence.run-index.result.v2');
 const apiReceipt = byId.get('api-only-success').output.run.object.results[0].receipt;
 assert.equal(apiReceipt.receipt_status, 'trusted');
 assert.equal(byId.get('api-only-success').output.coverage.object.verdict, 'satisfied');
@@ -78,7 +79,12 @@ const fullStack = byId.get('full-stack-composition');
 assert.equal(fullStack.exit_code, 0);
 assert.equal(fullStack.output.before.object.verdict, 'unsatisfied');
 assert.equal(fullStack.output.after.object.verdict, 'satisfied');
-const browserReceipt = fullStack.output.runs[1].object.receipt;
+assert.equal(fullStack.output.run.object.schema_version, 'planr.evidence.run-index.result.v2');
+const browserResult = fullStack.output.run.object.results.find(
+  (result) => result.attempt.obligation_id === 'pob-browser-cdp',
+);
+assert.ok(browserResult, 'full-stack batch must include the browser obligation');
+const browserReceipt = browserResult.receipt;
 assert.equal(browserReceipt.vantage_point.identity, 'verifier-browser-cdp-v1');
 assert.equal(browserReceipt.observations.length, 6);
 assert.ok(browserReceipt.observations.every((observation) => observation.outcome === 'passed'));
@@ -106,8 +112,14 @@ assert.equal(
 );
 
 const missing = byId.get('missing-capability');
-assert.equal(missing.exit_code, 1);
-assert.match(missing.output.run.error.message, /capability instance is not available/);
+assert.equal(missing.exit_code, 3);
+assert.equal(missing.output.readiness.object.status, 'blocked');
+assert.ok(
+  missing.output.readiness.object.gaps.some(
+    (gap) => gap.code === 'ProbeUnavailable' && gap.obligation_id === 'pob-docs-missing-capability',
+  ),
+  'missing capability example must fail closed during readiness',
+);
 assert.ok(
   missing.output.capabilities.object.instances.some(
     (instance) =>

@@ -39,6 +39,7 @@ fi
 
 cargo build --quiet
 pnpm --filter @planr/docs reference:generate
+pnpm --filter @planr/docs evidence-examples:generate
 pnpm --filter @planr/docs reference:check
 
 echo "prepared v$version candidate source; review and commit the resulting tracked files"

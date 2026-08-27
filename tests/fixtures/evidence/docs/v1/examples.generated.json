@@ -1,8 +1,8 @@
 {
   "schema_version": "planr.evidence_docs_examples.v1",
   "generated_by": "apps/docs/scripts/generate-evidence-examples.mjs",
-  "candidate_binary": "target/debug/planr",
-  "evidence_schema_digest": "sha256:6a529edd7c47a0628777560253d4c775163d421f2b981dd50b779f587badf6d8",
+  "candidate_binary": "<cargo-target>/debug/planr",
+  "evidence_schema_digest": "sha256:79fa5e94b4e9fd21dacb4e49a315d1faaee01975cd28396971ccb97d8ec04125",
   "host_matrix_digest": "sha256:dc4365247b11919b60b3bd4e922f60e63619eb1d58060d01655b6e05044a4df0",
   "cases": [
     {
@@ -145,18 +145,28 @@
               }
             },
             "registry": {
-              "available_capabilities": 1,
+              "available_capabilities": 2,
               "diagnostics": [],
               "probes": [
                 {
                   "availability_status": "available",
                   "instance_id": "<capability-instance-id>",
+                  "manifest_id": "host-codex-chrome-browser-client-admission-v1",
+                  "resolution": "probed_no_current",
+                  "reused": false
+                },
+                {
+                  "availability_status": "available",
+                  "instance_id": "<capability-instance-id>",
                   "manifest_id": "verifier-http-curl-v1",
                   "resolution": "probed_no_current",
+                  "resolved_adapter_digest": {
+                    "digest": "<sha256>"
+                  },
                   "reused": false
                 }
               ],
-              "registered_capabilities": 1
+              "registered_capabilities": 2
             },
             "status": "valid",
             "waivers": []
@@ -189,10 +199,13 @@
                   "instance_id": "<capability-instance-id>",
                   "manifest_id": "verifier-http-curl-v1",
                   "resolution": "reused_current",
+                  "resolved_adapter_digest": {
+                    "digest": "<sha256>"
+                  },
                   "reused": true
                 }
               ],
-              "registered_capabilities": 1
+              "registered_capabilities": 2
             },
             "run_index": {
               "policy_digest": "<sha256>",
@@ -208,6 +221,12 @@
                   },
                   "index": 0,
                   "input": {
+                    "adapter_environment": {
+                      "names": [],
+                      "public_names": [],
+                      "schema_version": "planr.evidence.adapter-environment.v1",
+                      "value_digest": "<sha256>"
+                    },
                     "capability_instance_id": "<capability-instance-id>",
                     "environment": {
                       "digest": "<sha256>",
@@ -236,6 +255,9 @@
                       "mocks_used": false
                     },
                     "obligation_id": "pob-docs-api-http",
+                    "requirement_ids": [
+                      "obs-pob-docs-api-http"
+                    ],
                     "target": {
                       "kind": "process",
                       "uri": "local://health"
@@ -243,7 +265,7 @@
                   }
                 }
               ],
-              "schema_version": "planr.evidence.run-index.v1",
+              "schema_version": "planr.evidence.run-index.v2",
               "scope": {
                 "id": "<plan-id>",
                 "kind": "plan"
@@ -269,6 +291,146 @@
             "code": 0
           },
           "object": {
+            "coverage": {
+              "canonical_projection": {
+                "actionable_gaps": [],
+                "actionable_now": false,
+                "attempt_refs": [],
+                "coverage_id": "<coverage-id>",
+                "criterion_id": "<plan-id>",
+                "non_actionable_blockers": [],
+                "observations": [
+                  {
+                    "covered_observation_ids": [
+                      "obs-pob-docs-api-http"
+                    ],
+                    "covering_receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "requirement_id": "obs-pob-docs-api-http",
+                    "status": "covered"
+                  }
+                ],
+                "pass": true,
+                "receipt_digests": [
+                  "<sha256>"
+                ],
+                "receipt_refs": [
+                  "<receipt-id>"
+                ],
+                "scope": {
+                  "id": "<plan-id>",
+                  "kind": "plan",
+                  "plan_id": "<plan-id>"
+                },
+                "status": "satisfied",
+                "suggested_next_action": "none",
+                "waiver_digests": [],
+                "waiver_refs": []
+              },
+              "coverage": {
+                "actionable_now": false,
+                "evaluated_at": "<timestamp>",
+                "id": "<coverage-id>",
+                "observation_coverage": [
+                  {
+                    "covered_observation_ids": [
+                      "obs-pob-docs-api-http"
+                    ],
+                    "covering_receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "requirement_id": "obs-pob-docs-api-http",
+                    "status": "covered"
+                  }
+                ],
+                "schema_version": "evidence.contract.v1",
+                "scope": {
+                  "id": "<plan-id>",
+                  "kind": "plan",
+                  "plan_id": "<plan-id>"
+                },
+                "status": "satisfied",
+                "suggested_next_action": "none",
+                "validation_details": {
+                  "completion": {
+                    "checked_at": "<timestamp>",
+                    "gap_reasons": [],
+                    "receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "status": "passed"
+                  },
+                  "fixture": {
+                    "checked_at": "<timestamp>",
+                    "gap_reasons": [],
+                    "receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "status": "passed"
+                  },
+                  "freshness": {
+                    "checked_at": "<timestamp>",
+                    "gap_reasons": [],
+                    "receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "status": "passed"
+                  },
+                  "provenance": {
+                    "checked_at": "<timestamp>",
+                    "gap_reasons": [],
+                    "receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "status": "passed"
+                  },
+                  "schema": {
+                    "checked_at": "<timestamp>",
+                    "gap_reasons": [],
+                    "receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "status": "passed"
+                  },
+                  "target": {
+                    "checked_at": "<timestamp>",
+                    "gap_reasons": [],
+                    "receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "status": "passed"
+                  },
+                  "trust": {
+                    "checked_at": "<timestamp>",
+                    "gap_reasons": [],
+                    "receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "status": "passed"
+                  }
+                }
+              },
+              "coverage_id": "<coverage-id>",
+              "receipt_digests": [
+                "<sha256>"
+              ],
+              "receipt_lineage": [
+                {
+                  "aggregation_policy": "latest_applicable_pass",
+                  "covering_receipt_ids": [
+                    "<receipt-id>"
+                  ],
+                  "diagnostic_receipt_ids": [],
+                  "rejected_receipt_ids": [],
+                  "requirement_id": "obs-pob-docs-api-http",
+                  "superseded_receipt_ids": []
+                }
+              ],
+              "status": "satisfied",
+              "verdict": "satisfied",
+              "waiver_digests": []
+            },
             "results": [
               {
                 "attempt": {
@@ -303,6 +465,68 @@
                     "stdout_truncated": false
                   },
                   "raw_result": {
+                    "adapter_request": {
+                      "assurance_policy": {},
+                      "criterion_id": "crit-pob-docs-api-http",
+                      "environment": {
+                        "digest": "<sha256>",
+                        "id": "planr-local",
+                        "kind": "local"
+                      },
+                      "execution_binding": {
+                        "obligation_id": "pob-docs-api-http",
+                        "requirement_ids": [
+                          "obs-pob-docs-api-http"
+                        ],
+                        "run_index": 0,
+                        "run_index_digest": "<sha256>",
+                        "schema_version": "planr.evidence.execution-binding.v2",
+                        "target": {
+                          "kind": "process",
+                          "uri": "local://health"
+                        }
+                      },
+                      "execution_contract_digest": "<sha256>",
+                      "fixture_disclosure": {
+                        "fixtures_used": false,
+                        "mocks_used": false
+                      },
+                      "obligation_id": "pob-docs-api-http",
+                      "request_digest": "<sha256>",
+                      "request_id": "ereq-ccc86842-915f-4f43-8baf-bcfd5c1151b7",
+                      "requirements": [
+                        {
+                          "expected": {
+                            "status": "ok"
+                          },
+                          "id": "obs-pob-docs-api-http",
+                          "payload_schema": {
+                            "schema_ref": "schema://com.example.http.status"
+                          },
+                          "subject": "docs fixture com.example.http.status",
+                          "target": {
+                            "kind": "process",
+                            "uri": "local://health"
+                          },
+                          "type": "com.example.http.status"
+                        }
+                      ],
+                      "result_contract": {
+                        "schema_digest": "<sha256>",
+                        "schema_ref": "schema://com.example.http.status",
+                        "type": "com.example.http.status"
+                      },
+                      "retry": {
+                        "attempt_number": 1,
+                        "max_attempts": 1,
+                        "previous_attempt_ids": []
+                      },
+                      "schema_version": "planr.evidence.adapter-request.v1",
+                      "target": {
+                        "kind": "process",
+                        "uri": "local://health"
+                      }
+                    },
                     "argv": [
                       "/usr/bin/curl",
                       "-fsS",
@@ -310,6 +534,19 @@
                     ],
                     "cwd": "<workspace>",
                     "digest": "<sha256>",
+                    "execution_binding": {
+                      "obligation_id": "pob-docs-api-http",
+                      "requirement_ids": [
+                        "obs-pob-docs-api-http"
+                      ],
+                      "run_index": 0,
+                      "run_index_digest": "<sha256>",
+                      "schema_version": "planr.evidence.execution-binding.v2",
+                      "target": {
+                        "kind": "process",
+                        "uri": "local://health"
+                      }
+                    },
                     "exit": {
                       "error": null,
                       "exit_code": 0,
@@ -323,7 +560,10 @@
                     "stdout_bytes": 15,
                     "stdout_digest": "<sha256>",
                     "stdout_excerpt": "<captured-output>",
-                    "stdout_truncated": false
+                    "stdout_truncated": false,
+                    "target_runtime": {
+                      "mode": "external"
+                    }
                   },
                   "resolved_command": {
                     "command": [
@@ -337,7 +577,7 @@
                   },
                   "retry_lineage": {
                     "attempt_number": 1,
-                    "max_attempts": 3,
+                    "max_attempts": 1,
                     "previous_attempt_ids": []
                   },
                   "schema_version": "evidence.contract.v1",
@@ -407,7 +647,7 @@
                   "retry_history": [
                     {
                       "attempt_number": 1,
-                      "max_attempts": 3,
+                      "max_attempts": 1,
                       "previous_attempt_ids": [],
                       "status": "passed"
                     }
@@ -439,12 +679,14 @@
                 "receipt_digest": "<sha256>",
                 "reuse_key": null,
                 "reused": false,
+                "terminal_exhaustion": null,
                 "verdict": "passed"
               }
             ],
             "run_index_digest": "<sha256>",
-            "schema_version": "planr.evidence.run-index.result.v1",
+            "schema_version": "planr.evidence.run-index.result.v2",
             "status": "passed",
+            "terminal_exhaustion": null,
             "verdict": "passed"
           },
           "ok": true,
@@ -648,10 +890,13 @@
                   "instance_id": "<capability-instance-id>",
                   "manifest_id": "verifier-queue-depth-v2",
                   "resolution": "probed_no_current",
+                  "resolved_adapter_digest": {
+                    "digest": "<sha256>"
+                  },
                   "reused": false
                 }
               ],
-              "registered_capabilities": 1
+              "registered_capabilities": 2
             },
             "run_index": {
               "policy_digest": "<sha256>",
@@ -667,6 +912,12 @@
                   },
                   "index": 0,
                   "input": {
+                    "adapter_environment": {
+                      "names": [],
+                      "public_names": [],
+                      "schema_version": "planr.evidence.adapter-environment.v1",
+                      "value_digest": "<sha256>"
+                    },
                     "capability_instance_id": "<capability-instance-id>",
                     "environment": {
                       "digest": "<sha256>",
@@ -695,6 +946,9 @@
                       "mocks_used": false
                     },
                     "obligation_id": "pob-docs-queue-depth",
+                    "requirement_ids": [
+                      "obs-pob-docs-queue-depth"
+                    ],
                     "target": {
                       "kind": "process",
                       "uri": "local://queue-depth"
@@ -702,7 +956,7 @@
                   }
                 }
               ],
-              "schema_version": "planr.evidence.run-index.v1",
+              "schema_version": "planr.evidence.run-index.v2",
               "scope": {
                 "id": "<plan-id>",
                 "kind": "plan"
@@ -728,6 +982,146 @@
             "code": 0
           },
           "object": {
+            "coverage": {
+              "canonical_projection": {
+                "actionable_gaps": [],
+                "actionable_now": false,
+                "attempt_refs": [],
+                "coverage_id": "<coverage-id>",
+                "criterion_id": "<plan-id>",
+                "non_actionable_blockers": [],
+                "observations": [
+                  {
+                    "covered_observation_ids": [
+                      "obs-pob-docs-queue-depth"
+                    ],
+                    "covering_receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "requirement_id": "obs-pob-docs-queue-depth",
+                    "status": "covered"
+                  }
+                ],
+                "pass": true,
+                "receipt_digests": [
+                  "<sha256>"
+                ],
+                "receipt_refs": [
+                  "<receipt-id>"
+                ],
+                "scope": {
+                  "id": "<plan-id>",
+                  "kind": "plan",
+                  "plan_id": "<plan-id>"
+                },
+                "status": "satisfied",
+                "suggested_next_action": "none",
+                "waiver_digests": [],
+                "waiver_refs": []
+              },
+              "coverage": {
+                "actionable_now": false,
+                "evaluated_at": "<timestamp>",
+                "id": "<coverage-id>",
+                "observation_coverage": [
+                  {
+                    "covered_observation_ids": [
+                      "obs-pob-docs-queue-depth"
+                    ],
+                    "covering_receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "requirement_id": "obs-pob-docs-queue-depth",
+                    "status": "covered"
+                  }
+                ],
+                "schema_version": "evidence.contract.v1",
+                "scope": {
+                  "id": "<plan-id>",
+                  "kind": "plan",
+                  "plan_id": "<plan-id>"
+                },
+                "status": "satisfied",
+                "suggested_next_action": "none",
+                "validation_details": {
+                  "completion": {
+                    "checked_at": "<timestamp>",
+                    "gap_reasons": [],
+                    "receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "status": "passed"
+                  },
+                  "fixture": {
+                    "checked_at": "<timestamp>",
+                    "gap_reasons": [],
+                    "receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "status": "passed"
+                  },
+                  "freshness": {
+                    "checked_at": "<timestamp>",
+                    "gap_reasons": [],
+                    "receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "status": "passed"
+                  },
+                  "provenance": {
+                    "checked_at": "<timestamp>",
+                    "gap_reasons": [],
+                    "receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "status": "passed"
+                  },
+                  "schema": {
+                    "checked_at": "<timestamp>",
+                    "gap_reasons": [],
+                    "receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "status": "passed"
+                  },
+                  "target": {
+                    "checked_at": "<timestamp>",
+                    "gap_reasons": [],
+                    "receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "status": "passed"
+                  },
+                  "trust": {
+                    "checked_at": "<timestamp>",
+                    "gap_reasons": [],
+                    "receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "status": "passed"
+                  }
+                }
+              },
+              "coverage_id": "<coverage-id>",
+              "receipt_digests": [
+                "<sha256>"
+              ],
+              "receipt_lineage": [
+                {
+                  "aggregation_policy": "latest_applicable_pass",
+                  "covering_receipt_ids": [
+                    "<receipt-id>"
+                  ],
+                  "diagnostic_receipt_ids": [],
+                  "rejected_receipt_ids": [],
+                  "requirement_id": "obs-pob-docs-queue-depth",
+                  "superseded_receipt_ids": []
+                }
+              ],
+              "status": "satisfied",
+              "verdict": "satisfied",
+              "waiver_digests": []
+            },
             "results": [
               {
                 "attempt": {
@@ -762,6 +1156,68 @@
                     "stdout_truncated": false
                   },
                   "raw_result": {
+                    "adapter_request": {
+                      "assurance_policy": {},
+                      "criterion_id": "crit-pob-docs-queue-depth",
+                      "environment": {
+                        "digest": "<sha256>",
+                        "id": "planr-local",
+                        "kind": "local"
+                      },
+                      "execution_binding": {
+                        "obligation_id": "pob-docs-queue-depth",
+                        "requirement_ids": [
+                          "obs-pob-docs-queue-depth"
+                        ],
+                        "run_index": 0,
+                        "run_index_digest": "<sha256>",
+                        "schema_version": "planr.evidence.execution-binding.v2",
+                        "target": {
+                          "kind": "process",
+                          "uri": "local://queue-depth"
+                        }
+                      },
+                      "execution_contract_digest": "<sha256>",
+                      "fixture_disclosure": {
+                        "fixtures_used": false,
+                        "mocks_used": false
+                      },
+                      "obligation_id": "pob-docs-queue-depth",
+                      "request_digest": "<sha256>",
+                      "request_id": "ereq-b026aa4e-6e85-4fcc-97f4-3df8f9a716f9",
+                      "requirements": [
+                        {
+                          "expected": {
+                            "status": "drained"
+                          },
+                          "id": "obs-pob-docs-queue-depth",
+                          "payload_schema": {
+                            "schema_ref": "schema://com.example.queue.depth.v2"
+                          },
+                          "subject": "docs fixture com.example.queue.depth.v2",
+                          "target": {
+                            "kind": "process",
+                            "uri": "local://queue-depth"
+                          },
+                          "type": "com.example.queue.depth.v2"
+                        }
+                      ],
+                      "result_contract": {
+                        "schema_digest": "<sha256>",
+                        "schema_ref": "schema://com.example.queue.depth.v2",
+                        "type": "com.example.queue.depth.v2"
+                      },
+                      "retry": {
+                        "attempt_number": 1,
+                        "max_attempts": 1,
+                        "previous_attempt_ids": []
+                      },
+                      "schema_version": "planr.evidence.adapter-request.v1",
+                      "target": {
+                        "kind": "process",
+                        "uri": "local://queue-depth"
+                      }
+                    },
                     "argv": [
                       "/bin/sh",
                       "-c",
@@ -769,6 +1225,19 @@
                     ],
                     "cwd": "<workspace>",
                     "digest": "<sha256>",
+                    "execution_binding": {
+                      "obligation_id": "pob-docs-queue-depth",
+                      "requirement_ids": [
+                        "obs-pob-docs-queue-depth"
+                      ],
+                      "run_index": 0,
+                      "run_index_digest": "<sha256>",
+                      "schema_version": "planr.evidence.execution-binding.v2",
+                      "target": {
+                        "kind": "process",
+                        "uri": "local://queue-depth"
+                      }
+                    },
                     "exit": {
                       "error": null,
                       "exit_code": 0,
@@ -782,7 +1251,10 @@
                     "stdout_bytes": 20,
                     "stdout_digest": "<sha256>",
                     "stdout_excerpt": "<captured-output>",
-                    "stdout_truncated": false
+                    "stdout_truncated": false,
+                    "target_runtime": {
+                      "mode": "external"
+                    }
                   },
                   "resolved_command": {
                     "command": [
@@ -796,7 +1268,7 @@
                   },
                   "retry_lineage": {
                     "attempt_number": 1,
-                    "max_attempts": 3,
+                    "max_attempts": 1,
                     "previous_attempt_ids": []
                   },
                   "schema_version": "evidence.contract.v1",
@@ -866,7 +1338,7 @@
                   "retry_history": [
                     {
                       "attempt_number": 1,
-                      "max_attempts": 3,
+                      "max_attempts": 1,
                       "previous_attempt_ids": [],
                       "status": "passed"
                     }
@@ -898,12 +1370,14 @@
                 "receipt_digest": "<sha256>",
                 "reuse_key": "<sha256>",
                 "reused": false,
+                "terminal_exhaustion": null,
                 "verdict": "passed"
               }
             ],
             "run_index_digest": "<sha256>",
-            "schema_version": "planr.evidence.run-index.result.v1",
+            "schema_version": "planr.evidence.run-index.result.v2",
             "status": "passed",
+            "terminal_exhaustion": null,
             "verdict": "passed"
           },
           "ok": true,
@@ -1097,6 +1571,60 @@
                   "criterion_id": "<plan-id>",
                   "reason": "missing_observation",
                   "receipt_refs": [],
+                  "requirement_id": "obs-pob-browser-cdp-visible",
+                  "status": "missing",
+                  "waiver_ref": null
+                },
+                {
+                  "attempt_refs": [],
+                  "criterion_id": "<plan-id>",
+                  "reason": "missing_observation",
+                  "receipt_refs": [],
+                  "requirement_id": "obs-pob-browser-cdp-interaction",
+                  "status": "missing",
+                  "waiver_ref": null
+                },
+                {
+                  "attempt_refs": [],
+                  "criterion_id": "<plan-id>",
+                  "reason": "missing_observation",
+                  "receipt_refs": [],
+                  "requirement_id": "obs-pob-browser-cdp-navigation",
+                  "status": "missing",
+                  "waiver_ref": null
+                },
+                {
+                  "attempt_refs": [],
+                  "criterion_id": "<plan-id>",
+                  "reason": "missing_observation",
+                  "receipt_refs": [],
+                  "requirement_id": "obs-pob-browser-cdp-network",
+                  "status": "missing",
+                  "waiver_ref": null
+                },
+                {
+                  "attempt_refs": [],
+                  "criterion_id": "<plan-id>",
+                  "reason": "missing_observation",
+                  "receipt_refs": [],
+                  "requirement_id": "obs-pob-browser-cdp-console",
+                  "status": "missing",
+                  "waiver_ref": null
+                },
+                {
+                  "attempt_refs": [],
+                  "criterion_id": "<plan-id>",
+                  "reason": "missing_observation",
+                  "receipt_refs": [],
+                  "requirement_id": "obs-pob-browser-cdp-reload",
+                  "status": "missing",
+                  "waiver_ref": null
+                },
+                {
+                  "attempt_refs": [],
+                  "criterion_id": "<plan-id>",
+                  "reason": "missing_observation",
+                  "receipt_refs": [],
                   "requirement_id": "obs-pob-docs-full-http",
                   "status": "missing",
                   "waiver_ref": null
@@ -1108,6 +1636,54 @@
               "criterion_id": "<plan-id>",
               "non_actionable_blockers": [],
               "observations": [
+                {
+                  "gap_reason": "missing_observation",
+                  "gap_reasons": [
+                    "missing_observation"
+                  ],
+                  "requirement_id": "obs-pob-browser-cdp-visible",
+                  "status": "missing"
+                },
+                {
+                  "gap_reason": "missing_observation",
+                  "gap_reasons": [
+                    "missing_observation"
+                  ],
+                  "requirement_id": "obs-pob-browser-cdp-interaction",
+                  "status": "missing"
+                },
+                {
+                  "gap_reason": "missing_observation",
+                  "gap_reasons": [
+                    "missing_observation"
+                  ],
+                  "requirement_id": "obs-pob-browser-cdp-navigation",
+                  "status": "missing"
+                },
+                {
+                  "gap_reason": "missing_observation",
+                  "gap_reasons": [
+                    "missing_observation"
+                  ],
+                  "requirement_id": "obs-pob-browser-cdp-network",
+                  "status": "missing"
+                },
+                {
+                  "gap_reason": "missing_observation",
+                  "gap_reasons": [
+                    "missing_observation"
+                  ],
+                  "requirement_id": "obs-pob-browser-cdp-console",
+                  "status": "missing"
+                },
+                {
+                  "gap_reason": "missing_observation",
+                  "gap_reasons": [
+                    "missing_observation"
+                  ],
+                  "requirement_id": "obs-pob-browser-cdp-reload",
+                  "status": "missing"
+                },
                 {
                   "gap_reason": "missing_observation",
                   "gap_reasons": [
@@ -1135,6 +1711,54 @@
               "evaluated_at": "<timestamp>",
               "id": "<coverage-id>",
               "observation_coverage": [
+                {
+                  "gap_reason": "missing_observation",
+                  "gap_reasons": [
+                    "missing_observation"
+                  ],
+                  "requirement_id": "obs-pob-browser-cdp-visible",
+                  "status": "missing"
+                },
+                {
+                  "gap_reason": "missing_observation",
+                  "gap_reasons": [
+                    "missing_observation"
+                  ],
+                  "requirement_id": "obs-pob-browser-cdp-interaction",
+                  "status": "missing"
+                },
+                {
+                  "gap_reason": "missing_observation",
+                  "gap_reasons": [
+                    "missing_observation"
+                  ],
+                  "requirement_id": "obs-pob-browser-cdp-navigation",
+                  "status": "missing"
+                },
+                {
+                  "gap_reason": "missing_observation",
+                  "gap_reasons": [
+                    "missing_observation"
+                  ],
+                  "requirement_id": "obs-pob-browser-cdp-network",
+                  "status": "missing"
+                },
+                {
+                  "gap_reason": "missing_observation",
+                  "gap_reasons": [
+                    "missing_observation"
+                  ],
+                  "requirement_id": "obs-pob-browser-cdp-console",
+                  "status": "missing"
+                },
+                {
+                  "gap_reason": "missing_observation",
+                  "gap_reasons": [
+                    "missing_observation"
+                  ],
+                  "requirement_id": "obs-pob-browser-cdp-reload",
+                  "status": "missing"
+                },
                 {
                   "gap_reason": "missing_observation",
                   "gap_reasons": [
@@ -1205,6 +1829,54 @@
                 "covering_receipt_ids": [],
                 "diagnostic_receipt_ids": [],
                 "rejected_receipt_ids": [],
+                "requirement_id": "obs-pob-browser-cdp-visible",
+                "superseded_receipt_ids": []
+              },
+              {
+                "aggregation_policy": "latest_applicable_pass",
+                "covering_receipt_ids": [],
+                "diagnostic_receipt_ids": [],
+                "rejected_receipt_ids": [],
+                "requirement_id": "obs-pob-browser-cdp-interaction",
+                "superseded_receipt_ids": []
+              },
+              {
+                "aggregation_policy": "latest_applicable_pass",
+                "covering_receipt_ids": [],
+                "diagnostic_receipt_ids": [],
+                "rejected_receipt_ids": [],
+                "requirement_id": "obs-pob-browser-cdp-navigation",
+                "superseded_receipt_ids": []
+              },
+              {
+                "aggregation_policy": "latest_applicable_pass",
+                "covering_receipt_ids": [],
+                "diagnostic_receipt_ids": [],
+                "rejected_receipt_ids": [],
+                "requirement_id": "obs-pob-browser-cdp-network",
+                "superseded_receipt_ids": []
+              },
+              {
+                "aggregation_policy": "latest_applicable_pass",
+                "covering_receipt_ids": [],
+                "diagnostic_receipt_ids": [],
+                "rejected_receipt_ids": [],
+                "requirement_id": "obs-pob-browser-cdp-console",
+                "superseded_receipt_ids": []
+              },
+              {
+                "aggregation_policy": "latest_applicable_pass",
+                "covering_receipt_ids": [],
+                "diagnostic_receipt_ids": [],
+                "rejected_receipt_ids": [],
+                "requirement_id": "obs-pob-browser-cdp-reload",
+                "superseded_receipt_ids": []
+              },
+              {
+                "aggregation_policy": "latest_applicable_pass",
+                "covering_receipt_ids": [],
+                "diagnostic_receipt_ids": [],
+                "rejected_receipt_ids": [],
                 "requirement_id": "obs-pob-docs-full-http",
                 "superseded_receipt_ids": []
               }
@@ -1247,18 +1919,24 @@
                   "availability_status": "available",
                   "instance_id": "<capability-instance-id>",
                   "manifest_id": "verifier-browser-cdp-v1",
-                  "resolution": "reprobed_registration_mismatch",
+                  "resolution": "probed_no_current",
+                  "resolved_adapter_digest": {
+                    "digest": "<sha256>"
+                  },
                   "reused": false
                 },
                 {
                   "availability_status": "available",
                   "instance_id": "<capability-instance-id>",
                   "manifest_id": "verifier-http-curl-v1",
-                  "resolution": "reused_current",
-                  "reused": true
+                  "resolution": "probed_no_current",
+                  "resolved_adapter_digest": {
+                    "digest": "<sha256>"
+                  },
+                  "reused": false
                 }
               ],
-              "registered_capabilities": 2
+              "registered_capabilities": 3
             },
             "run_index": {
               "policy_digest": "<sha256>",
@@ -1274,6 +1952,12 @@
                   },
                   "index": 0,
                   "input": {
+                    "adapter_environment": {
+                      "names": [],
+                      "public_names": [],
+                      "schema_version": "planr.evidence.adapter-environment.v1",
+                      "value_digest": "<sha256>"
+                    },
                     "capability_instance_id": "<capability-instance-id>",
                     "environment": {
                       "digest": "<sha256>",
@@ -1304,6 +1988,14 @@
                       "mocks_used": false
                     },
                     "obligation_id": "pob-browser-cdp",
+                    "requirement_ids": [
+                      "obs-pob-browser-cdp-console",
+                      "obs-pob-browser-cdp-interaction",
+                      "obs-pob-browser-cdp-navigation",
+                      "obs-pob-browser-cdp-network",
+                      "obs-pob-browser-cdp-reload",
+                      "obs-pob-browser-cdp-visible"
+                    ],
                     "target": {
                       "kind": "browser",
                       "uri": "http://127.0.0.1:<port>/workflow"
@@ -1319,6 +2011,12 @@
                   },
                   "index": 1,
                   "input": {
+                    "adapter_environment": {
+                      "names": [],
+                      "public_names": [],
+                      "schema_version": "planr.evidence.adapter-environment.v1",
+                      "value_digest": "<sha256>"
+                    },
                     "capability_instance_id": "<capability-instance-id>",
                     "environment": {
                       "digest": "<sha256>",
@@ -1347,6 +2045,9 @@
                       "mocks_used": false
                     },
                     "obligation_id": "pob-docs-full-http",
+                    "requirement_ids": [
+                      "obs-pob-docs-full-http"
+                    ],
                     "target": {
                       "kind": "process",
                       "uri": "local://health"
@@ -1354,7 +2055,7 @@
                   }
                 }
               ],
-              "schema_version": "planr.evidence.run-index.v1",
+              "schema_version": "planr.evidence.run-index.v2",
               "scope": {
                 "id": "<plan-id>",
                 "kind": "plan"
@@ -1374,545 +2075,1107 @@
           "ok": true,
           "schema": "planr.evidence.command.v1"
         },
-        "runs": [
-          {
-            "command": "evidence.run",
-            "exit": {
-              "code": 0
-            },
-            "object": {
-              "attempt": {
-                "artifacts": [
-                  {
-                    "digest": "<sha256>",
-                    "id": "stdout",
-                    "inline_excerpt": "<captured-output>",
-                    "kind": "stdout"
-                  },
-                  {
-                    "digest": "<sha256>",
-                    "id": "stderr",
-                    "inline_excerpt": "<captured-output>",
-                    "kind": "stderr"
-                  }
-                ],
-                "capability_instance_id": "<capability-instance-id>",
-                "criterion_id": "crit-pob-docs-full-http",
-                "ended_at": "<timestamp>",
-                "exit": {
-                  "error": null,
-                  "exit_code": 0,
-                  "signal": null
-                },
-                "id": "<attempt-id>",
-                "obligation_id": "pob-docs-full-http",
-                "output_bounds": {
-                  "stderr_bytes": 0,
-                  "stderr_truncated": false,
-                  "stdout_bytes": 15,
-                  "stdout_truncated": false
-                },
-                "raw_result": {
-                  "argv": [
-                    "/usr/bin/curl",
-                    "-fsS",
-                    "http://127.0.0.1:<port>/health"
-                  ],
-                  "cwd": "<workspace>",
-                  "digest": "<sha256>",
-                  "exit": {
-                    "error": null,
-                    "exit_code": 0,
-                    "signal": null
-                  },
-                  "kind": "process_output",
-                  "stderr_bytes": 0,
-                  "stderr_digest": "<sha256>",
-                  "stderr_excerpt": "<captured-output>",
-                  "stderr_truncated": false,
-                  "stdout_bytes": 15,
-                  "stdout_digest": "<sha256>",
-                  "stdout_excerpt": "<captured-output>",
-                  "stdout_truncated": false
-                },
-                "resolved_command": {
-                  "command": [
-                    "/usr/bin/curl",
-                    "-fsS",
-                    "http://127.0.0.1:<port>/health"
-                  ],
-                  "cwd": "<workspace>",
-                  "env_digest": "<sha256>",
-                  "kind": "command"
-                },
-                "retry_lineage": {
-                  "attempt_number": 1,
-                  "max_attempts": 3,
-                  "previous_attempt_ids": []
-                },
-                "schema_version": "evidence.contract.v1",
-                "started_at": "<timestamp>",
-                "status": "passed",
-                "stderr_digest": "<sha256>",
-                "stdout_digest": "<sha256>"
-              },
-              "feature_run_lease": null,
-              "product_finding": null,
-              "receipt": {
-                "artifacts": [],
-                "attempt_ids": [
-                  "<attempt-id>"
-                ],
-                "capability": {
-                  "instance_digest": "<sha256>",
-                  "instance_id": "<capability-instance-id>",
-                  "manifest_digest": "<sha256>",
-                  "manifest_id": "verifier-http-curl-v1"
-                },
-                "config_digest": "<sha256>",
-                "criterion_id": "crit-pob-docs-full-http",
-                "ended_at": "<timestamp>",
-                "environment": {
-                  "digest": "<sha256>",
-                  "id": "planr-local",
-                  "kind": "local"
-                },
-                "fixture_disclosure": {
-                  "fixtures_used": false,
-                  "mocks_used": false
-                },
-                "id": "<receipt-id>",
-                "obligation_id": "pob-docs-full-http",
+        "run": {
+          "command": "evidence.run",
+          "exit": {
+            "code": 0
+          },
+          "object": {
+            "coverage": {
+              "canonical_projection": {
+                "actionable_gaps": [],
+                "actionable_now": false,
+                "attempt_refs": [],
+                "coverage_id": "<coverage-id>",
+                "criterion_id": "<plan-id>",
+                "non_actionable_blockers": [],
                 "observations": [
                   {
-                    "actual": {
-                      "schema_ref": "schema://com.example.http.status",
-                      "status": "ok"
-                    },
-                    "outcome": "passed",
-                    "predicate": {
-                      "status": "ok"
-                    },
+                    "covered_observation_ids": [
+                      "obs-pob-browser-cdp-visible"
+                    ],
+                    "covering_receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "requirement_id": "obs-pob-browser-cdp-visible",
+                    "status": "covered"
+                  },
+                  {
+                    "covered_observation_ids": [
+                      "obs-pob-browser-cdp-interaction"
+                    ],
+                    "covering_receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "requirement_id": "obs-pob-browser-cdp-interaction",
+                    "status": "covered"
+                  },
+                  {
+                    "covered_observation_ids": [
+                      "obs-pob-browser-cdp-navigation"
+                    ],
+                    "covering_receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "requirement_id": "obs-pob-browser-cdp-navigation",
+                    "status": "covered"
+                  },
+                  {
+                    "covered_observation_ids": [
+                      "obs-pob-browser-cdp-network"
+                    ],
+                    "covering_receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "requirement_id": "obs-pob-browser-cdp-network",
+                    "status": "covered"
+                  },
+                  {
+                    "covered_observation_ids": [
+                      "obs-pob-browser-cdp-console"
+                    ],
+                    "covering_receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "requirement_id": "obs-pob-browser-cdp-console",
+                    "status": "covered"
+                  },
+                  {
+                    "covered_observation_ids": [
+                      "obs-pob-browser-cdp-reload"
+                    ],
+                    "covering_receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "requirement_id": "obs-pob-browser-cdp-reload",
+                    "status": "covered"
+                  },
+                  {
+                    "covered_observation_ids": [
+                      "obs-pob-docs-full-http"
+                    ],
+                    "covering_receipt_ids": [
+                      "<receipt-id>"
+                    ],
                     "requirement_id": "obs-pob-docs-full-http",
-                    "type": "com.example.http.status"
+                    "status": "covered"
                   }
                 ],
-                "permissions": {
-                  "filesystem": "read_workspace",
-                  "network": "loopback"
+                "pass": true,
+                "receipt_digests": [
+                  "<sha256>",
+                  "<sha256>"
+                ],
+                "receipt_refs": [
+                  "<receipt-id>",
+                  "<receipt-id>",
+                  "<receipt-id>",
+                  "<receipt-id>",
+                  "<receipt-id>",
+                  "<receipt-id>",
+                  "<receipt-id>"
+                ],
+                "scope": {
+                  "id": "<plan-id>",
+                  "kind": "plan",
+                  "plan_id": "<plan-id>"
                 },
-                "proof_gaps": [],
-                "provenance": {
-                  "assigned_by": "planr",
-                  "execution_id": "<attempt-id>",
-                  "source": "planr_observed_execution",
-                  "tool_call_id": null
-                },
-                "raw_result": {
-                  "digest": "<sha256>",
-                  "kind": "process_result"
-                },
-                "receipt_digest": "<sha256>",
-                "receipt_status": "trusted",
-                "retry_history": [
+                "status": "satisfied",
+                "suggested_next_action": "none",
+                "waiver_digests": [],
+                "waiver_refs": []
+              },
+              "coverage": {
+                "actionable_now": false,
+                "evaluated_at": "<timestamp>",
+                "id": "<coverage-id>",
+                "observation_coverage": [
                   {
-                    "attempt_number": 1,
-                    "max_attempts": 3,
-                    "previous_attempt_ids": [],
+                    "covered_observation_ids": [
+                      "obs-pob-browser-cdp-visible"
+                    ],
+                    "covering_receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "requirement_id": "obs-pob-browser-cdp-visible",
+                    "status": "covered"
+                  },
+                  {
+                    "covered_observation_ids": [
+                      "obs-pob-browser-cdp-interaction"
+                    ],
+                    "covering_receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "requirement_id": "obs-pob-browser-cdp-interaction",
+                    "status": "covered"
+                  },
+                  {
+                    "covered_observation_ids": [
+                      "obs-pob-browser-cdp-navigation"
+                    ],
+                    "covering_receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "requirement_id": "obs-pob-browser-cdp-navigation",
+                    "status": "covered"
+                  },
+                  {
+                    "covered_observation_ids": [
+                      "obs-pob-browser-cdp-network"
+                    ],
+                    "covering_receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "requirement_id": "obs-pob-browser-cdp-network",
+                    "status": "covered"
+                  },
+                  {
+                    "covered_observation_ids": [
+                      "obs-pob-browser-cdp-console"
+                    ],
+                    "covering_receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "requirement_id": "obs-pob-browser-cdp-console",
+                    "status": "covered"
+                  },
+                  {
+                    "covered_observation_ids": [
+                      "obs-pob-browser-cdp-reload"
+                    ],
+                    "covering_receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "requirement_id": "obs-pob-browser-cdp-reload",
+                    "status": "covered"
+                  },
+                  {
+                    "covered_observation_ids": [
+                      "obs-pob-docs-full-http"
+                    ],
+                    "covering_receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "requirement_id": "obs-pob-docs-full-http",
+                    "status": "covered"
+                  }
+                ],
+                "schema_version": "evidence.contract.v1",
+                "scope": {
+                  "id": "<plan-id>",
+                  "kind": "plan",
+                  "plan_id": "<plan-id>"
+                },
+                "status": "satisfied",
+                "suggested_next_action": "none",
+                "validation_details": {
+                  "completion": {
+                    "checked_at": "<timestamp>",
+                    "gap_reasons": [],
+                    "receipt_ids": [
+                      "<receipt-id>",
+                      "<receipt-id>"
+                    ],
+                    "status": "passed"
+                  },
+                  "fixture": {
+                    "checked_at": "<timestamp>",
+                    "gap_reasons": [],
+                    "receipt_ids": [
+                      "<receipt-id>",
+                      "<receipt-id>"
+                    ],
+                    "status": "passed"
+                  },
+                  "freshness": {
+                    "checked_at": "<timestamp>",
+                    "gap_reasons": [],
+                    "receipt_ids": [
+                      "<receipt-id>",
+                      "<receipt-id>"
+                    ],
+                    "status": "passed"
+                  },
+                  "provenance": {
+                    "checked_at": "<timestamp>",
+                    "gap_reasons": [],
+                    "receipt_ids": [
+                      "<receipt-id>",
+                      "<receipt-id>"
+                    ],
+                    "status": "passed"
+                  },
+                  "schema": {
+                    "checked_at": "<timestamp>",
+                    "gap_reasons": [],
+                    "receipt_ids": [
+                      "<receipt-id>",
+                      "<receipt-id>"
+                    ],
+                    "status": "passed"
+                  },
+                  "target": {
+                    "checked_at": "<timestamp>",
+                    "gap_reasons": [],
+                    "receipt_ids": [
+                      "<receipt-id>",
+                      "<receipt-id>"
+                    ],
+                    "status": "passed"
+                  },
+                  "trust": {
+                    "checked_at": "<timestamp>",
+                    "gap_reasons": [],
+                    "receipt_ids": [
+                      "<receipt-id>",
+                      "<receipt-id>"
+                    ],
                     "status": "passed"
                   }
-                ],
-                "sandbox": {
-                  "limits": {
-                    "stderr_bytes": 4096,
-                    "stdout_bytes": 4096,
-                    "timeout_ms": 5000
-                  },
-                  "mode": "bounded_process"
-                },
-                "schema_version": "evidence.contract.v1",
-                "source": {
-                  "dirty": true,
-                  "revision": "<source-revision>",
-                  "tree_digest": "<sha256>"
-                },
-                "started_at": "<timestamp>",
-                "target": {
-                  "kind": "process",
-                  "uri": "local://health"
-                },
-                "vantage_point": {
-                  "identity": "verifier-http-curl-v1",
-                  "kind": "process_adapter"
                 }
               },
-              "receipt_digest": "<sha256>",
-              "reuse_key": null,
-              "reused": false,
-              "verdict": "passed"
-            },
-            "ok": true,
-            "schema": "planr.evidence.command.v1"
-          },
-          {
-            "command": "evidence.run",
-            "exit": {
-              "code": 0
-            },
-            "object": {
-              "attempt": {
-                "artifacts": [
-                  {
-                    "digest": "<sha256>",
-                    "id": "stdout",
-                    "inline_excerpt": "<captured-output>",
-                    "kind": "stdout"
-                  },
-                  {
-                    "digest": "<sha256>",
-                    "id": "stderr",
-                    "inline_excerpt": "<captured-output>",
-                    "kind": "stderr"
-                  }
-                ],
-                "capability_instance_id": "<capability-instance-id>",
-                "criterion_id": "crit-pob-browser-cdp",
-                "ended_at": "<timestamp>",
-                "exit": {
-                  "error": null,
-                  "exit_code": 0,
-                  "signal": null
-                },
-                "id": "<attempt-id>",
-                "obligation_id": "pob-browser-cdp",
-                "output_bounds": {
-                  "stderr_bytes": 0,
-                  "stderr_truncated": false,
-                  "stdout_bytes": 6415,
-                  "stdout_truncated": false
-                },
-                "raw_result": {
-                  "argv": [
-                    "/opt/homebrew/Cellar/node/26.6.0/bin/node",
-                    ".planr/evidence/adapters/browser-cdp-live.cjs",
-                    "http://127.0.0.1:<port>/workflow",
-                    "<port>",
-                    "<port>"
+              "coverage_id": "<coverage-id>",
+              "receipt_digests": [
+                "<sha256>",
+                "<sha256>"
+              ],
+              "receipt_lineage": [
+                {
+                  "aggregation_policy": "latest_applicable_pass",
+                  "covering_receipt_ids": [
+                    "<receipt-id>"
                   ],
-                  "cwd": "<workspace>",
-                  "digest": "<sha256>",
+                  "diagnostic_receipt_ids": [],
+                  "rejected_receipt_ids": [],
+                  "requirement_id": "obs-pob-browser-cdp-visible",
+                  "superseded_receipt_ids": []
+                },
+                {
+                  "aggregation_policy": "latest_applicable_pass",
+                  "covering_receipt_ids": [
+                    "<receipt-id>"
+                  ],
+                  "diagnostic_receipt_ids": [],
+                  "rejected_receipt_ids": [],
+                  "requirement_id": "obs-pob-browser-cdp-interaction",
+                  "superseded_receipt_ids": []
+                },
+                {
+                  "aggregation_policy": "latest_applicable_pass",
+                  "covering_receipt_ids": [
+                    "<receipt-id>"
+                  ],
+                  "diagnostic_receipt_ids": [],
+                  "rejected_receipt_ids": [],
+                  "requirement_id": "obs-pob-browser-cdp-navigation",
+                  "superseded_receipt_ids": []
+                },
+                {
+                  "aggregation_policy": "latest_applicable_pass",
+                  "covering_receipt_ids": [
+                    "<receipt-id>"
+                  ],
+                  "diagnostic_receipt_ids": [],
+                  "rejected_receipt_ids": [],
+                  "requirement_id": "obs-pob-browser-cdp-network",
+                  "superseded_receipt_ids": []
+                },
+                {
+                  "aggregation_policy": "latest_applicable_pass",
+                  "covering_receipt_ids": [
+                    "<receipt-id>"
+                  ],
+                  "diagnostic_receipt_ids": [],
+                  "rejected_receipt_ids": [],
+                  "requirement_id": "obs-pob-browser-cdp-console",
+                  "superseded_receipt_ids": []
+                },
+                {
+                  "aggregation_policy": "latest_applicable_pass",
+                  "covering_receipt_ids": [
+                    "<receipt-id>"
+                  ],
+                  "diagnostic_receipt_ids": [],
+                  "rejected_receipt_ids": [],
+                  "requirement_id": "obs-pob-browser-cdp-reload",
+                  "superseded_receipt_ids": []
+                },
+                {
+                  "aggregation_policy": "latest_applicable_pass",
+                  "covering_receipt_ids": [
+                    "<receipt-id>"
+                  ],
+                  "diagnostic_receipt_ids": [],
+                  "rejected_receipt_ids": [],
+                  "requirement_id": "obs-pob-docs-full-http",
+                  "superseded_receipt_ids": []
+                }
+              ],
+              "status": "satisfied",
+              "verdict": "satisfied",
+              "waiver_digests": []
+            },
+            "results": [
+              {
+                "attempt": {
+                  "artifacts": [
+                    {
+                      "digest": "<sha256>",
+                      "id": "stdout",
+                      "inline_excerpt": "<captured-output>",
+                      "kind": "stdout"
+                    },
+                    {
+                      "digest": "<sha256>",
+                      "id": "stderr",
+                      "inline_excerpt": "<captured-output>",
+                      "kind": "stderr"
+                    }
+                  ],
+                  "capability_instance_id": "<capability-instance-id>",
+                  "criterion_id": "crit-pob-browser-cdp",
+                  "ended_at": "<timestamp>",
                   "exit": {
                     "error": null,
                     "exit_code": 0,
                     "signal": null
                   },
-                  "kind": "process_output",
-                  "stderr_bytes": 0,
-                  "stderr_digest": "<sha256>",
-                  "stderr_excerpt": "<captured-output>",
-                  "stderr_truncated": false,
-                  "stdout_bytes": 6415,
-                  "stdout_digest": "<sha256>",
-                  "stdout_excerpt": "<captured-output>",
-                  "stdout_truncated": false
-                },
-                "resolved_command": {
-                  "command": [
-                    "/opt/homebrew/Cellar/node/26.6.0/bin/node",
-                    ".planr/evidence/adapters/browser-cdp-live.cjs",
-                    "http://127.0.0.1:<port>/workflow",
-                    "<port>",
-                    "<port>"
-                  ],
-                  "cwd": "<workspace>",
-                  "env_digest": "<sha256>",
-                  "kind": "command"
-                },
-                "retry_lineage": {
-                  "attempt_number": 1,
-                  "max_attempts": 3,
-                  "previous_attempt_ids": []
-                },
-                "schema_version": "evidence.contract.v1",
-                "started_at": "<timestamp>",
-                "status": "passed",
-                "stderr_digest": "<sha256>",
-                "stdout_digest": "<sha256>"
-              },
-              "feature_run_lease": null,
-              "product_finding": null,
-              "receipt": {
-                "artifacts": [],
-                "attempt_ids": [
-                  "<attempt-id>"
-                ],
-                "capability": {
-                  "instance_digest": "<sha256>",
-                  "instance_id": "<capability-instance-id>",
-                  "manifest_digest": "<sha256>",
-                  "manifest_id": "verifier-browser-cdp-v1"
-                },
-                "config_digest": "<sha256>",
-                "criterion_id": "crit-pob-browser-cdp",
-                "ended_at": "<timestamp>",
-                "environment": {
-                  "digest": "<sha256>",
-                  "id": "planr-local",
-                  "kind": "local"
-                },
-                "fixture_disclosure": {
-                  "fixture_refs": [
-                    "planr-test-fixture:browser-cdp-live-helper:sha256:6e4ce336f6e8d4d8ddcb860c6316bb28443d7e34f63e00c7093a7a1abed3b37f"
-                  ],
-                  "fixtures_used": true,
-                  "mocks_used": false
-                },
-                "id": "<receipt-id>",
-                "obligation_id": "pob-browser-cdp",
-                "observations": [
-                  {
-                    "actual": {
-                      "observed_target": {
-                        "final_uri": "http://127.0.0.1:<port>/next",
-                        "initial_uri": "http://127.0.0.1:<port>/workflow",
-                        "kind": "browser"
-                      },
-                      "runtime_identity": {
-                        "debug_endpoint": "<browser-debug-endpoint>",
-                        "executable_digest": "<sha256>",
-                        "executable_path": "<browser-executable-path>",
-                        "kind": "chrome-cdp",
-                        "product": "<browser-product>",
-                        "protocol_version": "<browser-protocol-version>",
-                        "user_agent": "<browser-user-agent>"
-                      },
-                      "schema_ref": "schema://com.example.browser.rendered_visibility",
-                      "text": "Ready",
-                      "visible": true
-                    },
-                    "outcome": "passed",
-                    "predicate": {
-                      "visible": true
-                    },
-                    "requirement_id": "obs-pob-browser-cdp-visible",
-                    "type": "com.example.browser.rendered_visibility"
+                  "id": "<attempt-id>",
+                  "obligation_id": "pob-browser-cdp",
+                  "output_bounds": {
+                    "stderr_bytes": 0,
+                    "stderr_truncated": false,
+                    "stdout_bytes": 6526,
+                    "stdout_truncated": false
                   },
-                  {
-                    "actual": {
-                      "clicked": true,
-                      "observed_target": {
-                        "final_uri": "http://127.0.0.1:<port>/next",
-                        "initial_uri": "http://127.0.0.1:<port>/workflow",
-                        "kind": "browser"
+                  "raw_result": {
+                    "adapter_request": {
+                      "assurance_policy": {},
+                      "criterion_id": "crit-pob-browser-cdp",
+                      "environment": {
+                        "digest": "<sha256>",
+                        "id": "planr-local",
+                        "kind": "local"
                       },
-                      "runtime_identity": {
-                        "debug_endpoint": "<browser-debug-endpoint>",
-                        "executable_digest": "<sha256>",
-                        "executable_path": "<browser-executable-path>",
-                        "kind": "chrome-cdp",
-                        "product": "<browser-product>",
-                        "protocol_version": "<browser-protocol-version>",
-                        "user_agent": "<browser-user-agent>"
+                      "execution_binding": {
+                        "obligation_id": "pob-browser-cdp",
+                        "requirement_ids": [
+                          "obs-pob-browser-cdp-console",
+                          "obs-pob-browser-cdp-interaction",
+                          "obs-pob-browser-cdp-navigation",
+                          "obs-pob-browser-cdp-network",
+                          "obs-pob-browser-cdp-reload",
+                          "obs-pob-browser-cdp-visible"
+                        ],
+                        "run_index": 0,
+                        "run_index_digest": "<sha256>",
+                        "schema_version": "planr.evidence.execution-binding.v2",
+                        "target": {
+                          "kind": "browser",
+                          "uri": "http://127.0.0.1:<port>/workflow"
+                        }
                       },
-                      "schema_ref": "schema://com.example.browser.user_interaction"
-                    },
-                    "outcome": "passed",
-                    "predicate": {
-                      "clicked": true
-                    },
-                    "requirement_id": "obs-pob-browser-cdp-interaction",
-                    "type": "com.example.browser.user_interaction"
-                  },
-                  {
-                    "actual": {
-                      "observed_target": {
-                        "final_uri": "http://127.0.0.1:<port>/next",
-                        "initial_uri": "http://127.0.0.1:<port>/workflow",
-                        "kind": "browser"
+                      "execution_contract_digest": "<sha256>",
+                      "fixture_disclosure": {
+                        "fixtures_used": false,
+                        "mocks_used": false
                       },
-                      "path": "/next",
-                      "runtime_identity": {
-                        "debug_endpoint": "<browser-debug-endpoint>",
-                        "executable_digest": "<sha256>",
-                        "executable_path": "<browser-executable-path>",
-                        "kind": "chrome-cdp",
-                        "product": "<browser-product>",
-                        "protocol_version": "<browser-protocol-version>",
-                        "user_agent": "<browser-user-agent>"
-                      },
-                      "schema_ref": "schema://com.example.browser.navigation"
-                    },
-                    "outcome": "passed",
-                    "predicate": {
-                      "path": "/next"
-                    },
-                    "requirement_id": "obs-pob-browser-cdp-navigation",
-                    "type": "com.example.browser.navigation"
-                  },
-                  {
-                    "actual": {
-                      "api_status": 200,
-                      "observed_target": {
-                        "final_uri": "http://127.0.0.1:<port>/next",
-                        "initial_uri": "http://127.0.0.1:<port>/workflow",
-                        "kind": "browser"
-                      },
-                      "responses": [
+                      "obligation_id": "pob-browser-cdp",
+                      "request_digest": "<sha256>",
+                      "request_id": "ereq-c9d300b8-9a05-4990-92e8-f37969da7fa5",
+                      "requirements": [
                         {
-                          "status": 200,
-                          "url": "http://127.0.0.1:<port>/workflow"
+                          "expected": {
+                            "visible": true
+                          },
+                          "id": "obs-pob-browser-cdp-visible",
+                          "payload_schema": {
+                            "schema_ref": "schema://com.example.browser.rendered_visibility"
+                          },
+                          "subject": "rendered page content is visible",
+                          "target": {
+                            "kind": "browser",
+                            "uri": "http://127.0.0.1:<port>/workflow"
+                          },
+                          "type": "com.example.browser.rendered_visibility"
                         },
                         {
-                          "status": 200,
-                          "url": "http://127.0.0.1:<port>/favicon.ico"
+                          "expected": {
+                            "clicked": true
+                          },
+                          "id": "obs-pob-browser-cdp-interaction",
+                          "payload_schema": {
+                            "schema_ref": "schema://com.example.browser.user_interaction"
+                          },
+                          "subject": "user-equivalent click mutates rendered state",
+                          "target": {
+                            "kind": "browser",
+                            "uri": "http://127.0.0.1:<port>/workflow"
+                          },
+                          "type": "com.example.browser.user_interaction"
                         },
                         {
-                          "status": 200,
-                          "url": "http://127.0.0.1:<port>/api/ping"
+                          "expected": {
+                            "path": "/next"
+                          },
+                          "id": "obs-pob-browser-cdp-navigation",
+                          "payload_schema": {
+                            "schema_ref": "schema://com.example.browser.navigation"
+                          },
+                          "subject": "browser navigation is observed",
+                          "target": {
+                            "kind": "browser",
+                            "uri": "http://127.0.0.1:<port>/workflow"
+                          },
+                          "type": "com.example.browser.navigation"
                         },
                         {
-                          "status": 200,
-                          "url": "http://127.0.0.1:<port>/favicon.ico"
+                          "expected": {
+                            "api_status": 200
+                          },
+                          "id": "obs-pob-browser-cdp-network",
+                          "payload_schema": {
+                            "schema_ref": "schema://com.example.browser.network"
+                          },
+                          "subject": "browser network result is observed",
+                          "target": {
+                            "kind": "browser",
+                            "uri": "http://127.0.0.1:<port>/workflow"
+                          },
+                          "type": "com.example.browser.network"
                         },
                         {
-                          "status": 200,
-                          "url": "http://127.0.0.1:<port>/next"
+                          "expected": {
+                            "error_count": 0
+                          },
+                          "id": "obs-pob-browser-cdp-console",
+                          "payload_schema": {
+                            "schema_ref": "schema://com.example.browser.console"
+                          },
+                          "subject": "browser console has no relevant errors",
+                          "target": {
+                            "kind": "browser",
+                            "uri": "http://127.0.0.1:<port>/workflow"
+                          },
+                          "type": "com.example.browser.console"
                         },
                         {
-                          "status": 200,
-                          "url": "http://127.0.0.1:<port>/favicon.ico"
+                          "expected": {
+                            "persisted": true
+                          },
+                          "id": "obs-pob-browser-cdp-reload",
+                          "payload_schema": {
+                            "schema_ref": "schema://com.example.browser.reload_storage"
+                          },
+                          "subject": "local storage persists across reload",
+                          "target": {
+                            "kind": "browser",
+                            "uri": "http://127.0.0.1:<port>/workflow"
+                          },
+                          "type": "com.example.browser.reload_storage"
                         }
                       ],
-                      "runtime_identity": {
-                        "debug_endpoint": "<browser-debug-endpoint>",
-                        "executable_digest": "<sha256>",
-                        "executable_path": "<browser-executable-path>",
-                        "kind": "chrome-cdp",
-                        "product": "<browser-product>",
-                        "protocol_version": "<browser-protocol-version>",
-                        "user_agent": "<browser-user-agent>"
+                      "result_contract": {
+                        "schema_digest": "<sha256>",
+                        "schema_ref": "schema://planr.structured_observation_results.v2",
+                        "type": "planr.structured_observation_results"
                       },
-                      "schema_ref": "schema://com.example.browser.network"
+                      "retry": {
+                        "attempt_number": 1,
+                        "max_attempts": 1,
+                        "previous_attempt_ids": []
+                      },
+                      "schema_version": "planr.evidence.adapter-request.v1",
+                      "target": {
+                        "kind": "browser",
+                        "uri": "http://127.0.0.1:<port>/workflow"
+                      }
                     },
-                    "outcome": "passed",
-                    "predicate": {
-                      "api_status": 200
+                    "argv": [
+                      "/opt/homebrew/Cellar/node/26.7.0/bin/node",
+                      ".planr/evidence/adapters/browser-cdp-live.cjs",
+                      "http://127.0.0.1:<port>/workflow",
+                      "<port>",
+                      "<port>"
+                    ],
+                    "cwd": "<workspace>",
+                    "digest": "<sha256>",
+                    "execution_binding": {
+                      "obligation_id": "pob-browser-cdp",
+                      "requirement_ids": [
+                        "obs-pob-browser-cdp-console",
+                        "obs-pob-browser-cdp-interaction",
+                        "obs-pob-browser-cdp-navigation",
+                        "obs-pob-browser-cdp-network",
+                        "obs-pob-browser-cdp-reload",
+                        "obs-pob-browser-cdp-visible"
+                      ],
+                      "run_index": 0,
+                      "run_index_digest": "<sha256>",
+                      "schema_version": "planr.evidence.execution-binding.v2",
+                      "target": {
+                        "kind": "browser",
+                        "uri": "http://127.0.0.1:<port>/workflow"
+                      }
                     },
-                    "requirement_id": "obs-pob-browser-cdp-network",
-                    "type": "com.example.browser.network"
+                    "exit": {
+                      "error": null,
+                      "exit_code": 0,
+                      "signal": null
+                    },
+                    "kind": "process_output",
+                    "stderr_bytes": 0,
+                    "stderr_digest": "<sha256>",
+                    "stderr_excerpt": "<captured-output>",
+                    "stderr_truncated": false,
+                    "stdout_bytes": 6526,
+                    "stdout_digest": "<sha256>",
+                    "stdout_excerpt": "<captured-output>",
+                    "stdout_truncated": false,
+                    "target_runtime": {
+                      "mode": "external"
+                    }
                   },
-                  {
-                    "actual": {
-                      "error_count": 0,
-                      "errors": [],
-                      "observed_target": {
-                        "final_uri": "http://127.0.0.1:<port>/next",
-                        "initial_uri": "http://127.0.0.1:<port>/workflow",
-                        "kind": "browser"
-                      },
-                      "runtime_identity": {
-                        "debug_endpoint": "<browser-debug-endpoint>",
-                        "executable_digest": "<sha256>",
-                        "executable_path": "<browser-executable-path>",
-                        "kind": "chrome-cdp",
-                        "product": "<browser-product>",
-                        "protocol_version": "<browser-protocol-version>",
-                        "user_agent": "<browser-user-agent>"
-                      },
-                      "schema_ref": "schema://com.example.browser.console"
-                    },
-                    "outcome": "passed",
-                    "predicate": {
-                      "error_count": 0
-                    },
-                    "requirement_id": "obs-pob-browser-cdp-console",
-                    "type": "com.example.browser.console"
+                  "resolved_command": {
+                    "command": [
+                      "/opt/homebrew/Cellar/node/26.7.0/bin/node",
+                      ".planr/evidence/adapters/browser-cdp-live.cjs",
+                      "http://127.0.0.1:<port>/workflow",
+                      "<port>",
+                      "<port>"
+                    ],
+                    "cwd": "<workspace>",
+                    "env_digest": "<sha256>",
+                    "kind": "command"
                   },
-                  {
-                    "actual": {
-                      "observed_target": {
-                        "final_uri": "http://127.0.0.1:<port>/next",
-                        "initial_uri": "http://127.0.0.1:<port>/workflow",
-                        "kind": "browser"
+                  "retry_lineage": {
+                    "attempt_number": 1,
+                    "max_attempts": 1,
+                    "previous_attempt_ids": []
+                  },
+                  "schema_version": "evidence.contract.v1",
+                  "started_at": "<timestamp>",
+                  "status": "passed",
+                  "stderr_digest": "<sha256>",
+                  "stdout_digest": "<sha256>"
+                },
+                "feature_run_lease": null,
+                "product_finding": null,
+                "receipt": {
+                  "artifacts": [],
+                  "attempt_ids": [
+                    "<attempt-id>"
+                  ],
+                  "capability": {
+                    "instance_digest": "<sha256>",
+                    "instance_id": "<capability-instance-id>",
+                    "manifest_digest": "<sha256>",
+                    "manifest_id": "verifier-browser-cdp-v1"
+                  },
+                  "config_digest": "<sha256>",
+                  "criterion_id": "crit-pob-browser-cdp",
+                  "ended_at": "<timestamp>",
+                  "environment": {
+                    "digest": "<sha256>",
+                    "id": "planr-local",
+                    "kind": "local"
+                  },
+                  "fixture_disclosure": {
+                    "fixtures_used": false,
+                    "mocks_used": false
+                  },
+                  "id": "<receipt-id>",
+                  "obligation_id": "pob-browser-cdp",
+                  "observations": [
+                    {
+                      "actual": {
+                        "observed_target": {
+                          "final_uri": "http://127.0.0.1:<port>/next",
+                          "initial_uri": "http://127.0.0.1:<port>/workflow",
+                          "kind": "browser"
+                        },
+                        "runtime_identity": {
+                          "debug_endpoint": "<browser-debug-endpoint>",
+                          "executable_digest": "<sha256>",
+                          "executable_path": "<browser-executable-path>",
+                          "kind": "chrome-cdp",
+                          "product": "<browser-product>",
+                          "protocol_version": "<browser-protocol-version>",
+                          "user_agent": "<browser-user-agent>"
+                        },
+                        "schema_ref": "schema://com.example.browser.rendered_visibility",
+                        "text": "Ready",
+                        "visible": true
                       },
-                      "persisted": true,
-                      "runtime_identity": {
-                        "debug_endpoint": "<browser-debug-endpoint>",
-                        "executable_digest": "<sha256>",
-                        "executable_path": "<browser-executable-path>",
-                        "kind": "chrome-cdp",
-                        "product": "<browser-product>",
-                        "protocol_version": "<browser-protocol-version>",
-                        "user_agent": "<browser-user-agent>"
+                      "outcome": "passed",
+                      "predicate": {
+                        "visible": true
                       },
-                      "schema_ref": "schema://com.example.browser.reload_storage"
+                      "requirement_id": "obs-pob-browser-cdp-visible",
+                      "type": "com.example.browser.rendered_visibility"
                     },
-                    "outcome": "passed",
-                    "predicate": {
-                      "persisted": true
+                    {
+                      "actual": {
+                        "clicked": true,
+                        "observed_target": {
+                          "final_uri": "http://127.0.0.1:<port>/next",
+                          "initial_uri": "http://127.0.0.1:<port>/workflow",
+                          "kind": "browser"
+                        },
+                        "runtime_identity": {
+                          "debug_endpoint": "<browser-debug-endpoint>",
+                          "executable_digest": "<sha256>",
+                          "executable_path": "<browser-executable-path>",
+                          "kind": "chrome-cdp",
+                          "product": "<browser-product>",
+                          "protocol_version": "<browser-protocol-version>",
+                          "user_agent": "<browser-user-agent>"
+                        },
+                        "schema_ref": "schema://com.example.browser.user_interaction"
+                      },
+                      "outcome": "passed",
+                      "predicate": {
+                        "clicked": true
+                      },
+                      "requirement_id": "obs-pob-browser-cdp-interaction",
+                      "type": "com.example.browser.user_interaction"
                     },
-                    "requirement_id": "obs-pob-browser-cdp-reload",
-                    "type": "com.example.browser.reload_storage"
+                    {
+                      "actual": {
+                        "observed_target": {
+                          "final_uri": "http://127.0.0.1:<port>/next",
+                          "initial_uri": "http://127.0.0.1:<port>/workflow",
+                          "kind": "browser"
+                        },
+                        "path": "/next",
+                        "runtime_identity": {
+                          "debug_endpoint": "<browser-debug-endpoint>",
+                          "executable_digest": "<sha256>",
+                          "executable_path": "<browser-executable-path>",
+                          "kind": "chrome-cdp",
+                          "product": "<browser-product>",
+                          "protocol_version": "<browser-protocol-version>",
+                          "user_agent": "<browser-user-agent>"
+                        },
+                        "schema_ref": "schema://com.example.browser.navigation"
+                      },
+                      "outcome": "passed",
+                      "predicate": {
+                        "path": "/next"
+                      },
+                      "requirement_id": "obs-pob-browser-cdp-navigation",
+                      "type": "com.example.browser.navigation"
+                    },
+                    {
+                      "actual": {
+                        "api_status": 200,
+                        "observed_target": {
+                          "final_uri": "http://127.0.0.1:<port>/next",
+                          "initial_uri": "http://127.0.0.1:<port>/workflow",
+                          "kind": "browser"
+                        },
+                        "responses": [
+                          {
+                            "status": 200,
+                            "url": "http://127.0.0.1:<port>/workflow"
+                          },
+                          {
+                            "status": 200,
+                            "url": "http://127.0.0.1:<port>/api/ping"
+                          },
+                          {
+                            "status": 200,
+                            "url": "http://127.0.0.1:<port>/next"
+                          }
+                        ],
+                        "runtime_identity": {
+                          "debug_endpoint": "<browser-debug-endpoint>",
+                          "executable_digest": "<sha256>",
+                          "executable_path": "<browser-executable-path>",
+                          "kind": "chrome-cdp",
+                          "product": "<browser-product>",
+                          "protocol_version": "<browser-protocol-version>",
+                          "user_agent": "<browser-user-agent>"
+                        },
+                        "schema_ref": "schema://com.example.browser.network"
+                      },
+                      "outcome": "passed",
+                      "predicate": {
+                        "api_status": 200
+                      },
+                      "requirement_id": "obs-pob-browser-cdp-network",
+                      "type": "com.example.browser.network"
+                    },
+                    {
+                      "actual": {
+                        "error_count": 0,
+                        "errors": [],
+                        "observed_target": {
+                          "final_uri": "http://127.0.0.1:<port>/next",
+                          "initial_uri": "http://127.0.0.1:<port>/workflow",
+                          "kind": "browser"
+                        },
+                        "runtime_identity": {
+                          "debug_endpoint": "<browser-debug-endpoint>",
+                          "executable_digest": "<sha256>",
+                          "executable_path": "<browser-executable-path>",
+                          "kind": "chrome-cdp",
+                          "product": "<browser-product>",
+                          "protocol_version": "<browser-protocol-version>",
+                          "user_agent": "<browser-user-agent>"
+                        },
+                        "schema_ref": "schema://com.example.browser.console"
+                      },
+                      "outcome": "passed",
+                      "predicate": {
+                        "error_count": 0
+                      },
+                      "requirement_id": "obs-pob-browser-cdp-console",
+                      "type": "com.example.browser.console"
+                    },
+                    {
+                      "actual": {
+                        "observed_target": {
+                          "final_uri": "http://127.0.0.1:<port>/next",
+                          "initial_uri": "http://127.0.0.1:<port>/workflow",
+                          "kind": "browser"
+                        },
+                        "persisted": true,
+                        "runtime_identity": {
+                          "debug_endpoint": "<browser-debug-endpoint>",
+                          "executable_digest": "<sha256>",
+                          "executable_path": "<browser-executable-path>",
+                          "kind": "chrome-cdp",
+                          "product": "<browser-product>",
+                          "protocol_version": "<browser-protocol-version>",
+                          "user_agent": "<browser-user-agent>"
+                        },
+                        "schema_ref": "schema://com.example.browser.reload_storage"
+                      },
+                      "outcome": "passed",
+                      "predicate": {
+                        "persisted": true
+                      },
+                      "requirement_id": "obs-pob-browser-cdp-reload",
+                      "type": "com.example.browser.reload_storage"
+                    }
+                  ],
+                  "permissions": {
+                    "filesystem": "read_workspace",
+                    "network": "loopback"
+                  },
+                  "proof_gaps": [],
+                  "provenance": {
+                    "assigned_by": "planr",
+                    "execution_id": "<attempt-id>",
+                    "source": "planr_observed_execution",
+                    "tool_call_id": null
+                  },
+                  "raw_result": {
+                    "digest": "<sha256>",
+                    "kind": "process_result"
+                  },
+                  "receipt_digest": "<sha256>",
+                  "receipt_status": "trusted",
+                  "retry_history": [
+                    {
+                      "attempt_number": 1,
+                      "max_attempts": 1,
+                      "previous_attempt_ids": [],
+                      "status": "passed"
+                    }
+                  ],
+                  "sandbox": {
+                    "limits": {
+                      "stderr_bytes": 65536,
+                      "stdout_bytes": 65536,
+                      "timeout_ms": 20000
+                    },
+                    "mode": "bounded_process"
+                  },
+                  "schema_version": "evidence.contract.v1",
+                  "source": {
+                    "dirty": true,
+                    "revision": "<source-revision>",
+                    "tree_digest": "<sha256>"
+                  },
+                  "started_at": "<timestamp>",
+                  "target": {
+                    "kind": "browser",
+                    "uri": "http://127.0.0.1:<port>/workflow"
+                  },
+                  "vantage_point": {
+                    "identity": "verifier-browser-cdp-v1",
+                    "kind": "process_adapter"
                   }
-                ],
-                "permissions": {
-                  "filesystem": "read_workspace",
-                  "network": "loopback"
-                },
-                "proof_gaps": [],
-                "provenance": {
-                  "assigned_by": "planr",
-                  "execution_id": "<attempt-id>",
-                  "source": "planr_observed_execution",
-                  "tool_call_id": null
-                },
-                "raw_result": {
-                  "digest": "<sha256>",
-                  "kind": "process_result"
                 },
                 "receipt_digest": "<sha256>",
-                "receipt_status": "trusted",
-                "retry_history": [
-                  {
-                    "attempt_number": 1,
-                    "max_attempts": 3,
-                    "previous_attempt_ids": [],
-                    "status": "passed"
-                  }
-                ],
-                "sandbox": {
-                  "limits": {
-                    "stderr_bytes": 65536,
-                    "stdout_bytes": 65536,
-                    "timeout_ms": 20000
-                  },
-                  "mode": "bounded_process"
-                },
-                "schema_version": "evidence.contract.v1",
-                "source": {
-                  "dirty": true,
-                  "revision": "<source-revision>",
-                  "tree_digest": "<sha256>"
-                },
-                "started_at": "<timestamp>",
-                "target": {
-                  "kind": "browser",
-                  "uri": "http://127.0.0.1:<port>/workflow"
-                },
-                "vantage_point": {
-                  "identity": "verifier-browser-cdp-v1",
-                  "kind": "process_adapter"
-                }
+                "reuse_key": null,
+                "reused": false,
+                "terminal_exhaustion": null,
+                "verdict": "passed"
               },
-              "receipt_digest": "<sha256>",
-              "reuse_key": null,
-              "reused": false,
-              "verdict": "passed"
-            },
-            "ok": true,
-            "schema": "planr.evidence.command.v1"
-          }
-        ],
+              {
+                "attempt": {
+                  "artifacts": [
+                    {
+                      "digest": "<sha256>",
+                      "id": "stdout",
+                      "inline_excerpt": "<captured-output>",
+                      "kind": "stdout"
+                    },
+                    {
+                      "digest": "<sha256>",
+                      "id": "stderr",
+                      "inline_excerpt": "<captured-output>",
+                      "kind": "stderr"
+                    }
+                  ],
+                  "capability_instance_id": "<capability-instance-id>",
+                  "criterion_id": "crit-pob-docs-full-http",
+                  "ended_at": "<timestamp>",
+                  "exit": {
+                    "error": null,
+                    "exit_code": 0,
+                    "signal": null
+                  },
+                  "id": "<attempt-id>",
+                  "obligation_id": "pob-docs-full-http",
+                  "output_bounds": {
+                    "stderr_bytes": 0,
+                    "stderr_truncated": false,
+                    "stdout_bytes": 15,
+                    "stdout_truncated": false
+                  },
+                  "raw_result": {
+                    "adapter_request": {
+                      "assurance_policy": {},
+                      "criterion_id": "crit-pob-docs-full-http",
+                      "environment": {
+                        "digest": "<sha256>",
+                        "id": "planr-local",
+                        "kind": "local"
+                      },
+                      "execution_binding": {
+                        "obligation_id": "pob-docs-full-http",
+                        "requirement_ids": [
+                          "obs-pob-docs-full-http"
+                        ],
+                        "run_index": 1,
+                        "run_index_digest": "<sha256>",
+                        "schema_version": "planr.evidence.execution-binding.v2",
+                        "target": {
+                          "kind": "process",
+                          "uri": "local://health"
+                        }
+                      },
+                      "execution_contract_digest": "<sha256>",
+                      "fixture_disclosure": {
+                        "fixtures_used": false,
+                        "mocks_used": false
+                      },
+                      "obligation_id": "pob-docs-full-http",
+                      "request_digest": "<sha256>",
+                      "request_id": "ereq-a7085400-b12e-417d-9c0f-6ff47d9f160c",
+                      "requirements": [
+                        {
+                          "expected": {
+                            "status": "ok"
+                          },
+                          "id": "obs-pob-docs-full-http",
+                          "payload_schema": {
+                            "schema_ref": "schema://com.example.http.status"
+                          },
+                          "subject": "docs fixture com.example.http.status",
+                          "target": {
+                            "kind": "process",
+                            "uri": "local://health"
+                          },
+                          "type": "com.example.http.status"
+                        }
+                      ],
+                      "result_contract": {
+                        "schema_digest": "<sha256>",
+                        "schema_ref": "schema://com.example.http.status",
+                        "type": "com.example.http.status"
+                      },
+                      "retry": {
+                        "attempt_number": 1,
+                        "max_attempts": 1,
+                        "previous_attempt_ids": []
+                      },
+                      "schema_version": "planr.evidence.adapter-request.v1",
+                      "target": {
+                        "kind": "process",
+                        "uri": "local://health"
+                      }
+                    },
+                    "argv": [
+                      "/usr/bin/curl",
+                      "-fsS",
+                      "http://127.0.0.1:<port>/health"
+                    ],
+                    "cwd": "<workspace>",
+                    "digest": "<sha256>",
+                    "execution_binding": {
+                      "obligation_id": "pob-docs-full-http",
+                      "requirement_ids": [
+                        "obs-pob-docs-full-http"
+                      ],
+                      "run_index": 1,
+                      "run_index_digest": "<sha256>",
+                      "schema_version": "planr.evidence.execution-binding.v2",
+                      "target": {
+                        "kind": "process",
+                        "uri": "local://health"
+                      }
+                    },
+                    "exit": {
+                      "error": null,
+                      "exit_code": 0,
+                      "signal": null
+                    },
+                    "kind": "process_output",
+                    "stderr_bytes": 0,
+                    "stderr_digest": "<sha256>",
+                    "stderr_excerpt": "<captured-output>",
+                    "stderr_truncated": false,
+                    "stdout_bytes": 15,
+                    "stdout_digest": "<sha256>",
+                    "stdout_excerpt": "<captured-output>",
+                    "stdout_truncated": false,
+                    "target_runtime": {
+                      "mode": "external"
+                    }
+                  },
+                  "resolved_command": {
+                    "command": [
+                      "/usr/bin/curl",
+                      "-fsS",
+                      "http://127.0.0.1:<port>/health"
+                    ],
+                    "cwd": "<workspace>",
+                    "env_digest": "<sha256>",
+                    "kind": "command"
+                  },
+                  "retry_lineage": {
+                    "attempt_number": 1,
+                    "max_attempts": 1,
+                    "previous_attempt_ids": []
+                  },
+                  "schema_version": "evidence.contract.v1",
+                  "started_at": "<timestamp>",
+                  "status": "passed",
+                  "stderr_digest": "<sha256>",
+                  "stdout_digest": "<sha256>"
+                },
+                "feature_run_lease": null,
+                "product_finding": null,
+                "receipt": {
+                  "artifacts": [],
+                  "attempt_ids": [
+                    "<attempt-id>"
+                  ],
+                  "capability": {
+                    "instance_digest": "<sha256>",
+                    "instance_id": "<capability-instance-id>",
+                    "manifest_digest": "<sha256>",
+                    "manifest_id": "verifier-http-curl-v1"
+                  },
+                  "config_digest": "<sha256>",
+                  "criterion_id": "crit-pob-docs-full-http",
+                  "ended_at": "<timestamp>",
+                  "environment": {
+                    "digest": "<sha256>",
+                    "id": "planr-local",
+                    "kind": "local"
+                  },
+                  "fixture_disclosure": {
+                    "fixtures_used": false,
+                    "mocks_used": false
+                  },
+                  "id": "<receipt-id>",
+                  "obligation_id": "pob-docs-full-http",
+                  "observations": [
+                    {
+                      "actual": {
+                        "schema_ref": "schema://com.example.http.status",
+                        "status": "ok"
+                      },
+                      "outcome": "passed",
+                      "predicate": {
+                        "status": "ok"
+                      },
+                      "requirement_id": "obs-pob-docs-full-http",
+                      "type": "com.example.http.status"
+                    }
+                  ],
+                  "permissions": {
+                    "filesystem": "read_workspace",
+                    "network": "loopback"
+                  },
+                  "proof_gaps": [],
+                  "provenance": {
+                    "assigned_by": "planr",
+                    "execution_id": "<attempt-id>",
+                    "source": "planr_observed_execution",
+                    "tool_call_id": null
+                  },
+                  "raw_result": {
+                    "digest": "<sha256>",
+                    "kind": "process_result"
+                  },
+                  "receipt_digest": "<sha256>",
+                  "receipt_status": "trusted",
+                  "retry_history": [
+                    {
+                      "attempt_number": 1,
+                      "max_attempts": 1,
+                      "previous_attempt_ids": [],
+                      "status": "passed"
+                    }
+                  ],
+                  "sandbox": {
+                    "limits": {
+                      "stderr_bytes": 4096,
+                      "stdout_bytes": 4096,
+                      "timeout_ms": 5000
+                    },
+                    "mode": "bounded_process"
+                  },
+                  "schema_version": "evidence.contract.v1",
+                  "source": {
+                    "dirty": true,
+                    "revision": "<source-revision>",
+                    "tree_digest": "<sha256>"
+                  },
+                  "started_at": "<timestamp>",
+                  "target": {
+                    "kind": "process",
+                    "uri": "local://health"
+                  },
+                  "vantage_point": {
+                    "identity": "verifier-http-curl-v1",
+                    "kind": "process_adapter"
+                  }
+                },
+                "receipt_digest": "<sha256>",
+                "reuse_key": null,
+                "reused": false,
+                "terminal_exhaustion": null,
+                "verdict": "passed"
+              }
+            ],
+            "run_index_digest": "<sha256>",
+            "schema_version": "planr.evidence.run-index.result.v2",
+            "status": "passed",
+            "terminal_exhaustion": null,
+            "verdict": "passed"
+          },
+          "ok": true,
+          "schema": "planr.evidence.command.v1"
+        },
         "after": {
           "command": "evidence.coverage",
           "exit": {
@@ -2273,7 +3536,7 @@
         "evidence",
         "run",
         "--input",
-        "<workspace>/pob-docs-forged.run.json",
+        "<workspace>/.planr/evidence/runs/<sealed-digest>.json",
         "--json"
       ],
       "exit_code": 1,
@@ -2319,174 +3582,402 @@
             "code": 0
           },
           "object": {
-            "attempt": {
-              "artifacts": [
-                {
-                  "digest": "<sha256>",
-                  "id": "stdout",
-                  "inline_excerpt": "<captured-output>",
-                  "kind": "stdout"
+            "coverage": {
+              "canonical_projection": {
+                "actionable_gaps": [],
+                "actionable_now": false,
+                "attempt_refs": [],
+                "coverage_id": "<coverage-id>",
+                "criterion_id": "<plan-id>",
+                "non_actionable_blockers": [],
+                "observations": [
+                  {
+                    "covered_observation_ids": [
+                      "obs-pob-docs-stale-policy"
+                    ],
+                    "covering_receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "requirement_id": "obs-pob-docs-stale-policy",
+                    "status": "covered"
+                  }
+                ],
+                "pass": true,
+                "receipt_digests": [
+                  "<sha256>"
+                ],
+                "receipt_refs": [
+                  "<receipt-id>"
+                ],
+                "scope": {
+                  "id": "<plan-id>",
+                  "kind": "plan",
+                  "plan_id": "<plan-id>"
                 },
-                {
-                  "digest": "<sha256>",
-                  "id": "stderr",
-                  "inline_excerpt": "<captured-output>",
-                  "kind": "stderr"
+                "status": "satisfied",
+                "suggested_next_action": "none",
+                "waiver_digests": [],
+                "waiver_refs": []
+              },
+              "coverage": {
+                "actionable_now": false,
+                "evaluated_at": "<timestamp>",
+                "id": "<coverage-id>",
+                "observation_coverage": [
+                  {
+                    "covered_observation_ids": [
+                      "obs-pob-docs-stale-policy"
+                    ],
+                    "covering_receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "requirement_id": "obs-pob-docs-stale-policy",
+                    "status": "covered"
+                  }
+                ],
+                "schema_version": "evidence.contract.v1",
+                "scope": {
+                  "id": "<plan-id>",
+                  "kind": "plan",
+                  "plan_id": "<plan-id>"
+                },
+                "status": "satisfied",
+                "suggested_next_action": "none",
+                "validation_details": {
+                  "completion": {
+                    "checked_at": "<timestamp>",
+                    "gap_reasons": [],
+                    "receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "status": "passed"
+                  },
+                  "fixture": {
+                    "checked_at": "<timestamp>",
+                    "gap_reasons": [],
+                    "receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "status": "passed"
+                  },
+                  "freshness": {
+                    "checked_at": "<timestamp>",
+                    "gap_reasons": [],
+                    "receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "status": "passed"
+                  },
+                  "provenance": {
+                    "checked_at": "<timestamp>",
+                    "gap_reasons": [],
+                    "receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "status": "passed"
+                  },
+                  "schema": {
+                    "checked_at": "<timestamp>",
+                    "gap_reasons": [],
+                    "receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "status": "passed"
+                  },
+                  "target": {
+                    "checked_at": "<timestamp>",
+                    "gap_reasons": [],
+                    "receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "status": "passed"
+                  },
+                  "trust": {
+                    "checked_at": "<timestamp>",
+                    "gap_reasons": [],
+                    "receipt_ids": [
+                      "<receipt-id>"
+                    ],
+                    "status": "passed"
+                  }
                 }
+              },
+              "coverage_id": "<coverage-id>",
+              "receipt_digests": [
+                "<sha256>"
               ],
-              "capability_instance_id": "<capability-instance-id>",
-              "criterion_id": "crit-pob-docs-stale-policy",
-              "ended_at": "<timestamp>",
-              "exit": {
-                "error": null,
-                "exit_code": 0,
-                "signal": null
-              },
-              "id": "<attempt-id>",
-              "obligation_id": "pob-docs-stale-policy",
-              "output_bounds": {
-                "stderr_bytes": 0,
-                "stderr_truncated": false,
-                "stdout_bytes": 15,
-                "stdout_truncated": false
-              },
-              "raw_result": {
-                "argv": [
-                  "/usr/bin/curl",
-                  "-fsS",
-                  "http://127.0.0.1:<port>/health"
-                ],
-                "cwd": "<workspace>",
-                "digest": "<sha256>",
-                "exit": {
-                  "error": null,
-                  "exit_code": 0,
-                  "signal": null
-                },
-                "kind": "process_output",
-                "stderr_bytes": 0,
-                "stderr_digest": "<sha256>",
-                "stderr_excerpt": "<captured-output>",
-                "stderr_truncated": false,
-                "stdout_bytes": 15,
-                "stdout_digest": "<sha256>",
-                "stdout_excerpt": "<captured-output>",
-                "stdout_truncated": false
-              },
-              "resolved_command": {
-                "command": [
-                  "/usr/bin/curl",
-                  "-fsS",
-                  "http://127.0.0.1:<port>/health"
-                ],
-                "cwd": "<workspace>",
-                "env_digest": "<sha256>",
-                "kind": "command"
-              },
-              "retry_lineage": {
-                "attempt_number": 1,
-                "max_attempts": 3,
-                "previous_attempt_ids": []
-              },
-              "schema_version": "evidence.contract.v1",
-              "started_at": "<timestamp>",
-              "status": "passed",
-              "stderr_digest": "<sha256>",
-              "stdout_digest": "<sha256>"
-            },
-            "feature_run_lease": null,
-            "product_finding": null,
-            "receipt": {
-              "artifacts": [],
-              "attempt_ids": [
-                "<attempt-id>"
-              ],
-              "capability": {
-                "instance_digest": "<sha256>",
-                "instance_id": "<capability-instance-id>",
-                "manifest_digest": "<sha256>",
-                "manifest_id": "verifier-http-curl-v1"
-              },
-              "config_digest": "<sha256>",
-              "criterion_id": "crit-pob-docs-stale-policy",
-              "ended_at": "<timestamp>",
-              "environment": {
-                "digest": "<sha256>",
-                "id": "planr-local",
-                "kind": "local"
-              },
-              "fixture_disclosure": {
-                "fixtures_used": false,
-                "mocks_used": false
-              },
-              "id": "<receipt-id>",
-              "obligation_id": "pob-docs-stale-policy",
-              "observations": [
+              "receipt_lineage": [
                 {
-                  "actual": {
-                    "schema_ref": "schema://com.example.http.status",
-                    "status": "ok"
-                  },
-                  "outcome": "passed",
-                  "predicate": {
-                    "status": "ok"
-                  },
+                  "aggregation_policy": "latest_applicable_pass",
+                  "covering_receipt_ids": [
+                    "<receipt-id>"
+                  ],
+                  "diagnostic_receipt_ids": [],
+                  "rejected_receipt_ids": [],
                   "requirement_id": "obs-pob-docs-stale-policy",
-                  "type": "com.example.http.status"
+                  "superseded_receipt_ids": []
                 }
               ],
-              "permissions": {
-                "filesystem": "read_workspace",
-                "network": "loopback"
-              },
-              "proof_gaps": [],
-              "provenance": {
-                "assigned_by": "planr",
-                "execution_id": "<attempt-id>",
-                "source": "planr_observed_execution",
-                "tool_call_id": null
-              },
-              "raw_result": {
-                "digest": "<sha256>",
-                "kind": "process_result"
-              },
-              "receipt_digest": "<sha256>",
-              "receipt_status": "trusted",
-              "retry_history": [
-                {
-                  "attempt_number": 1,
-                  "max_attempts": 3,
-                  "previous_attempt_ids": [],
-                  "status": "passed"
-                }
-              ],
-              "sandbox": {
-                "limits": {
-                  "stderr_bytes": 4096,
-                  "stdout_bytes": 4096,
-                  "timeout_ms": 5000
-                },
-                "mode": "bounded_process"
-              },
-              "schema_version": "evidence.contract.v1",
-              "source": {
-                "dirty": true,
-                "revision": "<source-revision>",
-                "tree_digest": "<sha256>"
-              },
-              "started_at": "<timestamp>",
-              "target": {
-                "kind": "process",
-                "uri": "local://health"
-              },
-              "vantage_point": {
-                "identity": "verifier-http-curl-v1",
-                "kind": "process_adapter"
-              }
+              "status": "satisfied",
+              "verdict": "satisfied",
+              "waiver_digests": []
             },
-            "receipt_digest": "<sha256>",
-            "reuse_key": null,
-            "reused": false,
+            "results": [
+              {
+                "attempt": {
+                  "artifacts": [
+                    {
+                      "digest": "<sha256>",
+                      "id": "stdout",
+                      "inline_excerpt": "<captured-output>",
+                      "kind": "stdout"
+                    },
+                    {
+                      "digest": "<sha256>",
+                      "id": "stderr",
+                      "inline_excerpt": "<captured-output>",
+                      "kind": "stderr"
+                    }
+                  ],
+                  "capability_instance_id": "<capability-instance-id>",
+                  "criterion_id": "crit-pob-docs-stale-policy",
+                  "ended_at": "<timestamp>",
+                  "exit": {
+                    "error": null,
+                    "exit_code": 0,
+                    "signal": null
+                  },
+                  "id": "<attempt-id>",
+                  "obligation_id": "pob-docs-stale-policy",
+                  "output_bounds": {
+                    "stderr_bytes": 0,
+                    "stderr_truncated": false,
+                    "stdout_bytes": 15,
+                    "stdout_truncated": false
+                  },
+                  "raw_result": {
+                    "adapter_request": {
+                      "assurance_policy": {},
+                      "criterion_id": "crit-pob-docs-stale-policy",
+                      "environment": {
+                        "digest": "<sha256>",
+                        "id": "planr-local",
+                        "kind": "local"
+                      },
+                      "execution_binding": {
+                        "obligation_id": "pob-docs-stale-policy",
+                        "requirement_ids": [
+                          "obs-pob-docs-stale-policy"
+                        ],
+                        "run_index": 0,
+                        "run_index_digest": "<sha256>",
+                        "schema_version": "planr.evidence.execution-binding.v2",
+                        "target": {
+                          "kind": "process",
+                          "uri": "local://health"
+                        }
+                      },
+                      "execution_contract_digest": "<sha256>",
+                      "fixture_disclosure": {
+                        "fixtures_used": false,
+                        "mocks_used": false
+                      },
+                      "obligation_id": "pob-docs-stale-policy",
+                      "request_digest": "<sha256>",
+                      "request_id": "ereq-95ab2ce0-7d13-4ab2-b5e9-9e4ff619e5ad",
+                      "requirements": [
+                        {
+                          "expected": {
+                            "status": "ok"
+                          },
+                          "id": "obs-pob-docs-stale-policy",
+                          "payload_schema": {
+                            "schema_ref": "schema://com.example.http.status"
+                          },
+                          "subject": "docs fixture com.example.http.status",
+                          "target": {
+                            "kind": "process",
+                            "uri": "local://health"
+                          },
+                          "type": "com.example.http.status"
+                        }
+                      ],
+                      "result_contract": {
+                        "schema_digest": "<sha256>",
+                        "schema_ref": "schema://com.example.http.status",
+                        "type": "com.example.http.status"
+                      },
+                      "retry": {
+                        "attempt_number": 1,
+                        "max_attempts": 1,
+                        "previous_attempt_ids": []
+                      },
+                      "schema_version": "planr.evidence.adapter-request.v1",
+                      "target": {
+                        "kind": "process",
+                        "uri": "local://health"
+                      }
+                    },
+                    "argv": [
+                      "/usr/bin/curl",
+                      "-fsS",
+                      "http://127.0.0.1:<port>/health"
+                    ],
+                    "cwd": "<workspace>",
+                    "digest": "<sha256>",
+                    "execution_binding": {
+                      "obligation_id": "pob-docs-stale-policy",
+                      "requirement_ids": [
+                        "obs-pob-docs-stale-policy"
+                      ],
+                      "run_index": 0,
+                      "run_index_digest": "<sha256>",
+                      "schema_version": "planr.evidence.execution-binding.v2",
+                      "target": {
+                        "kind": "process",
+                        "uri": "local://health"
+                      }
+                    },
+                    "exit": {
+                      "error": null,
+                      "exit_code": 0,
+                      "signal": null
+                    },
+                    "kind": "process_output",
+                    "stderr_bytes": 0,
+                    "stderr_digest": "<sha256>",
+                    "stderr_excerpt": "<captured-output>",
+                    "stderr_truncated": false,
+                    "stdout_bytes": 15,
+                    "stdout_digest": "<sha256>",
+                    "stdout_excerpt": "<captured-output>",
+                    "stdout_truncated": false,
+                    "target_runtime": {
+                      "mode": "external"
+                    }
+                  },
+                  "resolved_command": {
+                    "command": [
+                      "/usr/bin/curl",
+                      "-fsS",
+                      "http://127.0.0.1:<port>/health"
+                    ],
+                    "cwd": "<workspace>",
+                    "env_digest": "<sha256>",
+                    "kind": "command"
+                  },
+                  "retry_lineage": {
+                    "attempt_number": 1,
+                    "max_attempts": 1,
+                    "previous_attempt_ids": []
+                  },
+                  "schema_version": "evidence.contract.v1",
+                  "started_at": "<timestamp>",
+                  "status": "passed",
+                  "stderr_digest": "<sha256>",
+                  "stdout_digest": "<sha256>"
+                },
+                "feature_run_lease": null,
+                "product_finding": null,
+                "receipt": {
+                  "artifacts": [],
+                  "attempt_ids": [
+                    "<attempt-id>"
+                  ],
+                  "capability": {
+                    "instance_digest": "<sha256>",
+                    "instance_id": "<capability-instance-id>",
+                    "manifest_digest": "<sha256>",
+                    "manifest_id": "verifier-http-curl-v1"
+                  },
+                  "config_digest": "<sha256>",
+                  "criterion_id": "crit-pob-docs-stale-policy",
+                  "ended_at": "<timestamp>",
+                  "environment": {
+                    "digest": "<sha256>",
+                    "id": "planr-local",
+                    "kind": "local"
+                  },
+                  "fixture_disclosure": {
+                    "fixtures_used": false,
+                    "mocks_used": false
+                  },
+                  "id": "<receipt-id>",
+                  "obligation_id": "pob-docs-stale-policy",
+                  "observations": [
+                    {
+                      "actual": {
+                        "schema_ref": "schema://com.example.http.status",
+                        "status": "ok"
+                      },
+                      "outcome": "passed",
+                      "predicate": {
+                        "status": "ok"
+                      },
+                      "requirement_id": "obs-pob-docs-stale-policy",
+                      "type": "com.example.http.status"
+                    }
+                  ],
+                  "permissions": {
+                    "filesystem": "read_workspace",
+                    "network": "loopback"
+                  },
+                  "proof_gaps": [],
+                  "provenance": {
+                    "assigned_by": "planr",
+                    "execution_id": "<attempt-id>",
+                    "source": "planr_observed_execution",
+                    "tool_call_id": null
+                  },
+                  "raw_result": {
+                    "digest": "<sha256>",
+                    "kind": "process_result"
+                  },
+                  "receipt_digest": "<sha256>",
+                  "receipt_status": "trusted",
+                  "retry_history": [
+                    {
+                      "attempt_number": 1,
+                      "max_attempts": 1,
+                      "previous_attempt_ids": [],
+                      "status": "passed"
+                    }
+                  ],
+                  "sandbox": {
+                    "limits": {
+                      "stderr_bytes": 4096,
+                      "stdout_bytes": 4096,
+                      "timeout_ms": 5000
+                    },
+                    "mode": "bounded_process"
+                  },
+                  "schema_version": "evidence.contract.v1",
+                  "source": {
+                    "dirty": true,
+                    "revision": "<source-revision>",
+                    "tree_digest": "<sha256>"
+                  },
+                  "started_at": "<timestamp>",
+                  "target": {
+                    "kind": "process",
+                    "uri": "local://health"
+                  },
+                  "vantage_point": {
+                    "identity": "verifier-http-curl-v1",
+                    "kind": "process_adapter"
+                  }
+                },
+                "receipt_digest": "<sha256>",
+                "reuse_key": null,
+                "reused": false,
+                "terminal_exhaustion": null,
+                "verdict": "passed"
+              }
+            ],
+            "run_index_digest": "<sha256>",
+            "schema_version": "planr.evidence.run-index.result.v2",
+            "status": "passed",
+            "terminal_exhaustion": null,
             "verdict": "passed"
           },
           "ok": true,
@@ -2625,7 +4116,9 @@
               {
                 "aggregation_policy": "latest_applicable_pass",
                 "covering_receipt_ids": [],
-                "diagnostic_receipt_ids": [],
+                "diagnostic_receipt_ids": [
+                  "<receipt-id>"
+                ],
                 "rejected_receipt_ids": [
                   "<receipt-id>"
                 ],
@@ -2656,12 +4149,14 @@
       "command": [
         "planr",
         "evidence",
-        "run",
-        "--input",
-        "<workspace>/pob-docs-missing-capability.run.json",
+        "readiness",
+        "--scope",
+        "plan",
+        "--id",
+        "<plan-id>",
         "--json"
       ],
-      "exit_code": 1,
+      "exit_code": 3,
       "output": {
         "capabilities": {
           "command": "evidence.capability.list",
@@ -2670,6 +4165,87 @@
           },
           "object": {
             "instances": [
+              {
+                "availability_status": "available",
+                "capability": {
+                  "adapter_version": "1.0.0",
+                  "availability": {
+                    "status": "available"
+                  },
+                  "captured_at": "<timestamp>",
+                  "environment": {
+                    "digest": "<sha256>",
+                    "id": "planr-local",
+                    "kind": "local"
+                  },
+                  "host": "planr",
+                  "host_version": "1.10.0-alpha.14",
+                  "id": "<capability-instance-id>",
+                  "limitations": [
+                    "availability proves admission support, not a captured browser event"
+                  ],
+                  "manifest_digest": "<sha256>",
+                  "manifest_id": "host-codex-chrome-browser-client-admission-v1",
+                  "observed_payload_contract": {
+                    "observation_types": [
+                      "host.codex.chrome_browser_client"
+                    ],
+                    "schema_ref": "schemas/host-capability-observed-raw.schema.json"
+                  },
+                  "permissions": {
+                    "filesystem": "read_workspace",
+                    "network": "none"
+                  },
+                  "probe_result": {
+                    "checks": [
+                      {
+                        "detail": "argv=[\"/opt/homebrew/lib/node_modules/planr/npm/bin/planr.js\", \"evidence\", \"classifications\"]; stdout_digest=sha256:c4242f5a4decd0ee022bc62607bf464ba8cb839b40b93dbefd15226453abeca3; stderr_digest=sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                        "name": "process_probe",
+                        "outcome": "passed"
+                      }
+                    ],
+                    "observed_at": "<timestamp>",
+                    "outcome": "passed",
+                    "probe_execution_id": "<probe-execution-id>"
+                  },
+                  "schema_version": "evidence.contract.v1",
+                  "surface": "local-process"
+                },
+                "created_at": "<timestamp>",
+                "host_fingerprint": {
+                  "environment": {
+                    "digest": "<sha256>",
+                    "id": "planr-local",
+                    "kind": "local"
+                  },
+                  "execution_contract_digest": "<sha256>",
+                  "execution_contract_source": "manifest_availability_probe"
+                },
+                "id": "<capability-instance-id>",
+                "manifest_digest": "<sha256>",
+                "manifest_id": "host-codex-chrome-browser-client-admission-v1",
+                "manifest_version": "1.0.0",
+                "probe_execution_id": "<probe-execution-id>",
+                "probe_result": {
+                  "checks": [
+                    {
+                      "detail": "argv=[\"/opt/homebrew/lib/node_modules/planr/npm/bin/planr.js\", \"evidence\", \"classifications\"]; stdout_digest=sha256:c4242f5a4decd0ee022bc62607bf464ba8cb839b40b93dbefd15226453abeca3; stderr_digest=sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                      "name": "process_probe",
+                      "outcome": "passed"
+                    }
+                  ],
+                  "observed_at": "<timestamp>",
+                  "outcome": "passed",
+                  "probe_execution_id": "<probe-execution-id>"
+                },
+                "runtime_target": [
+                  {
+                    "id": "codex-chrome-browser-client-admission",
+                    "kind": "host-capture-admission"
+                  }
+                ],
+                "valid_until": null
+              },
               {
                 "availability_status": "unavailable",
                 "capability": {
@@ -2685,7 +4261,7 @@
                     "kind": "local"
                   },
                   "host": "planr",
-                  "host_version": "1.10.0-alpha.2",
+                  "host_version": "1.10.0-alpha.14",
                   "id": "<capability-instance-id>",
                   "limitations": [
                     "fixture adapter checks a deterministic disposable queue state"
@@ -2754,6 +4330,79 @@
               }
             ],
             "manifests": [
+              {
+                "adapter_digest": "<sha256>",
+                "adapter_kind": "host",
+                "created_at": "<timestamp>",
+                "id": "host-codex-chrome-browser-client-admission-v1",
+                "manifest": {
+                  "adapter_digest": "<sha256>",
+                  "adapter_kind": "host",
+                  "availability_probe": {
+                    "execution": {
+                      "args": [
+                        "evidence",
+                        "classifications"
+                      ],
+                      "executable": "planr",
+                      "kind": "process",
+                      "payload_schema": {
+                        "schema_digest": "<sha256>",
+                        "schema_ref": "schemas/host-capability-observed-raw.schema.json",
+                        "type": "host.codex.chrome_browser_client"
+                      },
+                      "stderr_limit_bytes": 1048576,
+                      "stdout_limit_bytes": 1048576,
+                      "timeout_ms": 30000,
+                      "working_directory": "."
+                    },
+                    "kind": "process"
+                  },
+                  "blind_spots": [
+                    "availability proves admission support, not a captured browser event"
+                  ],
+                  "costs": {
+                    "execution": "local-process"
+                  },
+                  "determinism": "validated-external-capture-dependent",
+                  "id": "host-codex-chrome-browser-client-admission-v1",
+                  "independence": "Planr admission validates an external host capture",
+                  "permissions": {
+                    "filesystem": "read_workspace",
+                    "network": "none"
+                  },
+                  "provenance_path": "verified_host_event",
+                  "repeatability": "fresh-capture-required",
+                  "runtime_targets": [
+                    {
+                      "id": "codex-chrome-browser-client-admission",
+                      "kind": "host-capture-admission"
+                    }
+                  ],
+                  "schema_version": "evidence.contract.v1",
+                  "supported_artifacts": [
+                    "host-capture-envelope",
+                    "cdp-json-result"
+                  ],
+                  "supported_interactions": [
+                    "external-capture-admission"
+                  ],
+                  "supported_observations": [
+                    {
+                      "schema_digest": "<sha256>",
+                      "schema_ref": "schemas/host-capability-observed-raw.schema.json",
+                      "type": "host.codex.chrome_browser_client"
+                    }
+                  ],
+                  "supported_surfaces": [
+                    "local-process"
+                  ],
+                  "version": "1.0.0"
+                },
+                "manifest_digest": "<sha256>",
+                "source_path": null,
+                "version": "1.0.0"
+              },
               {
                 "adapter_digest": "<sha256>",
                 "adapter_kind": "artifact_import",
@@ -2827,6 +4476,66 @@
               }
             ],
             "registry": {
+              "available_capabilities": 1,
+              "diagnostics": [
+                {
+                  "code": "ProbeUnavailable",
+                  "manifest_id": "verifier-unavailable-queue-v1",
+                  "message": "process executable definitely-not-a-planr-probe was not found in captured PATH"
+                }
+              ],
+              "probes": [
+                {
+                  "availability_status": "available",
+                  "instance_id": "<capability-instance-id>",
+                  "manifest_id": "host-codex-chrome-browser-client-admission-v1",
+                  "resolution": "probed_no_current",
+                  "reused": false
+                },
+                {
+                  "availability_status": "unavailable",
+                  "instance_id": "<capability-instance-id>",
+                  "manifest_id": "verifier-unavailable-queue-v1",
+                  "resolution": "probed_no_current",
+                  "resolved_adapter_digest": {
+                    "error": "process executable definitely-not-a-planr-probe was not found in captured PATH"
+                  },
+                  "reused": false
+                }
+              ],
+              "registered_capabilities": 2
+            }
+          },
+          "ok": true,
+          "schema": "planr.evidence.command.v1"
+        },
+        "readiness": {
+          "command": "evidence.readiness",
+          "exit": {
+            "code": 3
+          },
+          "object": {
+            "active_obligation_ids": [
+              "pob-docs-missing-capability"
+            ],
+            "feature_run_freeze": null,
+            "feature_run_readiness": null,
+            "gaps": [
+              {
+                "availability_statuses": [
+                  "unavailable"
+                ],
+                "code": "ProbeUnavailable",
+                "message": "no matching capability has a currently available runtime instance",
+                "obligation_id": "pob-docs-missing-capability",
+                "requirement_id": "obs-pob-docs-missing-capability"
+              }
+            ],
+            "next_action": "repair the reported Evidence policy, schema, capability, or runtime gap",
+            "observation_types": [
+              "com.example.queue.depth.v2"
+            ],
+            "registry": {
               "available_capabilities": 0,
               "diagnostics": [
                 {
@@ -2841,25 +4550,22 @@
                   "instance_id": "<capability-instance-id>",
                   "manifest_id": "verifier-unavailable-queue-v1",
                   "resolution": "probed_no_current",
+                  "resolved_adapter_digest": {
+                    "error": "process executable definitely-not-a-planr-probe was not found in captured PATH"
+                  },
                   "reused": false
                 }
               ],
-              "registered_capabilities": 1
-            }
+              "registered_capabilities": 2
+            },
+            "run_index": null,
+            "scope": {
+              "id": "<plan-id>",
+              "kind": "plan"
+            },
+            "status": "blocked"
           },
           "ok": true,
-          "schema": "planr.evidence.command.v1"
-        },
-        "run": {
-          "command": "evidence.run",
-          "error": {
-            "code": "internal_error",
-            "message": "capability instance is not available"
-          },
-          "exit": {
-            "code": 1
-          },
-          "ok": false,
           "schema": "planr.evidence.command.v1"
         },
         "coverage": {
@@ -3014,7 +4720,7 @@
         "evidence",
         "run",
         "--input",
-        "<workspace>/pob-docs-browser-rendered.run.json",
+        "<workspace>/.planr/evidence/runs/<sealed-digest>.json",
         "--json"
       ],
       "exit_code": 1,
@@ -3027,175 +4733,376 @@
             "code": 0
           },
           "object": {
-            "attempt": {
-              "artifacts": [
-                {
-                  "digest": "<sha256>",
-                  "id": "stdout",
-                  "inline_excerpt": "<captured-output>",
-                  "kind": "stdout"
+            "results": [
+              {
+                "attempt": {
+                  "artifacts": [
+                    {
+                      "digest": "<sha256>",
+                      "id": "stdout",
+                      "inline_excerpt": "<captured-output>",
+                      "kind": "stdout"
+                    },
+                    {
+                      "digest": "<sha256>",
+                      "id": "stderr",
+                      "inline_excerpt": "<captured-output>",
+                      "kind": "stderr"
+                    }
+                  ],
+                  "capability_instance_id": "<capability-instance-id>",
+                  "criterion_id": "crit-pob-docs-curl-http",
+                  "ended_at": "<timestamp>",
+                  "exit": {
+                    "error": null,
+                    "exit_code": 0,
+                    "signal": null
+                  },
+                  "id": "<attempt-id>",
+                  "obligation_id": "pob-docs-curl-http",
+                  "output_bounds": {
+                    "stderr_bytes": 0,
+                    "stderr_truncated": false,
+                    "stdout_bytes": 15,
+                    "stdout_truncated": false
+                  },
+                  "raw_result": {
+                    "adapter_request": {
+                      "assurance_policy": {},
+                      "criterion_id": "crit-pob-docs-curl-http",
+                      "environment": {
+                        "digest": "<sha256>",
+                        "id": "planr-local",
+                        "kind": "local"
+                      },
+                      "execution_binding": {
+                        "obligation_id": "pob-docs-curl-http",
+                        "requirement_ids": [
+                          "obs-pob-docs-curl-http"
+                        ],
+                        "run_index": 0,
+                        "run_index_digest": "<sha256>",
+                        "schema_version": "planr.evidence.execution-binding.v2",
+                        "target": {
+                          "kind": "process",
+                          "uri": "local://health"
+                        }
+                      },
+                      "execution_contract_digest": "<sha256>",
+                      "fixture_disclosure": {
+                        "fixtures_used": false,
+                        "mocks_used": false
+                      },
+                      "obligation_id": "pob-docs-curl-http",
+                      "request_digest": "<sha256>",
+                      "request_id": "ereq-f7d6c377-1071-4dde-967c-ed0aed156622",
+                      "requirements": [
+                        {
+                          "expected": {
+                            "status": "ok"
+                          },
+                          "id": "obs-pob-docs-curl-http",
+                          "payload_schema": {
+                            "schema_ref": "schema://com.example.http.status"
+                          },
+                          "subject": "docs fixture com.example.http.status",
+                          "target": {
+                            "kind": "process",
+                            "uri": "local://health"
+                          },
+                          "type": "com.example.http.status"
+                        }
+                      ],
+                      "result_contract": {
+                        "schema_digest": "<sha256>",
+                        "schema_ref": "schema://com.example.http.status",
+                        "type": "com.example.http.status"
+                      },
+                      "retry": {
+                        "attempt_number": 1,
+                        "max_attempts": 1,
+                        "previous_attempt_ids": []
+                      },
+                      "schema_version": "planr.evidence.adapter-request.v1",
+                      "target": {
+                        "kind": "process",
+                        "uri": "local://health"
+                      }
+                    },
+                    "argv": [
+                      "/usr/bin/curl",
+                      "-fsS",
+                      "http://127.0.0.1:<port>/health"
+                    ],
+                    "cwd": "<workspace>",
+                    "digest": "<sha256>",
+                    "execution_binding": {
+                      "obligation_id": "pob-docs-curl-http",
+                      "requirement_ids": [
+                        "obs-pob-docs-curl-http"
+                      ],
+                      "run_index": 0,
+                      "run_index_digest": "<sha256>",
+                      "schema_version": "planr.evidence.execution-binding.v2",
+                      "target": {
+                        "kind": "process",
+                        "uri": "local://health"
+                      }
+                    },
+                    "exit": {
+                      "error": null,
+                      "exit_code": 0,
+                      "signal": null
+                    },
+                    "kind": "process_output",
+                    "stderr_bytes": 0,
+                    "stderr_digest": "<sha256>",
+                    "stderr_excerpt": "<captured-output>",
+                    "stderr_truncated": false,
+                    "stdout_bytes": 15,
+                    "stdout_digest": "<sha256>",
+                    "stdout_excerpt": "<captured-output>",
+                    "stdout_truncated": false,
+                    "target_runtime": {
+                      "mode": "external"
+                    }
+                  },
+                  "resolved_command": {
+                    "command": [
+                      "/usr/bin/curl",
+                      "-fsS",
+                      "http://127.0.0.1:<port>/health"
+                    ],
+                    "cwd": "<workspace>",
+                    "env_digest": "<sha256>",
+                    "kind": "command"
+                  },
+                  "retry_lineage": {
+                    "attempt_number": 1,
+                    "max_attempts": 1,
+                    "previous_attempt_ids": []
+                  },
+                  "schema_version": "evidence.contract.v1",
+                  "started_at": "<timestamp>",
+                  "status": "passed",
+                  "stderr_digest": "<sha256>",
+                  "stdout_digest": "<sha256>"
                 },
+                "feature_run_lease": null,
+                "product_finding": null,
+                "receipt": {
+                  "artifacts": [],
+                  "attempt_ids": [
+                    "<attempt-id>"
+                  ],
+                  "capability": {
+                    "instance_digest": "<sha256>",
+                    "instance_id": "<capability-instance-id>",
+                    "manifest_digest": "<sha256>",
+                    "manifest_id": "verifier-http-curl-v1"
+                  },
+                  "config_digest": "<sha256>",
+                  "criterion_id": "crit-pob-docs-curl-http",
+                  "ended_at": "<timestamp>",
+                  "environment": {
+                    "digest": "<sha256>",
+                    "id": "planr-local",
+                    "kind": "local"
+                  },
+                  "fixture_disclosure": {
+                    "fixtures_used": false,
+                    "mocks_used": false
+                  },
+                  "id": "<receipt-id>",
+                  "obligation_id": "pob-docs-curl-http",
+                  "observations": [
+                    {
+                      "actual": {
+                        "schema_ref": "schema://com.example.http.status",
+                        "status": "ok"
+                      },
+                      "outcome": "passed",
+                      "predicate": {
+                        "status": "ok"
+                      },
+                      "requirement_id": "obs-pob-docs-curl-http",
+                      "type": "com.example.http.status"
+                    }
+                  ],
+                  "permissions": {
+                    "filesystem": "read_workspace",
+                    "network": "loopback"
+                  },
+                  "proof_gaps": [],
+                  "provenance": {
+                    "assigned_by": "planr",
+                    "execution_id": "<attempt-id>",
+                    "source": "planr_observed_execution",
+                    "tool_call_id": null
+                  },
+                  "raw_result": {
+                    "digest": "<sha256>",
+                    "kind": "process_result"
+                  },
+                  "receipt_digest": "<sha256>",
+                  "receipt_status": "trusted",
+                  "retry_history": [
+                    {
+                      "attempt_number": 1,
+                      "max_attempts": 1,
+                      "previous_attempt_ids": [],
+                      "status": "passed"
+                    }
+                  ],
+                  "sandbox": {
+                    "limits": {
+                      "stderr_bytes": 4096,
+                      "stdout_bytes": 4096,
+                      "timeout_ms": 5000
+                    },
+                    "mode": "bounded_process"
+                  },
+                  "schema_version": "evidence.contract.v1",
+                  "source": {
+                    "dirty": true,
+                    "revision": "<source-revision>",
+                    "tree_digest": "<sha256>"
+                  },
+                  "started_at": "<timestamp>",
+                  "target": {
+                    "kind": "process",
+                    "uri": "local://health"
+                  },
+                  "vantage_point": {
+                    "identity": "verifier-http-curl-v1",
+                    "kind": "process_adapter"
+                  }
+                },
+                "receipt_digest": "<sha256>",
+                "reuse_key": null,
+                "reused": false,
+                "terminal_exhaustion": null,
+                "verdict": "passed"
+              }
+            ],
+            "run_index_digest": "<sha256>",
+            "schema_version": "planr.evidence.run-index.result.v2",
+            "status": "passed",
+            "terminal_exhaustion": null,
+            "verdict": "passed"
+          },
+          "ok": true,
+          "schema": "planr.evidence.command.v1"
+        },
+        "browser_readiness": {
+          "command": "evidence.readiness",
+          "exit": {
+            "code": 0
+          },
+          "object": {
+            "active_obligation_ids": [
+              "pob-docs-browser-rendered"
+            ],
+            "feature_run_freeze": null,
+            "feature_run_readiness": null,
+            "gaps": [],
+            "next_action": "run planr evidence run --input <exact-readiness.run_index.repository_path>",
+            "observation_types": [
+              "com.example.browser.rendered_visibility"
+            ],
+            "registry": {
+              "available_capabilities": 1,
+              "diagnostics": [],
+              "probes": [
                 {
-                  "digest": "<sha256>",
-                  "id": "stderr",
-                  "inline_excerpt": "<captured-output>",
-                  "kind": "stderr"
+                  "availability_status": "available",
+                  "instance_id": "<capability-instance-id>",
+                  "manifest_id": "verifier-browser-cdp-v1",
+                  "resolution": "reused_current",
+                  "resolved_adapter_digest": {
+                    "digest": "<sha256>"
+                  },
+                  "reused": true
                 }
               ],
-              "capability_instance_id": "<capability-instance-id>",
-              "criterion_id": "crit-pob-docs-curl-http",
-              "ended_at": "<timestamp>",
-              "exit": {
-                "error": null,
-                "exit_code": 0,
-                "signal": null
-              },
-              "id": "<attempt-id>",
-              "obligation_id": "pob-docs-curl-http",
-              "output_bounds": {
-                "stderr_bytes": 0,
-                "stderr_truncated": false,
-                "stdout_bytes": 15,
-                "stdout_truncated": false
-              },
-              "raw_result": {
-                "argv": [
-                  "/usr/bin/curl",
-                  "-fsS",
-                  "http://127.0.0.1:<port>/health"
-                ],
-                "cwd": "<workspace>",
-                "digest": "<sha256>",
-                "exit": {
-                  "error": null,
-                  "exit_code": 0,
-                  "signal": null
-                },
-                "kind": "process_output",
-                "stderr_bytes": 0,
-                "stderr_digest": "<sha256>",
-                "stderr_excerpt": "<captured-output>",
-                "stderr_truncated": false,
-                "stdout_bytes": 15,
-                "stdout_digest": "<sha256>",
-                "stdout_excerpt": "<captured-output>",
-                "stdout_truncated": false
-              },
-              "resolved_command": {
-                "command": [
-                  "/usr/bin/curl",
-                  "-fsS",
-                  "http://127.0.0.1:<port>/health"
-                ],
-                "cwd": "<workspace>",
-                "env_digest": "<sha256>",
-                "kind": "command"
-              },
-              "retry_lineage": {
-                "attempt_number": 1,
-                "max_attempts": 3,
-                "previous_attempt_ids": []
-              },
-              "schema_version": "evidence.contract.v1",
-              "started_at": "<timestamp>",
-              "status": "passed",
-              "stderr_digest": "<sha256>",
-              "stdout_digest": "<sha256>"
+              "registered_capabilities": 3
             },
-            "feature_run_lease": null,
-            "product_finding": null,
-            "receipt": {
-              "artifacts": [],
-              "attempt_ids": [
-                "<attempt-id>"
-              ],
-              "capability": {
-                "instance_digest": "<sha256>",
-                "instance_id": "<capability-instance-id>",
-                "manifest_digest": "<sha256>",
-                "manifest_id": "verifier-http-curl-v1"
-              },
-              "config_digest": "<sha256>",
-              "criterion_id": "crit-pob-docs-curl-http",
-              "ended_at": "<timestamp>",
-              "environment": {
-                "digest": "<sha256>",
-                "id": "planr-local",
-                "kind": "local"
-              },
-              "fixture_disclosure": {
-                "fixtures_used": false,
-                "mocks_used": false
-              },
-              "id": "<receipt-id>",
-              "obligation_id": "pob-docs-curl-http",
-              "observations": [
+            "run_index": {
+              "policy_digest": "<sha256>",
+              "repository_path": ".planr/evidence/runs/<sealed-digest>.json",
+              "run_index_digest": "<sha256>",
+              "runs": [
                 {
-                  "actual": {
-                    "schema_ref": "schema://com.example.http.status",
-                    "status": "ok"
+                  "capability": {
+                    "instance_id": "<capability-instance-id>",
+                    "manifest_digest": "<sha256>",
+                    "manifest_id": "verifier-browser-cdp-v1",
+                    "manifest_version": "1.0.0"
                   },
-                  "outcome": "passed",
-                  "predicate": {
-                    "status": "ok"
-                  },
-                  "requirement_id": "obs-pob-docs-curl-http",
-                  "type": "com.example.http.status"
+                  "index": 0,
+                  "input": {
+                    "adapter_environment": {
+                      "names": [],
+                      "public_names": [],
+                      "schema_version": "planr.evidence.adapter-environment.v1",
+                      "value_digest": "<sha256>"
+                    },
+                    "capability_instance_id": "<capability-instance-id>",
+                    "environment": {
+                      "digest": "<sha256>",
+                      "id": "planr-local",
+                      "kind": "local"
+                    },
+                    "execution_contract": {
+                      "args": [
+                        ".planr/evidence/adapters/browser-cdp-live.cjs",
+                        "http://127.0.0.1:<port>/workflow",
+                        "<port>",
+                        "<port>"
+                      ],
+                      "executable": "node",
+                      "kind": "process",
+                      "payload_schema": {
+                        "schema_digest": "<sha256>",
+                        "schema_ref": "schema://planr.structured_observation_results.v2",
+                        "type": "planr.structured_observation_results"
+                      },
+                      "stderr_limit_bytes": 65536,
+                      "stdout_limit_bytes": 65536,
+                      "timeout_ms": 20000,
+                      "working_directory": "."
+                    },
+                    "fixture_disclosure": {
+                      "fixtures_used": false,
+                      "mocks_used": false
+                    },
+                    "obligation_id": "pob-docs-browser-rendered",
+                    "requirement_ids": [
+                      "obs-pob-docs-browser-rendered"
+                    ],
+                    "target": {
+                      "kind": "browser",
+                      "uri": "http://127.0.0.1:<port>/workflow"
+                    }
+                  }
                 }
               ],
-              "permissions": {
-                "filesystem": "read_workspace",
-                "network": "loopback"
+              "schema_version": "planr.evidence.run-index.v2",
+              "scope": {
+                "id": "pob-docs-browser-rendered",
+                "kind": "obligation"
               },
-              "proof_gaps": [],
-              "provenance": {
-                "assigned_by": "planr",
-                "execution_id": "<attempt-id>",
-                "source": "planr_observed_execution",
-                "tool_call_id": null
-              },
-              "raw_result": {
-                "digest": "<sha256>",
-                "kind": "process_result"
-              },
-              "receipt_digest": "<sha256>",
-              "receipt_status": "trusted",
-              "retry_history": [
-                {
-                  "attempt_number": 1,
-                  "max_attempts": 3,
-                  "previous_attempt_ids": [],
-                  "status": "passed"
-                }
-              ],
-              "sandbox": {
-                "limits": {
-                  "stderr_bytes": 4096,
-                  "stdout_bytes": 4096,
-                  "timeout_ms": 5000
-                },
-                "mode": "bounded_process"
-              },
-              "schema_version": "evidence.contract.v1",
               "source": {
                 "dirty": true,
                 "revision": "<source-revision>",
                 "tree_digest": "<sha256>"
-              },
-              "started_at": "<timestamp>",
-              "target": {
-                "kind": "process",
-                "uri": "local://health"
-              },
-              "vantage_point": {
-                "identity": "verifier-http-curl-v1",
-                "kind": "process_adapter"
               }
             },
-            "receipt_digest": "<sha256>",
-            "reuse_key": null,
-            "reused": false,
-            "verdict": "passed"
+            "scope": {
+              "id": "pob-docs-browser-rendered",
+              "kind": "obligation"
+            },
+            "status": "passed"
           },
           "ok": true,
           "schema": "planr.evidence.command.v1"

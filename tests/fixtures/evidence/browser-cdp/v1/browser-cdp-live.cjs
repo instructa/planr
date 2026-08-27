@@ -197,19 +197,9 @@ async function main() {
       initial_uri: initialLocation.result.value,
       final_uri: finalLocation.result.value
     };
-    const helperDigest = crypto.createHash("sha256").update(fs.readFileSync(__filename)).digest("hex").replace(/^/, "sha256:");
-    const sourceDigest = process.env.PLANR_TEST_STALE_FIXTURE_SOURCE_DIGEST === "1"
-      ? "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-      : helperDigest;
-    const fixtureSources = [{
-      ref: `planr-test-fixture:browser-cdp-live-helper:${sourceDigest}`,
-      path: ".planr/evidence/adapters/browser-cdp-live.cjs",
-      digest: sourceDigest
-    }];
     const fixtureDisclosure = {
-      fixtures_used: true,
-      mocks_used: false,
-      fixture_refs: fixtureSources.map((source) => source.ref)
+      fixtures_used: false,
+      mocks_used: false
     };
     const result = {
       schema_version: "planr.structured_observation_results.v2",
@@ -221,7 +211,6 @@ async function main() {
       environment: adapterRequest?.environment ?? null,
       execution_contract_digest: adapterRequest?.execution_contract_digest ?? null,
       runtime_identity: runtimeIdentity,
-      fixture_sources: fixtureSources,
       fixture_disclosure: fixtureDisclosure,
       observations: [
         {requirement_id: "obs-pob-browser-cdp-visible", type: "com.example.browser.rendered_visibility", actual: {...visible.result.value, observed_target: observedTarget, runtime_identity: runtimeIdentity}},
@@ -232,10 +221,6 @@ async function main() {
         {requirement_id: "obs-pob-browser-cdp-reload", type: "com.example.browser.reload_storage", actual: {...afterReload.result.value, observed_target: observedTarget, runtime_identity: runtimeIdentity}}
       ]
     };
-    if (process.env.PLANR_TEST_OMIT_FIXTURE_DISCLOSURE === "1") {
-      delete result.fixture_sources;
-      delete result.fixture_disclosure;
-    }
     console.log(JSON.stringify(result));
     ws.close();
   } finally {
