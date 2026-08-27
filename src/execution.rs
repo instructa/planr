@@ -89,11 +89,15 @@ impl SupervisedProcess {
 
     fn stop_in_place(&mut self) -> Result<SupervisedProcessExit> {
         let observed_exit = self.try_wait()?;
-        terminate_process_tree(
-            &mut self.child,
-            self.process_group_id,
-            &self.term_grace_sleeps,
-        );
+        if observed_exit.is_some() {
+            kill_process_tree_after_leader_exit(&mut self.child, self.process_group_id);
+        } else {
+            terminate_process_tree(
+                &mut self.child,
+                self.process_group_id,
+                &self.term_grace_sleeps,
+            );
+        }
         let reaped_exit = self
             .child
             .wait()
@@ -275,7 +279,7 @@ pub(crate) fn run_bounded_process(input: BoundedProcessInput<'_>) -> Result<Boun
     let mut child_status: Option<ExitStatus> = None;
     loop {
         if observe_child_exit(&mut child)?.is_some() {
-            terminate_process_tree(&mut child, process_group_id, &term_grace_sleeps);
+            kill_process_tree_after_leader_exit(&mut child, process_group_id);
             child_status = Some(child.wait()?);
             break;
         }
@@ -423,12 +427,28 @@ fn terminate_process_tree(
     signal_process_group(process_group_id, libc::SIGKILL);
 }
 
+#[cfg(unix)]
+fn kill_process_tree_after_leader_exit(_child: &mut Child, process_group_id: u32) {
+    // The unreaped leader still anchors its process-group identity. Once that
+    // leader has exited, any remaining members are stray descendants: kill
+    // them immediately instead of waiting out the graceful-stop window. On
+    // Linux the zombie leader itself makes kill(-pgid, SIGTERM) succeed even
+    // when there are no descendants, so using the live-tree path here would
+    // add a cleanup delay to every normal process exit.
+    signal_process_group(process_group_id as i32, libc::SIGKILL);
+}
+
 #[cfg(not(unix))]
 fn terminate_process_tree(
     child: &mut Child,
     _process_group_id: u32,
     _term_grace_sleeps: &ProcessTreeTermGraceSleeps,
 ) {
+    let _ = child.kill();
+}
+
+#[cfg(not(unix))]
+fn kill_process_tree_after_leader_exit(child: &mut Child, _process_group_id: u32) {
     let _ = child.kill();
 }
 
