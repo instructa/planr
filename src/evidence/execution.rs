@@ -1662,7 +1662,7 @@ fn redact_forwarded_environment_values(
         .filter(|(_, value)| !value.is_empty())
         .map(|(name, value)| (name.as_str(), value.as_str()))
         .collect::<Vec<_>>();
-    redactions.sort_by(|left, right| right.1.len().cmp(&left.1.len()));
+    redactions.sort_by_key(|entry| std::cmp::Reverse(entry.1.len()));
     let mut exposed_names = BTreeSet::new();
     let mut redact = |text: &mut String| {
         for (name, value) in &redactions {
