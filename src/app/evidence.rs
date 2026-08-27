@@ -2038,13 +2038,6 @@ impl App {
             )
             .into());
         }
-        let repository_path = string_field(value, "repository_path")?;
-        if repository_path != canonical_run_index_repository_path(value)? {
-            return Err(EvidenceCommandError::conflict(
-                "evidence run-index repository_path is not canonical",
-            )
-            .into());
-        }
         let declared_digest = string_field(value, "run_index_digest")?;
         let actual_digest = crate::canonical_json::sha256_json_digest_without_top_level_field(
             value,
@@ -2054,6 +2047,14 @@ impl App {
             return Err(
                 EvidenceCommandError::conflict("evidence run-index seal is invalid").into(),
             );
+        }
+        let repository_path = string_field(value, "repository_path")?;
+        let canonical_repository_path = canonical_run_index_repository_path(value)?;
+        if repository_path != canonical_repository_path {
+            return Err(EvidenceCommandError::conflict(format!(
+                "evidence run-index repository_path is not canonical: expected {canonical_repository_path}, got {repository_path}"
+            ))
+            .into());
         }
         let snapshot = capture_repository_snapshot(&self.root)
             .map_err(|error| anyhow!("checking evidence run-index source: {error}"))?;
