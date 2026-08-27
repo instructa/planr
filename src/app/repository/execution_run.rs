@@ -312,6 +312,16 @@ impl<'conn> ExecutionRunRepository<'conn> {
         run_id.map(|id| self.feature_run(&id)).transpose()
     }
 
+    pub(crate) fn has_feature_run_history(&self, project_id: &str, plan_id: &str) -> Result<bool> {
+        Ok(self.conn.query_row(
+            "SELECT EXISTS(
+               SELECT 1 FROM feature_runs WHERE project_id = ?1 AND plan_id = ?2
+             )",
+            params![project_id, plan_id],
+            |row| row.get(0),
+        )?)
+    }
+
     pub(crate) fn verification_item_projection(
         &self,
         plan_id: &str,

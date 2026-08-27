@@ -1910,11 +1910,7 @@ impl App {
             "policy_digest": policy_digest,
             "runs": runs,
         });
-        let digest = crate::canonical_json::sha256_json_digest(&run_index)?;
-        let relative_path = format!(
-            ".planr/evidence/runs/{}.json",
-            digest.strip_prefix("sha256:").unwrap_or(&digest)
-        );
+        let relative_path = canonical_run_index_repository_path(&run_index)?;
         run_index["repository_path"] = json!(relative_path);
         let sealed_digest = crate::canonical_json::sha256_json_digest(&run_index)?;
         run_index["run_index_digest"] = json!(sealed_digest);
@@ -2039,6 +2035,13 @@ impl App {
         {
             return Err(EvidenceCommandError::bad_request(
                 "evidence run-index schema_version must be planr.evidence.run-index.v2",
+            )
+            .into());
+        }
+        let repository_path = string_field(value, "repository_path")?;
+        if repository_path != canonical_run_index_repository_path(value)? {
+            return Err(EvidenceCommandError::conflict(
+                "evidence run-index repository_path is not canonical",
             )
             .into());
         }
@@ -2174,7 +2177,7 @@ impl App {
         Ok(response)
     }
 
-    fn validate_feature_run_run_index_admission(
+    pub(crate) fn validate_feature_run_run_index_admission(
         &self,
         plan_id: &str,
         run_index_digest: &str,
@@ -2191,6 +2194,12 @@ impl App {
             if active.is_some() {
                 return Err(EvidenceCommandError::conflict(format!(
                     "sealed run index {run_index_digest} is not the admitted FeatureRun verification for plan {plan_id}"
+                ))
+                .into());
+            }
+            if repository.has_feature_run_history(&project.id, plan_id)? {
+                return Err(EvidenceCommandError::conflict(format!(
+                    "sealed FeatureRun Evidence allowance already consumed or run index was never admitted for plan {plan_id}"
                 ))
                 .into());
             }
@@ -4709,6 +4718,20 @@ fn ensure_capability_manifest_instance_identity(
         );
     }
     Ok(())
+}
+
+pub(crate) fn canonical_run_index_repository_path(value: &Value) -> Result<String> {
+    let mut unsigned = value.clone();
+    let object = unsigned
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("evidence run-index must be an object"))?;
+    object.remove("repository_path");
+    object.remove("run_index_digest");
+    let digest = crate::canonical_json::sha256_json_digest(&unsigned)?;
+    Ok(format!(
+        ".planr/evidence/runs/{}.json",
+        digest.strip_prefix("sha256:").unwrap_or(&digest)
+    ))
 }
 
 fn evidence_run_verdict(status: AttemptStatus, exit: &Value, raw_result: &Value) -> String {

@@ -4963,6 +4963,20 @@ allow_overwrite = true
     }
 
     #[test]
+    fn plan_without_feature_run_history_does_not_require_a_verification_admission() {
+        let root = tempfile::tempdir().unwrap();
+        let app = test_app(root.path().to_path_buf());
+
+        app.validate_feature_run_run_index_admission("plan-a", "sha256:legacy-plan-run")
+            .unwrap();
+        assert!(
+            !ExecutionRunRepository::new(&app.conn)
+                .has_feature_run_history("project-a", "plan-a")
+                .unwrap()
+        );
+    }
+
+    #[test]
     fn passed_one_shot_rejects_second_fresh_initial_before_adapter_launch() {
         let marker = tempfile::NamedTempFile::new().unwrap();
         let shell_script = format!(
@@ -4974,6 +4988,62 @@ allow_overwrite = true
 
         let first = app.evidence_run_value(run_index.clone()).unwrap();
         assert_eq!(first["verdict"], "passed");
+        let mut noncanonical_path = run_index.clone();
+        noncanonical_path["repository_path"] = json!(".planr/evidence/runs/resealed-bypass.json");
+        noncanonical_path["run_index_digest"] = json!(
+            crate::canonical_json::sha256_json_digest_without_top_level_field(
+                &noncanonical_path,
+                "run_index_digest",
+            )
+            .unwrap()
+        );
+        let error = app.evidence_run_value(noncanonical_path).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("repository_path is not canonical"),
+            "{error}"
+        );
+
+        let mut missing_path = run_index.clone();
+        missing_path
+            .as_object_mut()
+            .unwrap()
+            .remove("repository_path");
+        missing_path["run_index_digest"] = json!(
+            crate::canonical_json::sha256_json_digest_without_top_level_field(
+                &missing_path,
+                "run_index_digest",
+            )
+            .unwrap()
+        );
+        let error = app.evidence_run_value(missing_path).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("missing required Evidence field: repository_path"),
+            "{error}"
+        );
+
+        let mut semantically_resealed = run_index.clone();
+        semantically_resealed["runs"][0]["input"]["max_attempts"] = json!(1);
+        semantically_resealed["repository_path"] = json!(
+            crate::app::evidence::canonical_run_index_repository_path(&semantically_resealed)
+                .unwrap()
+        );
+        semantically_resealed["run_index_digest"] = json!(
+            crate::canonical_json::sha256_json_digest_without_top_level_field(
+                &semantically_resealed,
+                "run_index_digest",
+            )
+            .unwrap()
+        );
+        let error = app.evidence_run_value(semantically_resealed).unwrap_err();
+        assert!(
+            error.to_string().contains("allowance already consumed"),
+            "{error}"
+        );
+
         let second = app.evidence_run_value(run_index).unwrap_err();
         assert!(
             second.to_string().contains("allowance already consumed"),
