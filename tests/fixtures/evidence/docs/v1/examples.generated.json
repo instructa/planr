@@ -4179,7 +4179,7 @@
                     "kind": "local"
                   },
                   "host": "planr",
-                  "host_version": "1.10.0-alpha.14",
+                  "host_version": "1.10.0-alpha.15",
                   "id": "<capability-instance-id>",
                   "limitations": [
                     "availability proves admission support, not a captured browser event"
@@ -4261,7 +4261,7 @@
                     "kind": "local"
                   },
                   "host": "planr",
-                  "host_version": "1.10.0-alpha.14",
+                  "host_version": "1.10.0-alpha.15",
                   "id": "<capability-instance-id>",
                   "limitations": [
                     "fixture adapter checks a deterministic disposable queue state"

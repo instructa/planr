@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.10.0-alpha.15] - 2026-08-27
+
+### Changed
+
+- Publish a new immutable prerelease identity for the reviewed alpha.14 Core state before the next matched dogfood. Planr Core behavior is unchanged; the Herdr adapter-allowlist repair remains in `planr-evals` commit `1627454` and is not part of this package.
+
 ## [1.10.0-alpha.14] - 2026-08-27
 
 ### Added
@@ -750,7 +756,8 @@ Initial Planr product release.
 - Tag-driven release pipeline with multi-target builds (darwin/linux, arm64/x86_64) and Homebrew tap automation.
 - Skill workflow documentation for Codex, Claude Code, Cursor, and MCP-only clients.
 
-[Unreleased]: https://github.com/instructa/planr/compare/v1.10.0-alpha.14...HEAD
+[Unreleased]: https://github.com/instructa/planr/compare/v1.10.0-alpha.15...HEAD
+[1.10.0-alpha.15]: https://github.com/instructa/planr/compare/v1.10.0-alpha.14...v1.10.0-alpha.15
 [1.10.0-alpha.14]: https://github.com/instructa/planr/compare/v1.10.0-alpha.13...v1.10.0-alpha.14
 [1.10.0-alpha.13]: https://github.com/instructa/planr/compare/v1.10.0-alpha.12...v1.10.0-alpha.13
 [1.10.0-alpha.12]: https://github.com/instructa/planr/compare/v1.10.0-alpha.11...v1.10.0-alpha.12
