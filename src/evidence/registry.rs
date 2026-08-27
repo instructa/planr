@@ -2,11 +2,12 @@
 
 use super::adapter_signal::{AdapterBoundarySignal, adapter_boundary_signal_from_process_output};
 use super::model::{
-    AttemptStatus, CapabilityAvailability, CapabilityAvailabilityStatus, EnvironmentBinding,
-    EvidenceId, NamespacedIdentifier, ObservedPayloadContract, PayloadSchemaBinding,
-    PermissionState, ProbeCheck, ProbeResult, ProcessExecutionContract, ProvenanceSourceKind,
-    STRUCTURED_OBSERVATION_RESULTS_V2, STRUCTURED_OBSERVATION_RESULTS_V2_SCHEMA_REF, SchemaVersion,
-    Sha256Digest, VerificationCapabilityInstance, VerificationCapabilityManifest,
+    AdapterKind, AttemptStatus, CapabilityAvailability, CapabilityAvailabilityStatus,
+    EnvironmentBinding, EvidenceId, NamespacedIdentifier, ObservedPayloadContract,
+    PayloadSchemaBinding, PermissionState, ProbeCheck, ProbeResult, ProcessExecutionContract,
+    ProvenanceSourceKind, STRUCTURED_OBSERVATION_RESULTS_V2,
+    STRUCTURED_OBSERVATION_RESULTS_V2_SCHEMA_REF, SchemaVersion, Sha256Digest,
+    VerificationCapabilityInstance, VerificationCapabilityManifest,
 };
 use crate::canonical_json::{sha256_json_digest, sha256_prefixed_bytes};
 use crate::execution::{BoundedProcessInput, CancellationToken, run_bounded_process};
@@ -1058,6 +1059,9 @@ pub(crate) fn capture_manifest_adapter_environment(
 fn manifest_adapter_environment_names(
     manifest: &VerificationCapabilityManifest,
 ) -> Result<Vec<String>> {
+    if manifest.adapter_kind != AdapterKind::Process {
+        return Ok(Vec::new());
+    }
     let names = manifest
         .permissions
         .get("environment")
@@ -3549,6 +3553,28 @@ mod tests {
             instance.permissions.secrets.as_deref(),
             Some("host_allowlist")
         );
+    }
+
+    #[test]
+    fn only_process_manifests_declare_forwarded_adapter_environment() {
+        let mut host_manifest = manifest_value("cargo", vec!["--version"], 1024);
+        host_manifest["adapter_kind"] = json!("host");
+        host_manifest["permissions"]["environment"] = json!("Chrome extension browser client");
+        let host_manifest = manifest(host_manifest);
+
+        validate_manifest_runtime_permissions(&host_manifest).unwrap();
+        let captured = capture_manifest_adapter_environment(&host_manifest).unwrap();
+        assert!(captured.values.is_empty());
+        assert!(captured.durable_output_redactions.is_empty());
+        assert_eq!(captured.binding["names"], json!([]));
+        assert_eq!(captured.binding["public_names"], json!([]));
+
+        let mut process_manifest = manifest_value("cargo", vec!["--version"], 1024);
+        process_manifest["permissions"]["environment"] = json!("Chrome extension browser client");
+        let error = validate_manifest_runtime_permissions(&manifest(process_manifest))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("must use read_env:"), "{error}");
     }
 
     #[cfg(unix)]

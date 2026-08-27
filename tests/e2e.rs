@@ -5654,7 +5654,7 @@ fn evidence_public_surfaces_share_canonical_service_and_status_codes() {
 }
 
 #[test]
-fn evidence_process_adapter_semantic_mismatch_does_not_satisfy_coverage() {
+fn evidence_process_adapter_product_mismatch_routes_finding_without_coverage() {
     let planr_binary_dir = tempdir().unwrap();
     let planr_binary = private_planr_binary(planr_binary_dir.path());
     let planr = || planr_from_binary(&planr_binary);
@@ -5855,28 +5855,39 @@ fn evidence_process_adapter_semantic_mismatch_does_not_satisfy_coverage() {
     let result = &run["object"]["results"][0];
     assert_eq!(result["attempt"]["status"], "failed");
     assert_eq!(
-        result["attempt"]["raw_result"]["ordinary_observation_error"],
-        json!(
-            "ordinary process actual does not satisfy expected predicate for obs-pob-semantic-mismatch"
-        )
+        result["attempt"]["raw_result"]["ordinary_observation_failed_requirement_ids"],
+        json!(["obs-pob-semantic-mismatch"])
     );
+    assert!(
+        result["attempt"]["raw_result"]
+            .get("planr_adapter_gap_reasons")
+            .is_none(),
+        "{run}"
+    );
+    let semantic_actual = &result["receipt"]["observations"][0]["actual"];
+    assert_eq!(semantic_actual["status"], "ok");
     assert_eq!(
-        result["attempt"]["raw_result"]["planr_adapter_gap_reasons"],
-        json!(["target_mismatch"])
+        semantic_actual["schema_ref"],
+        "schema://com.example.health.status"
     );
-    let semantic_actual: Value = serde_json::from_str(
-        result["receipt"]["observations"][0]["actual"]["stdout_excerpt"]
-            .as_str()
-            .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(semantic_actual, json!({"status": "ok"}));
     assert_eq!(
         result["receipt"]["observations"][0]["predicate"],
         json!({"status": "missing"})
     );
     assert_eq!(result["receipt"]["observations"][0]["outcome"], "failed");
-    assert_eq!(result["receipt"]["proof_gaps"], json!(["target_mismatch"]));
+    assert_eq!(result["receipt"]["proof_gaps"], json!([]));
+    assert_eq!(
+        result["product_finding"]["classification"],
+        "product_finding"
+    );
+    assert_eq!(
+        result["product_finding"]["selective_replay_obligation_ids"],
+        json!(["pob-semantic-mismatch"])
+    );
+    assert_eq!(
+        result["product_finding"]["next"],
+        "maker_repair_then_plan_readiness_refreeze"
+    );
 
     let coverage = single_json_document(
         &planr()
@@ -5901,7 +5912,8 @@ fn evidence_process_adapter_semantic_mismatch_does_not_satisfy_coverage() {
     assert_eq!(coverage["object"]["verdict"], "unsatisfied");
     assert_eq!(
         coverage["object"]["coverage"]["observation_coverage"][0]["gap_reason"],
-        "target_mismatch"
+        "missing_observation",
+        "{coverage}"
     );
     assert!(
         coverage["object"]["coverage"]["observation_coverage"][0]["covering_receipt_ids"]
