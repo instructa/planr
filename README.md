@@ -2,10 +2,6 @@
 
 A small planning layer for agent-built products, using Markdown files in Git.
 
-During the 2.0 beta, use `npm install -g planr@next` or `npx planr@next`; plain `planr` installs 1.x
-until 2.0.0 ships.
-Plugin installs get the beta through the pinned marketplaces.
-
 When several coding agents work on one product, planr shows what is ready,
 blocked, waiting on you & what changed. Tasks & their dependencies live in a
 planning repository, usually separate from your code & often private.

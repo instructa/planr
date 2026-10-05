@@ -3,7 +3,7 @@ name: planr
 license: MIT
 description: Plan and track product work as a Markdown task graph in a planning repository - see what is ready, blocked or waiting on a decision, change task status safely, and work through one approved goal with the project's orchestrator. Use when the project keeps tasks as tasks/<ID>.md and goals as plans/<name>-goal.md, or when asked what is next, about task status, ready or blocked tasks, or to "work goal <name>". Not for building code itself.
 metadata:
-  version: "2.0.0-beta.1"
+  version: "2.0.0"
 ---
 
 # planr

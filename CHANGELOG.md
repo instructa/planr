@@ -3,6 +3,11 @@
 This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow [Semantic Versioning](https://semver.org/).
 
+## [2.0.0] - 2026-10-05
+
+First stable release of planr 2.0, unchanged from 2.0.0-beta.1; see the entry below for the changes.
+Version 1.x remains available as `planr@1` on npm and `instructa/tap/planr@1` on Homebrew.
+
 ## [2.0.0-beta.1] - 2026-10-05
 
 ### Changed
