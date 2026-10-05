@@ -87,7 +87,7 @@ for (const doc of docs) {
 }
 
 // For agents: every docs page as Markdown with absolute links, and /llms.txt, which lists them by
-// the sidebar's groups. Cloudflare static assets read their content types from _headers.
+// the sidebar's groups. deploy/alchemy.run.ts serves them as text/markdown & text/plain.
 for (const doc of docs) {
   write(doc.md.route, doc.md.text);
 }
@@ -106,11 +106,6 @@ ${groups.map(g => `
 
 ${docs.filter(d => d.group === g).map(d => `- [${d.nav}](${SITE}${d.md.route}): ${llms.notes[d.route]}`).join('\n')}
 `).join('')}`);
-const types = [
-  ...docs.map(d => [d.md.route, 'text/markdown; charset=utf-8']),
-  ['/llms.txt', 'text/plain; charset=utf-8'],
-];
-write('/_headers', types.map(([route, type]) => `${route}\n  Content-Type: ${type}\n`).join('\n'));
 
 // The landing's sample: one replayed planning repo. The setup writes the board page, then the build
 // reads the task file and runs the "How it works" commands, in that order.

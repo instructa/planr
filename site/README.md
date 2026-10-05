@@ -21,9 +21,9 @@ Requires Node.js 20 or newer & Git. There are no dependencies.
   (`/docs/` is `/docs/index.md`, `/docs/plugins/codex/` is `/docs/plugins/codex.md`; `mdRoute` in
   `src/docs.mjs`). Links in those copies are absolute: docs to their `.md` on planr.so, other
   repository files to GitHub. Code & the quickstart's show marks stay as written. `/llms.txt` lists
-  the copies by the sidebar's groups with the notes in `content/llms.mjs`. `dist/_headers` serves them
-  as `text/markdown` & `text/plain` through Cloudflare static assets. The agent setup guide is one of those pages,
-  `docs/setup.md`, at `/docs/setup/` & `/docs/setup.md`.
+  the copies by the sidebar's groups with the notes in `content/llms.mjs`. The deploy serves them
+  as `text/markdown` & `text/plain` (`deploy/alchemy.run.ts`). The agent setup guide is one of
+  those pages, `docs/setup.md`, at `/docs/setup/` & `/docs/setup.md`.
 - **The quickstart chooser** comes from `docs/quickstart.md`, which reads on GitHub with every path.
   A comment `<!-- show: key=value -->` on the line before a heading makes that heading's section depend
   on a choice; `content/quickstart.mjs` holds the questions & answers. The build stops when a mark
@@ -114,10 +114,12 @@ credentials, including `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`.
 (cd site/deploy && npm run deploy:prod)
 ```
 
-Each deploy runs `npm ci && npm run build` in `site/` and uploads `site/dist`. The pinned Alchemy
-version supplies the minimal assets pass-through Worker; there is no custom Worker script.
-Alchemy consumes `dist/_headers` as asset metadata, serving the `.md` copies as
-`text/markdown; charset=utf-8` & `/llms.txt` as `text/plain; charset=utf-8`.
+Each deploy runs `npm ci && npm run build` in `site/` and uploads `site/dist`. A small Worker
+(`deploy/media.js`) runs only for `/assets/media/*` and answers byte ranges, which Safari needs to
+play the videos; every other path is served by static assets alone.
+Alchemy knows few file types and does not upload a `_headers` file, so the stack passes Cloudflare
+`_headers` rules as asset config: `.md` copies as `text/markdown; charset=utf-8`, `/llms.txt` as
+`text/plain; charset=utf-8`, plus videos, posters, fonts & the sitemap (`CONTENT_TYPES`).
 
 The `PlanrDocs` stack uses Cloudflare state and adopts the existing `Website` resource,
 named `planr-docs-<stage>`. Production replaces the old site at `planr.so`; preview uses a
