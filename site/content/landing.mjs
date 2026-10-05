@@ -9,15 +9,15 @@
 // `emphasis` lists text that marks lines to tint, like the board's related rows.
 
 export default {
-  title: 'planr · See what your agents can build next.',
+  title: 'planr · Know what your agents are doing.',
   description:
-    'See what is ready, blocked or waiting on you. ' +
-    'Keep a plan you & your agents can read & update.',
+    'planr is a planning board for you & your coding agents. ' +
+    'See what\'s ready, blocked or waiting on you.',
 
   hero: {
-    heading: 'See what your agents can build next.',
-    lead: 'Know what\'s ready, blocked or waiting on you. ' +
-      'You & your agents read & update the same plan.',
+    heading: 'Know what your agents are doing.',
+    lead: 'planr is a planning board for you & your coding agents. ' +
+      'See what\'s ready, blocked or waiting on you.',
     links: [
       { label: 'Quickstart', href: '/docs/quickstart/' },
     ],
