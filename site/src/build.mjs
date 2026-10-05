@@ -87,7 +87,7 @@ for (const doc of docs) {
 }
 
 // For agents: every docs page as Markdown with absolute links, and /llms.txt, which lists them by
-// the sidebar's groups. Cloudflare Pages reads their content types from _headers.
+// the sidebar's groups. Cloudflare static assets read their content types from _headers.
 for (const doc of docs) {
   write(doc.md.route, doc.md.text);
 }

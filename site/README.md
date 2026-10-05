@@ -22,7 +22,7 @@ Requires Node.js 20 or newer & Git. There are no dependencies.
   `src/docs.mjs`). Links in those copies are absolute: docs to their `.md` on planr.so, other
   repository files to GitHub. Code & the quickstart's show marks stay as written. `/llms.txt` lists
   the copies by the sidebar's groups with the notes in `content/llms.mjs`. `dist/_headers` serves them
-  as `text/markdown` & `text/plain` on Cloudflare Pages. The agent setup guide is one of those pages,
+  as `text/markdown` & `text/plain` through Cloudflare static assets. The agent setup guide is one of those pages,
   `docs/setup.md`, at `/docs/setup/` & `/docs/setup.md`.
 - **The quickstart chooser** comes from `docs/quickstart.md`, which reads on GitHub with every path.
   A comment `<!-- show: key=value -->` on the line before a heading makes that heading's section depend
@@ -98,7 +98,28 @@ one terminal prints its lines once when it comes into view, and not at all under
 
 ## Deploying
 
-`dist/` is plain static files with a `404.html`, `robots.txt` & `sitemap.xml`; no server runtime,
-analytics, external fonts or CDNs. On Cloudflare Pages use root directory `site`, build command
-`npm ci && npm run build`, output directory `dist`, and Node 20 or newer. `dist/_headers` serves
-the `.md` copies as `text/markdown; charset=utf-8` & `/llms.txt` as `text/plain; charset=utf-8`.
+`dist/` is plain static files with a `404.html`, `robots.txt` & `sitemap.xml`; no application runtime,
+analytics, external fonts or CDNs. Alchemy lives in the separate private package `site/deploy/`,
+so the site build and the published planr package have no deployment dependencies.
+Effect's Node adapter and its transitive overrides stay on the same pinned version to avoid
+mixing the older Alchemy release with newer, incompatible Effect internals.
+
+Deploy from the repository root with Node 22.22.2+, 24.15.0+ or 26+ (the deploy dependencies' requirement).
+First authenticate on the machine with
+`alchemy login` (use `npx alchemy login` in `site/deploy/` after installing), or configure Cloudflare
+credentials, including `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`.
+
+```sh
+(cd site/deploy && npm ci && npm run deploy:preview)
+(cd site/deploy && npm run deploy:prod)
+```
+
+Each deploy runs `npm ci && npm run build` in `site/` and uploads `site/dist`. The pinned Alchemy
+version supplies the minimal assets pass-through Worker; there is no custom Worker script.
+Alchemy consumes `dist/_headers` as asset metadata, serving the `.md` copies as
+`text/markdown; charset=utf-8` & `/llms.txt` as `text/plain; charset=utf-8`.
+
+The `PlanrDocs` stack uses Cloudflare state and adopts the existing `Website` resource,
+named `planr-docs-<stage>`. Production replaces the old site at `planr.so`; preview uses a
+Cloudflare URL without a custom domain. To check the config without contacting Cloudflare,
+run `npm run typecheck` in `site/deploy/` after `npm ci`.
