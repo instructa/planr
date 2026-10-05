@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 481 194" role="img" aria-label="planr">
+  <!-- The planr logo: the mark is the first letter of a geometric wordmark built from the same ring
+       (outer 52, stroke 17) and stem. x-height 100 (y 48 to 148), ascender 148, descender 46,
+       round overshoot 2. One path, nonzero winding: every shape runs clockwise, counters run back. -->
+  <path fill="currentColor" d="M0 98a52 52 0 1 1 104 0a52 52 0 1 1-104 0zM17 98a35 35 0 1 0 70 0a35 35 0 1 0-70 0zM0 98h17v96H0zM52 72a26 26 0 0 1 0 52zM127 0h17v148h-17zM166 98a52 52 0 1 1 104 0a52 52 0 1 1-104 0zM183 98a35 35 0 1 0 70 0a35 35 0 1 0-70 0zM253 48h17v100h-17zM297 48h17v100h-17zM297 91.5a45.5 45.5 0 0 1 91 0h-17a28.5 28.5 0 0 0-57 0zM371 91.5h17v56.5h-17zM415 48h17v100h-17zM415 91.5A45.5 45.5 0 0 1 480.45 50.6L472.99 65.88A28.5 28.5 0 0 0 432 91.5z"/>
+</svg>

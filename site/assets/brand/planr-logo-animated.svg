@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 481 194" role="img" aria-label="planr">
+  <!-- The planr logo, revealed once: the p draws as in planr-mark-animated.svg while l, a, n and r
+       rise into place one after another, the way tasks become ready in order. Same geometry as
+       planr-logo.svg. Timing: MOTION.md. Without motion the final frame shows. -->
+  <style>
+    .pl-stroke { fill: none; stroke: currentColor; stroke-width: 17; }
+    .pl-fill { fill: none; stroke: currentColor; stroke-width: 26; stroke-dasharray: 40.85 81.69; }
+    .pl-letter { fill: currentColor; }
+    @media (prefers-reduced-motion: no-preference) {
+      .pl-stroke { stroke-dasharray: 369.4 369.4; animation: pl-draw .64s cubic-bezier(.65, 0, .35, 1) both; }
+      .pl-fill { animation: pl-sweep .48s .56s cubic-bezier(.5, 0, .2, 1) both; }
+      .pl-letter { animation: pl-rise .56s cubic-bezier(.16, 1, .3, 1) both; }
+      .pl-l { animation-delay: .36s; }
+      .pl-a { animation-delay: .43s; }
+      .pl-n { animation-delay: .5s; }
+      .pl-r { animation-delay: .57s; }
+    }
+    @keyframes pl-draw { from { stroke-dashoffset: 369.4; } to { stroke-dashoffset: 0; } }
+    @keyframes pl-sweep { from { stroke-dashoffset: 40.85; } to { stroke-dashoffset: 0; } }
+    @keyframes pl-rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+  </style>
+  <path class="pl-stroke" d="M8.5 194V98A43.5 43.5 0 0 1 95.5 98A43.5 43.5 0 0 1 8.5 98"/>
+  <circle class="pl-fill" cx="52" cy="98" r="13" transform="rotate(-90 52 98)"/>
+  <path class="pl-letter pl-l" d="M127 0h17v148h-17z"/>
+  <path class="pl-letter pl-a" d="M166 98a52 52 0 1 1 104 0a52 52 0 1 1-104 0zM183 98a35 35 0 1 0 70 0a35 35 0 1 0-70 0zM253 48h17v100h-17z"/>
+  <path class="pl-letter pl-n" d="M297 48h17v100h-17zM297 91.5a45.5 45.5 0 0 1 91 0h-17a28.5 28.5 0 0 0-57 0zM371 91.5h17v56.5h-17z"/>
+  <path class="pl-letter pl-r" d="M415 48h17v100h-17zM415 91.5A45.5 45.5 0 0 1 480.45 50.6L472.99 65.88A28.5 28.5 0 0 0 432 91.5z"/>
+</svg>

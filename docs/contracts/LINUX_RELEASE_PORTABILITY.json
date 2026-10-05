@@ -1,9 +1,0 @@
-{
-  "affectedReleases": [
-    "1.7.2"
-  ],
-  "affectedThrough": "1.7.2",
-  "correctedFrom": "1.7.3",
-  "noticeSchema": 1,
-  "status": "corrected"
-}

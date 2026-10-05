@@ -1,14 +1,15 @@
 {
   "name": "planr",
   "interface": {
-    "displayName": "Planr"
+    "displayName": "planr"
   },
   "plugins": [
     {
       "name": "planr",
       "source": {
-        "source": "local",
-        "path": "./plugins/planr"
+        "source": "npm",
+        "package": "planr",
+        "version": "2.0.0-beta.1"
       },
       "policy": {
         "installation": "AVAILABLE",

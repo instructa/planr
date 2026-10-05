@@ -1,5 +1,0 @@
-{
-  "title": "Plugins",
-  "description": "Optional external integrations that complement Planr without becoming Planr Core.",
-  "pages": ["index", "switchloom"]
-}

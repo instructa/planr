@@ -1,0 +1,1185 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-03T20:46:35.450Z",
+  "title": "Design System: Taskboard",
+  "extensions": {
+    "colorMeta": {
+      "bg": {
+        "role": "neutral",
+        "displayName": "Cool Ground",
+        "canonical": "#f4f5f7",
+        "oklch": "oklch(97.0% 0.003 264.5)",
+        "cssVar": "--bg",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15.0% 0.003 264.5)",
+          "oklch(26.4% 0.003 264.5)",
+          "oklch(37.9% 0.003 264.5)",
+          "oklch(49.3% 0.003 264.5)",
+          "oklch(60.7% 0.003 264.5)",
+          "oklch(72.1% 0.003 264.5)",
+          "oklch(83.6% 0.003 264.5)",
+          "oklch(95.0% 0.003 264.5)"
+        ]
+      },
+      "panel": {
+        "role": "neutral",
+        "displayName": "Panel White",
+        "canonical": "#ffffff",
+        "oklch": "oklch(100.0% 0.000 0)",
+        "cssVar": "--panel",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15.0% 0.000 0)",
+          "oklch(26.4% 0.000 0)",
+          "oklch(37.9% 0.000 0)",
+          "oklch(49.3% 0.000 0)",
+          "oklch(60.7% 0.000 0)",
+          "oklch(72.1% 0.000 0)",
+          "oklch(83.6% 0.000 0)",
+          "oklch(95.0% 0.000 0)"
+        ]
+      },
+      "sunken": {
+        "role": "neutral",
+        "displayName": "Sunken",
+        "canonical": "#eceef1",
+        "oklch": "oklch(94.8% 0.005 258.3)",
+        "cssVar": "--sunken",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15.0% 0.005 258.3)",
+          "oklch(26.4% 0.005 258.3)",
+          "oklch(37.9% 0.005 258.3)",
+          "oklch(49.3% 0.005 258.3)",
+          "oklch(60.7% 0.005 258.3)",
+          "oklch(72.1% 0.005 258.3)",
+          "oklch(83.6% 0.005 258.3)",
+          "oklch(95.0% 0.005 258.3)"
+        ]
+      },
+      "hover": {
+        "role": "neutral",
+        "displayName": "Hover Tint",
+        "canonical": "#f1f3f6",
+        "oklch": "oklch(96.3% 0.005 258.3)",
+        "cssVar": "--hover",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15.0% 0.005 258.3)",
+          "oklch(26.4% 0.005 258.3)",
+          "oklch(37.9% 0.005 258.3)",
+          "oklch(49.3% 0.005 258.3)",
+          "oklch(60.7% 0.005 258.3)",
+          "oklch(72.1% 0.005 258.3)",
+          "oklch(83.6% 0.005 258.3)",
+          "oklch(95.0% 0.005 258.3)"
+        ]
+      },
+      "line": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "canonical": "#e2e5e9",
+        "oklch": "oklch(92.1% 0.006 255.5)",
+        "cssVar": "--line",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15.0% 0.006 255.5)",
+          "oklch(26.4% 0.006 255.5)",
+          "oklch(37.9% 0.006 255.5)",
+          "oklch(49.3% 0.006 255.5)",
+          "oklch(60.7% 0.006 255.5)",
+          "oklch(72.1% 0.006 255.5)",
+          "oklch(83.6% 0.006 255.5)",
+          "oklch(95.0% 0.006 255.5)"
+        ]
+      },
+      "line-2": {
+        "role": "neutral",
+        "displayName": "Strong Hairline",
+        "canonical": "#cdd2d8",
+        "oklch": "oklch(86.2% 0.010 252.8)",
+        "cssVar": "--line-2",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15.0% 0.010 252.8)",
+          "oklch(26.4% 0.010 252.8)",
+          "oklch(37.9% 0.010 252.8)",
+          "oklch(49.3% 0.010 252.8)",
+          "oklch(60.7% 0.010 252.8)",
+          "oklch(72.1% 0.010 252.8)",
+          "oklch(83.6% 0.010 252.8)",
+          "oklch(95.0% 0.010 252.8)"
+        ]
+      },
+      "fg": {
+        "role": "primary",
+        "displayName": "Ink",
+        "canonical": "#0e1116",
+        "oklch": "oklch(17.7% 0.011 260.6)",
+        "cssVar": "--fg",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15.0% 0.011 260.6)",
+          "oklch(26.4% 0.011 260.6)",
+          "oklch(37.9% 0.011 260.6)",
+          "oklch(49.3% 0.011 260.6)",
+          "oklch(60.7% 0.011 260.6)",
+          "oklch(72.1% 0.011 260.6)",
+          "oklch(83.6% 0.011 260.6)",
+          "oklch(95.0% 0.011 260.6)"
+        ]
+      },
+      "fg-2": {
+        "role": "neutral",
+        "displayName": "Ink 2 (titles)",
+        "canonical": "#3f4753",
+        "oklch": "oklch(39.5% 0.023 258.4)",
+        "cssVar": "--fg-2",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15.0% 0.023 258.4)",
+          "oklch(26.4% 0.023 258.4)",
+          "oklch(37.9% 0.023 258.4)",
+          "oklch(49.3% 0.023 258.4)",
+          "oklch(60.7% 0.023 258.4)",
+          "oklch(72.1% 0.023 258.4)",
+          "oklch(83.6% 0.023 258.4)",
+          "oklch(95.0% 0.023 258.4)"
+        ]
+      },
+      "fg-3": {
+        "role": "neutral",
+        "displayName": "Ink 3 (meta)",
+        "canonical": "#535b67",
+        "oklch": "oklch(46.9% 0.022 258.4)",
+        "cssVar": "--fg-3",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15.0% 0.022 258.4)",
+          "oklch(26.4% 0.022 258.4)",
+          "oklch(37.9% 0.022 258.4)",
+          "oklch(49.3% 0.022 258.4)",
+          "oklch(60.7% 0.022 258.4)",
+          "oklch(72.1% 0.022 258.4)",
+          "oklch(83.6% 0.022 258.4)",
+          "oklch(95.0% 0.022 258.4)"
+        ]
+      },
+      "fg-4": {
+        "role": "neutral",
+        "displayName": "Ink 4 (quietest)",
+        "canonical": "#646c78",
+        "oklch": "oklch(52.9% 0.021 258.4)",
+        "cssVar": "--fg-4",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15.0% 0.021 258.4)",
+          "oklch(26.4% 0.021 258.4)",
+          "oklch(37.9% 0.021 258.4)",
+          "oklch(49.3% 0.021 258.4)",
+          "oklch(60.7% 0.021 258.4)",
+          "oklch(72.1% 0.021 258.4)",
+          "oklch(83.6% 0.021 258.4)",
+          "oklch(95.0% 0.021 258.4)"
+        ]
+      },
+      "sel": {
+        "role": "primary",
+        "displayName": "Selection Ink",
+        "canonical": "#0e1116",
+        "oklch": "oklch(17.7% 0.011 260.6)",
+        "cssVar": "--sel",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15.0% 0.011 260.6)",
+          "oklch(26.4% 0.011 260.6)",
+          "oklch(37.9% 0.011 260.6)",
+          "oklch(49.3% 0.011 260.6)",
+          "oklch(60.7% 0.011 260.6)",
+          "oklch(72.1% 0.011 260.6)",
+          "oklch(83.6% 0.011 260.6)",
+          "oklch(95.0% 0.011 260.6)"
+        ]
+      },
+      "sel-fg": {
+        "role": "primary",
+        "displayName": "Inverted Ink",
+        "canonical": "#ffffff",
+        "oklch": "oklch(100.0% 0.000 0)",
+        "cssVar": "--sel-fg",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15.0% 0.000 0)",
+          "oklch(26.4% 0.000 0)",
+          "oklch(37.9% 0.000 0)",
+          "oklch(49.3% 0.000 0)",
+          "oklch(60.7% 0.000 0)",
+          "oklch(72.1% 0.000 0)",
+          "oklch(83.6% 0.000 0)",
+          "oklch(95.0% 0.000 0)"
+        ]
+      },
+      "sel-soft": {
+        "role": "neutral",
+        "displayName": "Soft Ink",
+        "canonical": "#e6e9ee",
+        "oklch": "oklch(93.3% 0.007 260.7)",
+        "cssVar": "--sel-soft",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15.0% 0.007 260.7)",
+          "oklch(26.4% 0.007 260.7)",
+          "oklch(37.9% 0.007 260.7)",
+          "oklch(49.3% 0.007 260.7)",
+          "oklch(60.7% 0.007 260.7)",
+          "oklch(72.1% 0.007 260.7)",
+          "oklch(83.6% 0.007 260.7)",
+          "oklch(95.0% 0.007 260.7)"
+        ]
+      },
+      "focus": {
+        "role": "primary",
+        "displayName": "Focus Ink",
+        "canonical": "#0e1116",
+        "oklch": "oklch(17.7% 0.011 260.6)",
+        "cssVar": "--focus",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15.0% 0.011 260.6)",
+          "oklch(26.4% 0.011 260.6)",
+          "oklch(37.9% 0.011 260.6)",
+          "oklch(49.3% 0.011 260.6)",
+          "oklch(60.7% 0.011 260.6)",
+          "oklch(72.1% 0.011 260.6)",
+          "oklch(83.6% 0.011 260.6)",
+          "oklch(95.0% 0.011 260.6)"
+        ]
+      },
+      "mark-ink": {
+        "role": "primary",
+        "displayName": "Mark Cut-out",
+        "canonical": "#ffffff",
+        "oklch": "oklch(100.0% 0.000 0)",
+        "cssVar": "--mark-ink",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15.0% 0.000 0)",
+          "oklch(26.4% 0.000 0)",
+          "oklch(37.9% 0.000 0)",
+          "oklch(49.3% 0.000 0)",
+          "oklch(60.7% 0.000 0)",
+          "oklch(72.1% 0.000 0)",
+          "oklch(83.6% 0.000 0)",
+          "oklch(95.0% 0.000 0)"
+        ]
+      },
+      "s-done": {
+        "role": "secondary",
+        "displayName": "Done Green",
+        "canonical": "#1f9d55",
+        "oklch": "oklch(61.4% 0.150 152.3)",
+        "cssVar": "--s-done",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15.0% 0.150 152.3)",
+          "oklch(26.4% 0.150 152.3)",
+          "oklch(37.9% 0.150 152.3)",
+          "oklch(49.3% 0.150 152.3)",
+          "oklch(60.7% 0.150 152.3)",
+          "oklch(72.1% 0.150 152.3)",
+          "oklch(83.6% 0.150 152.3)",
+          "oklch(95.0% 0.150 152.3)"
+        ]
+      },
+      "s-review": {
+        "role": "secondary",
+        "displayName": "Review Blue",
+        "canonical": "#3366e0",
+        "oklch": "oklch(54.8% 0.194 263.9)",
+        "cssVar": "--s-review",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15.0% 0.160 263.9)",
+          "oklch(26.4% 0.160 263.9)",
+          "oklch(37.9% 0.160 263.9)",
+          "oklch(49.3% 0.160 263.9)",
+          "oklch(60.7% 0.160 263.9)",
+          "oklch(72.1% 0.160 263.9)",
+          "oklch(83.6% 0.160 263.9)",
+          "oklch(95.0% 0.160 263.9)"
+        ]
+      },
+      "s-wip": {
+        "role": "secondary",
+        "displayName": "In-progress Violet",
+        "canonical": "#8152e6",
+        "oklch": "oklch(57.0% 0.212 293.0)",
+        "cssVar": "--s-wip",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15.0% 0.160 293.0)",
+          "oklch(26.4% 0.160 293.0)",
+          "oklch(37.9% 0.160 293.0)",
+          "oklch(49.3% 0.160 293.0)",
+          "oklch(60.7% 0.160 293.0)",
+          "oklch(72.1% 0.160 293.0)",
+          "oklch(83.6% 0.160 293.0)",
+          "oklch(95.0% 0.160 293.0)"
+        ]
+      },
+      "s-open": {
+        "role": "secondary",
+        "displayName": "Open Slate",
+        "canonical": "#7f8691",
+        "oklch": "oklch(61.8% 0.019 259.4)",
+        "cssVar": "--s-open",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15.0% 0.019 259.4)",
+          "oklch(26.4% 0.019 259.4)",
+          "oklch(37.9% 0.019 259.4)",
+          "oklch(49.3% 0.019 259.4)",
+          "oklch(60.7% 0.019 259.4)",
+          "oklch(72.1% 0.019 259.4)",
+          "oklch(83.6% 0.019 259.4)",
+          "oklch(95.0% 0.019 259.4)"
+        ],
+        "contrast": {
+          "against": "light surfaces",
+          "panel": "3.67",
+          "bg": "3.36",
+          "hover": "3.30",
+          "sunken": "3.16",
+          "sel-soft": "3.02",
+          "sel": "5.15",
+          "previous": "#878e98 fell to 2.97 on hover"
+        }
+      },
+      "s-blocked": {
+        "role": "secondary",
+        "displayName": "Blocked Red",
+        "canonical": "#e0464c",
+        "oklch": "oklch(61.5% 0.190 22.7)",
+        "cssVar": "--s-blocked",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15.0% 0.160 22.7)",
+          "oklch(26.4% 0.160 22.7)",
+          "oklch(37.9% 0.160 22.7)",
+          "oklch(49.3% 0.160 22.7)",
+          "oklch(60.7% 0.160 22.7)",
+          "oklch(72.1% 0.160 22.7)",
+          "oklch(83.6% 0.160 22.7)",
+          "oklch(95.0% 0.160 22.7)"
+        ]
+      },
+      "s-decision": {
+        "role": "secondary",
+        "displayName": "Decision Amber",
+        "canonical": "#b57300",
+        "oklch": "oklch(61.1% 0.132 70.1)",
+        "cssVar": "--s-decision",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15.0% 0.132 70.1)",
+          "oklch(26.4% 0.132 70.1)",
+          "oklch(37.9% 0.132 70.1)",
+          "oklch(49.3% 0.132 70.1)",
+          "oklch(60.7% 0.132 70.1)",
+          "oklch(72.1% 0.132 70.1)",
+          "oklch(83.6% 0.132 70.1)",
+          "oklch(95.0% 0.132 70.1)"
+        ]
+      },
+      "s-dropped": {
+        "role": "secondary",
+        "displayName": "Dropped Slate",
+        "canonical": "#7f8691",
+        "oklch": "oklch(61.8% 0.019 259.4)",
+        "cssVar": "--s-dropped",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15.0% 0.019 259.4)",
+          "oklch(26.4% 0.019 259.4)",
+          "oklch(37.9% 0.019 259.4)",
+          "oklch(49.3% 0.019 259.4)",
+          "oklch(60.7% 0.019 259.4)",
+          "oklch(72.1% 0.019 259.4)",
+          "oklch(83.6% 0.019 259.4)",
+          "oklch(95.0% 0.019 259.4)"
+        ],
+        "contrast": {
+          "against": "light surfaces",
+          "panel": "3.67",
+          "bg": "3.36",
+          "hover": "3.30",
+          "sunken": "3.16",
+          "sel-soft": "3.02",
+          "sel": "5.15",
+          "previous": "#878e98 fell to 2.97 on hover"
+        }
+      },
+      "bg-dark": {
+        "role": "neutral",
+        "displayName": "Cool Ground (dark)",
+        "canonical": "#0a0c0f",
+        "oklch": "oklch(15.3% 0.007 258.4)",
+        "cssVar": "--bg",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15.0% 0.007 258.4)",
+          "oklch(26.4% 0.007 258.4)",
+          "oklch(37.9% 0.007 258.4)",
+          "oklch(49.3% 0.007 258.4)",
+          "oklch(60.7% 0.007 258.4)",
+          "oklch(72.1% 0.007 258.4)",
+          "oklch(83.6% 0.007 258.4)",
+          "oklch(95.0% 0.007 258.4)"
+        ]
+      },
+      "panel-dark": {
+        "role": "neutral",
+        "displayName": "Panel White (dark)",
+        "canonical": "#111419",
+        "oklch": "oklch(19.0% 0.011 260.7)",
+        "cssVar": "--panel",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15.0% 0.011 260.7)",
+          "oklch(26.4% 0.011 260.7)",
+          "oklch(37.9% 0.011 260.7)",
+          "oklch(49.3% 0.011 260.7)",
+          "oklch(60.7% 0.011 260.7)",
+          "oklch(72.1% 0.011 260.7)",
+          "oklch(83.6% 0.011 260.7)",
+          "oklch(95.0% 0.011 260.7)"
+        ]
+      },
+      "sunken-dark": {
+        "role": "neutral",
+        "displayName": "Sunken (dark)",
+        "canonical": "#0d1014",
+        "oklch": "oklch(17.2% 0.010 255.7)",
+        "cssVar": "--sunken",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15.0% 0.010 255.7)",
+          "oklch(26.4% 0.010 255.7)",
+          "oklch(37.9% 0.010 255.7)",
+          "oklch(49.3% 0.010 255.7)",
+          "oklch(60.7% 0.010 255.7)",
+          "oklch(72.1% 0.010 255.7)",
+          "oklch(83.6% 0.010 255.7)",
+          "oklch(95.0% 0.010 255.7)"
+        ]
+      },
+      "hover-dark": {
+        "role": "neutral",
+        "displayName": "Hover Tint (dark)",
+        "canonical": "#171b21",
+        "oklch": "oklch(22.1% 0.013 258.4)",
+        "cssVar": "--hover",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15.0% 0.013 258.4)",
+          "oklch(26.4% 0.013 258.4)",
+          "oklch(37.9% 0.013 258.4)",
+          "oklch(49.3% 0.013 258.4)",
+          "oklch(60.7% 0.013 258.4)",
+          "oklch(72.1% 0.013 258.4)",
+          "oklch(83.6% 0.013 258.4)",
+          "oklch(95.0% 0.013 258.4)"
+        ]
+      },
+      "line-dark": {
+        "role": "neutral",
+        "displayName": "Hairline (dark)",
+        "canonical": "#1f242b",
+        "oklch": "oklch(25.8% 0.015 256.8)",
+        "cssVar": "--line",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15.0% 0.015 256.8)",
+          "oklch(26.4% 0.015 256.8)",
+          "oklch(37.9% 0.015 256.8)",
+          "oklch(49.3% 0.015 256.8)",
+          "oklch(60.7% 0.015 256.8)",
+          "oklch(72.1% 0.015 256.8)",
+          "oklch(83.6% 0.015 256.8)",
+          "oklch(95.0% 0.015 256.8)"
+        ]
+      },
+      "line-2-dark": {
+        "role": "neutral",
+        "displayName": "Strong Hairline (dark)",
+        "canonical": "#2c333c",
+        "oklch": "oklch(31.8% 0.019 254.8)",
+        "cssVar": "--line-2",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15.0% 0.019 254.8)",
+          "oklch(26.4% 0.019 254.8)",
+          "oklch(37.9% 0.019 254.8)",
+          "oklch(49.3% 0.019 254.8)",
+          "oklch(60.7% 0.019 254.8)",
+          "oklch(72.1% 0.019 254.8)",
+          "oklch(83.6% 0.019 254.8)",
+          "oklch(95.0% 0.019 254.8)"
+        ]
+      },
+      "fg-dark": {
+        "role": "primary",
+        "displayName": "Ink (dark)",
+        "canonical": "#e8ebef",
+        "oklch": "oklch(93.9% 0.006 255.5)",
+        "cssVar": "--fg",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15.0% 0.006 255.5)",
+          "oklch(26.4% 0.006 255.5)",
+          "oklch(37.9% 0.006 255.5)",
+          "oklch(49.3% 0.006 255.5)",
+          "oklch(60.7% 0.006 255.5)",
+          "oklch(72.1% 0.006 255.5)",
+          "oklch(83.6% 0.006 255.5)",
+          "oklch(95.0% 0.006 255.5)"
+        ]
+      },
+      "fg-2-dark": {
+        "role": "neutral",
+        "displayName": "Ink 2 (titles) (dark)",
+        "canonical": "#b0b8c3",
+        "oklch": "oklch(78.0% 0.018 256.3)",
+        "cssVar": "--fg-2",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15.0% 0.018 256.3)",
+          "oklch(26.4% 0.018 256.3)",
+          "oklch(37.9% 0.018 256.3)",
+          "oklch(49.3% 0.018 256.3)",
+          "oklch(60.7% 0.018 256.3)",
+          "oklch(72.1% 0.018 256.3)",
+          "oklch(83.6% 0.018 256.3)",
+          "oklch(95.0% 0.018 256.3)"
+        ]
+      },
+      "fg-3-dark": {
+        "role": "neutral",
+        "displayName": "Ink 3 (meta) (dark)",
+        "canonical": "#8d95a1",
+        "oklch": "oklch(66.7% 0.020 258.4)",
+        "cssVar": "--fg-3",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15.0% 0.020 258.4)",
+          "oklch(26.4% 0.020 258.4)",
+          "oklch(37.9% 0.020 258.4)",
+          "oklch(49.3% 0.020 258.4)",
+          "oklch(60.7% 0.020 258.4)",
+          "oklch(72.1% 0.020 258.4)",
+          "oklch(83.6% 0.020 258.4)",
+          "oklch(95.0% 0.020 258.4)"
+        ]
+      },
+      "fg-4-dark": {
+        "role": "neutral",
+        "displayName": "Ink 4 (quietest) (dark)",
+        "canonical": "#7a838f",
+        "oklch": "oklch(60.7% 0.021 255.6)",
+        "cssVar": "--fg-4",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15.0% 0.021 255.6)",
+          "oklch(26.4% 0.021 255.6)",
+          "oklch(37.9% 0.021 255.6)",
+          "oklch(49.3% 0.021 255.6)",
+          "oklch(60.7% 0.021 255.6)",
+          "oklch(72.1% 0.021 255.6)",
+          "oklch(83.6% 0.021 255.6)",
+          "oklch(95.0% 0.021 255.6)"
+        ]
+      },
+      "sel-dark": {
+        "role": "primary",
+        "displayName": "Selection Ink (dark)",
+        "canonical": "#e8ebef",
+        "oklch": "oklch(93.9% 0.006 255.5)",
+        "cssVar": "--sel",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15.0% 0.006 255.5)",
+          "oklch(26.4% 0.006 255.5)",
+          "oklch(37.9% 0.006 255.5)",
+          "oklch(49.3% 0.006 255.5)",
+          "oklch(60.7% 0.006 255.5)",
+          "oklch(72.1% 0.006 255.5)",
+          "oklch(83.6% 0.006 255.5)",
+          "oklch(95.0% 0.006 255.5)"
+        ]
+      },
+      "sel-fg-dark": {
+        "role": "primary",
+        "displayName": "Inverted Ink (dark)",
+        "canonical": "#0a0c0f",
+        "oklch": "oklch(15.3% 0.007 258.4)",
+        "cssVar": "--sel-fg",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15.0% 0.007 258.4)",
+          "oklch(26.4% 0.007 258.4)",
+          "oklch(37.9% 0.007 258.4)",
+          "oklch(49.3% 0.007 258.4)",
+          "oklch(60.7% 0.007 258.4)",
+          "oklch(72.1% 0.007 258.4)",
+          "oklch(83.6% 0.007 258.4)",
+          "oklch(95.0% 0.007 258.4)"
+        ]
+      },
+      "sel-soft-dark": {
+        "role": "neutral",
+        "displayName": "Soft Ink (dark)",
+        "canonical": "#1c2129",
+        "oklch": "oklch(24.6% 0.017 259.8)",
+        "cssVar": "--sel-soft",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15.0% 0.017 259.8)",
+          "oklch(26.4% 0.017 259.8)",
+          "oklch(37.9% 0.017 259.8)",
+          "oklch(49.3% 0.017 259.8)",
+          "oklch(60.7% 0.017 259.8)",
+          "oklch(72.1% 0.017 259.8)",
+          "oklch(83.6% 0.017 259.8)",
+          "oklch(95.0% 0.017 259.8)"
+        ]
+      },
+      "focus-dark": {
+        "role": "primary",
+        "displayName": "Focus Ink (dark)",
+        "canonical": "#e8ebef",
+        "oklch": "oklch(93.9% 0.006 255.5)",
+        "cssVar": "--focus",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15.0% 0.006 255.5)",
+          "oklch(26.4% 0.006 255.5)",
+          "oklch(37.9% 0.006 255.5)",
+          "oklch(49.3% 0.006 255.5)",
+          "oklch(60.7% 0.006 255.5)",
+          "oklch(72.1% 0.006 255.5)",
+          "oklch(83.6% 0.006 255.5)",
+          "oklch(95.0% 0.006 255.5)"
+        ]
+      },
+      "mark-ink-dark": {
+        "role": "primary",
+        "displayName": "Mark Cut-out (dark)",
+        "canonical": "#0a0c0f",
+        "oklch": "oklch(15.3% 0.007 258.4)",
+        "cssVar": "--mark-ink",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15.0% 0.007 258.4)",
+          "oklch(26.4% 0.007 258.4)",
+          "oklch(37.9% 0.007 258.4)",
+          "oklch(49.3% 0.007 258.4)",
+          "oklch(60.7% 0.007 258.4)",
+          "oklch(72.1% 0.007 258.4)",
+          "oklch(83.6% 0.007 258.4)",
+          "oklch(95.0% 0.007 258.4)"
+        ]
+      },
+      "s-done-dark": {
+        "role": "secondary",
+        "displayName": "Done Green (dark)",
+        "canonical": "#3cc06e",
+        "oklch": "oklch(71.7% 0.164 152.0)",
+        "cssVar": "--s-done",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15.0% 0.160 152.0)",
+          "oklch(26.4% 0.160 152.0)",
+          "oklch(37.9% 0.160 152.0)",
+          "oklch(49.3% 0.160 152.0)",
+          "oklch(60.7% 0.160 152.0)",
+          "oklch(72.1% 0.160 152.0)",
+          "oklch(83.6% 0.160 152.0)",
+          "oklch(95.0% 0.160 152.0)"
+        ]
+      },
+      "s-review-dark": {
+        "role": "secondary",
+        "displayName": "Review Blue (dark)",
+        "canonical": "#6e9bff",
+        "oklch": "oklch(70.2% 0.155 264.5)",
+        "cssVar": "--s-review",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15.0% 0.155 264.5)",
+          "oklch(26.4% 0.155 264.5)",
+          "oklch(37.9% 0.155 264.5)",
+          "oklch(49.3% 0.155 264.5)",
+          "oklch(60.7% 0.155 264.5)",
+          "oklch(72.1% 0.155 264.5)",
+          "oklch(83.6% 0.155 264.5)",
+          "oklch(95.0% 0.155 264.5)"
+        ]
+      },
+      "s-wip-dark": {
+        "role": "secondary",
+        "displayName": "In-progress Violet (dark)",
+        "canonical": "#a684ff",
+        "oklch": "oklch(69.9% 0.176 294.1)",
+        "cssVar": "--s-wip",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15.0% 0.160 294.1)",
+          "oklch(26.4% 0.160 294.1)",
+          "oklch(37.9% 0.160 294.1)",
+          "oklch(49.3% 0.160 294.1)",
+          "oklch(60.7% 0.160 294.1)",
+          "oklch(72.1% 0.160 294.1)",
+          "oklch(83.6% 0.160 294.1)",
+          "oklch(95.0% 0.160 294.1)"
+        ]
+      },
+      "s-open-dark": {
+        "role": "secondary",
+        "displayName": "Open Slate (dark)",
+        "canonical": "#68717c",
+        "oklch": "oklch(54.5% 0.020 253.4)",
+        "cssVar": "--s-open",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15.0% 0.020 253.4)",
+          "oklch(26.4% 0.020 253.4)",
+          "oklch(37.9% 0.020 253.4)",
+          "oklch(49.3% 0.020 253.4)",
+          "oklch(60.7% 0.020 253.4)",
+          "oklch(72.1% 0.020 253.4)",
+          "oklch(83.6% 0.020 253.4)",
+          "oklch(95.0% 0.020 253.4)"
+        ]
+      },
+      "s-blocked-dark": {
+        "role": "secondary",
+        "displayName": "Blocked Red (dark)",
+        "canonical": "#ff6268",
+        "oklch": "oklch(70.0% 0.191 21.3)",
+        "cssVar": "--s-blocked",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15.0% 0.160 21.3)",
+          "oklch(26.4% 0.160 21.3)",
+          "oklch(37.9% 0.160 21.3)",
+          "oklch(49.3% 0.160 21.3)",
+          "oklch(60.7% 0.160 21.3)",
+          "oklch(72.1% 0.160 21.3)",
+          "oklch(83.6% 0.160 21.3)",
+          "oklch(95.0% 0.160 21.3)"
+        ]
+      },
+      "s-decision-dark": {
+        "role": "secondary",
+        "displayName": "Decision Amber (dark)",
+        "canonical": "#f2b23e",
+        "oklch": "oklch(80.4% 0.146 78.2)",
+        "cssVar": "--s-decision",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15.0% 0.146 78.2)",
+          "oklch(26.4% 0.146 78.2)",
+          "oklch(37.9% 0.146 78.2)",
+          "oklch(49.3% 0.146 78.2)",
+          "oklch(60.7% 0.146 78.2)",
+          "oklch(72.1% 0.146 78.2)",
+          "oklch(83.6% 0.146 78.2)",
+          "oklch(95.0% 0.146 78.2)"
+        ]
+      },
+      "s-dropped-dark": {
+        "role": "secondary",
+        "displayName": "Dropped Slate (dark)",
+        "canonical": "#6a727d",
+        "oklch": "oklch(54.9% 0.020 256.3)",
+        "cssVar": "--s-dropped",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15.0% 0.020 256.3)",
+          "oklch(26.4% 0.020 256.3)",
+          "oklch(37.9% 0.020 256.3)",
+          "oklch(49.3% 0.020 256.3)",
+          "oklch(60.7% 0.020 256.3)",
+          "oklch(72.1% 0.020 256.3)",
+          "oklch(83.6% 0.020 256.3)",
+          "oklch(95.0% 0.020 256.3)"
+        ]
+      }
+    },
+    "themes": {
+      "selector": {
+        "dark": ":root[data-theme=\"dark\"], or prefers-color-scheme: dark when no data-theme=\"light\""
+      },
+      "note": "Tokens ending in -dark are the dark values of the same CSS custom property (cssVar)."
+    },
+    "typographyMeta": {
+      "project": {
+        "displayName": "Project",
+        "purpose": "Project name in the top bar."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Task-detail heading; text-wrap: pretty."
+      },
+      "title-sm": {
+        "displayName": "Title small",
+        "purpose": "Run-detail heading."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Task titles, run subjects, empty states; human-written text."
+      },
+      "body-sm": {
+        "displayName": "Body small",
+        "purpose": "Chip labels and none-lines."
+      },
+      "numeral": {
+        "displayName": "Numeral",
+        "purpose": "Summary status counts only."
+      },
+      "data": {
+        "displayName": "Data",
+        "purpose": "IDs (500), times, history, track names."
+      },
+      "meta": {
+        "displayName": "Meta",
+        "purpose": "Hashes, row meta, facts, panel counts, footer."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Panel headings; uppercase. A heading, never a kicker.",
+        "textTransform": "uppercase"
+      },
+      "label-sm": {
+        "displayName": "Label small",
+        "purpose": "Group, column, day and detail-section headings, the summary's Goals heading and detail-note labels; uppercase.",
+        "textTransform": "uppercase"
+      },
+      "micro": {
+        "displayName": "Micro",
+        "purpose": "Key caps and tab counts."
+      },
+      "tag": {
+        "displayName": "Tag",
+        "purpose": "Inline row tags (goal, ready); uppercase.",
+        "textTransform": "uppercase"
+      }
+    },
+    "shadows": [
+      {
+        "name": "tooltip-lift",
+        "value": "0 8px 24px rgba(0,0,0,.2)",
+        "purpose": "The tooltip, the only shadowed floating layer."
+      },
+      {
+        "name": "ground-ring",
+        "value": "0 0 0 4px var(--bg)",
+        "purpose": "Warnings popover: a flat ring of page-background color around its 1px line-2 border, instead of a shadow."
+      },
+      {
+        "name": "search-halo",
+        "value": "0 0 0 3px var(--sel-soft)",
+        "purpose": "Focus ring around the search field."
+      },
+      {
+        "name": "inverted-tag-ring",
+        "value": "inset 0 0 0 1px currentColor",
+        "purpose": "Tag inside a selected (inverted) row."
+      },
+      {
+        "name": "focus-ring",
+        "value": "outline: 2px solid var(--focus); outline-offset: 2px",
+        "purpose": "Keyboard focus on every control."
+      }
+    ],
+    "motion": [
+      {
+        "name": "state-fade",
+        "value": "background-color .12s ease-out, color .12s ease-out",
+        "purpose": "Hover/selection color change on rows, chips, tabs, count tiles, goal tiles, the warnings count and the theme button; only under prefers-reduced-motion: no-preference."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "narrow",
+        "value": "max-width: 520px (container)",
+        "purpose": "Hide HEAD hash; stack overview panels, Needs you first (min 360px); overview scrolls; table hides goal and ready tags; footer keeps view and filter hints and the warnings count."
+      },
+      {
+        "name": "compact",
+        "value": "max-width: 640px (container)",
+        "purpose": "Drop Track column; counts in three columns; toolbar chip rows stop wrapping and scroll sideways."
+      },
+      {
+        "name": "sidebar",
+        "value": "max-width: 760px (container)",
+        "purpose": "Stack runs split; drop footer source note."
+      },
+      {
+        "name": "split",
+        "value": "max-width: 1080px (container)",
+        "purpose": "Stack task table above detail."
+      },
+      {
+        "name": "wide-titles",
+        "value": "min-width: 1000px (container)",
+        "purpose": "Two-line title clamp; ID columns uncapped."
+      },
+      {
+        "name": "wide",
+        "value": "min-width: 1240px (container)",
+        "purpose": "Track bars four across."
+      },
+      {
+        "name": "ultra",
+        "value": "min-width: 1680px (container)",
+        "purpose": "Overview panels in one row of four, Needs you first."
+      }
+    ],
+    "keyboard": [
+      {
+        "keys": "1 2 3",
+        "action": "Switch Overview, Runs, Tasks"
+      },
+      {
+        "keys": "/",
+        "action": "Focus filter; Enter opens first match; Esc clears then blurs"
+      },
+      {
+        "keys": "j k / ArrowDown ArrowUp",
+        "action": "Move selected task (Tasks) or run (Runs)"
+      },
+      {
+        "keys": "Esc",
+        "action": "Close the warnings popover, then the task detail, then clear filters"
+      }
+    ],
+    "fonts": [
+      {
+        "family": "Mona Sans",
+        "source": "fonts/MonaSans-Variable.woff2",
+        "weights": "200-900",
+        "delivery": "base64 inlined at build, font-display: block"
+      },
+      {
+        "family": "Monaspace Neon",
+        "source": "fonts/MonaspaceNeon-{400,500,600}.woff2",
+        "weights": "400, 500, 600-700",
+        "delivery": "base64 inlined at build, font-display: block"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Panel",
+      "kind": "card",
+      "refersTo": "panel",
+      "description": "Hairline panel with uppercase mono heading, quiet count and an internal scroll body.",
+      "html": "<section class=\"ds-panel\"><div class=\"ds-ph\"><h2>Needs you</h2><span class=\"ds-c\">2</span><button class=\"ds-more\">all →</button></div><div class=\"ds-body\"><button class=\"ds-trow\"><svg class=\"ds-mark\" viewBox=\"0 0 12 12\" aria-hidden=\"true\"><circle cx=\"6\" cy=\"6\" r=\"5.4\" fill=\"var(--s-blocked, #e0464c)\"/><rect x=\"3.3\" y=\"5.25\" width=\"5.4\" height=\"1.5\" rx=\".75\" fill=\"var(--mark-ink, #fff)\"/></svg><span class=\"ds-id\">REL-04</span><span class=\"ds-tt\">Release checklist signed off</span><span class=\"ds-meta\">blocks 3</span></button><button class=\"ds-trow\"><svg class=\"ds-mark\" viewBox=\"0 0 12 12\" aria-hidden=\"true\"><rect x=\"2.1\" y=\"2.1\" width=\"7.8\" height=\"7.8\" rx=\"1.6\" transform=\"rotate(45 6 6)\" fill=\"var(--s-decision, #b57300)\"/><rect x=\"5.3\" y=\"3.3\" width=\"1.4\" height=\"3.3\" rx=\".7\" fill=\"var(--mark-ink, #fff)\"/><circle cx=\"6\" cy=\"8.2\" r=\".8\" fill=\"var(--mark-ink, #fff)\"/></svg><span class=\"ds-id\">SW-02</span><span class=\"ds-tt\">Choose switchover date</span><span class=\"ds-meta\">·</span></button></div></section>",
+      "css": ".ds-panel{width:420px;background:var(--panel,#fff);border:1px solid var(--line,#e2e5e9);border-radius:8px;overflow:hidden;color:var(--fg,#0e1116);font:13px/1.45 var(--sans, 'Mona Sans', ui-sans-serif, system-ui, sans-serif)}.ds-ph{display:flex;align-items:baseline;gap:8px;padding:10px 12px 8px}.ds-ph h2{margin:0;font:600 10.5px/1 var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace);text-transform:uppercase;letter-spacing:.06em;color:var(--fg-2,#3f4753)}.ds-c{font:11px/1 var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace);color:var(--fg-4,#646c78)}.ds-more{margin-left:auto;background:none;border:0;padding:0;cursor:pointer;font:11px/1 var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace);color:var(--fg-3,#535b67)}.ds-more:hover{color:var(--fg,#0e1116)}.ds-more:focus-visible{outline:2px solid var(--focus,#0e1116);outline-offset:2px;border-radius:4px}.ds-trow{display:grid;grid-template-columns:12px 7ch minmax(0,1fr) auto;align-items:center;gap:10px;padding:5px 12px;width:100%;text-align:left;background:none;border:0;border-top:1px solid var(--line,#e2e5e9);cursor:pointer;font:500 11.5px/1.45 var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace);color:var(--fg,#0e1116);transition:background-color .12s ease-out}.ds-trow:hover{background:var(--hover,#f1f3f6)}.ds-trow:focus-visible{outline:2px solid var(--focus,#0e1116);outline-offset:-2px}.ds-mark{width:12px;height:12px;display:block}.ds-tt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font:13px/1.4 var(--sans, 'Mona Sans', ui-sans-serif, system-ui, sans-serif);color:var(--fg-2,#3f4753)}.ds-meta{font:400 11px var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace);color:var(--fg-3,#535b67)}"
+    },
+    {
+      "name": "Needs You Queue",
+      "kind": "card",
+      "refersTo": "panel",
+      "description": "The approver's whole queue in the left column of the overview: header counts, then sticky groups Goals (draft = approve, review = check), To decide (blocked and decision by unlocks) and To check (review tasks, most recently moved first, first five rows, then 'N more in Tasks →'). Group headings carry a count and 'all →' into the matching Tasks filter.",
+      "html": "<section class=\"ds-panel\"><div class=\"ds-ph\"><h2>Needs you</h2><span class=\"ds-c\">1 goal · 2 to decide · 9 to check</span></div><div class=\"ds-body\"><div class=\"ds-qg\">Goals <span class=\"ds-c\">1</span></div><button class=\"ds-trow\"><svg class=\"ds-mark\" viewBox=\"0 0 12 12\" aria-hidden=\"true\"><rect x=\"2.1\" y=\"2.1\" width=\"7.8\" height=\"7.8\" rx=\"1.6\" transform=\"rotate(45 6 6)\" fill=\"var(--s-decision, #b57300)\"/><rect x=\"5.3\" y=\"3.3\" width=\"1.4\" height=\"3.3\" rx=\".7\" fill=\"var(--mark-ink, #fff)\"/><circle cx=\"6\" cy=\"8.2\" r=\".8\" fill=\"var(--mark-ink, #fff)\"/></svg><span class=\"ds-id\">billing</span><span class=\"ds-tt\"><span class=\"ds-tx\">Billing backend phase A</span><span class=\"ds-tag\">goal</span></span><span class=\"ds-meta\">approve</span></button><div class=\"ds-qg\">To decide <span class=\"ds-c\">2</span><button class=\"ds-more\">all →</button></div><button class=\"ds-trow\"><svg class=\"ds-mark\" viewBox=\"0 0 12 12\" aria-hidden=\"true\"><rect x=\"2.1\" y=\"2.1\" width=\"7.8\" height=\"7.8\" rx=\"1.6\" transform=\"rotate(45 6 6)\" fill=\"var(--s-decision, #b57300)\"/><rect x=\"5.3\" y=\"3.3\" width=\"1.4\" height=\"3.3\" rx=\".7\" fill=\"var(--mark-ink, #fff)\"/><circle cx=\"6\" cy=\"8.2\" r=\".8\" fill=\"var(--mark-ink, #fff)\"/></svg><span class=\"ds-id\">DEC-07</span><span class=\"ds-tt\"><span class=\"ds-tx\">Choose payment provider</span></span><span class=\"ds-meta\">unlocks 2 · blocks 3</span></button><button class=\"ds-trow\"><svg class=\"ds-mark\" viewBox=\"0 0 12 12\" aria-hidden=\"true\"><rect x=\"2.1\" y=\"2.1\" width=\"7.8\" height=\"7.8\" rx=\"1.6\" transform=\"rotate(45 6 6)\" fill=\"var(--s-decision, #b57300)\"/><rect x=\"5.3\" y=\"3.3\" width=\"1.4\" height=\"3.3\" rx=\".7\" fill=\"var(--mark-ink, #fff)\"/><circle cx=\"6\" cy=\"8.2\" r=\".8\" fill=\"var(--mark-ink, #fff)\"/></svg><span class=\"ds-id\">DEC-09</span><span class=\"ds-tt\"><span class=\"ds-tx\">Data residency</span></span><span class=\"ds-meta\">blocks 1</span></button><div class=\"ds-qg\">To check <span class=\"ds-c\">9</span><button class=\"ds-more\">all →</button></div><button class=\"ds-trow\"><svg class=\"ds-mark\" viewBox=\"0 0 12 12\" aria-hidden=\"true\"><circle cx=\"6\" cy=\"6\" r=\"4.6\" fill=\"none\" stroke=\"var(--s-review, #3366e0)\" stroke-width=\"1.5\"/><circle cx=\"6\" cy=\"6\" r=\"2\" fill=\"var(--s-review, #3366e0)\"/></svg><span class=\"ds-id\">PLT-12</span><span class=\"ds-tt\"><span class=\"ds-tx\">Plugin host contract</span></span><span class=\"ds-meta\">18:28</span></button><button class=\"ds-trow\"><svg class=\"ds-mark\" viewBox=\"0 0 12 12\" aria-hidden=\"true\"><circle cx=\"6\" cy=\"6\" r=\"4.6\" fill=\"none\" stroke=\"var(--s-review, #3366e0)\" stroke-width=\"1.5\"/><circle cx=\"6\" cy=\"6\" r=\"2\" fill=\"var(--s-review, #3366e0)\"/></svg><span class=\"ds-id\">REL-04</span><span class=\"ds-tt\"><span class=\"ds-tx\">Release checklist</span></span><span class=\"ds-meta\">02:34</span></button><button class=\"ds-qmore\">7 more in Tasks →</button></div></section>",
+      "css": ".ds-panel{width:420px;background:var(--panel,#fff);border:1px solid var(--line,#e2e5e9);border-radius:8px;overflow:hidden;color:var(--fg,#0e1116);font:13px/1.45 var(--sans, 'Mona Sans', ui-sans-serif, system-ui, sans-serif)}.ds-ph{display:flex;align-items:baseline;gap:8px;padding:10px 12px 8px}.ds-ph h2{margin:0;font:600 10.5px/1 var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace);text-transform:uppercase;letter-spacing:.06em;color:var(--fg-2,#3f4753)}.ds-c{font:11px/1 var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace);color:var(--fg-4,#646c78);text-transform:none;letter-spacing:0;font-weight:400}.ds-qg{position:sticky;top:0;display:flex;align-items:baseline;gap:6px;padding:7px 12px 5px;background:var(--panel,#fff);border-top:1px solid var(--line,#e2e5e9);font:600 10px var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace);text-transform:uppercase;letter-spacing:.06em;color:var(--fg-3,#535b67)}.ds-more{margin-left:auto;background:none;border:0;padding:0;cursor:pointer;font:11px/1 var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace);text-transform:none;letter-spacing:0;color:var(--fg-3,#535b67)}.ds-more:hover,.ds-qmore:hover{color:var(--fg,#0e1116)}.ds-trow{display:grid;grid-template-columns:12px 7ch minmax(0,1fr) auto;align-items:center;gap:10px;padding:5px 12px;width:100%;text-align:left;background:none;border:0;border-top:1px solid var(--line,#e2e5e9);cursor:pointer;font:500 11.5px/1.45 var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace);color:var(--fg,#0e1116);transition:background-color .12s ease-out}.ds-trow:hover,.ds-qmore:hover{background:var(--hover,#f1f3f6)}.ds-tt{display:flex;align-items:center;gap:6px;min-width:0;font:13px/1.4 var(--sans, 'Mona Sans', ui-sans-serif, system-ui, sans-serif);color:var(--fg-2,#3f4753)}.ds-tx{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}.ds-tag{font:500 9.5px/1 var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace);text-transform:uppercase;letter-spacing:.05em;padding:3px 4px 2px;border-radius:3px;color:var(--fg-2,#3f4753);background:var(--sunken,#eceef1);flex:none}.ds-meta{font:400 11px var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace);color:var(--fg-3,#535b67);white-space:nowrap}.ds-qmore{display:block;width:100%;padding:6px 12px 8px;border:0;border-top:1px solid var(--line,#e2e5e9);background:none;cursor:pointer;text-align:left;font:11px var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace);color:var(--fg-3,#535b67)}.ds-mark{width:12px;height:12px;display:block}"
+    },
+    {
+      "name": "Table Row (selected)",
+      "kind": "custom",
+      "refersTo": "task-row-selected",
+      "description": "Ink inversion for the selected task; related rows take the soft ink wash.",
+      "html": "<div class=\"ds-tbl\"><button class=\"ds-tr\"><svg class=\"ds-mark\" viewBox=\"0 0 12 12\" aria-hidden=\"true\"><circle cx=\"6\" cy=\"6\" r=\"4.6\" fill=\"none\" stroke=\"var(--s-open, #7f8691)\" stroke-width=\"1.5\"/></svg><span class=\"ds-id\">PLT-11</span><span class=\"ds-tt\">Worker lease shared</span><span class=\"ds-u\">01.10.</span></button><button class=\"ds-tr ds-sel\" aria-selected=\"true\"><svg class=\"ds-mark\" viewBox=\"0 0 12 12\" aria-hidden=\"true\"><circle cx=\"6\" cy=\"6\" r=\"4.6\" fill=\"none\" stroke=\"var(--s-wip, #8152e6)\" stroke-width=\"1.5\"/><path d=\"M6 2.6a3.4 3.4 0 0 1 0 6.8z\" fill=\"var(--s-wip, #8152e6)\"/></svg><span class=\"ds-id\">PLT-12</span><span class=\"ds-tt\">Plugin host contract <span class=\"ds-tag\">goal</span></span><span class=\"ds-u\">03.10.</span></button><button class=\"ds-tr ds-rel\"><svg class=\"ds-mark\" viewBox=\"0 0 12 12\" aria-hidden=\"true\"><circle cx=\"6\" cy=\"6\" r=\"4.6\" fill=\"none\" stroke=\"var(--s-review, #3366e0)\" stroke-width=\"1.5\"/><circle cx=\"6\" cy=\"6\" r=\"2\" fill=\"var(--s-review, #3366e0)\"/></svg><span class=\"ds-id\">PLT-13</span><span class=\"ds-tt\">Entitlement check</span><span class=\"ds-u\">02.10.</span></button></div>",
+      "css": ".ds-tbl{width:440px;background:var(--panel,#fff);border:1px solid var(--line,#e2e5e9);border-radius:8px;overflow:hidden}.ds-tr{display:grid;grid-template-columns:12px 7ch minmax(0,1fr) 6ch;gap:10px;align-items:center;padding:0 12px;min-height:31px;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--line,#e2e5e9);cursor:pointer;color:var(--fg-2,#3f4753);font:13px/1.45 var(--sans, 'Mona Sans', ui-sans-serif, system-ui, sans-serif);transition:background-color .12s ease-out,color .12s ease-out}.ds-tr:hover{background:var(--hover,#f1f3f6)}.ds-tr:focus-visible{outline:2px solid var(--focus,#0e1116);outline-offset:-2px}.ds-mark{width:12px;height:12px;display:block}.ds-id{font:500 11.5px var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace);color:var(--fg,#0e1116)}.ds-tt{display:flex;gap:6px;align-items:center;min-width:0;white-space:nowrap;overflow:hidden}.ds-u{font:11px var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace);color:var(--fg-3,#535b67);text-align:right}.ds-tag{font:500 9.5px/1 var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace);text-transform:uppercase;letter-spacing:.05em;padding:3px 4px 2px;border-radius:3px;color:var(--fg-2,#3f4753);background:var(--sunken,#eceef1)}.ds-sel,.ds-sel:hover{background:var(--sel,#0e1116)}.ds-sel .ds-id,.ds-sel .ds-tt,.ds-sel .ds-u{color:var(--sel-fg,#fff)}.ds-sel .ds-tag{background:transparent;color:var(--sel-fg,#fff);box-shadow:inset 0 0 0 1px currentColor}.ds-rel{background:var(--sel-soft,#e6e9ee)}"
+    },
+    {
+      "name": "Filter Chip",
+      "kind": "chip",
+      "refersTo": "chip",
+      "description": "Toggle filter with optional status mark and mono count; pressed inverts to ink.",
+      "html": "<div class=\"ds-row\"><button class=\"ds-chip\" aria-pressed=\"true\">Needs you <span class=\"ds-n\">4</span></button><button class=\"ds-chip\" aria-pressed=\"false\"><svg class=\"ds-mark\" viewBox=\"0 0 12 12\" aria-hidden=\"true\"><circle cx=\"6\" cy=\"6\" r=\"5.4\" fill=\"var(--s-done, #1f9d55)\"/><path d=\"M3.6 6.1l1.6 1.6 3.2-3.3\" fill=\"none\" stroke=\"var(--mark-ink, #fff)\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg>Done <span class=\"ds-n\">61</span></button><button class=\"ds-chip\" aria-pressed=\"false\">release <span class=\"ds-n\">38</span></button></div>",
+      "css": ".ds-row{display:flex;gap:6px}.ds-chip{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 9px;border:1px solid var(--line,#e2e5e9);border-radius:6px;background:var(--panel,#fff);color:var(--fg-2,#3f4753);font:12px var(--sans, 'Mona Sans', ui-sans-serif, system-ui, sans-serif);cursor:pointer;transition:background-color .12s ease-out,color .12s ease-out}.ds-chip:hover{border-color:var(--line-2,#cdd2d8);color:var(--fg,#0e1116)}.ds-chip:focus-visible{outline:2px solid var(--focus,#0e1116);outline-offset:2px}.ds-chip[aria-pressed=\"true\"]{background:var(--sel,#0e1116);border-color:var(--sel,#0e1116);color:var(--sel-fg,#fff)}.ds-n{font:11px var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace);color:var(--fg-3,#535b67)}.ds-chip[aria-pressed=\"true\"] .ds-n{color:var(--sel-fg,#fff);opacity:.7}.ds-mark{width:12px;height:12px;display:block}"
+    },
+    {
+      "name": "Tabs",
+      "kind": "nav",
+      "refersTo": "tab",
+      "description": "Sans tabs with mono count pills and a 2px ink underline on the hairline.",
+      "html": "<nav class=\"ds-tabs\" role=\"tablist\"><button class=\"ds-tab\" role=\"tab\" aria-selected=\"true\">Overview</button><button class=\"ds-tab\" role=\"tab\" aria-selected=\"false\">Runs <span class=\"ds-n\">16</span></button><button class=\"ds-tab\" role=\"tab\" aria-selected=\"false\">Tasks <span class=\"ds-n\">109</span></button></nav>",
+      "css": ".ds-tabs{display:flex;align-items:end;gap:2px;padding:0 8px;border-bottom:1px solid var(--line,#e2e5e9);background:var(--bg,#f4f5f7)}.ds-tab{position:relative;display:flex;align-items:center;gap:7px;padding:6px 8px 9px;background:none;border:0;cursor:pointer;color:var(--fg-3,#535b67);font:500 13px/1.45 var(--sans, 'Mona Sans', ui-sans-serif, system-ui, sans-serif);transition:color .12s ease-out}.ds-tab:hover,.ds-tab[aria-selected=\"true\"]{color:var(--fg,#0e1116)}.ds-tab[aria-selected=\"true\"]::after{content:\"\";position:absolute;left:6px;right:6px;bottom:-1px;height:2px;background:var(--fg,#0e1116);border-radius:2px}.ds-tab:focus-visible{outline:2px solid var(--focus,#0e1116);outline-offset:2px;border-radius:4px}.ds-n{font:500 10.5px/1 var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace);color:var(--fg-3,#535b67);padding:3px 5px;border-radius:4px;background:var(--sunken,#eceef1)}"
+    },
+    {
+      "name": "Search Field",
+      "kind": "input",
+      "refersTo": "search",
+      "description": "Prompt-led filter field with a key cap; focus lifts the border and adds a soft ink halo.",
+      "html": "<label class=\"ds-search\"><span class=\"ds-p\" aria-hidden=\"true\">›</span><input type=\"search\" placeholder=\"Filter tasks\" aria-label=\"Filter tasks\"><kbd class=\"ds-kbd\">/</kbd></label>",
+      "css": ".ds-search{display:flex;align-items:center;gap:6px;height:28px;width:260px;padding:0 6px 0 8px;background:var(--panel,#fff);border:1px solid var(--line,#e2e5e9);border-radius:7px}.ds-search:focus-within{border-color:var(--line-2,#cdd2d8);box-shadow:0 0 0 3px var(--sel-soft,#e6e9ee)}.ds-p{color:var(--fg-4,#646c78);font-family:var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace)}.ds-search input{flex:1;min-width:0;border:0;outline:0;background:none;font:12.5px var(--sans, 'Mona Sans', ui-sans-serif, system-ui, sans-serif);color:var(--fg,#0e1116)}.ds-search input::placeholder{color:var(--fg-4,#646c78)}.ds-kbd{font:500 10.5px/1 var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace);color:var(--fg-3,#535b67);padding:3px 5px 2px;border:1px solid var(--line,#e2e5e9);border-bottom-width:2px;border-radius:4px;background:var(--panel,#fff)}"
+    },
+    {
+      "name": "Summary Strip and Count",
+      "kind": "custom",
+      "description": "Proportional status strip above clickable mono count tiles with day deltas.",
+      "html": "<div class=\"ds-sum\"><div class=\"ds-strip\"><i style=\"flex:61;background:var(--s-done,#1f9d55)\"></i><i style=\"flex:6;background:var(--s-review,#3366e0)\"></i><i style=\"flex:9;background:var(--s-wip,#8152e6)\"></i><i style=\"flex:28;background:var(--s-open,#7f8691)\"></i><i style=\"flex:2;background:var(--s-decision,#b57300)\"></i><i style=\"flex:3;background:var(--s-blocked,#e0464c)\"></i></div><div class=\"ds-counts\"><button class=\"ds-count\"><span class=\"ds-v\">61</span><span class=\"ds-d ds-up\">+4</span><span class=\"ds-l\"><svg class=\"ds-mark\" viewBox=\"0 0 12 12\" aria-hidden=\"true\"><circle cx=\"6\" cy=\"6\" r=\"5.4\" fill=\"var(--s-done, #1f9d55)\"/><path d=\"M3.6 6.1l1.6 1.6 3.2-3.3\" fill=\"none\" stroke=\"var(--mark-ink, #fff)\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg>Done</span></button><button class=\"ds-count\"><span class=\"ds-v\">2</span><span class=\"ds-d\">±0</span><span class=\"ds-l\"><svg class=\"ds-mark\" viewBox=\"0 0 12 12\" aria-hidden=\"true\"><rect x=\"2.1\" y=\"2.1\" width=\"7.8\" height=\"7.8\" rx=\"1.6\" transform=\"rotate(45 6 6)\" fill=\"var(--s-decision, #b57300)\"/><rect x=\"5.3\" y=\"3.3\" width=\"1.4\" height=\"3.3\" rx=\".7\" fill=\"var(--mark-ink, #fff)\"/><circle cx=\"6\" cy=\"8.2\" r=\".8\" fill=\"var(--mark-ink, #fff)\"/></svg>Decision</span></button><button class=\"ds-count\"><span class=\"ds-v\">3</span><span class=\"ds-d ds-up\">+1</span><span class=\"ds-l\"><svg class=\"ds-mark\" viewBox=\"0 0 12 12\" aria-hidden=\"true\"><circle cx=\"6\" cy=\"6\" r=\"5.4\" fill=\"var(--s-blocked, #e0464c)\"/><rect x=\"3.3\" y=\"5.25\" width=\"5.4\" height=\"1.5\" rx=\".75\" fill=\"var(--mark-ink, #fff)\"/></svg>Blocked</span></button></div></div>",
+      "css": ".ds-sum{width:420px;display:grid;gap:12px;padding:12px 12px 10px;background:var(--panel,#fff);border:1px solid var(--line,#e2e5e9);border-radius:8px}.ds-strip{display:flex;gap:2px;height:8px}.ds-strip i{display:block;min-width:2px}.ds-strip i:first-child{border-radius:3px 0 0 3px}.ds-strip i:last-child{border-radius:0 3px 3px 0}.ds-counts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px}.ds-count{display:grid;grid-template-columns:auto 1fr;column-gap:6px;row-gap:3px;align-items:baseline;padding:4px 6px;margin:-4px -6px;border-radius:6px;background:none;border:0;cursor:pointer;text-align:left;transition:background-color .12s ease-out}.ds-count:hover{background:var(--hover,#f1f3f6)}.ds-count:focus-visible{outline:2px solid var(--focus,#0e1116);outline-offset:2px}.ds-v{font:500 19px/1 var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace);letter-spacing:-.03em;color:var(--fg,#0e1116)}.ds-d{font:11.5px var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace);color:var(--fg-4,#646c78)}.ds-d.ds-up{color:var(--fg,#0e1116);font-weight:600}.ds-l{grid-column:1/-1;display:flex;align-items:center;gap:5px;font:11.5px var(--sans, 'Mona Sans', ui-sans-serif, system-ui, sans-serif);color:var(--fg-2,#3f4753)}.ds-mark{width:12px;height:12px;display:block}"
+    },
+    {
+      "name": "Status Marks",
+      "kind": "custom",
+      "description": "The 12x12 SVG status vocabulary; shape identifies status without color.",
+      "html": "<div class=\"ds-marks\"><span><svg class=\"ds-mark\" viewBox=\"0 0 12 12\" aria-hidden=\"true\"><circle cx=\"6\" cy=\"6\" r=\"4.6\" fill=\"none\" stroke=\"var(--s-open, #7f8691)\" stroke-width=\"1.5\"/></svg>Open</span><span><svg class=\"ds-mark\" viewBox=\"0 0 12 12\" aria-hidden=\"true\"><circle cx=\"6\" cy=\"6\" r=\"4.6\" fill=\"none\" stroke=\"var(--s-wip, #8152e6)\" stroke-width=\"1.5\"/><path d=\"M6 2.6a3.4 3.4 0 0 1 0 6.8z\" fill=\"var(--s-wip, #8152e6)\"/></svg>In progress</span><span><svg class=\"ds-mark\" viewBox=\"0 0 12 12\" aria-hidden=\"true\"><circle cx=\"6\" cy=\"6\" r=\"4.6\" fill=\"none\" stroke=\"var(--s-review, #3366e0)\" stroke-width=\"1.5\"/><circle cx=\"6\" cy=\"6\" r=\"2\" fill=\"var(--s-review, #3366e0)\"/></svg>Review</span><span><svg class=\"ds-mark\" viewBox=\"0 0 12 12\" aria-hidden=\"true\"><circle cx=\"6\" cy=\"6\" r=\"5.4\" fill=\"var(--s-done, #1f9d55)\"/><path d=\"M3.6 6.1l1.6 1.6 3.2-3.3\" fill=\"none\" stroke=\"var(--mark-ink, #fff)\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg>Done</span><span><svg class=\"ds-mark\" viewBox=\"0 0 12 12\" aria-hidden=\"true\"><circle cx=\"6\" cy=\"6\" r=\"5.4\" fill=\"var(--s-blocked, #e0464c)\"/><rect x=\"3.3\" y=\"5.25\" width=\"5.4\" height=\"1.5\" rx=\".75\" fill=\"var(--mark-ink, #fff)\"/></svg>Blocked</span><span><svg class=\"ds-mark\" viewBox=\"0 0 12 12\" aria-hidden=\"true\"><rect x=\"2.1\" y=\"2.1\" width=\"7.8\" height=\"7.8\" rx=\"1.6\" transform=\"rotate(45 6 6)\" fill=\"var(--s-decision, #b57300)\"/><rect x=\"5.3\" y=\"3.3\" width=\"1.4\" height=\"3.3\" rx=\".7\" fill=\"var(--mark-ink, #fff)\"/><circle cx=\"6\" cy=\"8.2\" r=\".8\" fill=\"var(--mark-ink, #fff)\"/></svg>Decision</span></div>",
+      "css": ".ds-marks{display:flex;flex-wrap:wrap;gap:8px 16px;font:12px var(--sans, 'Mona Sans', ui-sans-serif, system-ui, sans-serif);color:var(--fg-2,#3f4753)}.ds-marks span{display:inline-flex;align-items:center;gap:6px}.ds-mark{width:12px;height:12px;display:block}"
+    },
+    {
+      "name": "Goal Queue",
+      "kind": "custom",
+      "refersTo": "goal-tile",
+      "description": "Summary section between counts and track bars: Goals heading with state counts and +N legacy/done notes, then one tile per running, approved, draft and review goal (state mark and word, stream · budget, built/total = (done + review)/total; name and title; scope status strip and to check/ready/waiting note). Goal states reuse task marks: running in-progress, approved open, draft decision, review review, done done, legacy dashed ring. Click opens Tasks filtered to the goal.",
+      "html": "<div class=\"ds-goals\"><h3 class=\"ds-gh\">Goals<span class=\"ds-c\">1 running · 1 draft</span><span class=\"ds-c\">+1 legacy</span></h3><div class=\"ds-gq\"><button class=\"ds-goal\"><span class=\"ds-g1\"><svg class=\"ds-mark\" viewBox=\"0 0 12 12\" aria-hidden=\"true\"><circle cx=\"6\" cy=\"6\" r=\"4.6\" fill=\"none\" stroke=\"var(--s-wip, #8152e6)\" stroke-width=\"1.5\"/><path d=\"M6 2.6a3.4 3.4 0 0 1 0 6.8z\" fill=\"var(--s-wip, #8152e6)\"/></svg><span class=\"ds-gs\">running</span><span class=\"ds-gm\">S1 · 4h</span><span class=\"ds-gf\">6/6</span></span><span class=\"ds-g2\"><span class=\"ds-gn\">rc2</span><span class=\"ds-gt\">Release candidate 2</span></span><span class=\"ds-g3\"><span class=\"ds-strip\"><i style=\"flex:5;background:var(--s-done,#1f9d55)\"></i><i style=\"flex:1;background:var(--s-review,#3366e0)\"></i></span><span>1 to check</span></span></button><button class=\"ds-goal\"><span class=\"ds-g1\"><svg class=\"ds-mark\" viewBox=\"0 0 12 12\" aria-hidden=\"true\"><rect x=\"2.1\" y=\"2.1\" width=\"7.8\" height=\"7.8\" rx=\"1.6\" transform=\"rotate(45 6 6)\" fill=\"var(--s-decision, #b57300)\"/><rect x=\"5.3\" y=\"3.3\" width=\"1.4\" height=\"3.3\" rx=\".7\" fill=\"var(--mark-ink, #fff)\"/><circle cx=\"6\" cy=\"8.2\" r=\".8\" fill=\"var(--mark-ink, #fff)\"/></svg><span class=\"ds-gs\">draft</span><span class=\"ds-gm\">S5 · 1 day</span><span class=\"ds-gf\">0/4</span></span><span class=\"ds-g2\"><span class=\"ds-gn\">billing</span><span class=\"ds-gt\">Billing backend phase A</span></span><span class=\"ds-g3\"><span class=\"ds-strip\"><i style=\"flex:1;background:var(--s-wip,#8152e6)\"></i><i style=\"flex:3;background:var(--s-decision,#b57300)\"></i></span><span>3 waiting</span></span></button></div></div>",
+      "css": ".ds-goals{width:460px;display:grid;gap:6px;padding:10px 12px;background:var(--panel,#fff);border:1px solid var(--line,#e2e5e9);border-radius:8px}.ds-gh{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;margin:0;font:600 10px/1 var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace);text-transform:uppercase;letter-spacing:.06em;color:var(--fg-2,#3f4753)}.ds-c{font:11px/1 var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace);color:var(--fg-4,#646c78);text-transform:none;letter-spacing:0}.ds-gq{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,196px),1fr));gap:2px 20px}.ds-goal{display:grid;gap:4px;min-width:0;padding:5px 6px 6px;margin:0 -6px;border:0;border-radius:6px;background:none;cursor:pointer;text-align:left;transition:background-color .12s ease-out}.ds-goal:hover{background:var(--hover,#f1f3f6)}.ds-goal:focus-visible{outline:2px solid var(--focus,#0e1116);outline-offset:2px}.ds-g1{display:flex;align-items:center;gap:6px;min-width:0;font:11px var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace);color:var(--fg-3,#535b67);white-space:nowrap}.ds-gs{color:var(--fg,#0e1116);font-weight:500}.ds-gm{overflow:hidden;text-overflow:ellipsis;min-width:0}.ds-gf{margin-left:auto;color:var(--fg-2,#3f4753)}.ds-g2{display:flex;align-items:baseline;gap:7px;min-width:0;white-space:nowrap}.ds-gn{font:500 11.5px var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace);color:var(--fg,#0e1116)}.ds-gt{overflow:hidden;text-overflow:ellipsis;min-width:0;font:12.5px var(--sans, 'Mona Sans', ui-sans-serif, system-ui, sans-serif);color:var(--fg-2,#3f4753)}.ds-g3{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;font:10.5px var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace);color:var(--fg-3,#535b67);white-space:nowrap}.ds-strip{display:flex;gap:2px;height:6px}.ds-strip i{display:block;min-width:2px}.ds-strip i:first-child{border-radius:3px 0 0 3px}.ds-strip i:last-child{border-radius:0 3px 3px 0}.ds-strip:empty{background:var(--sunken,#eceef1);border-radius:3px}.ds-mark{width:12px;height:12px;display:block;flex:none}"
+    },
+    {
+      "name": "Detail Notes",
+      "kind": "custom",
+      "refersTo": "tag",
+      "description": "The task detail lists notes under its facts (check for review tasks, warnings): a label-sm uppercase label in fg-2 followed by a 12px sans sentence in fg-3. Row meta reads unlocks N · blocks N.",
+      "html": "<div class=\"ds-dt\"><button class=\"ds-trow\"><svg class=\"ds-mark\" viewBox=\"0 0 12 12\" aria-hidden=\"true\"><circle cx=\"6\" cy=\"6\" r=\"4.6\" fill=\"none\" stroke=\"var(--s-wip, #8152e6)\" stroke-width=\"1.5\"/><path d=\"M6 2.6a3.4 3.4 0 0 1 0 6.8z\" fill=\"var(--s-wip, #8152e6)\"/></svg><span class=\"ds-id\">PLT-12</span><span class=\"ds-tt\"><span class=\"ds-tx\">Plugin host contract</span></span><span class=\"ds-meta\">unlocks 1 · blocks 2</span></button><div class=\"ds-notes\"><div><b>warning</b>in-progress without owner</div></div></div>",
+      "css": ".ds-dt{width:440px;background:var(--panel,#fff);border:1px solid var(--line,#e2e5e9);border-radius:8px;padding:0 12px 11px;color:var(--fg,#0e1116)}.ds-trow{display:grid;grid-template-columns:12px 7ch minmax(0,1fr) auto;align-items:center;gap:10px;padding:5px 0;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--line,#e2e5e9);cursor:pointer;font:500 11.5px/1.45 var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace);color:var(--fg,#0e1116)}.ds-trow:hover{background:var(--hover,#f1f3f6)}.ds-tt{display:flex;align-items:center;gap:6px;min-width:0;font:13px/1.4 var(--sans, 'Mona Sans', ui-sans-serif, system-ui, sans-serif);color:var(--fg-2,#3f4753)}.ds-tx{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}.ds-tag{font:500 9.5px/1 var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace);text-transform:uppercase;letter-spacing:.05em;padding:3px 4px 2px;border-radius:3px;color:var(--fg-2,#3f4753);background:var(--sunken,#eceef1);flex:none}.ds-meta{font:400 11px var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace);color:var(--fg-3,#535b67);white-space:nowrap}.ds-notes{margin-top:7px;display:grid;gap:2px;font:12px var(--sans, 'Mona Sans', ui-sans-serif, system-ui, sans-serif);color:var(--fg-3,#535b67)}.ds-notes b{color:var(--fg-2,#3f4753);font:600 10px var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace);text-transform:uppercase;letter-spacing:.06em;margin-right:6px}.ds-mark{width:12px;height:12px;display:block}"
+    },
+    {
+      "name": "Warnings Popover",
+      "kind": "custom",
+      "refersTo": "popover",
+      "description": "Second floating layer, opened from the footer's warnings count: panel background, 1px line-2 border, 8px radius, flat 4px ground ring, no shadow. Warnings grouped by message; task IDs are links. Esc, outside click or the close button hide it.",
+      "html": "<div class=\"ds-wrap\"><div class=\"ds-pop\"><div class=\"ds-ph\"><h2>Warnings</h2><span class=\"ds-c\">3</span><button class=\"ds-close\" aria-label=\"Close warnings\"><svg width=\"12\" height=\"12\" viewBox=\"0 0 12 12\" aria-hidden=\"true\"><path d=\"M3 3l6 6M9 3l-6 6\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\"/></svg></button></div><div class=\"ds-wg\"><div class=\"ds-wm\">in-progress without owner<span class=\"ds-c\">2</span></div><div class=\"ds-wids\"><button class=\"ds-lnk\">PLT-12</button><button class=\"ds-lnk\">REL-04</button></div></div><div class=\"ds-wg\"><div class=\"ds-wm\">no frontmatter, listed as legacy<span class=\"ds-c\">1</span></div><div class=\"ds-wids\"><span>plans/desktop-goal.md</span></div></div></div><div class=\"ds-foot\"><button class=\"ds-warn\"><b>3</b> warnings</button></div></div>",
+      "css": ".ds-wrap{width:400px;display:grid;gap:10px;padding:10px;background:var(--bg,#f4f5f7)}.ds-pop{background:var(--panel,#fff);color:var(--fg,#0e1116);border:1px solid var(--line-2,#cdd2d8);border-radius:8px;box-shadow:0 0 0 4px var(--bg,#f4f5f7);overflow:hidden;font:13px/1.45 var(--sans, 'Mona Sans', ui-sans-serif, system-ui, sans-serif)}.ds-ph{display:flex;align-items:center;gap:8px;padding:7px 12px 5px}.ds-ph h2{margin:0;font:600 10.5px/1 var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace);text-transform:uppercase;letter-spacing:.06em;color:var(--fg-2,#3f4753)}.ds-c{font:11px var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace);color:var(--fg-4,#646c78);margin-left:4px}.ds-close{margin:0 -6px 0 auto;width:24px;height:24px;display:grid;place-items:center;border:0;border-radius:6px;background:none;color:var(--fg-3,#535b67);cursor:pointer}.ds-close:hover{background:var(--hover,#f1f3f6);color:var(--fg,#0e1116)}.ds-wg{padding:8px 12px 10px;border-top:1px solid var(--line,#e2e5e9)}.ds-wm{color:var(--fg-2,#3f4753);font-size:12.5px}.ds-wids{display:flex;flex-wrap:wrap;gap:2px 10px;margin-top:4px;font:11.5px var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace);color:var(--fg-2,#3f4753)}.ds-lnk{background:none;border:0;padding:0;cursor:pointer;font:inherit;color:inherit;text-decoration:underline;text-decoration-color:var(--line-2,#cdd2d8);text-underline-offset:3px}.ds-lnk:hover{color:var(--fg,#0e1116);text-decoration-color:currentColor}.ds-lnk:focus-visible{outline:2px solid var(--focus,#0e1116);outline-offset:2px;border-radius:4px}.ds-foot{display:flex;justify-content:flex-end;font:11px var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace);color:var(--fg-4,#646c78)}.ds-warn{padding:2px 6px;border:0;border-radius:4px;background:none;cursor:pointer;font:inherit;color:var(--fg-3,#535b67);transition:background-color .12s ease-out,color .12s ease-out}.ds-warn b{color:var(--fg,#0e1116);font-weight:600}.ds-warn:hover{background:var(--panel,#fff);color:var(--fg,#0e1116)}"
+    },
+    {
+      "name": "Link",
+      "kind": "custom",
+      "refersTo": "link-hover",
+      "description": "Inline text link (.lnk): inherits the surrounding color with a line-2 underline at 3px offset; hover turns text fg and the underline currentColor. Goal names in the detail, warning IDs, Clear filters, history commits.",
+      "html": "<div class=\"ds-facts\"><span>track <b>platform</b></span><span>goal <button class=\"ds-lnk\"><b>rc2</b></button></span><span><button class=\"ds-lnk\">Clear filters</button></span></div>",
+      "css": ".ds-facts{display:flex;flex-wrap:wrap;gap:4px 12px;align-items:center;font:11px var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace);color:var(--fg-3,#535b67)}.ds-facts b{color:var(--fg-2,#3f4753);font-weight:500}.ds-lnk{background:none;border:0;padding:0;cursor:pointer;font:inherit;color:inherit;text-decoration:underline;text-decoration-color:var(--line-2,#cdd2d8);text-underline-offset:3px}.ds-lnk:hover{color:var(--fg,#0e1116);text-decoration-color:currentColor}.ds-lnk:focus-visible{outline:2px solid var(--focus,#0e1116);outline-offset:2px;border-radius:4px}"
+    },
+    {
+      "name": "Tooltip",
+      "kind": "custom",
+      "refersTo": "tooltip",
+      "description": "The shadowed floating layer: inverted ink with mono detail and the one shadow.",
+      "html": "<div class=\"ds-tip\"><b>PLT-12</b> <span class=\"ds-m\">In progress · platform</span><br>Plugin host contract for note blocks</div>",
+      "css": ".ds-tip{max-width:300px;padding:7px 9px;border-radius:7px;background:var(--fg,#0e1116);color:var(--bg,#f4f5f7);font:11.5px/1.45 var(--sans, 'Mona Sans', ui-sans-serif, system-ui, sans-serif);box-shadow:0 8px 24px rgba(0,0,0,.2)}.ds-m{font-family:var(--mono, 'Monaspace Neon', ui-monospace, Menlo, monospace);font-size:11px;opacity:.75}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Hairline Console",
+    "overview": "A modern app shell with a light terminal accent: it borrows the terminal's density, monospace data and key-driven movement, and refuses both a terminal costume (box-drawing, ANSI palettes, one face everywhere) and a scrolling report of cards. The whole page is one fixed viewport. A cool neutral ground holds white panels (ink panels in dark) separated by single hairlines; every list scrolls inside its own panel, never the page.\n\nDensity is high and ordered. Prose (task titles, run subjects, headings) is set in Mona Sans; everything a machine produced (IDs, counts, hashes, dates, deltas, panel headings, key hints) is set in Monaspace Neon. Both faces come from GitHub's type family, so the two voices read as one. Color carries status and nothing else: it lives only on small drawn SVG marks and on bar or strip segments. Interaction state is achromatic: hover is a faint tint, selection is full ink inversion, related items get a soft ink wash.\n\nLight and dark are the same system mapped onto two token sets; nothing is designed for one theme only. The system is meant to be lifted into other planning-repo boards and a bb plugin surface, so it depends on nothing a plugin host cannot provide: inlined fonts, inline SVG, no network.",
+    "keyCharacteristics": [
+      "One viewport, panel-internal scrolling, no page scroll above the narrowest breakpoint.",
+      "Sans for human text, mono for machine values and panel headings.",
+      "Status color only on drawn marks and bar segments, always paired with a label.",
+      "Selection is ink inversion; there is no brand accent hue.",
+      "Hairline borders and tonal steps for depth; a single shadow, on the tooltip. The warnings popover floats on a flat ground ring instead.",
+      "Container-query layout keyed to the board's own width, not the window.",
+      "Every view is reachable and drivable from the keyboard."
+    ],
+    "rules": [
+      {
+        "name": "The Status Is a Mark Rule",
+        "body": "Status hues appear only as drawn SVG marks, strip segments, bar segments and change cells. Text, backgrounds, borders and selection never take a status hue.",
+        "section": "colors"
+      },
+      {
+        "name": "The Ink Selection Rule",
+        "body": "Selection and pressed state are a full inversion to ink (`sel` / `sel-fg`); related items use `sel-soft`. Never introduce a colored accent for \"active\".",
+        "section": "colors"
+      },
+      {
+        "name": "The Twin Token Rule",
+        "body": "Every color is defined for light and dark under the same name; components reference the role token only, and the theme switch (`data-theme` or `prefers-color-scheme`) swaps values, never component rules.",
+        "section": "colors"
+      },
+      {
+        "name": "The Two Voices Rule",
+        "body": "If a person wrote it, it is sans; if the system produced it (ID, count, hash, date, delta, key), it is mono. Never set a task title in mono or an ID in sans.",
+        "section": "typography"
+      },
+      {
+        "name": "The Label Is the Heading Rule",
+        "body": "Uppercase mono labels are the heading of the panel or group they sit in, followed directly by content. They never sit above another heading as a kicker or eyebrow.",
+        "section": "typography"
+      },
+      {
+        "name": "The One Numeral Rule",
+        "body": "Only the summary status counts use the 19px numeral. Everywhere else, numbers stay at data or meta size.",
+        "section": "typography"
+      },
+      {
+        "name": "The One Viewport Rule",
+        "body": "Overview, attention panels and navigation stay above the fold at sidebar width; when content grows, a panel scrolls internally rather than the page.",
+        "section": "layout"
+      },
+      {
+        "name": "The Container Not Window Rule",
+        "body": "Breakpoints are container queries on the shell. Never key layout to `@media` viewport width; the board must behave by the width it is given.",
+        "section": "layout"
+      },
+      {
+        "name": "The Pinned Width Rule",
+        "body": "The shell, every view and the summary use a single `minmax(0, 1fr)` column, so no string can widen the page beyond the board: the document's scroll width always equals its client width. Long single-line values truncate with an ellipsis and keep the full value in a `title` or tooltip; secondary parts wrap instead (summary header line, Goals heading). In the top bar the HEAD line shrinks first, the project name next, and the search field keeps its width; the \"uncommitted\" marker sits right after the hash, so truncation drops the time first.",
+        "section": "layout"
+      },
+      {
+        "name": "The Hairline Panel Rule",
+        "body": "Panels are separated by a 1px hairline and a tonal step, never by a drop shadow. A shadow means \"floating above the page\" and belongs to the tooltip alone; the warnings popover floats without one, on a stronger hairline and the ground ring.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Shape Carries Status Rule",
+        "body": "Each status must be identifiable by mark shape alone, and every mark sits next to a text label, count or tooltip. Add new statuses as new 12×12 shapes, never as new colors on an existing shape.",
+        "section": "shapes"
+      },
+      {
+        "name": "The Escape Twice Rule",
+        "body": "Every data value is escaped before it enters markup. Tooltip markup is built as HTML, stored in `data-tip` and parsed again when shown, so each value inside it is escaped first and the whole string is escaped once more for the attribute. Lookups keyed by data (status labels, marks, goal-state marks) accept only their own keys; numeric fields are coerced or escaped like text.",
+        "section": "components"
+      }
+    ],
+    "dos": [
+      "Do set every machine value (ID, count, hash, date, delta, key) in Monaspace Neon and every human sentence or title in Mona Sans.",
+      "Do draw status as a 12×12 SVG mark from the defined vocabulary, next to a label, count or tooltip.",
+      "Do show selection and pressed state as ink inversion (`sel` / `sel-fg`) and related items with `sel-soft`.",
+      "Do separate panels with a 1px `line` hairline and a tonal step; keep the tooltip as the only shadowed layer.",
+      "Do define every new color twice (light and dark) under one role name.",
+      "Do write responsive rules as container queries on the shell and let long lists scroll inside their panel.",
+      "Do give every new view or list a keyboard path and list its keys in the footer.",
+      "Do use uppercase mono labels only as the heading of the panel or group they open.",
+      "Do escape every data value before it enters markup, and twice inside tooltip markup.",
+      "Do let long strings truncate with a tooltip or wrap their secondary parts; the page width never grows past the board."
+    ],
+    "donts": [
+      "Don't put a status hue on text, backgrounds, borders or the selected state.",
+      "Don't add a brand accent color; ink is the only emphasis.",
+      "Don't use glyph or emoji status icons, icon fonts or remote icon sprites; draw SVG.",
+      "Don't add drop shadows to panels, cards or chips.",
+      "Don't make the page scroll at sidebar width; scroll inside panels.",
+      "Don't dress the board as a terminal: no box-drawing characters, ANSI palettes or single-font-everywhere.",
+      "Don't fetch fonts, scripts or images at view time; inline them at build.",
+      "Don't place an uppercase mono label above a heading as a kicker or eyebrow.",
+      "Don't signal warnings with a hue; use a text tag, a label or a count."
+    ]
+  }
+}

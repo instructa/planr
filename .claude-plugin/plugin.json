@@ -1,0 +1,11 @@
+{
+  "name": "planr",
+  "version": "2.0.0-beta.1",
+  "description": "Small planning layer for agent-built products: Markdown task graph, CLI, board.",
+  "author": {
+    "name": "instructa"
+  },
+  "homepage": "https://planr.so",
+  "repository": "https://github.com/instructa/planr",
+  "license": "MIT"
+}

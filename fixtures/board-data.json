@@ -1,0 +1,974 @@
+{
+  "project": "budget-planning",
+  "commit": "4a7de62 · 2026-10-03T15:10:00+02:00",
+  "dirty": false,
+  "generatedAt": "2026-10-04T08:00:00.000Z",
+  "tasks": [
+    {
+      "id": "EXP-01",
+      "title": "CSV export of transactions",
+      "status": "review",
+      "track": "web",
+      "depends": [],
+      "owner": null,
+      "file": "tasks/EXP-01.md",
+      "openDeps": [],
+      "ready": false,
+      "waitingOn": [
+        "EXP-02"
+      ],
+      "unlocks": 0,
+      "stream": null,
+      "goal": [
+        "export"
+      ],
+      "history": [
+        {
+          "run": 1,
+          "from": "open",
+          "to": "in-progress"
+        },
+        {
+          "run": 7,
+          "from": "in-progress",
+          "to": "review"
+        }
+      ],
+      "lastRun": 7
+    },
+    {
+      "id": "EXP-02",
+      "title": "PDF statements",
+      "status": "open",
+      "track": "web",
+      "depends": [
+        "EXP-01"
+      ],
+      "owner": null,
+      "file": "tasks/EXP-02.md",
+      "openDeps": [],
+      "ready": true,
+      "waitingOn": [],
+      "unlocks": 0,
+      "stream": null,
+      "goal": [
+        "export"
+      ],
+      "history": [],
+      "lastRun": null
+    },
+    {
+      "id": "IMP-01",
+      "title": "Import from other budget apps",
+      "status": "dropped",
+      "track": "web",
+      "depends": [],
+      "owner": null,
+      "file": "tasks/IMP-01.md",
+      "openDeps": [],
+      "ready": false,
+      "waitingOn": [],
+      "unlocks": 0,
+      "stream": null,
+      "goal": [],
+      "history": [
+        {
+          "run": 4,
+          "from": "open",
+          "to": "dropped"
+        }
+      ],
+      "lastRun": 4
+    },
+    {
+      "id": "MOB-01",
+      "title": "App shell & navigation",
+      "status": "done",
+      "track": "mobile",
+      "depends": [],
+      "owner": null,
+      "file": "tasks/MOB-01.md",
+      "openDeps": [],
+      "ready": false,
+      "waitingOn": [
+        "MOB-04"
+      ],
+      "unlocks": 0,
+      "stream": "S1",
+      "goal": [
+        "mobile-app"
+      ],
+      "history": [
+        {
+          "run": 3,
+          "from": null,
+          "to": "open"
+        },
+        {
+          "run": 4,
+          "from": "open",
+          "to": "in-progress"
+        },
+        {
+          "run": 5,
+          "from": "in-progress",
+          "to": "review"
+        },
+        {
+          "run": 7,
+          "from": "review",
+          "to": "done"
+        }
+      ],
+      "lastRun": 7
+    },
+    {
+      "id": "MOB-02",
+      "title": "Sign in",
+      "status": "done",
+      "track": "mobile",
+      "depends": [
+        "MOB-01"
+      ],
+      "owner": null,
+      "file": "tasks/MOB-02.md",
+      "openDeps": [],
+      "ready": false,
+      "waitingOn": [
+        "MOB-03",
+        "MOB-05"
+      ],
+      "unlocks": 0,
+      "stream": "S1",
+      "goal": [
+        "mobile-app"
+      ],
+      "history": [
+        {
+          "run": 3,
+          "from": null,
+          "to": "open"
+        },
+        {
+          "run": 5,
+          "from": "open",
+          "to": "in-progress"
+        },
+        {
+          "run": 6,
+          "from": "in-progress",
+          "to": "review"
+        },
+        {
+          "run": 7,
+          "from": "review",
+          "to": "done"
+        }
+      ],
+      "lastRun": 7
+    },
+    {
+      "id": "MOB-03",
+      "title": "Accounts & balances",
+      "status": "review",
+      "track": "mobile",
+      "depends": [
+        "MOB-02"
+      ],
+      "owner": null,
+      "file": "tasks/MOB-03.md",
+      "openDeps": [],
+      "ready": false,
+      "waitingOn": [
+        "MOB-08"
+      ],
+      "unlocks": 0,
+      "stream": "S1",
+      "goal": [
+        "mobile-app"
+      ],
+      "history": [
+        {
+          "run": 3,
+          "from": null,
+          "to": "open"
+        },
+        {
+          "run": 6,
+          "from": "open",
+          "to": "in-progress"
+        },
+        {
+          "run": 10,
+          "from": "in-progress",
+          "to": "review"
+        }
+      ],
+      "lastRun": 10
+    },
+    {
+      "id": "MOB-04",
+      "title": "Add an expense",
+      "status": "review",
+      "track": "mobile",
+      "depends": [
+        "MOB-01"
+      ],
+      "owner": null,
+      "file": "tasks/MOB-04.md",
+      "openDeps": [],
+      "ready": false,
+      "waitingOn": [
+        "MOB-08"
+      ],
+      "unlocks": 0,
+      "stream": "S1",
+      "goal": [
+        "mobile-app"
+      ],
+      "history": [
+        {
+          "run": 3,
+          "from": null,
+          "to": "open"
+        },
+        {
+          "run": 5,
+          "from": "open",
+          "to": "in-progress"
+        },
+        {
+          "run": 9,
+          "from": "in-progress",
+          "to": "review"
+        }
+      ],
+      "lastRun": 9
+    },
+    {
+      "id": "MOB-05",
+      "title": "Sync with the web app",
+      "status": "review",
+      "track": "mobile",
+      "depends": [
+        "MOB-02"
+      ],
+      "owner": "S2",
+      "file": "tasks/MOB-05.md",
+      "openDeps": [],
+      "ready": false,
+      "waitingOn": [
+        "MOB-06"
+      ],
+      "unlocks": 0,
+      "stream": "S2",
+      "goal": [
+        "mobile-app"
+      ],
+      "history": [
+        {
+          "run": 3,
+          "from": null,
+          "to": "open"
+        },
+        {
+          "run": 6,
+          "from": "open",
+          "to": "in-progress"
+        },
+        {
+          "run": 9,
+          "from": "in-progress",
+          "to": "review"
+        }
+      ],
+      "lastRun": 9
+    },
+    {
+      "id": "MOB-06",
+      "title": "Budget alerts (push)",
+      "status": "review",
+      "track": "mobile",
+      "depends": [
+        "MOB-05"
+      ],
+      "owner": "S2",
+      "file": "tasks/MOB-06.md",
+      "openDeps": [],
+      "ready": false,
+      "waitingOn": [
+        "MOB-08"
+      ],
+      "unlocks": 0,
+      "stream": "S2",
+      "goal": [
+        "mobile-app"
+      ],
+      "history": [
+        {
+          "run": 3,
+          "from": null,
+          "to": "open"
+        },
+        {
+          "run": 9,
+          "from": "open",
+          "to": "in-progress"
+        },
+        {
+          "run": 10,
+          "from": "in-progress",
+          "to": "review"
+        }
+      ],
+      "lastRun": 10
+    },
+    {
+      "id": "MOB-07",
+      "title": "Store launch plan",
+      "status": "decision",
+      "track": "mobile",
+      "depends": [],
+      "owner": "S3",
+      "file": "tasks/MOB-07.md",
+      "openDeps": [],
+      "ready": false,
+      "waitingOn": [
+        "MOB-08"
+      ],
+      "unlocks": 1,
+      "stream": "S3",
+      "goal": [
+        "mobile-app"
+      ],
+      "history": [
+        {
+          "run": 3,
+          "from": null,
+          "to": "decision"
+        }
+      ],
+      "lastRun": 3
+    },
+    {
+      "id": "MOB-08",
+      "title": "Release to the app stores",
+      "status": "open",
+      "track": "mobile",
+      "depends": [
+        "MOB-03",
+        "MOB-04",
+        "MOB-06",
+        "MOB-07"
+      ],
+      "owner": "S3",
+      "file": "tasks/MOB-08.md",
+      "openDeps": [
+        "MOB-07"
+      ],
+      "ready": false,
+      "waitingOn": [],
+      "unlocks": 0,
+      "stream": "S3",
+      "goal": [
+        "mobile-app"
+      ],
+      "history": [
+        {
+          "run": 3,
+          "from": null,
+          "to": "open"
+        }
+      ],
+      "lastRun": 3
+    },
+    {
+      "id": "OPS-01",
+      "title": "Nightly database backups",
+      "status": "done",
+      "track": "ops",
+      "depends": [],
+      "owner": null,
+      "file": "tasks/OPS-01.md",
+      "openDeps": [],
+      "ready": false,
+      "waitingOn": [
+        "OPS-02"
+      ],
+      "unlocks": 0,
+      "stream": null,
+      "goal": [
+        "backups"
+      ],
+      "history": [
+        {
+          "run": 2,
+          "from": "open",
+          "to": "done"
+        }
+      ],
+      "lastRun": 2
+    },
+    {
+      "id": "OPS-02",
+      "title": "Restore drill on staging",
+      "status": "blocked",
+      "track": "ops",
+      "depends": [
+        "OPS-01"
+      ],
+      "owner": null,
+      "file": "tasks/OPS-02.md",
+      "openDeps": [],
+      "ready": false,
+      "waitingOn": [],
+      "unlocks": 0,
+      "stream": null,
+      "goal": [
+        "backups"
+      ],
+      "history": [
+        {
+          "run": 8,
+          "from": "open",
+          "to": "blocked"
+        }
+      ],
+      "lastRun": 8
+    },
+    {
+      "id": "OPS-03",
+      "title": "Error tracking for the web app",
+      "status": "open",
+      "track": "ops",
+      "depends": [],
+      "owner": null,
+      "file": "tasks/OPS-03.md",
+      "openDeps": [],
+      "ready": true,
+      "waitingOn": [],
+      "unlocks": 0,
+      "stream": null,
+      "goal": [],
+      "history": [],
+      "lastRun": null
+    },
+    {
+      "id": "WEB-01",
+      "title": "Spending chart",
+      "status": "done",
+      "track": "web",
+      "depends": [],
+      "owner": null,
+      "file": "tasks/WEB-01.md",
+      "openDeps": [],
+      "ready": false,
+      "waitingOn": [
+        "WEB-02"
+      ],
+      "unlocks": 0,
+      "stream": "S4",
+      "goal": [
+        "web-dashboard"
+      ],
+      "history": [
+        {
+          "run": 1,
+          "from": "open",
+          "to": "in-progress"
+        },
+        {
+          "run": 2,
+          "from": "in-progress",
+          "to": "done"
+        }
+      ],
+      "lastRun": 2
+    },
+    {
+      "id": "WEB-02",
+      "title": "Category filters",
+      "status": "review",
+      "track": "web",
+      "depends": [
+        "WEB-01"
+      ],
+      "owner": null,
+      "file": "tasks/WEB-02.md",
+      "openDeps": [],
+      "ready": false,
+      "waitingOn": [
+        "WEB-03"
+      ],
+      "unlocks": 0,
+      "stream": "S4",
+      "goal": [
+        "web-dashboard"
+      ],
+      "history": [
+        {
+          "run": 1,
+          "from": "open",
+          "to": "in-progress"
+        },
+        {
+          "run": 6,
+          "from": "in-progress",
+          "to": "review"
+        }
+      ],
+      "lastRun": 6
+    },
+    {
+      "id": "WEB-03",
+      "title": "Monthly report",
+      "status": "in-progress",
+      "track": "web",
+      "depends": [
+        "WEB-02"
+      ],
+      "owner": null,
+      "file": "tasks/WEB-03.md",
+      "openDeps": [],
+      "ready": false,
+      "waitingOn": [],
+      "unlocks": 0,
+      "stream": "S4",
+      "goal": [
+        "web-dashboard"
+      ],
+      "history": [
+        {
+          "run": 7,
+          "from": "open",
+          "to": "in-progress"
+        }
+      ],
+      "lastRun": 7
+    }
+  ],
+  "goals": [
+    {
+      "name": "mobile-app",
+      "file": "plans/mobile-app-goal.md",
+      "title": "Mobile app",
+      "state": "running",
+      "stream": "S1",
+      "budget": "1 week",
+      "thread": "thr_mob001",
+      "scope": [
+        "MOB-01",
+        "MOB-02",
+        "MOB-03",
+        "MOB-04",
+        "MOB-05",
+        "MOB-06",
+        "MOB-07",
+        "MOB-08"
+      ],
+      "done": 2,
+      "review": 4,
+      "total": 8,
+      "ready": [],
+      "waiting": [
+        "MOB-07"
+      ]
+    },
+    {
+      "name": "web-dashboard",
+      "file": "plans/web-dashboard-goal.md",
+      "title": "Web dashboard",
+      "state": "running",
+      "stream": "S4",
+      "budget": "3 runs",
+      "thread": "thr_web001",
+      "scope": [
+        "WEB-01",
+        "WEB-02",
+        "WEB-03"
+      ],
+      "done": 1,
+      "review": 1,
+      "total": 3,
+      "ready": [],
+      "waiting": []
+    },
+    {
+      "name": "export",
+      "file": "plans/export-goal.md",
+      "title": "CSV & PDF export",
+      "state": "draft",
+      "stream": "S5",
+      "budget": "1 day",
+      "thread": null,
+      "scope": [
+        "EXP-01",
+        "EXP-02"
+      ],
+      "done": 0,
+      "review": 1,
+      "total": 2,
+      "ready": [
+        "EXP-02"
+      ],
+      "waiting": []
+    },
+    {
+      "name": "backups",
+      "file": "plans/backups-goal.md",
+      "title": "Backups",
+      "state": "review",
+      "stream": "S6",
+      "budget": "1 day",
+      "thread": "thr_ops001",
+      "scope": [
+        "OPS-01",
+        "OPS-02"
+      ],
+      "done": 1,
+      "review": 0,
+      "total": 2,
+      "ready": [],
+      "waiting": [
+        "OPS-02"
+      ]
+    }
+  ],
+  "runs": [
+    {
+      "commit": "42fc700",
+      "date": "2026-09-28T10:00:00+02:00",
+      "subject": "Add the initial backlog",
+      "counts": {
+        "open": 9
+      },
+      "total": 9,
+      "initial": true,
+      "changes": []
+    },
+    {
+      "commit": "838541b",
+      "date": "2026-09-29T09:30:00+02:00",
+      "subject": "Start WEB-01, WEB-02 and EXP-01",
+      "counts": {
+        "in-progress": 3,
+        "open": 6
+      },
+      "total": 9,
+      "initial": false,
+      "changes": [
+        {
+          "id": "EXP-01",
+          "from": "open",
+          "to": "in-progress"
+        },
+        {
+          "id": "WEB-01",
+          "from": "open",
+          "to": "in-progress"
+        },
+        {
+          "id": "WEB-02",
+          "from": "open",
+          "to": "in-progress"
+        }
+      ]
+    },
+    {
+      "commit": "089bbac",
+      "date": "2026-09-29T17:00:00+02:00",
+      "subject": "OPS-01 and WEB-01 done",
+      "counts": {
+        "in-progress": 2,
+        "open": 5,
+        "done": 2
+      },
+      "total": 9,
+      "initial": false,
+      "changes": [
+        {
+          "id": "OPS-01",
+          "from": "open",
+          "to": "done"
+        },
+        {
+          "id": "WEB-01",
+          "from": "in-progress",
+          "to": "done"
+        }
+      ]
+    },
+    {
+      "commit": "370e39a",
+      "date": "2026-09-30T11:00:00+02:00",
+      "subject": "Plan the mobile app",
+      "counts": {
+        "in-progress": 2,
+        "open": 12,
+        "done": 2,
+        "decision": 1
+      },
+      "total": 17,
+      "initial": false,
+      "changes": [
+        {
+          "id": "MOB-01",
+          "from": null,
+          "to": "open"
+        },
+        {
+          "id": "MOB-02",
+          "from": null,
+          "to": "open"
+        },
+        {
+          "id": "MOB-03",
+          "from": null,
+          "to": "open"
+        },
+        {
+          "id": "MOB-04",
+          "from": null,
+          "to": "open"
+        },
+        {
+          "id": "MOB-05",
+          "from": null,
+          "to": "open"
+        },
+        {
+          "id": "MOB-06",
+          "from": null,
+          "to": "open"
+        },
+        {
+          "id": "MOB-07",
+          "from": null,
+          "to": "decision"
+        },
+        {
+          "id": "MOB-08",
+          "from": null,
+          "to": "open"
+        }
+      ]
+    },
+    {
+      "commit": "81eff40",
+      "date": "2026-10-01T09:10:00+02:00",
+      "subject": "Start MOB-01; drop IMP-01",
+      "counts": {
+        "in-progress": 3,
+        "open": 10,
+        "dropped": 1,
+        "done": 2,
+        "decision": 1
+      },
+      "total": 17,
+      "initial": false,
+      "changes": [
+        {
+          "id": "IMP-01",
+          "from": "open",
+          "to": "dropped"
+        },
+        {
+          "id": "MOB-01",
+          "from": "open",
+          "to": "in-progress"
+        }
+      ]
+    },
+    {
+      "commit": "eeed6af",
+      "date": "2026-10-01T14:40:00+02:00",
+      "subject": "MOB-01 to review; start MOB-02 and MOB-04",
+      "counts": {
+        "in-progress": 4,
+        "open": 8,
+        "dropped": 1,
+        "done": 2,
+        "review": 1,
+        "decision": 1
+      },
+      "total": 17,
+      "initial": false,
+      "changes": [
+        {
+          "id": "MOB-01",
+          "from": "in-progress",
+          "to": "review"
+        },
+        {
+          "id": "MOB-02",
+          "from": "open",
+          "to": "in-progress"
+        },
+        {
+          "id": "MOB-04",
+          "from": "open",
+          "to": "in-progress"
+        }
+      ]
+    },
+    {
+      "commit": "468f6bc",
+      "date": "2026-10-02T10:30:00+02:00",
+      "subject": "MOB-02 to review; start MOB-03 and MOB-05; WEB-02 to review",
+      "counts": {
+        "in-progress": 4,
+        "open": 6,
+        "dropped": 1,
+        "done": 2,
+        "review": 3,
+        "decision": 1
+      },
+      "total": 17,
+      "initial": false,
+      "changes": [
+        {
+          "id": "MOB-02",
+          "from": "in-progress",
+          "to": "review"
+        },
+        {
+          "id": "MOB-03",
+          "from": "open",
+          "to": "in-progress"
+        },
+        {
+          "id": "MOB-05",
+          "from": "open",
+          "to": "in-progress"
+        },
+        {
+          "id": "WEB-02",
+          "from": "in-progress",
+          "to": "review"
+        }
+      ]
+    },
+    {
+      "commit": "590b42c",
+      "date": "2026-10-02T16:20:00+02:00",
+      "subject": "MOB-01 and MOB-02 checked; EXP-01 to review; start WEB-03",
+      "counts": {
+        "review": 2,
+        "open": 5,
+        "dropped": 1,
+        "done": 4,
+        "in-progress": 4,
+        "decision": 1
+      },
+      "total": 17,
+      "initial": false,
+      "changes": [
+        {
+          "id": "EXP-01",
+          "from": "in-progress",
+          "to": "review"
+        },
+        {
+          "id": "MOB-01",
+          "from": "review",
+          "to": "done"
+        },
+        {
+          "id": "MOB-02",
+          "from": "review",
+          "to": "done"
+        },
+        {
+          "id": "WEB-03",
+          "from": "open",
+          "to": "in-progress"
+        }
+      ]
+    },
+    {
+      "commit": "1925331",
+      "date": "2026-10-03T10:05:00+02:00",
+      "subject": "OPS-02 blocked: staging restore needs credentials",
+      "counts": {
+        "review": 2,
+        "open": 4,
+        "dropped": 1,
+        "done": 4,
+        "blocked": 1,
+        "in-progress": 4,
+        "decision": 1
+      },
+      "total": 17,
+      "initial": false,
+      "changes": [
+        {
+          "id": "OPS-02",
+          "from": "open",
+          "to": "blocked"
+        }
+      ]
+    },
+    {
+      "commit": "6bbeb86",
+      "date": "2026-10-03T12:30:00+02:00",
+      "subject": "MOB-04 & MOB-05 to review; start MOB-06",
+      "counts": {
+        "review": 4,
+        "open": 3,
+        "dropped": 1,
+        "done": 4,
+        "blocked": 1,
+        "in-progress": 3,
+        "decision": 1
+      },
+      "total": 17,
+      "initial": false,
+      "changes": [
+        {
+          "id": "MOB-04",
+          "from": "in-progress",
+          "to": "review"
+        },
+        {
+          "id": "MOB-05",
+          "from": "in-progress",
+          "to": "review"
+        },
+        {
+          "id": "MOB-06",
+          "from": "open",
+          "to": "in-progress"
+        }
+      ]
+    },
+    {
+      "commit": "4a7de62",
+      "date": "2026-10-03T15:10:00+02:00",
+      "subject": "MOB-03 & MOB-06 to review",
+      "counts": {
+        "review": 6,
+        "open": 3,
+        "dropped": 1,
+        "done": 4,
+        "blocked": 1,
+        "in-progress": 1,
+        "decision": 1
+      },
+      "total": 17,
+      "initial": false,
+      "changes": [
+        {
+          "id": "MOB-03",
+          "from": "in-progress",
+          "to": "review"
+        },
+        {
+          "id": "MOB-06",
+          "from": "in-progress",
+          "to": "review"
+        }
+      ]
+    }
+  ],
+  "warnings": []
+}

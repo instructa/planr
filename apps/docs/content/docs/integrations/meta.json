@@ -1,5 +1,0 @@
-{
-  "title": "Integrations",
-  "description": "Connect Planr to supported coding-agent clients.",
-  "pages": ["index", "codex", "claude-code", "cursor", "grok-build", "pi", "generic-mcp", "cli-only"]
-}

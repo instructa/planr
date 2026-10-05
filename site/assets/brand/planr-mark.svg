@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 104 148" role="img" aria-label="planr">
+  <!-- The planr mark: a p whose bowl is the board's in-progress mark (a ring with its right half filled)
+       and whose stem continues down as the lane to what comes next. Grid: x-height 100, ring outer 52,
+       stroke 17, fill radius 26 (a 9-unit gap inside the ring). One path, nonzero winding. -->
+  <path fill="currentColor" d="M0 52a52 52 0 1 1 104 0a52 52 0 1 1-104 0zM17 52a35 35 0 1 0 70 0a35 35 0 1 0-70 0zM0 52h17v96H0zM52 26a26 26 0 0 1 0 52z"/>
+</svg>

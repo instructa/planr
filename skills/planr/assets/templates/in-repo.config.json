@@ -1,0 +1,6 @@
+{
+  "tasksDir": ".planr/tasks",
+  "goalsDir": ".planr/plans",
+  "goalSuffix": "-goal.md",
+  "boardOut": ".planr/board.html"
+}

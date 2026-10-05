@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 104 148" role="img" aria-label="planr">
+  <!-- The planr mark, revealed once: the stem rises and loops clockwise into the ring in one stroke,
+       then the right half fills like progress, from 12 to 6 o'clock. Same geometry as planr-mark.svg,
+       drawn as strokes: the stroke runs on the ring's center line (r 43.5, width 17), and the fill is
+       a pie of radius 26 made from a circle of r 13 with a 26-wide stroke. Timing: MOTION.md.
+       Without motion (prefers-reduced-motion, or no CSS animation) the final frame shows. -->
+  <style>
+    .pm-stroke { fill: none; stroke: currentColor; stroke-width: 17; }
+    .pm-fill { fill: none; stroke: currentColor; stroke-width: 26; stroke-dasharray: 40.85 81.69; }
+    @media (prefers-reduced-motion: no-preference) {
+      .pm-stroke { stroke-dasharray: 369.4 369.4; animation: pm-draw .64s cubic-bezier(.65, 0, .35, 1) both; }
+      .pm-fill { animation: pm-sweep .48s .56s cubic-bezier(.5, 0, .2, 1) both; }
+    }
+    @keyframes pm-draw { from { stroke-dashoffset: 369.4; } to { stroke-dashoffset: 0; } }
+    @keyframes pm-sweep { from { stroke-dashoffset: 40.85; } to { stroke-dashoffset: 0; } }
+  </style>
+  <path class="pm-stroke" d="M8.5 148V52A43.5 43.5 0 0 1 95.5 52A43.5 43.5 0 0 1 8.5 52"/>
+  <circle class="pm-fill" cx="52" cy="52" r="13" transform="rotate(-90 52 52)"/>
+</svg>

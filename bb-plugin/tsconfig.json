@@ -1,0 +1,34 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "lib": [
+      "ES2022",
+      "DOM"
+    ],
+    "types": [
+      "node"
+    ],
+    "paths": {
+      "@/*": [
+        "./*"
+      ]
+    },
+    "noEmit": true,
+    "skipLibCheck": false,
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true
+  },
+  "include": [
+    "server.ts",
+    "app.tsx",
+    "components",
+    "lib",
+    "hooks",
+    "host.ts",
+    "engine.d.ts"
+  ]
+}

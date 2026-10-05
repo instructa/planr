@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true
+  },
+  "include": ["server.ts", "host.ts", "host-contract.ts", "contract.ts", "engine.d.ts", "checks/*.ts"]
+}

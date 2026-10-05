@@ -1,0 +1,788 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Taskboard</title>
+<style>
+@font-face { font-family: "Mona Sans"; src: url(data:font/woff2;base64,/*FONT:MonaSans-Variable.woff2*/) format("woff2"); font-weight: 200 900; font-display: block; }
+@font-face { font-family: "Monaspace Neon"; src: url(data:font/woff2;base64,/*FONT:MonaspaceNeon-400.woff2*/) format("woff2"); font-weight: 400; font-display: block; }
+@font-face { font-family: "Monaspace Neon"; src: url(data:font/woff2;base64,/*FONT:MonaspaceNeon-500.woff2*/) format("woff2"); font-weight: 500; font-display: block; }
+@font-face { font-family: "Monaspace Neon"; src: url(data:font/woff2;base64,/*FONT:MonaspaceNeon-600.woff2*/) format("woff2"); font-weight: 600 700; font-display: block; }
+
+:root {
+  color-scheme: light;
+  --bg: #f4f5f7; --panel: #ffffff; --sunken: #eceef1; --hover: #f1f3f6;
+  --line: #e2e5e9; --line-2: #cdd2d8;
+  --fg: #0e1116; --fg-2: #3f4753; --fg-3: #535b67; --fg-4: #646c78;
+  --sel: #0e1116; --sel-fg: #ffffff; --sel-soft: #e6e9ee;
+  --focus: #0e1116;
+  --s-done: #1f9d55; --s-review: #3366e0; --s-wip: #8152e6; --s-open: #7f8691;
+  --s-blocked: #e0464c; --s-decision: #b57300; --s-dropped: #7f8691;
+  --mark-ink: #ffffff;
+  --sans: "Mona Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "Monaspace Neon", ui-monospace, "SF Mono", Menlo, monospace;
+  --r: 8px;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0a0c0f; --panel: #111419; --sunken: #0d1014; --hover: #171b21;
+  --line: #1f242b; --line-2: #2c333c;
+  --fg: #e8ebef; --fg-2: #b0b8c3; --fg-3: #8d95a1; --fg-4: #7a838f;
+  --sel: #e8ebef; --sel-fg: #0a0c0f; --sel-soft: #1c2129;
+  --focus: #e8ebef;
+  --s-done: #3cc06e; --s-review: #6e9bff; --s-wip: #a684ff; --s-open: #68717c;
+  --s-blocked: #ff6268; --s-decision: #f2b23e; --s-dropped: #6a727d;
+  --mark-ink: #0a0c0f;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0a0c0f; --panel: #111419; --sunken: #0d1014; --hover: #171b21;
+    --line: #1f242b; --line-2: #2c333c;
+    --fg: #e8ebef; --fg-2: #b0b8c3; --fg-3: #8d95a1; --fg-4: #7a838f;
+    --sel: #e8ebef; --sel-fg: #0a0c0f; --sel-soft: #1c2129;
+    --focus: #e8ebef;
+    --s-done: #3cc06e; --s-review: #6e9bff; --s-wip: #a684ff; --s-open: #68717c;
+    --s-blocked: #ff6268; --s-decision: #f2b23e; --s-dropped: #6a727d;
+    --mark-ink: #0a0c0f;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--bg); color: var(--fg);
+  font: 13px/1.45 var(--sans); letter-spacing: -0.005em;
+  -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+::selection { background: var(--sel); color: var(--sel-fg); }
+button, input { font: inherit; color: inherit; }
+button { background: none; border: 0; padding: 0; cursor: pointer; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
+.muted { color: var(--fg-3); }
+* { scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 8px; border: 2px solid var(--panel); }
+
+/* ---------- shell ---------- */
+.app { height: 100vh; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr) auto; container-type: inline-size; }
+.top { display: flex; align-items: center; gap: 12px; padding: 10px 14px 8px; }
+.proj { font-weight: 600; font-size: 14px; letter-spacing: -0.015em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.head { font-family: var(--mono); color: var(--fg-3); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex-shrink: 1000; }
+.head b { color: var(--fg-2); font-weight: 500; }
+.wip { color: var(--fg); font-weight: 600; }
+.search { margin-left: auto; display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 6px 0 8px; min-width: 0; width: min(260px, 40cqi); flex: none;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 7px; }
+.search:focus-within { border-color: var(--line-2); box-shadow: 0 0 0 3px var(--sel-soft); }
+.search .p { color: var(--fg-4); font-family: var(--mono); }
+.search input { border: 0; outline: 0; background: none; min-width: 0; flex: 1; font-size: 12.5px; }
+.search input::placeholder { color: var(--fg-4); }
+.search input::-webkit-search-cancel-button { display: none; }
+kbd { font: 500 10.5px/1 var(--mono); color: var(--fg-3); padding: 3px 5px 2px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; background: var(--panel); }
+.theme { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 7px; color: var(--fg-3); flex: none; }
+.theme:hover { background: var(--panel); color: var(--fg); }
+
+.tabs { display: flex; align-items: end; gap: 2px; padding: 0 8px; border-bottom: 1px solid var(--line); }
+.tab { position: relative; display: flex; align-items: center; gap: 7px; padding: 6px 8px 9px; color: var(--fg-3); font-weight: 500; }
+.tab:hover { color: var(--fg); }
+.tab[aria-selected="true"] { color: var(--fg); }
+.tab[aria-selected="true"]::after { content: ""; position: absolute; left: 6px; right: 6px; bottom: -1px; height: 2px; background: var(--fg); border-radius: 2px; }
+.tab .n { font: 500 10.5px/1 var(--mono); color: var(--fg-3); padding: 3px 5px; border-radius: 4px; background: var(--sunken); }
+.shead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; font: 11px var(--mono); color: var(--fg-3); }
+.shead b { color: var(--fg); font-weight: 600; }
+.shead .since { margin-left: auto; white-space: nowrap; }
+
+main { min-height: 0; position: relative; }
+.view { position: absolute; inset: 0; display: none; min-height: 0; }
+.view.on { display: grid; grid-template-columns: minmax(0, 1fr); }
+
+.foot { display: flex; gap: 14px; align-items: center; padding: 6px 14px 7px; border-top: 1px solid var(--line); font: 11px var(--mono); color: var(--fg-4); white-space: nowrap; overflow: hidden; }
+.foot span { display: inline-flex; align-items: center; gap: 4px; }
+.foot .gen { margin-left: auto; overflow: hidden; text-overflow: ellipsis; display: block; }
+.foot .warn { margin: -2px -6px -2px auto; padding: 2px 6px; border-radius: 4px; color: var(--fg-3); white-space: nowrap; flex: none; }
+.foot .warn b { color: var(--fg); font-weight: 600; }
+.foot .warn:hover { background: var(--panel); color: var(--fg); }
+.foot .warn:not([hidden]) + .gen { margin-left: 8px; }
+
+/* ---------- shared ---------- */
+.mark { width: 12px; height: 12px; flex: none; display: block; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
+.ph { display: flex; align-items: baseline; gap: 8px; padding: 10px 12px 8px; }
+.ph h2 { margin: 0; font: 600 10.5px/1 var(--mono); text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-2); }
+.ph .c { font: 11px/1 var(--mono); color: var(--fg-4); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.ph .more { margin-left: auto; font: 11px/1 var(--mono); color: var(--fg-3); }
+.ph .more:hover { color: var(--fg); }
+.scroll { overflow: auto; min-height: 0; }
+.empty { padding: 10px 12px 12px; color: var(--fg-3); }
+.lnk { color: inherit; text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 3px; }
+.lnk:hover { color: var(--fg); text-decoration-color: currentColor; }
+.close { color: var(--fg-3); width: 24px; height: 24px; display: grid; place-items: center; border-radius: 6px; flex: none; }
+.close:hover { background: var(--hover); color: var(--fg); }
+
+.trow { display: grid; grid-template-columns: 12px calc(min(var(--idw, 10), 18) * 1ch) minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 5px 12px; width: 100%; text-align: left; border-top: 1px solid var(--line); font: 11.5px/1.45 var(--mono); }
+.trow:hover { background: var(--hover); }
+.trow .id { font-weight: 500; color: var(--fg); white-space: nowrap; }
+.trow .tt { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--fg-2); font: 13px/1.4 var(--sans); }
+.trow .tx { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.trow .id { overflow: hidden; text-overflow: ellipsis; }
+.mk { position: relative; width: 12px; height: 12px; }
+.mv { position: absolute; right: -3px; top: -3px; width: 6px; height: 6px; border-radius: 50%; background: var(--fg); box-shadow: 0 0 0 1.5px var(--panel); }
+@container (min-width: 1000px) {
+  .trow { grid-template-columns: 12px calc(var(--idw, 10) * 1ch) minmax(0, 1fr) auto; }
+  .wrap2 .trow { align-items: start; }
+  .wrap2 .trow .mark, .wrap2 .trow .id, .wrap2 .trow .meta, .wrap2 .trow .tag { margin-top: 2px; }
+  .wrap2 .trow .tt { align-items: start; }
+  .wrap2 .trow .tx { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; text-wrap: pretty; }
+}
+.trow .meta { font-size: 11px; color: var(--fg-3); white-space: nowrap; text-align: right; }
+
+.chip { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--fg-2); font-size: 12px; white-space: nowrap; flex: none; }
+.chip:hover { border-color: var(--line-2); color: var(--fg); }
+.chip .n { font: 11px var(--mono); color: var(--fg-3); }
+.chip[aria-pressed="true"] { background: var(--sel); border-color: var(--sel); color: var(--sel-fg); }
+.chip[aria-pressed="true"] .n { color: var(--sel-fg); opacity: .7; }
+.tag { font: 500 9.5px/1 var(--mono); text-transform: uppercase; letter-spacing: .05em; padding: 3px 4px 2px; border-radius: 3px; color: var(--fg-2); background: var(--sunken); white-space: nowrap; flex: none; }
+
+.cells { display: inline-flex; gap: 2px; align-items: center; }
+.cells i { width: 5px; height: 10px; border-radius: 1.5px; display: block; }
+
+/* ---------- overview ---------- */
+#v-overview { grid-template-rows: auto minmax(0, 1fr); gap: 10px; padding: 10px; }
+.summary { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 12px 12px 10px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.strip { display: flex; gap: 2px; height: 8px; }
+.strip i { display: block; height: 100%; min-width: 2px; }
+.strip i:first-child { border-radius: 3px 0 0 3px; } .strip i:last-child { border-radius: 0 3px 3px 0; } .strip i:only-child { border-radius: 3px; }
+.counts { display: grid; gap: 4px; }
+.count { display: grid; grid-template-columns: auto 1fr; column-gap: 6px; row-gap: 3px; align-items: baseline; padding: 4px 6px; margin: -4px -6px; border-radius: 6px; text-align: left; }
+.count:hover { background: var(--hover); }
+.count .v { font: 500 19px/1 var(--mono); letter-spacing: -0.03em; color: var(--fg); }
+.count .l { grid-column: 1 / -1; display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--fg-2); white-space: nowrap; }
+.count .d { font: 11.5px var(--mono); color: var(--fg-4); white-space: nowrap; }
+.count .d.up { color: var(--fg); font-weight: 600; }
+.tracks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 20px; padding-top: 10px; border-top: 1px dashed var(--line-2); }
+.track { display: grid; grid-template-columns: 10ch minmax(0, 1fr) 6ch; align-items: center; gap: 8px; text-align: left; padding: 1px 0; }
+.track .nm { font: 11.5px var(--mono); color: var(--fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.track .strip { height: 6px; }
+.track .pc { font: 10.5px var(--mono); color: var(--fg-3); white-space: nowrap; text-align: right; }
+.track:hover .nm { color: var(--fg); }
+.goals { display: grid; gap: 6px; padding-top: 10px; border-top: 1px dashed var(--line-2); }
+.goals .gh { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin: 0; font: 600 10px/1 var(--mono); text-transform: uppercase; letter-spacing: .06em; color: var(--fg-2); }
+.goals .gh .c { font: 11px/1 var(--mono); color: var(--fg-4); text-transform: none; letter-spacing: 0; }
+.goals .none { color: var(--fg-3); font-size: 12px; }
+.gq { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 196px), 1fr)); gap: 2px 20px; }
+.goal { display: grid; gap: 4px; min-width: 0; padding: 5px 6px 6px; margin: 0 -6px; border-radius: 6px; text-align: left; }
+.goal:hover { background: var(--hover); }
+.goal .g1 { display: flex; align-items: center; gap: 6px; min-width: 0; font: 11px var(--mono); color: var(--fg-3); white-space: nowrap; }
+.goal .gs { color: var(--fg); font-weight: 500; }
+.goal .gm { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.goal .gf { margin-left: auto; color: var(--fg-2); }
+.goal .g2 { display: flex; align-items: baseline; gap: 7px; min-width: 0; white-space: nowrap; }
+.goal .gn { font: 500 11.5px var(--mono); color: var(--fg); }
+.goal .gt { overflow: hidden; text-overflow: ellipsis; min-width: 0; color: var(--fg-2); font-size: 12.5px; }
+.goal .g3 { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; font: 10.5px var(--mono); color: var(--fg-3); white-space: nowrap; }
+.goal .strip { height: 6px; }
+.goal .strip:empty { background: var(--sunken); border-radius: 3px; }
+/* Needs you is the approver's whole queue: it takes the left column; the other three panes stack on the right. */
+.ogrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: minmax(0, 1.25fr) minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "needs runs" "needs next" "needs levers"; gap: 10px; min-height: 0; }
+.p-needs { grid-area: needs; } .p-runs { grid-area: runs; } .p-next { grid-area: next; } .p-levers { grid-area: levers; }
+
+.rrow { display: grid; grid-template-columns: auto auto minmax(0, 1fr); column-gap: 8px; row-gap: 4px; padding: 7px 12px; width: 100%; text-align: left; border-top: 1px solid var(--line); align-items: baseline; }
+.rrow:hover { background: var(--hover); }
+.rrow .t { font: 500 11.5px var(--mono); color: var(--fg); white-space: nowrap; }
+.rrow .h { font: 11px var(--mono); color: var(--fg-4); }
+.rrow .s { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--fg-2); }
+.rrow .x { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; font: 10.5px var(--mono); color: var(--fg-3); }
+
+/* ---------- runs ---------- */
+#v-runs { grid-template-rows: auto minmax(0, 1fr); gap: 10px; padding: 10px; }
+.trend { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 12px 12px 8px; }
+.bars { display: flex; align-items: flex-end; gap: 3px; height: 60px; }
+.bars button { flex: 1; height: 100%; display: flex; flex-direction: column-reverse; gap: 1px; border-radius: 3px; padding: 0; }
+.bars button i { display: block; width: 100%; }
+.bars button i:last-child { border-radius: 2px 2px 0 0; }
+.bars button:hover, .bars button[aria-pressed="true"] { outline: 1.5px solid var(--fg); outline-offset: 2px; }
+.days { display: flex; gap: 3px; margin-top: 7px; font: 10.5px var(--mono); color: var(--fg-4); }
+.days span { overflow: hidden; white-space: nowrap; border-left: 1px solid var(--line-2); padding-left: 4px; min-width: 0; }
+.rsplit { display: grid; grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr); gap: 10px; min-height: 0; }
+.daygrp, .qg { position: sticky; top: 0; z-index: 1; background: var(--panel); padding: 7px 12px 5px; font: 600 10px var(--mono); color: var(--fg-3); text-transform: uppercase; letter-spacing: .06em; border-top: 1px solid var(--line); }
+.qg { display: flex; align-items: baseline; gap: 6px; }
+.qg .c { color: var(--fg-4); font-weight: 400; }
+.qg .more { margin-left: auto; font: 11px/1 var(--mono); text-transform: none; letter-spacing: 0; color: var(--fg-3); }
+.qg .more:hover, .qmore:hover { color: var(--fg); }
+.qmore { display: block; width: 100%; padding: 6px 12px 8px; border-top: 1px solid var(--line); text-align: left; font: 11px var(--mono); color: var(--fg-3); }
+.qmore:hover { background: var(--hover); }
+.rrow[aria-current="true"] { background: var(--sel); }
+.rrow[aria-current="true"] .t, .rrow[aria-current="true"] .h, .rrow[aria-current="true"] .s, .rrow[aria-current="true"] .x { color: var(--sel-fg); }
+.rd { padding: 0 12px 12px; }
+.rd h3 { margin: 0 0 3px; font-size: 13.5px; font-weight: 600; letter-spacing: -0.012em; line-height: 1.35; text-wrap: pretty; }
+.rd .sub { font: 11px var(--mono); color: var(--fg-3); }
+.grp { margin-top: 12px; }
+.grp > .gh { display: flex; align-items: center; gap: 6px; font: 600 10px var(--mono); text-transform: uppercase; letter-spacing: .06em; color: var(--fg-2); margin-bottom: 3px; }
+.grp > .gh .c { color: var(--fg-4); font-weight: 400; }
+.grp .trow, .ds .trow { padding-left: 0; padding-right: 0; }
+
+/* ---------- tasks ---------- */
+#v-tasks { grid-template-rows: auto minmax(0, 1fr); }
+.tbar { display: grid; gap: 6px; padding: 10px 10px 8px; }
+.tbar .fr { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.tbar .sep { width: 1px; height: 18px; background: var(--line-2); margin: 0 3px; flex: none; }
+.tsplit { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 0.85fr); gap: 10px; padding: 0 10px 10px; min-height: 0; }
+.tsplit.nodetail { grid-template-columns: minmax(0, 1fr); }
+.tsplit.nodetail .detail { display: none; }
+.table { display: grid; grid-template-rows: auto minmax(0, 1fr); }
+.thead, .tr { display: grid; grid-template-columns: 12px minmax(10ch, 18ch) minmax(0, 1fr) 10ch 4ch 6ch; gap: 10px; align-items: center; padding: 0 12px; }
+.thead { height: 32px; font: 600 10px var(--mono); text-transform: uppercase; letter-spacing: .06em; color: var(--fg-3); border-bottom: 1px solid var(--line); }
+.thead button { text-align: left; font: inherit; color: inherit; letter-spacing: inherit; text-transform: inherit; white-space: nowrap; }
+.thead button:hover, .thead button[aria-sort] { color: var(--fg); }
+.thead .r, .tr .r { text-align: right; justify-self: end; }
+.tr { min-height: 31px; width: 100%; text-align: left; border-bottom: 1px solid var(--line); }
+.tr:hover { background: var(--hover); }
+.tr[aria-selected="true"] { background: var(--sel); }
+.tr[aria-selected="true"] .id, .tr[aria-selected="true"] .tt, .tr[aria-selected="true"] .tk, .tr[aria-selected="true"] .w, .tr[aria-selected="true"] .u { color: var(--sel-fg); }
+.tr[aria-selected="true"] .tag { background: transparent; color: var(--sel-fg); box-shadow: inset 0 0 0 1px currentColor; }
+.tr.rel { background: var(--sel-soft); }
+.tr .id { font: 500 11.5px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--fg); }
+.tr .tt { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--fg-2); }
+.tr .tt span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.tr .tk, .tr .w, .tr .u { font: 11px var(--mono); color: var(--fg-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tr .w.hot { color: var(--fg); font-weight: 600; }
+.tr[aria-selected="true"] .w.hot { color: var(--sel-fg); }
+.detail { display: grid; grid-template-rows: auto minmax(0, 1fr); }
+.dt { padding: 12px 12px 11px; border-bottom: 1px solid var(--line); }
+.dt .row1 { display: flex; align-items: center; gap: 8px; font: 500 12px var(--mono); }
+.dt .row1 .close { margin: -4px -4px 0 auto; }
+.dt h3 { margin: 7px 0 8px; font-size: 14.5px; line-height: 1.35; font-weight: 600; letter-spacing: -0.015em; text-wrap: pretty; }
+.dt .facts { display: flex; flex-wrap: wrap; gap: 4px 12px; font: 11px var(--mono); color: var(--fg-3); align-items: center; }
+.dt .facts b { color: var(--fg-2); font-weight: 500; }
+.dt .notes { margin-top: 7px; display: grid; gap: 2px; font-size: 12px; color: var(--fg-3); }
+.dt .notes b { color: var(--fg-2); font: 600 10px var(--mono); text-transform: uppercase; letter-spacing: .06em; margin-right: 6px; }
+.ds { padding: 2px 12px 14px; }
+.ds h4 { margin: 12px 0 3px; font: 600 10px var(--mono); text-transform: uppercase; letter-spacing: .06em; color: var(--fg-3); display: flex; gap: 6px; }
+.ds h4 .c { color: var(--fg-4); font-weight: 400; }
+.ds .none { color: var(--fg-3); font-size: 12px; padding: 2px 0; }
+.hist { list-style: none; margin: 6px 0 0 5px; padding: 0; border-left: 1px solid var(--line-2); }
+.hist li { position: relative; padding: 3px 0 3px 13px; font: 11.5px var(--mono); color: var(--fg-2); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.hist li::before { content: ""; position: absolute; left: -4px; top: 50%; width: 7px; height: 7px; margin-top: -3.5px; border-radius: 50%; background: var(--panel); border: 1.5px solid var(--fg-4); }
+.hist li:first-child::before { background: var(--fg-2); border-color: var(--fg-2); }
+.hist li .when { color: var(--fg-3); }
+.hist li button { color: var(--fg-3); text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 3px; }
+.hist li button:hover { color: var(--fg); text-decoration-color: currentColor; }
+.arrow { color: var(--fg-4); }
+
+/* ---------- warnings popover ---------- */
+.pop { position: fixed; inset: auto 10px 40px auto; margin: 0; padding: 0; width: min(420px, calc(100vw - 20px)); max-height: min(70vh, 520px); overflow: hidden;
+  background: var(--panel); color: var(--fg); border: 1px solid var(--line-2); border-radius: var(--r); box-shadow: 0 0 0 4px var(--bg); }
+.pop:popover-open { display: grid; grid-template-rows: auto minmax(0, 1fr); }
+.pop .ph { align-items: center; padding-top: 7px; padding-bottom: 5px; }
+.pop .close { margin: 0 -6px 0 auto; }
+.wg { padding: 8px 12px 10px; border-top: 1px solid var(--line); }
+.wm { color: var(--fg-2); font-size: 12.5px; }
+.wm .c { font: 11px var(--mono); color: var(--fg-4); margin-left: 4px; }
+.wids { display: flex; flex-wrap: wrap; gap: 2px 10px; margin-top: 4px; font: 11.5px var(--mono); color: var(--fg-2); }
+
+/* ---------- tooltip ---------- */
+#tip { position: fixed; z-index: 20; pointer-events: none; display: none; max-width: 300px; padding: 7px 9px; border-radius: 7px; background: var(--fg); color: var(--bg); font: 11.5px/1.45 var(--sans); box-shadow: 0 8px 24px rgba(0,0,0,.2); }
+#tip .m { font-family: var(--mono); font-size: 11px; opacity: .75; }
+
+/* ---------- responsive ---------- */
+@container (max-width: 1080px) {
+  .tsplit { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1.15fr) minmax(0, 1fr); }
+  .tsplit.nodetail { grid-template-rows: minmax(0, 1fr); }
+}
+@container (max-width: 640px) {
+  .thead, .tr { grid-template-columns: 12px minmax(9ch, 12ch) minmax(0, 1fr) 4ch 6ch; }
+  .thead .c-track, .tr .tk { display: none; }
+  .tbar .fr { flex-wrap: nowrap; overflow-x: auto; margin: 0 -10px; padding: 0 10px; scrollbar-width: none; }
+}
+@container (max-width: 760px) {
+  .rsplit { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 0.9fr) minmax(0, 1.1fr); }
+  .foot .gen { display: none; }
+}
+@container (max-width: 640px) {
+  .counts { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; row-gap: 12px; }
+}
+@container (max-width: 520px) {
+  .head { display: none; }
+  .tr .tag.opt { display: none; }
+  .foot span:nth-child(3) { display: none; }
+  .tracks { grid-template-columns: minmax(0, 1fr); }
+  .foot span:nth-child(4) { display: none; }
+  .ogrid { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(360px, auto) repeat(3, minmax(220px, 1fr)); grid-template-areas: "needs" "runs" "next" "levers"; }
+  #v-overview { overflow: auto; }
+}
+@container (min-width: 1240px) {
+  .tracks { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .counts { gap: 16px; }
+}
+@container (min-width: 1680px) {
+  .ogrid { grid-template-columns: repeat(4, minmax(0, 1fr)); grid-template-rows: minmax(0, 1fr); grid-template-areas: "needs runs next levers"; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .tr, .trow, .rrow, .chip, .tab, .count, .goal, .theme, .foot .warn { transition: background-color .12s ease-out, color .12s ease-out; }
+}
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <header class="top">
+    <span class="proj" id="proj"></span>
+    <span class="head" id="head"></span>
+    <label class="search" title="Filter tasks (/)">
+      <span class="p" aria-hidden="true">›</span>
+      <input id="q" type="search" placeholder="Filter tasks" autocomplete="off" spellcheck="false" aria-label="Filter tasks by ID or title">
+      <kbd>/</kbd>
+    </label>
+    <button class="theme" id="theme" aria-label="Toggle light or dark theme" title="Theme"></button>
+  </header>
+  <nav class="tabs" role="tablist" aria-label="Views">
+    <button class="tab" role="tab" data-view="overview" aria-selected="true">Overview</button>
+    <button class="tab" role="tab" data-view="runs" aria-selected="false">Runs <span class="n" id="n-runs"></span></button>
+    <button class="tab" role="tab" data-view="tasks" aria-selected="false">Tasks <span class="n" id="n-tasks"></span></button>
+  </nav>
+  <main>
+    <section class="view on" id="v-overview" role="tabpanel" aria-label="Overview"></section>
+    <section class="view" id="v-runs" role="tabpanel" aria-label="Runs"></section>
+    <section class="view" id="v-tasks" role="tabpanel" aria-label="Tasks"></section>
+  </main>
+  <footer class="foot">
+    <span><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd>&nbsp;views</span>
+    <span><kbd>/</kbd>&nbsp;filter</span>
+    <span><kbd>j</kbd><kbd>k</kbd>&nbsp;move</span>
+    <span><kbd>esc</kbd>&nbsp;clear</span>
+    <button class="warn" id="warnbtn" popovertarget="warnpop" hidden></button>
+    <span class="gen" id="gen"></span>
+  </footer>
+</div>
+<div class="pop" id="warnpop" popover aria-label="Warnings"></div>
+<div id="tip" role="tooltip"></div>
+
+<script>
+const DATA = /*DATA*/null;
+
+// ---------- model ----------
+// ready, openDeps, waitingOn, unlocks and goal come from the data (lib/graph.mjs owns those rules).
+// This page only sorts and groups them for presentation.
+const STATUS = {
+  "blocked":     { label: "Blocked",     short: "blocked" },
+  "decision":    { label: "Decision",    short: "decide" },
+  "in-progress": { label: "In progress", short: "wip" },
+  "review":      { label: "Review",      short: "review" },
+  "open":        { label: "Open",        short: "open" },
+  "done":        { label: "Done",        short: "done" },
+  "dropped":     { label: "Dropped",     short: "dropped" },
+  "removed":     { label: "Removed",     short: "removed" },
+};
+const PROGRESS = ["done", "review", "in-progress", "open", "decision", "blocked", "dropped"];
+const RANK = { blocked: 0, decision: 1, "in-progress": 2, review: 3, open: 4, done: 5, dropped: 6 };
+// Goal states reuse the task mark with the same meaning: running works, approved waits to start, draft waits on the owner.
+const GOAL_MARK = { running: "in-progress", approved: "open", draft: "decision", review: "review", done: "done", legacy: "removed" };
+const COLOR = (s) => `var(--s-${s === "in-progress" ? "wip" : Object.hasOwn(STATUS, s) && s !== "removed" ? s : "open"})`;
+const tasks = DATA.tasks, runs = DATA.runs, goals = DATA.goals ?? [], warnings = (DATA.warnings ?? []).map(String), lastRun = runs.length - 1;
+const byId = new Map(tasks.map((t) => [t.id, t]));
+const goalByName = new Map(goals.map((g) => [g.name, g]));
+// Every data value goes through esc() before it enters markup. Tooltip markup is escaped twice:
+// esc() each value inside it, then esc() the whole string for the data-tip attribute (showTip parses it as HTML).
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const dayKey = (iso) => { const d = new Date(iso); return `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}.`; };
+const hm = (iso) => new Date(iso).toLocaleTimeString("de-AT", { hour: "2-digit", minute: "2-digit" });
+const lab = (s) => (Object.hasOwn(STATUS, s) ? STATUS[s].label : String(s));
+const short = (s) => (s === null ? "new" : Object.hasOwn(STATUS, s) ? STATUS[s].short : String(s));
+const cnt = (arr, s) => arr.filter((t) => t.status === s).length;
+const idCmp = (a, b) => a.id.localeCompare(b.id, undefined, { numeric: true });
+const byLever = (a, b) => b.unlocks - a.unlocks || b.waitingOn.length - a.waitingOn.length;
+const statuses = PROGRESS.filter((s) => tasks.some((t) => t.status === s));
+const trackOrder = [...new Set(tasks.map((t) => t.track))].sort((a, b) => tasks.filter((t) => t.track === b).length - tasks.filter((t) => t.track === a).length);
+const today = dayKey(runs.at(-1)?.date ?? DATA.generatedAt);
+const baseIdx = (() => { for (let i = lastRun; i >= 0; i--) if (dayKey(runs[i].date) !== today) return i; return -1; })();
+const baseRun = baseIdx >= 0 ? runs[baseIdx] : null;
+const changedSinceBase = new Set(tasks.filter((t) => t.history.some((h) => h.run > baseIdx)).map((t) => t.id));
+const queued = goals.filter((g) => g.state !== "done" && g.state !== "legacy");
+// The approver's queue: goals to approve (draft) or check (review), decisions and blocked tasks, tasks to check (review).
+const ASK = { draft: "approve", review: "check" };
+const askGoals = goals.filter((g) => Object.hasOwn(ASK, g.state));
+const goalTasks = (name) => tasks.filter((t) => t.goal.includes(name));
+const inActiveGoal = (t) => t.goal.some((n) => ["running", "approved"].includes(goalByName.get(n)?.state));
+const needsYou = tasks.filter((t) => t.status === "blocked" || t.status === "decision").sort((a, b) => byLever(a, b) || RANK[a.status] - RANK[b.status] || idCmp(a, b));
+const upNext = tasks.filter((t) => t.ready).sort((a, b) => inActiveGoal(b) - inActiveGoal(a) || byLever(a, b) || idCmp(a, b));
+const toCheck = tasks.filter((t) => t.status === "review").sort((a, b) => (b.lastRun ?? -1) - (a.lastRun ?? -1) || idCmp(a, b));
+const CHECK_ROWS = 5;
+// review and done already satisfy dependencies, so only unfinished work can hold others up.
+const levers = tasks.filter((t) => !["review", "done", "dropped"].includes(t.status) && t.waitingOn.length).sort((a, b) => b.waitingOn.length - a.waitingOn.length || b.unlocks - a.unlocks || idCmp(a, b));
+const runLabel = (r) => `${dayKey(r.date) === today ? "" : dayKey(r.date) + " "}${hm(r.date)}`;
+const goalReview = (g) => Number(g.review) || 0;
+const goalBuilt = (g) => (Number(g.done) || 0) + goalReview(g);
+const runAt = (t) => (t.lastRun === null || t.lastRun === undefined ? null : runs[t.lastRun]);
+
+// ---------- marks ----------
+function mark(s) {
+  const c = COLOR(s);
+  const body = {
+    "open":        `<circle cx="6" cy="6" r="4.6" fill="none" stroke="${c}" stroke-width="1.5"/>`,
+    "in-progress": `<circle cx="6" cy="6" r="4.6" fill="none" stroke="${c}" stroke-width="1.5"/><path d="M6 2.6a3.4 3.4 0 0 1 0 6.8z" fill="${c}"/>`,
+    "review":      `<circle cx="6" cy="6" r="4.6" fill="none" stroke="${c}" stroke-width="1.5"/><circle cx="6" cy="6" r="2" fill="${c}"/>`,
+    "done":        `<circle cx="6" cy="6" r="5.4" fill="${c}"/><path d="M3.6 6.1l1.6 1.6 3.2-3.3" fill="none" stroke="var(--mark-ink)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>`,
+    "blocked":     `<circle cx="6" cy="6" r="5.4" fill="${c}"/><rect x="3.3" y="5.25" width="5.4" height="1.5" rx=".75" fill="var(--mark-ink)"/>`,
+    "decision":    `<rect x="2.1" y="2.1" width="7.8" height="7.8" rx="1.6" transform="rotate(45 6 6)" fill="${c}"/><rect x="5.3" y="3.3" width="1.4" height="3.3" rx=".7" fill="var(--mark-ink)"/><circle cx="6" cy="8.2" r=".8" fill="var(--mark-ink)"/>`,
+    "dropped":     `<circle cx="6" cy="6" r="4.6" fill="none" stroke="${c}" stroke-width="1.5"/><path d="M3.2 8.8l5.6-5.6" stroke="${c}" stroke-width="1.5" stroke-linecap="round"/>`,
+    "removed":     `<circle cx="6" cy="6" r="4.6" fill="none" stroke="${c}" stroke-width="1.5" stroke-dasharray="2 2"/>`,
+    "new":         `<path d="M6 2.5v7M2.5 6h7" stroke="var(--fg-2)" stroke-width="1.6" stroke-linecap="round"/>`,
+  }[s];
+  return `<svg class="mark" viewBox="0 0 12 12" aria-hidden="true">${typeof body === "string" ? body : ""}</svg>`;
+}
+const gmark = (g) => mark(Object.hasOwn(GOAL_MARK, g.state) ? GOAL_MARK[g.state] : "open");
+const strip = (items, label = "") => { const total = items.reduce((a, [, n]) => a + n, 0) || 1; return `<span class="strip" role="img" aria-label="${esc(label + items.filter(([, n]) => n).map(([s, n]) => `${lab(s)} ${n}`).join(", "))}">${items.filter(([, n]) => n).map(([s, n]) => `<i style="flex:${n};background:${COLOR(s)}" data-tip="${esc(`${esc(label)}${esc(lab(s))} · ${esc(n)} <span class='m'>${Math.round((n / total) * 100)}%</span>`)}"></i>`).join("")}</span>`; };
+const cells = (changes, max = 16) => `<span class="cells" aria-hidden="true">${changes.slice(0, max).map((c) => `<i style="background:${c.from === null ? "var(--fg-4)" : COLOR(c.to)}"></i>`).join("")}</span>${changes.length > max ? `<span>+${changes.length - max}</span>` : ""}`;
+const taskTip = (t) => esc(
+  `<b>${esc(t.id)}</b> <span class='m'>${esc(lab(t.status))} · ${esc(t.track)}</span><br>` +
+  `${esc(t.title)}` +
+  (t.goal.length ? `<br><span class='m'>goal ${esc(t.goal.join(", "))}</span>` : "")
+);
+const goalTip = (g) => esc(`<b>${esc(g.name)}</b> <span class='m'>${esc(g.state)}${g.stream ? ` · ${esc(g.stream)}` : ""}${g.budget ? ` · ${esc(g.budget)}` : ""}</span><br>${esc(g.title ?? g.name)}${g.state === "draft" ? "<br>Draft: waiting for your approval." : g.state === "review" ? "<br>Review: over budget or waiting for your sign-off." : ""}<br><span class='m'>${esc(goalBuilt(g))}/${esc(g.total)} built · ${esc(g.done)} done · ${esc(goalReview(g))} to check · ${esc(g.ready.length)} ready · ${esc(g.waiting.length)} waiting${g.thread ? ` · ${esc(g.thread)}` : ""}</span>`);
+const trow = (t, meta = "") => `<button class="trow" data-task="${esc(t.id)}" data-tip="${taskTip(t)}">
+  <span class="mk">${mark(t.status)}${changedSinceBase.has(t.id) ? `<span class="mv"
+    title="moved since ${baseRun ? dayKey(baseRun.date) : "start"}"></span>` : ""}</span>
+  <span class="id">${esc(t.id)}</span><span class="tt"><span class="tx">${esc(t.title)}</span></span>
+  <span class="meta">${esc(meta)}</span></button>`;
+const grow = (g) => `<button class="trow" data-goal="${esc(g.name)}" data-tip="${goalTip(g)}"><span class="mk">${gmark(g)}</span><span class="id">${esc(g.name)}</span><span class="tt"><span class="tx">${esc(g.title ?? g.name)}</span><span class="tag">goal</span></span><span class="meta">${esc(ASK[g.state] ?? g.state)}</span></button>`;
+const idw = (list) => `--idw:${Math.max(6, ...list.map((t) => t.id.length))}`;
+const lever = (t) => [t.unlocks && `unlocks ${t.unlocks}`, t.waitingOn.length && `blocks ${t.waitingOn.length}`].filter(Boolean).join(" · ") || "·";
+
+// ---------- state ----------
+const state = { view: "overview", run: lastRun, filter: "all", track: null, goal: null, q: "", sel: null, sort: "status" };
+const clearFilters = () => { state.filter = "all"; state.track = null; state.goal = null; state.q = ""; q.value = ""; };
+
+// ---------- header ----------
+const projName = DATA.project ?? "planning";
+document.getElementById("proj").textContent = projName;
+document.getElementById("proj").title = projName;
+document.title = `${projName} · taskboard`;
+document.getElementById("head").innerHTML = `<b>${esc(runs.at(-1) ? runs.at(-1).commit ?? "working tree" : String(DATA.commit ?? "").split(" · ")[0])}</b>${DATA.dirty ? ` · <span class="wip">uncommitted</span>` : ""} · ${today} ${hm(runs.at(-1)?.date ?? DATA.generatedAt)}`;
+document.getElementById("n-runs").textContent = runs.length;
+document.getElementById("n-tasks").textContent = tasks.length;
+document.getElementById("gen").textContent = `generated from ${DATA.commit}`;
+
+// ---------- warnings ----------
+const warnBtn = document.getElementById("warnbtn"), warnPop = document.getElementById("warnpop");
+if (warnings.length) {
+  const groups = new Map();
+  for (const w of warnings) {
+    const m = w.match(/^(\S+?):\s+(.+)$/);
+    const [key, msg] = m ? [m[1], m[2]] : [null, w];
+    if (!groups.has(msg)) groups.set(msg, []);
+    groups.get(msg).push(key);
+  }
+  warnBtn.hidden = false;
+  warnBtn.innerHTML = `<b>${warnings.length}</b> warning${warnings.length === 1 ? "" : "s"}`;
+  warnPop.innerHTML = `
+    <div class="ph"><h2>Warnings</h2><span class="c">${warnings.length}</span><button class="close" popovertarget="warnpop" popovertargetaction="hide" aria-label="Close warnings" title="Close (esc)"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button></div>
+    <div class="scroll">${[...groups].map(([msg, keys]) => `<div class="wg"><div class="wm">${esc(msg)}<span class="c">${keys.length}</span></div>${keys.some(Boolean) ? `<div class="wids">${keys.filter(Boolean).map((k) => (byId.has(k) ? `<button class="lnk" data-task="${esc(k)}">${esc(k)}</button>` : `<span>${esc(k)}</span>`)).join("")}</div>` : ""}</div>`).join("")}</div>`;
+}
+
+// ---------- overview ----------
+function delta(s) {
+  if (!baseRun) return "";
+  const d = cnt(tasks, s) - (baseRun.counts[s] ?? 0);
+  return `<span class="d ${d ? "up" : ""}">${d > 0 ? "+" : d < 0 ? "−" : "±"}${Math.abs(d)}</span>`;
+}
+function runRow(r, current = false) {
+  const i = runs.indexOf(r);
+  const news = r.changes.filter((c) => c.from === null).length;
+  const done = r.changes.filter((c) => c.from !== null && c.to === "done").length;
+  const moved = r.changes.length - done - news;
+  const summary = [done && `${done} done`, news && `${news} new`, moved && `${moved} moved`].filter(Boolean).join(" · ") || (r.initial ? `baseline · ${esc(r.total)} tasks` : "no status change");
+  return `<button class="rrow" data-run="${i}" ${current ? 'aria-current="true"' : ""}><span class="t">${runLabel(r)}</span><span class="h">${esc(r.commit ?? "uncommitted")}</span><span class="s">${esc(r.subject)}</span><span class="x">${cells(r.changes)}<span>${summary}</span></span></button>`;
+}
+function goalTile(g) {
+  const scope = g.scope.map((id) => byId.get(id)).filter(Boolean);
+  const note = [
+    goalReview(g) && `${goalReview(g)} to check`,
+    g.ready.length && `${g.ready.length} ready`,
+    g.waiting.length && `${g.waiting.length} waiting`,
+  ].filter(Boolean).join(" · ") || "·";
+  return `<button class="goal" data-goal="${esc(g.name)}" data-tip="${goalTip(g)}">
+    <span class="g1">${gmark(g)}<span class="gs">${esc(g.state)}</span><span class="gm">${esc([g.stream, g.budget].filter(Boolean).join(" · "))}</span><span class="gf">${esc(goalBuilt(g))}/${esc(g.total)}</span></span>
+    <span class="g2"><span class="gn">${esc(g.name)}</span><span class="gt">${esc(g.title ?? "")}</span></span>
+    <span class="g3">${scope.length ? strip(PROGRESS.map((s) => [s, cnt(scope, s)]), `${g.name} · `) : `<span class="strip"></span>`}<span>${esc(note)}</span></span>
+  </button>`;
+}
+function goalQueue() {
+  const of = (s) => goals.filter((g) => g.state === s);
+  const counts = ["running", "approved", "draft", "review"].filter((s) => of(s).length).map((s) => `${of(s).length} ${s}`).join(" · ");
+  const rest = ["legacy", "done"].filter((s) => of(s).length).map((s) => `<span class="c" tabindex="0" data-tip="${esc(of(s).map((g) => `<b>${esc(g.name)}</b> <span class='m'>${esc(g.file)}</span>`).join("<br>"))}">+${of(s).length} ${s}</span>`).join("");
+  return `<div class="goals">
+    <h3 class="gh">Goals${counts ? `<span class="c">${counts}</span>` : ""}${rest}</h3>
+    ${queued.length ? `<div class="gq">${queued.map(goalTile).join("")}</div>` : `<div class="none">${goals.length ? "No goal is running, approved or waiting for approval." : "No goal files yet."}</div>`}
+  </div>`;
+}
+function renderOverview() {
+  const el = document.getElementById("v-overview");
+  const shown = ["done", "review", "in-progress", "open", "decision", "blocked"].filter((s) => cnt(tasks, s) || runs.some((r) => r.counts[s]));
+  const recent = [...runs].reverse().filter((r) => !r.initial).slice(0, 10);
+  const checkRows = toCheck.slice(0, CHECK_ROWS);
+  const needs = [...askGoals.map((g) => ({ id: g.name })), ...needsYou, ...checkRows];
+  const queueCount = [askGoals.length && `${askGoals.length} goal${askGoals.length === 1 ? "" : "s"}`, needsYou.length && `${needsYou.length} to decide`, toCheck.length && `${toCheck.length} to check`].filter(Boolean).join(" · ") || "0";
+  const group = (label, n, filter, rows) => `<div class="qg">${label} <span class="c">${n}</span>${filter ? `<button class="more" data-filter="${filter}">all →</button>` : ""}</div>${rows}`;
+  el.innerHTML = `
+    <div class="summary">
+      <div class="shead">
+        <span><b>${tasks.length}</b> tasks · <b>${trackOrder.length}</b> tracks</span>
+        ${baseRun ? `<span class="since">
+          Δ since ${dayKey(baseRun.date)} · <b>${changedSinceBase.size}</b> moved</span>` : ""}
+      </div>
+      ${strip(PROGRESS.map((s) => [s, cnt(tasks, s)]))}
+      <div class="counts" style="grid-template-columns:repeat(${shown.length}, minmax(0,1fr))">
+        ${shown.map((s) => `<button class="count" data-filter="status:${s}" title="Show ${lab(s).toLowerCase()} tasks"><span class="v">${cnt(tasks, s)}</span>${delta(s)}<span class="l">${mark(s)}${lab(s)}</span></button>`).join("")}
+      </div>
+      ${goalQueue()}
+      <div class="tracks">
+        ${trackOrder.map((tr) => { const ts = tasks.filter((t) => t.track === tr); return `<button class="track" data-track="${esc(tr)}" title="Show ${esc(tr)} tasks"><span class="nm">${esc(tr)}</span>${strip(PROGRESS.map((s) => [s, cnt(ts, s)]), tr + " · ")}<span class="pc">${cnt(ts, "done")}/${ts.length}</span></button>`; }).join("")}
+      </div>
+    </div>
+    <div class="ogrid">
+      <section class="panel p-needs">
+        <div class="ph"><h2>Needs you</h2><span class="c">${queueCount}</span></div>
+        <div class="scroll" style="${idw(needs)}">${[
+          askGoals.length && group("Goals", askGoals.length, "", askGoals.map(grow).join("")),
+          needsYou.length && group("To decide", needsYou.length, "needs", needsYou.map((t) => trow(t, lever(t))).join("")),
+          toCheck.length && group("To check", toCheck.length, "check", checkRows.map((t) => trow(t, runAt(t) ? runLabel(runAt(t)) : "·")).join("") + (toCheck.length > CHECK_ROWS ? `<button class="qmore" data-filter="check">${toCheck.length - CHECK_ROWS} more in Tasks →</button>` : "")),
+        ].filter(Boolean).join("") || `<div class="empty">Nothing waits for you: no goal to approve or check, no decision, nothing blocked or to check.</div>`}</div>
+      </section>
+      <section class="panel p-runs">
+        <div class="ph"><h2>Recent runs</h2><span class="c">${changedSinceBase.size} tasks moved${baseRun ? ` since ${dayKey(baseRun.date)}` : ""}</span><button class="more" data-goview="runs">all →</button></div>
+        <div class="scroll">${recent.map((r) => runRow(r)).join("") || `<div class="empty">Only the baseline commit so far.</div>`}</div>
+      </section>
+      <section class="panel p-next">
+        <div class="ph"><h2>Up next</h2><span class="c">${upNext.length} ready</span>${upNext.length ? `<button class="more" data-filter="ready">all →</button>` : ""}</div>
+        <div class="scroll" style="${idw(upNext)}">${upNext.map((t) => trow(t, [t.goal[0], t.unlocks && `unlocks ${t.unlocks}`, t.waitingOn.length && `blocks ${t.waitingOn.length}`].filter(Boolean).join(" · ") || "·")).join("") || `<div class="empty">No open task has all of its dependencies done.</div>`}</div>
+      </section>
+      <section class="panel p-levers">
+        <div class="ph"><h2>Bottlenecks</h2><span class="c">open tasks that block the most</span></div>
+        <div class="scroll" style="${idw(levers.slice(0, 12))}">${levers.slice(0, 12).map((t) => trow(t, lever(t))).join("") || `<div class="empty">No open task holds others up.</div>`}</div>
+      </section>
+    </div>`;
+}
+
+// ---------- runs ----------
+function renderRuns() {
+  const el = document.getElementById("v-runs");
+  if (!runs.length) { el.innerHTML = `<section class="panel"><div class="ph"><h2>Runs</h2></div><div class="empty">No commit has touched tasks/index.json yet.</div></section>`; return; }
+  const max = Math.max(...runs.map((r) => r.total));
+  const r = runs[state.run];
+  const groups = new Map();
+  for (const c of r.changes) { const k = c.from === null ? "new" : c.to; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(c); }
+  const order = ["new", "done", "review", "in-progress", "open", "decision", "blocked", "dropped", "removed"];
+  let lastDay = null;
+  const list = runs.map((x, i) => ({ x, i })).reverse().map(({ x, i }) => {
+    const d = dayKey(x.date);
+    const head = d !== lastDay ? `<div class="daygrp">${d === today ? "Today" : d} · ${runs.filter((y) => dayKey(y.date) === d).length} runs</div>` : "";
+    lastDay = d;
+    return head + runRow(x, i === state.run);
+  }).join("");
+  const days = []; for (const x of runs) { const d = dayKey(x.date); if (days.at(-1)?.d === d) days.at(-1).n++; else days.push({ d, n: 1 }); }
+  el.innerHTML = `
+    <div class="trend">
+      <div class="bars">${runs.map((x, i) => `<button data-run="${i}" aria-pressed="${i === state.run}" aria-label="Run ${dayKey(x.date)} ${hm(x.date)}" data-tip="${esc(`<b>${dayKey(x.date)} ${hm(x.date)}</b> <span class='m'>${esc(x.commit ?? "uncommitted")}</span><br>${esc(x.subject)}<br><span class='m'>${PROGRESS.filter((s) => x.counts[s]).map((s) => `${short(s)} ${esc(x.counts[s])}`).join(" · ")}</span>`)}">${PROGRESS.filter((s) => x.counts[s]).map((s) => `<i style="height:calc(${(x.counts[s] / max) * 100}% - 1px);background:${COLOR(s)}"></i>`).join("")}</button>`).join("")}</div>
+      <div class="days">${days.map((d) => `<span style="flex:${d.n}">${d.n > 1 || days.length < 8 ? d.d : d.d.slice(0, 2)}</span>`).join("")}</div>
+    </div>
+    <div class="rsplit">
+      <section class="panel"><div class="ph"><h2>Runs</h2><span class="c">commits to tasks/index.json</span></div><div class="scroll" id="runlist">${list}</div></section>
+      <section class="panel"><div class="ph"><h2>Changes</h2><span class="c">${r.changes.length}</span>${r.changes.length ? `<button class="more" data-filter="run:${state.run}">in tasks →</button>` : ""}</div>
+        <div class="scroll"><div class="rd">
+          <h3>${esc(r.subject)}</h3>
+          <div class="sub">${dayKey(r.date)} ${hm(r.date)} · ${esc(r.commit ?? "uncommitted (git status)")} · ${esc(r.total)} tasks</div>
+          ${r.initial ? `<div class="grp muted">Baseline: the first commit of the planning repository.</div>` : r.changes.length ? order.filter((k) => groups.has(k)).map((k) => `<div class="grp"><div class="gh">${mark(k)}${k === "new" ? "Added" : "To " + lab(k).toLowerCase()} <span class="c">${groups.get(k).length}</span></div>${(() => { const ts = groups.get(k).map((c) => byId.get(c.id)).filter(Boolean); return `<div style="${idw(ts.length ? ts : [{ id: "" }])}">`; })()}${groups.get(k).map((c) => { const t = byId.get(c.id); return t ? trow(t, c.from === null ? short(c.to) : `${short(c.from)} → ${short(c.to)}`) : `<div class="trow"><span></span><span class="id">${esc(c.id)}</span><span class="tt muted">no longer in the index</span><span></span></div>`; }).join("")}</div></div>`).join("") : `<div class="grp muted">No status changed in this run.</div>`}
+        </div></div></section>
+    </div>`;
+  el.querySelector('#runlist [aria-current="true"]')?.scrollIntoView({ block: "nearest" });
+}
+
+// ---------- tasks ----------
+function filterChips() {
+  const primary = [
+    ["all", "All", tasks.length],
+    ["needs", "Needs you", needsYou.length],
+    ["check", "To check", toCheck.length],
+    ["ready", "Up next", upNext.length],
+    ["changed", baseRun ? `Moved since ${dayKey(baseRun.date)}` : "Moved", changedSinceBase.size],
+  ];
+  if (state.filter.startsWith("run:")) primary.push([state.filter, `Run ${runLabel(runs[+state.filter.slice(4)])}`, tasks.filter((t) => t.history.some((h) => h.run === +state.filter.slice(4))).length]);
+  const byStatus = statuses.map((s) => [`status:${s}`, lab(s), cnt(tasks, s), s]);
+  const chip = ([k, l, n, s]) => `<button class="chip" data-filter="${k}" aria-pressed="${state.filter === k}">${s ? mark(s) : ""}${l} <span class="n">${n}</span></button>`;
+  const goalChips = queued.filter((g) => goalTasks(g.name).length).map((g) => `<button class="chip" data-goal="${esc(g.name)}" aria-pressed="${state.goal === g.name}" data-tip="${goalTip(g)}">${gmark(g)}${esc(g.name)} <span class="n">${goalTasks(g.name).length}</span></button>`).join("");
+  const trackChips = trackOrder.map((tr) => `<button class="chip" data-track="${esc(tr)}" aria-pressed="${state.track === tr}">${esc(tr)} <span class="n">${tasks.filter((t) => t.track === tr).length}</span></button>`).join("");
+  return `<div class="fr">${primary.map(chip).join("")}</div><div class="fr">${goalChips ? `${goalChips}<span class="sep"></span>` : ""}${trackChips}</div><div class="fr">${byStatus.map(chip).join("")}</div>`;
+}
+function matches(t) {
+  const f = state.filter;
+  if (f === "needs" && !(t.status === "blocked" || t.status === "decision")) return false;
+  if (f === "check" && t.status !== "review") return false;
+  if (f === "ready" && !t.ready) return false;
+  if (f === "changed" && !changedSinceBase.has(t.id)) return false;
+  if (f.startsWith("status:") && t.status !== f.slice(7)) return false;
+  if (f.startsWith("run:") && !t.history.some((h) => h.run === +f.slice(4))) return false;
+  if (state.track && t.track !== state.track) return false;
+  if (state.goal && !t.goal.includes(state.goal)) return false;
+  if (state.q && !(t.id.toLowerCase().includes(state.q) || t.title.toLowerCase().includes(state.q))) return false;
+  return true;
+}
+const SORTS = {
+  status: (a, b) => RANK[a.status] - RANK[b.status] || byLever(a, b) || idCmp(a, b),
+  id: idCmp,
+  track: (a, b) => a.track.localeCompare(b.track) || RANK[a.status] - RANK[b.status],
+  waiting: (a, b) => b.waitingOn.length - a.waitingOn.length || RANK[a.status] - RANK[b.status],
+  moved: (a, b) => (b.lastRun ?? -1) - (a.lastRun ?? -1),
+};
+let visibleIds = [];
+function renderTasks() {
+  const el = document.getElementById("v-tasks");
+  const list = tasks.filter(matches).sort(SORTS[state.sort]);
+  visibleIds = list.map((t) => t.id);
+  const sel = state.sel && byId.get(state.sel);
+  const rel = new Set(sel ? [...sel.depends, ...sel.waitingOn] : []);
+  const th = (k, l, cls = "") => `<button class="${cls}" data-sort="${k}" ${state.sort === k ? 'aria-sort="descending"' : ""}>${l}${state.sort === k ? " ↓" : ""}</button>`;
+  el.innerHTML = `
+    <div class="tbar" role="toolbar" aria-label="Filters">${filterChips()}</div>
+    <div class="tsplit ${sel ? "" : "nodetail"}">
+      <section class="panel table">
+        <div class="thead"><span></span>${th("id", "ID")}${th("status", "Task")}${th("track", "Track", "c-track")}${th("waiting", "Wait", "r")}${th("moved", "Moved", "r")}</div>
+        <div class="scroll" id="tlist" role="listbox" aria-label="Tasks">
+          ${list.map((t) => {
+            const r = runAt(t);
+            return `<button class="tr ${rel.has(t.id) ? "rel" : ""}" role="option"
+              data-task="${esc(t.id)}" aria-selected="${t.id === state.sel}" data-tip="${taskTip(t)}">
+              ${mark(t.status)}<span class="id">${esc(t.id)}</span>
+              <span class="tt"><span>${esc(t.title)}</span>
+                ${t.goal.length ? `<span class="tag opt">goal</span>` : ""}
+                ${t.ready ? `<span class="tag opt">ready</span>` : ""}
+              </span><span class="tk">${esc(t.track)}</span>
+              <span class="w r ${t.waitingOn.length >= 3 ? "hot" : ""}">${t.waitingOn.length || "·"}</span>
+              <span class="u r">${r ? dayKey(r.date) : "·"}</span></button>`;
+          }).join("") || `<div class="empty">No task matches.
+            <button class="lnk" data-reset>Clear filters</button></div>`}
+        </div>
+      </section>
+      <section class="panel detail" aria-label="Task detail">${sel ? detail(sel) : ""}</section>
+    </div>`;
+  el.querySelector('#tlist [aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
+}
+function detail(t) {
+  const r = runAt(t);
+  const list = (ids, none) => { const ts = ids.map((id) => byId.get(id)).filter(Boolean); return ts.length ? `<div style="${idw(ts)}">${ts.map((d) => trow(d, short(d.status))).join("")}</div>` : `<div class="none">${none}</div>`; };
+  const warn = warnings.filter((w) => w.startsWith(`${t.id}:`)).map((w) => w.slice(t.id.length + 1).trim());
+  const notes = [
+    ...(t.status === "review" ? [
+      "<div><b>check</b>Built and tested by agents; waiting for your manual check.</div>",
+    ] : []),
+    ...warn.map((w) => `<div><b>warning</b>${esc(w)}</div>`),
+  ];
+  return `
+    <div class="dt">
+      <div class="row1">${mark(t.status)}<span>${esc(t.id)}</span><span class="muted">${esc(lab(t.status))}</span><button class="close" data-close aria-label="Close detail" title="Close (esc)"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button></div>
+      <h3>${esc(t.title)}</h3>
+      <div class="facts">
+        <span>track <b>${esc(t.track)}</b></span>
+        ${t.owner ? `<span>owner <b>${esc(t.owner)}</b></span>` : ""}
+        ${t.goal.length ? `<span>goal ${t.goal.map((n) =>
+          `<button class="lnk" data-goal="${esc(n)}" title="Show tasks of goal ${esc(n)}">
+            <b>${esc(n)}</b></button>`
+        ).join(", ")}</span>` : ""}
+        ${t.unlocks ? `<span>unlocks <b>${esc(t.unlocks)}</b></span>` : ""}
+        ${r ? `<span>moved <b>${dayKey(r.date)} ${hm(r.date)}</b></span>` : ""}
+        <span>${esc(t.file)}</span>${t.ready ? `<span class="tag">ready</span>` : ""}
+      </div>
+      ${notes.length ? `<div class="notes">${notes.join("")}</div>` : ""}
+    </div>
+    <div class="scroll"><div class="ds">
+      <h4>Needs <span class="c">${t.depends.length}${t.openDeps.length ? ` · ${t.openDeps.length} not done` : ""}</span></h4>
+      ${list(t.depends, "No dependencies.")}
+      <h4>Waiting on this <span class="c">${t.waitingOn.length}${t.unlocks ? ` · ${esc(t.unlocks)} ready once done` : ""}</span></h4>
+      ${list(t.waitingOn, "Nothing open depends on it.")}
+      <h4>History <span class="c">${t.history.length}</span></h4>
+      ${t.history.length ? `<ul class="hist">${[...t.history].reverse().map((x) => `<li><span class="when">${dayKey(runs[x.run].date)} ${hm(runs[x.run].date)}</span><span>${esc(short(x.from))} <span class="arrow">→</span> ${esc(short(x.to))}</span><button data-run="${esc(x.run)}" title="${esc(runs[x.run].subject)}">${esc(runs[x.run].commit ?? "uncommitted")}</button></li>`).join("")}</ul>` : `<div class="none">Unchanged since the first commit.</div>`}
+    </div></div>`;
+}
+
+// ---------- navigation ----------
+function setView(v) {
+  state.view = v;
+  document.querySelectorAll(".tab").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.view === v)));
+  document.querySelectorAll(".view").forEach((s) => s.classList.toggle("on", s.id === `v-${v}`));
+  render();
+}
+function render() { ({ overview: renderOverview, runs: renderRuns, tasks: renderTasks })[state.view](); }
+function openTask(id) {
+  state.sel = id;
+  if (state.view !== "tasks") { if (!matches(byId.get(id))) clearFilters(); return setView("tasks"); }
+  if (!matches(byId.get(id))) clearFilters();
+  renderTasks();
+}
+function toTasks(change) { change(); if (state.view !== "tasks") { state.sel = null; setView("tasks"); } else renderTasks(); }
+
+document.addEventListener("click", (e) => {
+  if (e.target.closest("#warnpop [data-task]")) warnPop.hidePopover();
+  const tab = e.target.closest(".tab"); if (tab) return setView(tab.dataset.view);
+  if (e.target.closest("[data-close]")) { state.sel = null; return renderTasks(); }
+  if (e.target.closest("[data-reset]")) { clearFilters(); return renderTasks(); }
+  const f = e.target.closest("[data-filter]");
+  if (f) return toTasks(() => { const k = f.dataset.filter; const inTasks = state.view === "tasks"; state.filter = inTasks && state.filter === k ? "all" : k; if (!inTasks) { state.track = null; state.goal = null; } });
+  const tr = e.target.closest("[data-track]");
+  if (tr) return toTasks(() => { const k = tr.dataset.track; const inTasks = state.view === "tasks"; state.track = inTasks && state.track === k ? null : k; if (!inTasks) { state.filter = "all"; state.goal = null; } });
+  const g = e.target.closest("[data-goal]");
+  if (g) return toTasks(() => { const k = g.dataset.goal; const inTasks = state.view === "tasks"; state.goal = inTasks && state.goal === k ? null : k; if (!inTasks) { state.filter = "all"; state.track = null; } });
+  const s = e.target.closest("[data-sort]"); if (s) { state.sort = s.dataset.sort; return renderTasks(); }
+  const run = e.target.closest("[data-run]");
+  if (run) { state.run = +run.dataset.run; return state.view === "runs" ? renderRuns() : setView("runs"); }
+  const gv = e.target.closest("[data-goview]"); if (gv) return setView(gv.dataset.goview);
+  const t = e.target.closest("[data-task]");
+  if (t) { if (state.view === "tasks" && state.sel === t.dataset.task && t.classList.contains("tr")) { state.sel = null; return renderTasks(); } return openTask(t.dataset.task); }
+});
+const q = document.getElementById("q");
+q.addEventListener("input", () => { state.q = q.value.trim().toLowerCase(); if (state.view !== "tasks") setView("tasks"); else renderTasks(); });
+document.addEventListener("keydown", (e) => {
+  const typing = e.target === q;
+  if (e.key === "Escape") {
+    if (warnPop.matches(":popover-open")) { warnPop.hidePopover(); warnBtn.focus(); return; }
+    if (typing) { if (q.value) { q.value = ""; state.q = ""; renderTasks(); } else q.blur(); return; }
+    if (state.view === "tasks" && state.sel) { state.sel = null; return renderTasks(); }
+    if (state.filter !== "all" || state.track || state.goal) { state.filter = "all"; state.track = null; state.goal = null; return render(); }
+    return;
+  }
+  if (typing) { if (e.key === "Enter" && visibleIds.length) { openTask(visibleIds[0]); q.blur(); } return; }
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key === "/") { e.preventDefault(); return q.focus(); }
+  if (["1", "2", "3"].includes(e.key)) return setView(["overview", "runs", "tasks"][+e.key - 1]);
+  const dir = { j: 1, ArrowDown: 1, k: -1, ArrowUp: -1 }[e.key];
+  if (dir) {
+    if (state.view === "tasks" && visibleIds.length) { e.preventDefault(); const i = visibleIds.indexOf(state.sel); state.sel = visibleIds[i < 0 ? 0 : Math.max(0, Math.min(visibleIds.length - 1, i + dir))]; return renderTasks(); }
+    if (state.view === "runs" && runs.length) { e.preventDefault(); state.run = Math.max(0, Math.min(lastRun, state.run - dir)); return renderRuns(); }
+  }
+});
+
+// ---------- theme ----------
+const themeBtn = document.getElementById("theme");
+const sun = `<svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="3.2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M3.4 12.6l1.1-1.1M11.5 4.5l1.1-1.1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`;
+const moon = `<svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.2 10.2A5.6 5.6 0 0 1 5.8 2.8a5.6 5.6 0 1 0 7.4 7.4z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+const isDark = () => document.documentElement.dataset.theme ? document.documentElement.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+const paintTheme = () => { themeBtn.innerHTML = isDark() ? sun : moon; };
+themeBtn.addEventListener("click", () => { document.documentElement.dataset.theme = isDark() ? "light" : "dark"; paintTheme(); });
+paintTheme();
+
+// ---------- tooltip ----------
+const tip = document.getElementById("tip");
+function showTip(el, x, y) {
+  if (!el) { tip.style.display = "none"; return; }
+  tip.innerHTML = el.dataset.tip; tip.style.display = "block";
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  tip.style.left = Math.max(8, Math.min(x + 12, innerWidth - w - 8)) + "px";
+  tip.style.top = (y + 14 + h > innerHeight ? y - h - 10 : y + 14) + "px";
+}
+document.addEventListener("mousemove", (e) => showTip(e.target.closest("[data-tip]"), e.clientX, e.clientY));
+document.addEventListener("focusin", (e) => { const el = e.target.closest("[data-tip]"); if (!el || !el.matches(":focus-visible")) return showTip(null); const r = el.getBoundingClientRect(); showTip(el, r.left + 8, r.bottom - 6); });
+document.addEventListener("focusout", () => showTip(null));
+
+render();
+</script>
+</body>
+</html>

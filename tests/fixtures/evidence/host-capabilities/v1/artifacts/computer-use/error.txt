@@ -1,1 +1,0 @@
-sky.list_apps() failed: Mac locked and automatic unlock failed; manual unlock required
