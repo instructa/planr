@@ -30,7 +30,7 @@ Rough sizes: engine (`skills/planr/scripts/`) around 800 lines, skill around 60,
 ## Release
 After maintainer approval, run `node scripts/bump-version.mjs X.Y.Z` and add its CHANGELOG section.
 Remove `private` only in that approved release commit, then tag `vX.Y.Z` in `instructa/planr`.
-CI publishes through `release.yml`; prerelease tags use npm `next` and never update Homebrew.
+CI publishes through `release.yml`; prerelease tags use npm `next`. planr ships through npm only.
 Plugin build needs the bb CLI and is omitted from CI; verify it on an isolated local bb instance.
 Static `site/` (planr.so) from `docs/`: `cd site && npm ci && npm run build`; deploy needs maintainer OK.
 `scripts/bump-version.mjs` syncs plugin manifests and both marketplace npm pins with the release version.

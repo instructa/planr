@@ -255,7 +255,7 @@ export default function plugin(bb: BbPluginApi) {
 
   bb.cli.register({
     name: "planr",
-    summary: "Read planning readiness and validation; human acceptance stays in the board.",
+    summary: "Read planning readiness and validation.",
     commands: [
       {
         name: "next",

@@ -83,7 +83,7 @@ export default {
       name: 'CLI',
       where: 'In your terminal',
       prompt: '$',
-      commands: ['npm install -g planr', 'npx planr', 'brew install instructa/tap/planr'],
+      commands: ['npm install -g planr', 'npx planr'],
       // The tab shows the first command; the others are listed as alternatives, then the note.
       note: 'Requires Node.js 20 or newer & Git.',
       link: { label: 'CLI reference', href: '/docs/cli/' },
