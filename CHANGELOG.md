@@ -3,6 +3,14 @@
 This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow [Semantic Versioning](https://semver.org/).
 
+## [2.0.1] - 2026-10-20
+
+### Fixed
+
+- Run history is rebuilt in linear time: `check` and `board` take 0.3 s instead of 3 s on a repository
+  with 2,700 commits and stay under 10 s at ten times that size. Output is unchanged.
+- A failed Git history read now reports `history: … runs unavailable` instead of an empty history.
+
 ## [2.0.0] - 2026-10-05
 
 First stable release of planr 2.0, unchanged from 2.0.0-beta.1; see the entry below for the changes.
