@@ -4,8 +4,8 @@ import { join, resolve, relative, dirname } from 'node:path';
 
 export const statuses = ['open', 'in-progress', 'review', 'blocked', 'decision', 'done', 'dropped'];
 export const states = ['draft', 'approved', 'running', 'done', 'review'];
-export const compare = (a, b) =>
-  a.localeCompare(b, 'en', { numeric: true }) || (a < b ? -1 : a > b ? 1 : 0);
+const collator = new Intl.Collator('en', { numeric: true });
+export const compare = (a, b) => collator.compare(a, b) || (a < b ? -1 : a > b ? 1 : 0);
 export const json = value => JSON.stringify(value, null, 2) + '\n';
 
 export function config(root, defaults = JSON.parse(readFileSync(
@@ -197,16 +197,23 @@ export function buildIndex(root, c = config(root), read = file => readFileSync(f
     }
     t.openDeps = t.depends.filter(d => !['review', 'done'].includes(byId.get(d)?.status));
     t.ready = t.status === 'open' && !t.openDeps.length;
-    t.waitingOn = tasks
-      .filter(x => !['done', 'dropped'].includes(x.status) && x.depends.includes(t.id))
-      .map(x => x.id);
+  }
+  // Reverse edges in one pass; tasks are sorted, so each list keeps the sorted order.
+  const waitingOn = new Map(tasks.map(t => [t.id, []]));
+  const unlocks = new Map();
+  for (const x of tasks) {
+    if (!['done', 'dropped'].includes(x.status)) {
+      for (const d of new Set(x.depends)) {
+        waitingOn.get(d)?.push(x.id);
+      }
+    }
+    if (x.status === 'open' && x.openDeps.length === 1) {
+      unlocks.set(x.openDeps[0], (unlocks.get(x.openDeps[0]) ?? 0) + 1);
+    }
   }
   for (const t of tasks) {
-    t.unlocks = ['review', 'done', 'dropped'].includes(t.status)
-      ? 0
-      : tasks.filter(x =>
-          x.status === 'open' && x.openDeps.length === 1 && x.openDeps[0] === t.id
-        ).length;
+    t.waitingOn = [...waitingOn.get(t.id)];
+    t.unlocks = ['review', 'done', 'dropped'].includes(t.status) ? 0 : unlocks.get(t.id) ?? 0;
   }
   const visited = new Set();
   const active = [];

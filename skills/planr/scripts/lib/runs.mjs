@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { posix } from 'node:path';
 import { compare, taskFile, taskStatus } from './graph.mjs';
 
@@ -17,6 +17,16 @@ export function git(root, args, input) {
   }
 }
 
+// History reads must fail loudly: a silently empty or truncated read would rewrite every run.
+function strict(root, args, input) {
+  const out = spawnSync('git', args, { cwd: root, input, maxBuffer: 1 << 30 });
+  if (out.error || out.status !== 0) {
+    const reason = out.error?.message ?? String(out.stderr).trim().split('\n')[0];
+    throw new Error(`git ${args[0]} failed: ${reason}`);
+  }
+  return out.stdout;
+}
+
 export function runs(root, index, c, now = new Date().toISOString()) {
   const mode = git(root, ['rev-parse', '--is-shallow-repository']);
   const warnings = mode === 'false' ? [] : [
@@ -25,10 +35,18 @@ export function runs(root, index, c, now = new Date().toISOString()) {
   ];
   const prefix = git(root, ['rev-parse', '--show-prefix']) +
     posix.normalize(c.tasksDir).replace(/\/$/, '') + '/';
-  const log = mode ? git(root, [
-    'log', '--first-parent', '--reverse', '--format=%x00PLANR%x09%H%x09%cI%x09%s',
-    '--raw', '-z', '--no-abbrev', '--no-renames', '--root', '--diff-merges=first-parent', '--', c.tasksDir,
-  ]) : '';
+  let log = '';
+  let batch = Buffer.alloc(0);
+  let failed = false;
+  try {
+    log = mode && git(root, ['rev-parse', '--verify', '--quiet', 'HEAD']) ? strict(root, [
+      'log', '--first-parent', '--reverse', '--format=%x00PLANR%x09%H%x09%cI%x09%s', '--raw', '-z',
+      '--no-abbrev', '--no-renames', '--root', '--diff-merges=first-parent', '--', c.tasksDir,
+    ]).toString('utf8').trimEnd() : '';
+  } catch (e) {
+    warnings.push(`history: ${e.message}; runs unavailable`);
+    failed = true;
+  }
   const records = [];
   const parts = log.split('\0');
   for (let i = 0; i < parts.length; i++) {
@@ -47,9 +65,13 @@ export function runs(root, index, c, now = new Date().toISOString()) {
   const hashes = [...new Set(records.flatMap(r =>
     r.files.filter(f => !f.removed).map(f => f.blob)
   ))];
-  const batch = hashes.length
-    ? git(root, ['cat-file', '--batch'], hashes.join('\n') + '\n')
-    : Buffer.alloc(0);
+  try {
+    batch = hashes.length ? strict(root, ['cat-file', '--batch'], hashes.join('\n') + '\n') : batch;
+  } catch (e) {
+    warnings.push(`history: ${e.message}; runs unavailable`);
+    failed = true;
+    records.length = 0;
+  }
   const blobs = new Map();
   let cursor = 0;
   while (cursor < batch.length) {
@@ -67,13 +89,14 @@ export function runs(root, index, c, now = new Date().toISOString()) {
   }
   const result = [];
   const history = new Map(index.tasks.map(t => [t.id, []]));
-  let previous = new Map();
-  const changesBetween = current => [...new Set([...previous.keys(), ...current.keys()])]
-    .sort(compare)
-    .filter(id => current.get(id) !== previous.get(id))
-    .map(id => ({ id, from: previous.get(id) ?? null, to: current.get(id) ?? 'removed' }));
-  const append = (s, current) => {
-    const changes = changesBetween(current);
+  // One status map is updated in place per commit; only the IDs a commit touched are compared and sorted.
+  const current = new Map();
+  const append = (s, before) => {
+    const changes = [...before]
+      .filter(([id, from]) => current.get(id) !== from)
+      .map(([id]) => id)
+      .sort(compare)
+      .map(id => ({ id, from: before.get(id) ?? null, to: current.get(id) ?? 'removed' }));
     if (changes.length) {
       const initial = !result.length;
       result.push({
@@ -92,12 +115,14 @@ export function runs(root, index, c, now = new Date().toISOString()) {
         history.get(change.id)?.push({ run: result.length - 1, from: change.from, to: change.to });
       }
     }
-    previous = current;
   };
   for (const record of records) {
-    const current = new Map(previous);
+    const before = new Map();
     for (const f of record.files) {
       const id = f.file.slice(prefix.length, -3);
+      if (!before.has(id)) {
+        before.set(id, current.get(id));
+      }
       if (f.removed) {
         current.delete(id);
       } else {
@@ -108,11 +133,20 @@ export function runs(root, index, c, now = new Date().toISOString()) {
         }
       }
     }
-    append(record, current);
+    append(record, before);
   }
-  if (mode) {
-    append({ commit: null, date: now, subject: 'Uncommitted changes' },
-      new Map(index.tasks.map(t => [t.id, t.status])));
+  if (mode && !failed) {
+    const before = new Map(current);
+    current.clear();
+    for (const t of index.tasks) {
+      current.set(t.id, t.status);
+    }
+    for (const id of current.keys()) {
+      if (!before.has(id)) {
+        before.set(id, undefined);
+      }
+    }
+    append({ commit: null, date: now, subject: 'Uncommitted changes' }, before);
   }
   const tasks = index.tasks.map(t => {
     const h = history.get(t.id);
